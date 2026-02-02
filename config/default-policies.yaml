@@ -1,0 +1,172 @@
+# Default security policies for aquaman-clawed
+# Copy to ~/.aquaman/config.yaml and customize
+
+wrapper:
+  # Port for the security proxy (OpenClaw connects here instead of direct)
+  proxyPort: 18790
+  # OpenClaw's actual gateway port
+  upstreamPort: 18789
+
+audit:
+  enabled: true
+  logDir: ~/.aquaman/audit
+  # Optional: webhook for alerts
+  # alertWebhook: https://hooks.slack.com/services/...
+  alertRules:
+    - id: dangerous-command-pipe
+      name: Dangerous command piping
+      pattern: "curl.*\\|.*sh"
+      action: block
+      severity: critical
+      message: "Blocked dangerous command pattern: piping download to shell"
+
+    - id: wget-pipe
+      name: Wget to shell
+      pattern: "wget.*\\|.*sh"
+      action: block
+      severity: critical
+      message: "Blocked dangerous command pattern: piping wget to shell"
+
+    - id: sudo-command
+      name: Sudo command
+      pattern: "^sudo\\s+"
+      action: require_approval
+      severity: critical
+      message: "Sudo command requires approval"
+
+    - id: rm-rf-root
+      name: Recursive force delete from root
+      pattern: "rm\\s+-rf\\s+/"
+      action: block
+      severity: critical
+      message: "Blocked dangerous recursive delete"
+
+    - id: rm-rf-home
+      name: Recursive force delete home
+      pattern: "rm\\s+-rf\\s+~"
+      action: block
+      severity: critical
+      message: "Blocked dangerous recursive delete of home"
+
+    - id: critical-tools
+      name: Critical tool access
+      tools:
+        - sessions_spawn
+        - cron_create
+        - camera_access
+        - screen_record
+        - location_access
+      action: require_approval
+      severity: critical
+      message: "Critical tool requires approval"
+
+    - id: mass-messaging
+      name: Mass messaging detection
+      tools:
+        - message_send
+      action: warn
+      severity: high
+      message: "High volume messaging detected"
+
+permissions:
+  files:
+    allowedPaths:
+      - "${HOME}/workspace/**"
+      - "/tmp/openclaw/**"
+      - "/tmp/aquaman/**"
+    deniedPaths:
+      - "**/.env"
+      - "**/.env.*"
+      - "**/*.pem"
+      - "**/*.key"
+      - "**/*.p12"
+      - "~/.ssh/**"
+      - "~/.aws/**"
+      - "~/.gnupg/**"
+      - "~/.openclaw/auth-profiles.json"
+    sensitivePatterns:
+      - "**/credentials*"
+      - "**/secrets*"
+      - "**/tokens*"
+
+  commands:
+    allowedCommands:
+      - command: git
+        deniedArgs:
+          - "push --force"
+          - "reset --hard"
+      - command: npm
+        allowedArgs:
+          - install
+          - test
+          - build
+          - run
+          - start
+      - command: node
+      - command: ls
+      - command: cat
+      - command: grep
+      - command: find
+      - command: pwd
+      - command: echo
+      - command: mkdir
+      - command: touch
+    deniedCommands:
+      - sudo
+      - su
+      - "rm -rf /"
+      - dd
+      - mkfs
+      - fdisk
+      - parted
+    dangerousPatterns:
+      - "curl.*\\|.*sh"
+      - "wget.*\\|.*sh"
+      - "eval\\s+\\$"
+      - ":(\\){\\s*:|:&\\s*};\\s*:" # fork bomb
+
+  network:
+    defaultAction: deny
+    allowedDomains:
+      - api.anthropic.com
+      - api.openai.com
+      - "*.slack.com"
+      - "*.discord.com"
+      - api.github.com
+      - raw.githubusercontent.com
+      - registry.npmjs.org
+      - pypi.org
+    deniedDomains:
+      - "*.onion"
+      - "*.i2p"
+      - "*.bit"
+      - localhost
+      - "127.0.0.1"
+      - "0.0.0.0"
+    deniedPorts:
+      - 22   # SSH
+      - 23   # Telnet
+      - 25   # SMTP
+      - 3389 # RDP
+
+credentials:
+  # Options: keychain, 1password, vault, encrypted-file
+  backend: keychain
+  proxyPort: 8081
+  proxiedServices:
+    - anthropic
+    - openai
+    - slack
+    - discord
+
+approval:
+  channels:
+    - type: console
+    # Uncomment to enable Slack notifications:
+    # - type: slack
+    #   webhook: https://hooks.slack.com/services/...
+    # Uncomment to enable Discord notifications:
+    # - type: discord
+    #   webhook: https://discord.com/api/webhooks/...
+  timeout: 300  # seconds
+  defaultOnTimeout: deny
