@@ -1,4 +1,4 @@
-# aquaman-clawed
+# 🔱🦞🪸 aquaman-clawed
 
 Security wrapper for OpenClaw - audit logging, guardrails, and credential isolation.
 
