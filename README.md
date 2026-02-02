@@ -85,7 +85,7 @@ aquaman start
 
 ## Features
 
-- **Credential isolation** - API keys in macOS Keychain, never exposed to OpenClaw
+- **Credential isolation** - API keys in macOS Keychain, not stored in OpenClaw config files
 - **Audit logging** - Hash-chained logs of all tool calls
 - **Guardrails** - Block dangerous commands (`rm -rf /`, `curl | sh`, etc.)
 - **Approval workflows** - Require approval for sensitive operations (CLI or Slack/Discord)
@@ -160,6 +160,84 @@ approval:
     # - type: slack
     #   webhook: https://hooks.slack.com/...
 ```
+
+## Security Model & Limitations
+
+**Understand what this is and isn't.**
+
+### What aquaman-clawed Does
+
+- Moves credentials from `~/.openclaw/auth-profiles.json` to macOS Keychain
+- Proxies API calls and injects credentials server-side
+- Logs all tool calls with tamper-evident hash chains
+- Pattern-matches dangerous commands and blocks/requires approval
+
+### What It Does NOT Do
+
+**aquaman-clawed is not a sandbox.** OpenClaw runs as a separate process, not a child process under our control. Security is enforced by:
+
+1. Modifying OpenClaw's config to route traffic through our proxies
+2. Trusting that OpenClaw respects that configuration
+
+If OpenClaw (or a prompt injection attack) decides to bypass the proxy and call APIs directly, make raw HTTP requests, or read process memory, there's nothing stopping it.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  What we provide        vs.      What we don't provide      │
+├─────────────────────────────────────────────────────────────┤
+│  ✓ Credential separation         ✗ Process isolation        │
+│  ✓ Tamper-evident audit logs     ✗ Tamper-proof logs        │
+│  ✓ Pattern-based guardrails      ✗ Semantic intent analysis │
+│  ✓ Configuration-level routing   ✗ Enforced network policy  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Threat Model
+
+**Protected against:**
+- Prompt injection trying to read credential files (they're cleared)
+- Accidental dangerous commands (`rm -rf /`, `curl | sh`)
+- Post-incident forensics (audit trail exists)
+- Casual credential exfiltration via OpenClaw's normal tool calls
+
+**NOT protected against:**
+- Fully malicious/compromised OpenClaw binary
+- Root/admin-level attackers
+- Sophisticated command evasion (encoding, quoting tricks)
+- Direct network requests bypassing the proxy
+
+### OpenClaw's Built-in Sandboxing
+
+OpenClaw itself offers Docker-based sandboxing for non-main sessions:
+
+```yaml
+# In ~/.openclaw/openclaw.yaml
+agents:
+  defaults:
+    sandbox:
+      mode: "non-main"  # Isolates group/channel sessions in containers
+```
+
+This is **stronger isolation** than aquaman-clawed provides. Consider using both:
+- OpenClaw's sandbox for process isolation
+- aquaman-clawed for credential separation and audit logging
+
+### For True Isolation
+
+If you need hard security boundaries, run OpenClaw in a container:
+
+```bash
+docker run -it --rm \
+  --network=host \  # Or restrict to only reach aquaman proxy
+  -v ~/workspace:/workspace:ro \
+  -e OPENCLAW_API_BASE=http://host.docker.internal:8081 \
+  openclaw/openclaw
+```
+
+This provides:
+- Filesystem isolation (only mounted paths accessible)
+- Network namespace (can restrict to proxy only)
+- No access to host Keychain, ~/.ssh, etc.
 
 ## License
 
