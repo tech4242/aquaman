@@ -95,6 +95,21 @@ export interface NetworkPermissions {
   deniedPorts: number[];
 }
 
+export interface SandboxConfig {
+  openclawImage: string;
+  workspace: {
+    hostPath: string;
+    containerPath: string;
+    readOnly: boolean;
+  };
+  resources?: {
+    cpus?: string;
+    memory?: string;
+  };
+  environment?: Record<string, string>;
+  enableOpenclawSandbox: boolean; // Enable OpenClaw's internal sandbox.mode for double isolation
+}
+
 export interface WrapperConfig {
   wrapper: {
     proxyPort: number;
@@ -121,6 +136,7 @@ export interface WrapperConfig {
     timeout: number;
     defaultOnTimeout: 'allow' | 'deny';
   };
+  sandbox: SandboxConfig;
 }
 
 export interface ApprovalChannel {

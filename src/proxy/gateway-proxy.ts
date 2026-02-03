@@ -14,6 +14,7 @@ export interface GatewayProxyOptions {
   proxyPort: number;
   upstreamHost: string;
   upstreamPort: number;
+  bindAddress?: string; // defaults to '0.0.0.0' for container access
   auditLogger: AuditLogger;
   alertEngine: AlertEngine;
   onToolCall?: (toolCall: ToolCall, alertResult: AlertResult) => Promise<boolean>;
@@ -46,9 +47,10 @@ export class GatewayProxy {
 
     await this.options.auditLogger.initialize();
 
+    const bindAddress = this.options.bindAddress || '0.0.0.0';
     this.server = new WebSocketServer({
       port: this.options.proxyPort,
-      host: '127.0.0.1'
+      host: bindAddress
     });
 
     this.server.on('connection', (clientWs, request) => {
@@ -60,7 +62,7 @@ export class GatewayProxy {
     });
 
     this.running = true;
-    console.log(`Gateway proxy listening on 127.0.0.1:${this.options.proxyPort}`);
+    console.log(`Gateway proxy listening on ${bindAddress}:${this.options.proxyPort}`);
     console.log(`Forwarding to ${this.options.upstreamHost}:${this.options.upstreamPort}`);
   }
 

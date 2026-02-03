@@ -1,0 +1,70 @@
+# Docker Compose template for aquaman-clawed
+# This file is generated automatically by `aquaman start`
+# You can use this as a reference for custom configurations
+
+version: '3.8'
+
+services:
+  aquaman:
+    image: aquaman-clawed:local
+    container_name: aquaman-control-plane
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.aquaman
+    volumes:
+      # Mount aquaman config (read-only)
+      - ~/.aquaman:/root/.aquaman:ro
+    networks:
+      - aquaman_net
+    ports:
+      # Only expose approval API to host for CLI interaction
+      - "127.0.0.1:18791:18791"
+    environment:
+      - AQUAMAN_SANDBOX_MODE=true
+      - AQUAMAN_BIND_ADDRESS=0.0.0.0
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:18791/pending"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  openclaw:
+    image: openclaw/openclaw:latest
+    container_name: openclaw-sandboxed
+    depends_on:
+      aquaman:
+        condition: service_healthy
+    volumes:
+      # Workspace mount - customize path as needed
+      # Use :ro suffix for read-only mode
+      - ~/workspace:/workspace:rw
+      # NO credential mounts - this is critical for isolation
+    networks:
+      - aquaman_net
+    environment:
+      # Point OpenClaw to aquaman proxies
+      - ANTHROPIC_BASE_URL=http://aquaman:8081/anthropic
+      - OPENAI_BASE_URL=http://aquaman:8081/openai
+      # Gateway configuration
+      - OPENCLAW_GATEWAY_HOST=aquaman
+      - OPENCLAW_GATEWAY_PORT=18790
+      # Disable direct credential loading
+      - OPENCLAW_NO_CREDENTIALS=true
+      # Enable OpenClaw's internal sandbox for double isolation
+      - OPENCLAW_SANDBOX_MODE=non-main
+    working_dir: /workspace
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4g
+
+networks:
+  aquaman_net:
+    driver: bridge
+    # CRITICAL: internal network means NO internet access
+    # OpenClaw can ONLY reach aquaman services
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

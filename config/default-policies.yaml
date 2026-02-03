@@ -170,3 +170,21 @@ approval:
     #   webhook: https://discord.com/api/webhooks/...
   timeout: 300  # seconds
   defaultOnTimeout: deny
+
+sandbox:
+  # Docker image for OpenClaw
+  openclawImage: "openclaw/openclaw:latest"
+  # Workspace configuration
+  workspace:
+    hostPath: "${HOME}/workspace"
+    containerPath: "/workspace"
+    readOnly: false
+  # Container resource limits
+  resources:
+    cpus: "2"
+    memory: "4g"
+  # Additional environment variables for OpenClaw container
+  environment: {}
+  # Enable OpenClaw's internal sandbox mode for double isolation
+  # This runs group/channel sessions in nested containers
+  enableOpenclawSandbox: true

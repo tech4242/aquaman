@@ -104,6 +104,20 @@ export function getDefaultConfig(): WrapperConfig {
       channels: [{ type: 'console' }],
       timeout: 300,
       defaultOnTimeout: 'deny'
+    },
+    sandbox: {
+      openclawImage: 'openclaw/openclaw:latest',
+      workspace: {
+        hostPath: path.join(os.homedir(), 'workspace'),
+        containerPath: '/workspace',
+        readOnly: false
+      },
+      resources: {
+        cpus: '2',
+        memory: '4g'
+      },
+      environment: {},
+      enableOpenclawSandbox: true // Double isolation: OpenClaw's sandbox inside our container
     }
   };
 }
@@ -192,6 +206,12 @@ function mergeConfig(
       ...base.approval,
       ...override.approval,
       channels: override.approval?.channels ?? base.approval.channels
+    },
+    sandbox: {
+      ...base.sandbox,
+      ...override.sandbox,
+      workspace: { ...base.sandbox.workspace, ...override.sandbox?.workspace },
+      resources: { ...base.sandbox.resources, ...override.sandbox?.resources }
     }
   };
 }

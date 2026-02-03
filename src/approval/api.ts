@@ -9,6 +9,7 @@ import { ApprovalManager } from './manager.js';
 
 export interface ApprovalApiOptions {
   port: number;
+  bindAddress?: string; // defaults to '0.0.0.0' for container access
   manager: ApprovalManager;
 }
 
@@ -28,8 +29,9 @@ export class ApprovalApi {
       this.handleRequest(req, res);
     });
 
+    const bindAddress = this.options.bindAddress || '0.0.0.0';
     return new Promise((resolve) => {
-      this.server!.listen(this.options.port, '127.0.0.1', () => {
+      this.server!.listen(this.options.port, bindAddress, () => {
         this.running = true;
         resolve();
       });

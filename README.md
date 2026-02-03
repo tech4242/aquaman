@@ -1,6 +1,14 @@
 # 🔱🦞🪸 aquaman-clawed
 
-Security wrapper for OpenClaw - audit logging, guardrails, and credential isolation.
+Secure sandbox control plane for OpenClaw - credential isolation, audit logging, and guardrails.
+
+## Prerequisites
+
+- **Docker** (required) - [Install Docker](https://docs.docker.com/get-docker/)
+- **Node.js 20+** - For the aquaman CLI
+- **macOS or Linux** - Both supported
+  - macOS: Uses Keychain for credential storage
+  - Linux: Uses encrypted-file backend
 
 ## Why This Exists
 
@@ -26,86 +34,95 @@ Security wrapper for OpenClaw - audit logging, guardrails, and credential isolat
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Why a Wrapper, Not a Fork?
-
-OpenClaw is a great project - a truly personal AI assistant across all messaging platforms, self-hosted, hackable. Security just wasn't the first priority, which is understandable for a fast-moving open source project.
-
-aquaman-clawed wraps OpenClaw without forking because:
-
-- **No maintenance burden** - Works with any OpenClaw version
-- **Optional by design** - Enable when you need it, disable when you don't
-- **Separation of concerns** - Security layer shouldn't be mixed into app code
-- **Respect for the project** - Adding security, not competing
-
 ## Quick Start
 
 ```bash
 # Install
 npm install -g aquaman-clawed
 
-# Initialize (backs up and configures OpenClaw automatically)
-aquaman init
-
 # Add your API keys to secure storage
 aquaman credentials add anthropic api_key
 aquaman credentials add openai api_key
 
-# Start the security wrapper
+# Start the secure sandbox (requires Docker)
 aquaman start
+
+# Or run in background
+aquaman start --detach
 ```
 
 ## How It Works
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        aquaman-clawed                               │
+│                          HOST MACHINE                               │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  OpenClaw ──> Credential Proxy ──> Anthropic/OpenAI APIs            │
-│               localhost:8081       (real credentials added here)    │
-│               (no API key)                                          │
+│  ┌───────────────────────────────────────────────────────────────┐ │
+│  │  aquaman (control plane container)                             │ │
+│  │                                                                 │ │
+│  │  Gateway Proxy :18790  ──> Intercepts all tool calls          │ │
+│  │  Credential Proxy :8081 ──> Injects API keys from Keychain    │ │
+│  │  Audit Logger ──────────> Hash-chained tamper-evident logs    │ │
+│  │  Alert Engine ──────────> Blocks dangerous patterns           │ │
+│  │  Approval Manager ──────> Requires approval for sudo, etc.    │ │
+│  │                                                                 │ │
+│  └───────────────────────────────────────────────────────────────┘ │
+│                               │                                     │
+│                    aquaman_net (internal, NO internet)              │
+│                               │                                     │
+│  ┌───────────────────────────▼───────────────────────────────────┐ │
+│  │  openclaw (sandboxed container)                                │ │
+│  │                                                                 │ │
+│  │  - NO credential files mounted                                 │ │
+│  │  - NO access to ~/.ssh, ~/.aws, ~/.gnupg                       │ │
+│  │  - Workspace: /workspace (your project, optionally read-only) │ │
+│  │  - Can ONLY reach aquaman proxy (no internet)                  │ │
+│  │  - OpenClaw sandbox mode enabled for double isolation          │ │
+│  │                                                                 │ │
+│  └───────────────────────────────────────────────────────────────┘ │
 │                                                                     │
-│  ┌─────────────────┐                                                │
-│  │  Audit Logger   │ ──> ~/.aquaman/audit/current.jsonl             │
-│  │  (hash-chained) │     (tamper-evident)                           │
-│  └────────┬────────┘                                                │
-│           │                                                         │
-│           │ evaluates every tool call                               │
-│           ▼                                                         │
-│  ┌─────────────────┐                                                │
-│  │  Alert Engine   │ "rm -rf /"    → BLOCKED                        │
-│  │                 │ "sudo ..."    → APPROVAL REQUIRED              │
-│  │                 │ "~/.ssh/*"    → BLOCKED                        │
-│  └─────────────────┘                                                │
-│                                                                     │
-│  Credentials: macOS Keychain (not in ~/.openclaw/)                  │
+│  Credentials: Stored in macOS Keychain (never in container)        │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Features
+## Security Features
 
-- **Credential isolation** - API keys in macOS Keychain, not stored in OpenClaw config files
-- **Audit logging** - Hash-chained logs of all tool calls
-- **Guardrails** - Block dangerous commands (`rm -rf /`, `curl | sh`, etc.)
-- **Approval workflows** - Require approval for sensitive operations (CLI or Slack/Discord)
+| Features | How It's Enforced |
+|-----------|-------------------|
+| **Network isolation** | Docker `internal: true` network - container has NO internet access |
+| **Credential isolation** | API keys stored in Keychain, injected via proxy, never in container |
+| **API interception** | Container can ONLY reach aquaman proxy - all calls audited |
+| **Audit completeness** | All traffic flows through hash-chained, tamper-evident audit log |
+| **Approval enforcement** | Dangerous operations actually blocked until approved |
+| **No Docker = No run** | Requires Docker - no "local mode" with weaker guarantees |
 
 ## CLI Commands
 
 ```bash
-aquaman init                         # Initialize and configure OpenClaw
-aquaman start                        # Start security wrapper
+# Sandbox lifecycle
+aquaman start                    # Start sandboxed OpenClaw
+aquaman start -w ~/myproject     # Custom workspace
+aquaman start --read-only        # Read-only workspace
+aquaman start --detach           # Run in background
+aquaman stop                     # Stop everything
+aquaman status                   # Show container status
+aquaman logs [-f]                # View logs
 
+# Credentials (stored on host, never in container)
 aquaman credentials add <svc> <key>  # Store API key securely
 aquaman credentials list             # List stored credentials
 aquaman credentials delete <svc> <key>
 
-aquaman audit tail                   # View recent audit entries
-aquaman audit verify                 # Verify log integrity
+# Audit
+aquaman audit tail               # View recent audit entries
+aquaman audit verify             # Verify log integrity
 
-aquaman pending                      # List pending approvals
-aquaman approve <id>                 # Approve a request
-aquaman deny <id>                    # Deny a request
+# Approval workflow
+aquaman pending                  # List pending approvals
+aquaman approve <id>             # Approve a request
+aquaman deny <id>                # Deny a request
 ```
 
 ## Approval Flow
@@ -120,7 +137,7 @@ Terminal 1 (aquaman start):             Terminal 2:
   Params: {"command": "sudo apt..."}      Reason: Sudo command
 
   Use: aquaman approve abc-123          $ aquaman approve abc-123
-                                        ✓ Approved: abc-123
+                                        Approved: abc-123
 ```
 
 Or configure Slack/Discord webhooks in `~/.aquaman/config.yaml` for remote approval.
@@ -130,21 +147,31 @@ Or configure Slack/Discord webhooks in `~/.aquaman/config.yaml` for remote appro
 Edit `~/.aquaman/config.yaml`:
 
 ```yaml
-wrapper:
-  proxyPort: 18790
-  upstreamPort: 18789
+sandbox:
+  openclawImage: "openclaw/openclaw:latest"
+  workspace:
+    hostPath: "${HOME}/workspace"
+    containerPath: "/workspace"
+    readOnly: false
+  resources:
+    cpus: "2"
+    memory: "4g"
+  enableOpenclawSandbox: true  # Double isolation
 
 audit:
   enabled: true
   logDir: ~/.aquaman/audit
+  alertRules:
+    - id: dangerous-command-pipe
+      pattern: "curl.*\\|.*sh"
+      action: block
+      severity: critical
 
 permissions:
   files:
-    allowedPaths: ['${HOME}/workspace/**']
     deniedPaths: ['~/.ssh/**', '**/.env', '**/*.pem']
   commands:
     deniedCommands: ['sudo', 'rm -rf /']
-    dangerousPatterns: ['curl.*|.*sh']
   network:
     defaultAction: deny
     allowedDomains: ['api.anthropic.com', 'api.openai.com']
@@ -161,83 +188,32 @@ approval:
     #   webhook: https://hooks.slack.com/...
 ```
 
-## Security Model & Limitations
+## aquaman-clawed vs OpenClaw's Sandbox Mode
 
-**Understand what this is and isn't.**
+OpenClaw has its own sandbox mode (`sandbox.mode: "non-main"`). These are **complementary**:
 
-### What aquaman-clawed Does
+| Feature | OpenClaw Sandbox | aquaman-clawed |
+|---------|-----------------|----------------|
+| **What it isolates** | Non-main sessions (groups/channels) | Entire OpenClaw instance |
+| **Who manages containers** | OpenClaw | aquaman |
+| **Credential storage** | Still in OpenClaw config | Keychain (never in container) |
+| **Audit logging** | No | Hash-chained, tamper-evident |
+| **Approval workflow** | No | Yes, with Slack/Discord |
+| **Network isolation** | Per-session | Entire instance |
 
-- Moves credentials from `~/.openclaw/auth-profiles.json` to macOS Keychain
-- Proxies API calls and injects credentials server-side
-- Logs all tool calls with tamper-evident hash chains
-- Pattern-matches dangerous commands and blocks/requires approval
+**Recommended:** Enable both for maximum security. aquaman automatically enables OpenClaw's sandbox mode inside the container (`enableOpenclawSandbox: true`).
 
-### What It Does NOT Do
+## Advanced: Generate Compose File
 
-**aquaman-clawed is not a sandbox.** OpenClaw runs as a separate process, not a child process under our control. Security is enforced by:
-
-1. Modifying OpenClaw's config to route traffic through our proxies
-2. Trusting that OpenClaw respects that configuration
-
-If OpenClaw (or a prompt injection attack) decides to bypass the proxy and call APIs directly, make raw HTTP requests, or read process memory, there's nothing stopping it.
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  What we provide        vs.      What we don't provide      │
-├─────────────────────────────────────────────────────────────┤
-│  ✓ Credential separation         ✗ Process isolation        │
-│  ✓ Tamper-evident audit logs     ✗ Tamper-proof logs        │
-│  ✓ Pattern-based guardrails      ✗ Semantic intent analysis │
-│  ✓ Configuration-level routing   ✗ Enforced network policy  │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Threat Model
-
-**Protected against:**
-- Prompt injection trying to read credential files (they're cleared)
-- Accidental dangerous commands (`rm -rf /`, `curl | sh`)
-- Post-incident forensics (audit trail exists)
-- Casual credential exfiltration via OpenClaw's normal tool calls
-
-**NOT protected against:**
-- Fully malicious/compromised OpenClaw binary
-- Root/admin-level attackers
-- Sophisticated command evasion (encoding, quoting tricks)
-- Direct network requests bypassing the proxy
-
-### OpenClaw's Built-in Sandboxing
-
-OpenClaw itself offers Docker-based sandboxing for non-main sessions:
-
-```yaml
-# In ~/.openclaw/openclaw.yaml
-agents:
-  defaults:
-    sandbox:
-      mode: "non-main"  # Isolates group/channel sessions in containers
-```
-
-This is **stronger isolation** than aquaman-clawed provides. Consider using both:
-- OpenClaw's sandbox for process isolation
-- aquaman-clawed for credential separation and audit logging
-
-### For True Isolation
-
-If you need hard security boundaries, run OpenClaw in a container:
+If you want to customize the Docker setup:
 
 ```bash
-docker run -it --rm \
-  --network=host \  # Or restrict to only reach aquaman proxy
-  -v ~/workspace:/workspace:ro \
-  -e OPENCLAW_API_BASE=http://host.docker.internal:8081 \
-  openclaw/openclaw
-```
+# Generate docker-compose.yml without starting
+aquaman generate-compose -o ./docker-compose.yml
 
-This provides:
-- Filesystem isolation (only mounted paths accessible)
-- Network namespace (can restrict to proxy only)
-- No access to host Keychain, ~/.ssh, etc.
+# Edit as needed, then:
+docker compose up -d
+```
 
 ## License
 

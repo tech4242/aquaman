@@ -11,6 +11,7 @@ import { generateId } from '../utils/hash.js';
 
 export interface CredentialProxyOptions {
   port: number;
+  bindAddress?: string; // defaults to '0.0.0.0' for container access
   store: CredentialStore;
   allowedServices: string[];
   onRequest?: (info: RequestInfo) => void;
@@ -82,10 +83,11 @@ export class CredentialProxy {
       });
     });
 
+    const bindAddress = this.options.bindAddress || '0.0.0.0';
     return new Promise((resolve, reject) => {
-      this.server!.listen(this.options.port, '127.0.0.1', () => {
+      this.server!.listen(this.options.port, bindAddress, () => {
         this.running = true;
-        console.log(`Credential proxy listening on 127.0.0.1:${this.options.port}`);
+        console.log(`Credential proxy listening on ${bindAddress}:${this.options.port}`);
         resolve();
       });
 
