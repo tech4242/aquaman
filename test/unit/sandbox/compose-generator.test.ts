@@ -87,6 +87,9 @@ describe('compose-generator', () => {
     });
 
     it('should configure openclaw to use aquaman proxies', () => {
+      // Disable TLS for this test to use HTTP
+      config.credentials.tls = { enabled: false };
+
       const compose = generateComposeConfig(config);
       const env = compose.services.openclaw.environment;
 
@@ -94,6 +97,17 @@ describe('compose-generator', () => {
       expect(env).toContain('OPENAI_BASE_URL=http://aquaman:8081/openai');
       expect(env).toContain('OPENCLAW_GATEWAY_HOST=aquaman');
       expect(env).toContain('OPENCLAW_NO_CREDENTIALS=true');
+    });
+
+    it('should use HTTPS when TLS is enabled', () => {
+      config.credentials.tls = { enabled: true };
+
+      const compose = generateComposeConfig(config);
+      const env = compose.services.openclaw.environment;
+
+      expect(env).toContain('ANTHROPIC_BASE_URL=https://aquaman:8081/anthropic');
+      expect(env).toContain('OPENAI_BASE_URL=https://aquaman:8081/openai');
+      expect(env).toContain('NODE_TLS_REJECT_UNAUTHORIZED=0');
     });
 
     it('should enable OpenClaw internal sandbox when configured', () => {

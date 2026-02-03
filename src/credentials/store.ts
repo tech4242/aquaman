@@ -31,8 +31,13 @@ export type CredentialBackend = 'keychain' | '1password' | 'vault' | 'encrypted-
 export interface CredentialStoreOptions {
   backend: CredentialBackend;
   encryptionPassword?: string;
+  // HashiCorp Vault options
   vaultAddress?: string;
   vaultToken?: string;
+  vaultNamespace?: string;
+  vaultMountPath?: string;
+  // 1Password options
+  onePasswordVault?: string;
   onePasswordAccount?: string;
 }
 
@@ -260,11 +265,34 @@ export function createCredentialStore(options: CredentialStoreOptions): Credenti
       }
       return new EncryptedFileStore(options.encryptionPassword);
 
-    case '1password':
-      throw new Error('1Password backend not yet implemented');
+    case '1password': {
+      // Dynamically import to avoid loading if not used
+      const { OnePasswordStore } = require('./backends/onepassword.js');
+      return new OnePasswordStore({
+        vault: options.onePasswordVault,
+        account: options.onePasswordAccount
+      });
+    }
 
-    case 'vault':
-      throw new Error('HashiCorp Vault backend not yet implemented');
+    case 'vault': {
+      if (!options.vaultAddress) {
+        // Try env var
+        const envAddress = process.env['VAULT_ADDR'];
+        if (!envAddress) {
+          throw new Error('vaultAddress required for vault backend. Set via config or VAULT_ADDR env var.');
+        }
+        options.vaultAddress = envAddress;
+      }
+
+      // Dynamically import to avoid loading if not used
+      const { VaultStore } = require('./backends/vault.js');
+      return new VaultStore({
+        address: options.vaultAddress,
+        token: options.vaultToken,
+        namespace: options.vaultNamespace,
+        mountPath: options.vaultMountPath
+      });
+    }
 
     default:
       throw new Error(`Unknown credential backend: ${options.backend}`);

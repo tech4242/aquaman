@@ -222,13 +222,19 @@ describe('createCredentialStore', () => {
     ).toThrow('encryptionPassword required');
   });
 
-  it('should throw for unimplemented backends', () => {
-    expect(() =>
-      createCredentialStore({ backend: '1password' })
-    ).toThrow('not yet implemented');
+  it('should throw for vault backend without address', () => {
+    // Clear VAULT_ADDR env var if set
+    const originalAddr = process.env['VAULT_ADDR'];
+    delete process.env['VAULT_ADDR'];
 
-    expect(() =>
-      createCredentialStore({ backend: 'vault' })
-    ).toThrow('not yet implemented');
+    try {
+      expect(() =>
+        createCredentialStore({ backend: 'vault' })
+      ).toThrow('vaultAddress required');
+    } finally {
+      if (originalAddr) {
+        process.env['VAULT_ADDR'] = originalAddr;
+      }
+    }
   });
 });

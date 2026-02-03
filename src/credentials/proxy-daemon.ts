@@ -5,9 +5,17 @@
 
 import * as http from 'node:http';
 import * as https from 'node:https';
+import * as fs from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { CredentialStore } from './store.js';
 import { generateId } from '../utils/hash.js';
+import { ServiceRegistry, createServiceRegistry, type ServiceDefinition } from './service-registry.js';
+
+export interface TlsOptions {
+  enabled: boolean;
+  certPath?: string;
+  keyPath?: string;
+}
 
 export interface CredentialProxyOptions {
   port: number;
@@ -15,6 +23,8 @@ export interface CredentialProxyOptions {
   store: CredentialStore;
   allowedServices: string[];
   onRequest?: (info: RequestInfo) => void;
+  tls?: TlsOptions;
+  serviceRegistry?: ServiceRegistry;
 }
 
 export interface RequestInfo {
@@ -35,39 +45,16 @@ interface ServiceConfig {
   credentialKey: string;
 }
 
-const SERVICE_CONFIGS: Record<string, ServiceConfig> = {
-  anthropic: {
-    upstream: 'https://api.anthropic.com',
-    authHeader: 'x-api-key',
-    credentialKey: 'api_key'
-  },
-  openai: {
-    upstream: 'https://api.openai.com',
-    authHeader: 'Authorization',
-    authPrefix: 'Bearer ',
-    credentialKey: 'api_key'
-  },
-  slack: {
-    upstream: 'https://slack.com/api',
-    authHeader: 'Authorization',
-    authPrefix: 'Bearer ',
-    credentialKey: 'bot_token'
-  },
-  discord: {
-    upstream: 'https://discord.com/api',
-    authHeader: 'Authorization',
-    authPrefix: 'Bot ',
-    credentialKey: 'bot_token'
-  }
-};
-
 export class CredentialProxy {
-  private server: http.Server | null = null;
+  private server: http.Server | https.Server | null = null;
   private options: CredentialProxyOptions;
   private running = false;
+  private tlsEnabled = false;
+  private serviceRegistry: ServiceRegistry;
 
   constructor(options: CredentialProxyOptions) {
     this.options = options;
+    this.serviceRegistry = options.serviceRegistry || createServiceRegistry();
   }
 
   async start(): Promise<void> {
@@ -75,19 +62,41 @@ export class CredentialProxy {
       throw new Error('Credential proxy already running');
     }
 
-    this.server = http.createServer((req, res) => {
+    const requestHandler = (req: IncomingMessage, res: ServerResponse) => {
       this.handleRequest(req, res).catch(error => {
         console.error('Proxy error:', error);
         res.statusCode = 500;
         res.end('Internal proxy error');
       });
-    });
+    };
+
+    // Determine if TLS should be used
+    const tls = this.options.tls;
+    if (tls?.enabled && tls.certPath && tls.keyPath) {
+      if (!fs.existsSync(tls.certPath) || !fs.existsSync(tls.keyPath)) {
+        console.warn('TLS cert/key not found, falling back to HTTP');
+        this.server = http.createServer(requestHandler);
+        this.tlsEnabled = false;
+      } else {
+        const tlsOptions = {
+          cert: fs.readFileSync(tls.certPath, 'utf-8'),
+          key: fs.readFileSync(tls.keyPath, 'utf-8')
+        };
+        this.server = https.createServer(tlsOptions, requestHandler);
+        this.tlsEnabled = true;
+      }
+    } else {
+      this.server = http.createServer(requestHandler);
+      this.tlsEnabled = false;
+    }
 
     const bindAddress = this.options.bindAddress || '0.0.0.0';
+    const protocol = this.tlsEnabled ? 'https' : 'http';
+
     return new Promise((resolve, reject) => {
       this.server!.listen(this.options.port, bindAddress, () => {
         this.running = true;
-        console.log(`Credential proxy listening on ${bindAddress}:${this.options.port}`);
+        console.log(`Credential proxy listening on ${protocol}://${bindAddress}:${this.options.port}`);
         resolve();
       });
 
@@ -109,12 +118,19 @@ export class CredentialProxy {
       return;
     }
 
-    const config = SERVICE_CONFIGS[service];
-    if (!config) {
+    const serviceDef = this.serviceRegistry.get(service);
+    if (!serviceDef) {
       res.statusCode = 404;
       res.end(`No configuration for service: ${service}`);
       return;
     }
+
+    const config: ServiceConfig = {
+      upstream: serviceDef.upstream,
+      authHeader: serviceDef.authHeader,
+      authPrefix: serviceDef.authPrefix,
+      credentialKey: serviceDef.credentialKey
+    };
 
     const requestInfo: RequestInfo = {
       id: requestId,
@@ -256,12 +272,26 @@ export class CredentialProxy {
     return this.running;
   }
 
-  getServiceConfigs(): Record<string, ServiceConfig> {
-    return { ...SERVICE_CONFIGS };
+  isTlsEnabled(): boolean {
+    return this.tlsEnabled;
   }
 
-  static getBaseUrl(service: string, proxyPort: number): string {
-    return `http://127.0.0.1:${proxyPort}/${service}`;
+  getServiceRegistry(): ServiceRegistry {
+    return this.serviceRegistry;
+  }
+
+  getServiceConfigs(): Record<string, ServiceConfig> {
+    return this.serviceRegistry.toConfigMap();
+  }
+
+  getBaseUrl(service: string): string {
+    const protocol = this.tlsEnabled ? 'https' : 'http';
+    return `${protocol}://127.0.0.1:${this.options.port}/${service}`;
+  }
+
+  static getBaseUrl(service: string, proxyPort: number, useTls = false): string {
+    const protocol = useTls ? 'https' : 'http';
+    return `${protocol}://127.0.0.1:${proxyPort}/${service}`;
   }
 }
 

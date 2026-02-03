@@ -3,7 +3,11 @@
  */
 
 import { generateId } from '../utils/hash.js';
+import { CredentialScanner } from '../credentials/scanner.js';
 import type { ApprovalRequest, ToolCall, ApprovalChannel } from '../types.js';
+
+// Shared scanner instance for all notifiers
+const credentialScanner = new CredentialScanner();
 
 export interface ApprovalManagerOptions {
   channels: ApprovalChannel[];
@@ -163,13 +167,16 @@ export interface ApprovalNotifier {
 
 export class ConsoleNotifier implements ApprovalNotifier {
   async notify(request: ApprovalRequest): Promise<void> {
+    // Redact any credentials in params before displaying
+    const redactedParams = credentialScanner.redactObject(request.toolCall.params);
+
     console.log('\n========================================');
     console.log('[APPROVAL REQUIRED]');
     console.log('----------------------------------------');
     console.log(`Request ID: ${request.id}`);
     console.log(`Tool: ${request.toolCall.tool}`);
     console.log(`Reason: ${request.reason}`);
-    console.log(`Params: ${JSON.stringify(request.toolCall.params, null, 2)}`);
+    console.log(`Params: ${JSON.stringify(redactedParams, null, 2)}`);
     console.log('----------------------------------------');
     console.log('Use: aquaman approve <request-id>');
     console.log('Or:  aquaman deny <request-id>');
@@ -185,6 +192,9 @@ export class SlackNotifier implements ApprovalNotifier {
   }
 
   async notify(request: ApprovalRequest): Promise<void> {
+    // Redact any credentials in params before sending to Slack
+    const redactedParams = credentialScanner.redactObject(request.toolCall.params);
+
     const payload = {
       blocks: [
         {
@@ -219,7 +229,7 @@ export class SlackNotifier implements ApprovalNotifier {
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `*Parameters:*\n\`\`\`${JSON.stringify(request.toolCall.params, null, 2)}\`\`\``
+            text: `*Parameters:*\n\`\`\`${JSON.stringify(redactedParams, null, 2)}\`\`\``
           }
         },
         {
@@ -250,6 +260,9 @@ export class DiscordNotifier implements ApprovalNotifier {
   }
 
   async notify(request: ApprovalRequest): Promise<void> {
+    // Redact any credentials in params before sending to Discord
+    const redactedParams = credentialScanner.redactObject(request.toolCall.params);
+
     const payload = {
       embeds: [
         {
@@ -272,7 +285,7 @@ export class DiscordNotifier implements ApprovalNotifier {
             },
             {
               name: 'Parameters',
-              value: `\`\`\`json\n${JSON.stringify(request.toolCall.params, null, 2)}\`\`\``
+              value: `\`\`\`json\n${JSON.stringify(redactedParams, null, 2)}\`\`\``
             }
           ],
           footer: {

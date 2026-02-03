@@ -9,6 +9,7 @@ import { generateId } from '../utils/hash.js';
 import type { GatewayMessage, ToolCall, WrapperConfig } from '../types.js';
 import { AuditLogger } from '../audit/logger.js';
 import { AlertEngine, AlertResult } from '../audit/alerting.js';
+import { CredentialScanner } from '../credentials/scanner.js';
 
 export interface GatewayProxyOptions {
   proxyPort: number;
@@ -35,9 +36,11 @@ export class GatewayProxy {
   private connections: Map<string, ClientConnection> = new Map();
   private options: GatewayProxyOptions;
   private running: boolean = false;
+  private credentialScanner: CredentialScanner;
 
   constructor(options: GatewayProxyOptions) {
     this.options = options;
+    this.credentialScanner = new CredentialScanner();
   }
 
   async start(): Promise<void> {
@@ -174,7 +177,7 @@ export class GatewayProxy {
       const pendingCall = connection.pendingCalls.get(message.id);
 
       if (pendingCall) {
-        // Log the result
+        // Log the result (logger already redacts)
         await this.options.auditLogger.logToolResult(
           connection.sessionId,
           connection.agentId,
@@ -189,9 +192,21 @@ export class GatewayProxy {
 
         connection.pendingCalls.delete(message.id);
       }
+
+      // Redact any credentials in the result before forwarding to client
+      if (message.result !== undefined) {
+        const redactedMessage = {
+          ...message,
+          result: this.credentialScanner.redactObject(message.result)
+        };
+        if (connection.clientWs.readyState === WebSocket.OPEN) {
+          connection.clientWs.send(JSON.stringify(redactedMessage));
+        }
+        return;
+      }
     }
 
-    // Forward to client
+    // Forward to client (no modification needed for non-result messages)
     if (connection.clientWs.readyState === WebSocket.OPEN) {
       connection.clientWs.send(data);
     }

@@ -213,6 +213,34 @@ export class CredentialScanner {
       ...this.customPatterns.map(p => p.type)
     ];
   }
+
+  /**
+   * Recursively redact credentials in an object
+   * Returns a deep copy with all string values scanned and redacted
+   */
+  redactObject<T>(obj: T): T {
+    if (obj === null || obj === undefined) {
+      return obj;
+    }
+
+    if (typeof obj === 'string') {
+      return this.scan(obj).redacted as T;
+    }
+
+    if (Array.isArray(obj)) {
+      return obj.map(item => this.redactObject(item)) as T;
+    }
+
+    if (typeof obj === 'object') {
+      const result: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(obj)) {
+        result[key] = this.redactObject(value);
+      }
+      return result as T;
+    }
+
+    return obj;
+  }
 }
 
 export function createCredentialScanner(additionalPatterns?: PatternConfig[]): CredentialScanner {

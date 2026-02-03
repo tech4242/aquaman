@@ -1,14 +1,6 @@
 # 🔱🦞🪸 aquaman-clawed
 
-Secure sandbox control plane for OpenClaw - credential isolation, audit logging, and guardrails.
-
-## Prerequisites
-
-- **Docker** (required) - [Install Docker](https://docs.docker.com/get-docker/)
-- **Node.js 20+** - For the aquaman CLI
-- **macOS or Linux** - Both supported
-  - macOS: Uses Keychain for credential storage
-  - Linux: Uses encrypted-file backend
+Security control plane for OpenClaw - audit logging, guardrails, and credential isolation.
 
 ## Why This Exists
 
@@ -89,14 +81,29 @@ aquaman start --detach
 
 ## Security Features
 
-| Features | How It's Enforced |
-|-----------|-------------------|
-| **Network isolation** | Docker `internal: true` network - container has NO internet access |
-| **Credential isolation** | API keys stored in Keychain, injected via proxy, never in container |
-| **API interception** | Container can ONLY reach aquaman proxy - all calls audited |
-| **Audit completeness** | All traffic flows through hash-chained, tamper-evident audit log |
-| **Approval enforcement** | Dangerous operations actually blocked until approved |
-| **No Docker = No run** | Requires Docker - no "local mode" with weaker guarantees |
+| Feature | Description |
+|---------|-------------|
+| **Container Isolation** | OpenClaw runs in Docker with no internet access |
+| **Credential Proxy** | API keys injected via HTTPS, never in container |
+| **TLS Encryption** | Self-signed certs, no external CA needed |
+| **Audit Logging** | Hash-chained, tamper-evident logs |
+| **Secret Redaction** | 16+ patterns auto-redacted from logs |
+| **Approval Workflow** | Block dangerous commands until approved |
+| **macOS Keychain** | Native credential storage |
+| **Encrypted File** | AES-256-GCM with PBKDF2 |
+| **1Password** | Team credential sharing via `op` CLI |
+| **HashiCorp Vault** | Enterprise secrets management |
+| **Custom Services** | YAML-based service registry |
+| **Policy Engine** | Block/allow commands, files, network |
+
+## Credential Backends
+
+| Backend | Use Case | Setup |
+|---------|----------|-------|
+| `keychain` | macOS local development | Default, no setup |
+| `encrypted-file` | Linux, CI/CD | Set encryption password |
+| `1password` | Team sharing, enterprise | Install `op` CLI, sign in |
+| `vault` | Enterprise secrets management | Vault server + token |
 
 ## CLI Commands
 
@@ -114,6 +121,10 @@ aquaman logs [-f]                # View logs
 aquaman credentials add <svc> <key>  # Store API key securely
 aquaman credentials list             # List stored credentials
 aquaman credentials delete <svc> <key>
+
+# Services (custom API configurations)
+aquaman services list            # List all configured services
+aquaman services validate        # Validate services.yaml
 
 # Audit
 aquaman audit tail               # View recent audit entries
@@ -177,7 +188,14 @@ permissions:
     allowedDomains: ['api.anthropic.com', 'api.openai.com']
 
 credentials:
-  backend: keychain  # or: encrypted-file
+  backend: keychain  # or: encrypted-file, 1password, vault
+  tls:
+    enabled: true
+    autoGenerate: true
+  # For 1Password backend
+  # onePasswordVault: aquaman-clawed
+  # For Vault backend
+  # vaultAddress: https://vault.company.com:8200
 
 approval:
   timeout: 300
@@ -202,6 +220,38 @@ OpenClaw has its own sandbox mode (`sandbox.mode: "non-main"`). These are **comp
 | **Network isolation** | Per-session | Entire instance |
 
 **Recommended:** Enable both for maximum security. aquaman automatically enables OpenClaw's sandbox mode inside the container (`enableOpenclawSandbox: true`).
+
+## Quick Examples
+
+```bash
+# Use 1Password for credentials
+aquaman config set credentials.backend 1password
+aquaman credentials add anthropic api_key
+
+# Use HashiCorp Vault
+export VAULT_ADDR=https://vault.company.com:8200
+export VAULT_TOKEN=hvs.xxxxx
+aquaman config set credentials.backend vault
+aquaman credentials add anthropic api_key
+
+# Add custom service
+cat >> ~/.aquaman/services.yaml << EOF
+services:
+  - name: github
+    upstream: https://api.github.com
+    authHeader: Authorization
+    authPrefix: "Bearer "
+    credentialKey: token
+  - name: custom-llm
+    upstream: https://llm.internal.company.com/v1
+    authHeader: X-API-Key
+    credentialKey: api_key
+EOF
+aquaman services validate
+
+# Verify audit log has no leaked secrets
+cat ~/.aquaman/audit/current.jsonl | grep -o 'sk-ant-[^"]*'  # Should be redacted
+```
 
 ## Advanced: Generate Compose File
 

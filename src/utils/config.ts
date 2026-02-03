@@ -98,7 +98,14 @@ export function getDefaultConfig(): WrapperConfig {
     credentials: {
       backend: 'keychain',
       proxyPort: 8081,
-      proxiedServices: ['claude', 'openai', 'slack', 'discord']
+      proxiedServices: ['anthropic', 'openai', 'slack', 'discord'],
+      tls: {
+        enabled: true,
+        autoGenerate: true,
+        certPath: path.join(getConfigDir(), 'certs', 'proxy.crt'),
+        keyPath: path.join(getConfigDir(), 'certs', 'proxy.key')
+      },
+      vaultMountPath: 'secret'
     },
     approval: {
       channels: [{ type: 'console' }],

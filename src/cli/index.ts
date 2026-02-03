@@ -19,6 +19,8 @@ import { createApprovalManager } from '../approval/manager.js';
 import { createApprovalApi, apiApprove, apiDeny, apiGetPending } from '../approval/api.js';
 import { createSandboxOrchestrator } from '../sandbox/orchestrator.js';
 import { generateComposeConfig, writeComposeFile } from '../sandbox/compose-generator.js';
+import { createServiceRegistry, ServiceRegistry } from '../credentials/service-registry.js';
+import { generateSelfSignedCert } from '../utils/hash.js';
 import type { WrapperConfig } from '../types.js';
 import { stringify as yamlStringify } from 'yaml';
 
@@ -156,18 +158,31 @@ program
     // Initialize credential store
     let credentialStore;
     try {
-      credentialStore = createCredentialStore({ backend: config.credentials.backend });
+      credentialStore = createCredentialStore({
+        backend: config.credentials.backend,
+        vaultAddress: config.credentials.vaultAddress,
+        vaultToken: config.credentials.vaultToken,
+        vaultNamespace: config.credentials.vaultNamespace,
+        vaultMountPath: config.credentials.vaultMountPath,
+        onePasswordVault: config.credentials.onePasswordVault,
+        onePasswordAccount: config.credentials.onePasswordAccount
+      });
     } catch {
       console.log('Note: Using memory store for credentials');
       credentialStore = new MemoryStore();
     }
 
-    // Start credential proxy
+    // Initialize service registry
+    const serviceRegistry = createServiceRegistry();
+
+    // Start credential proxy with TLS and service registry
     const credentialProxy = createCredentialProxy({
       port: config.credentials.proxyPort,
       bindAddress,
       store: credentialStore,
       allowedServices: config.credentials.proxiedServices,
+      serviceRegistry,
+      tls: config.credentials.tls,
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
@@ -242,6 +257,7 @@ program
   .command('init')
   .description('Initialize aquaman configuration')
   .option('--force', 'Overwrite existing configuration')
+  .option('--no-tls', 'Skip TLS certificate generation')
   .action(async (options) => {
     ensureConfigDir();
     const configPath = path.join(getConfigDir(), 'config.yaml');
@@ -260,6 +276,31 @@ program
     const auditDir = path.join(getConfigDir(), 'audit');
     fs.mkdirSync(auditDir, { recursive: true });
     console.log(`Created ${auditDir}`);
+
+    // Generate TLS certificates if enabled
+    if (options.tls !== false && config.credentials.tls?.autoGenerate) {
+      const certsDir = path.join(getConfigDir(), 'certs');
+      fs.mkdirSync(certsDir, { recursive: true });
+
+      const certPath = config.credentials.tls.certPath || path.join(certsDir, 'proxy.crt');
+      const keyPath = config.credentials.tls.keyPath || path.join(certsDir, 'proxy.key');
+
+      if (!fs.existsSync(certPath) || options.force) {
+        console.log('Generating TLS certificates...');
+        try {
+          const { cert, key } = generateSelfSignedCert('aquaman-proxy', 365);
+          fs.writeFileSync(certPath, cert, { mode: 0o644 });
+          fs.writeFileSync(keyPath, key, { mode: 0o600 });
+          console.log(`Created ${certPath}`);
+          console.log(`Created ${keyPath}`);
+        } catch (error) {
+          console.error('Warning: Failed to generate TLS certificates:', error);
+          console.log('TLS will be disabled. Run "aquaman init --force" to retry.');
+        }
+      } else {
+        console.log('TLS certificates already exist (use --force to regenerate)');
+      }
+    }
 
     console.log('\nNext steps:');
     console.log('1. Add your API keys: aquaman credentials add anthropic api_key');
@@ -465,6 +506,82 @@ credentials
       await store.delete(cred.service, cred.key);
     }
     console.log(`Revoked ${creds.length} credentials`);
+  });
+
+// Services commands
+const services = program.command('services').description('Service registry management');
+
+services
+  .command('list')
+  .description('List all configured services')
+  .option('--builtin', 'Show only builtin services')
+  .option('--custom', 'Show only custom services')
+  .action(async (options) => {
+    const registry = createServiceRegistry();
+    const builtinNames = new Set(ServiceRegistry.getBuiltinServiceNames());
+    const allServices = registry.getAll();
+
+    let filtered = allServices;
+    if (options.builtin) {
+      filtered = allServices.filter(s => builtinNames.has(s.name));
+    } else if (options.custom) {
+      filtered = allServices.filter(s => !builtinNames.has(s.name));
+    }
+
+    if (filtered.length === 0) {
+      console.log('No services found.');
+      return;
+    }
+
+    console.log('Configured services:\n');
+    for (const service of filtered) {
+      const source = builtinNames.has(service.name) ? '(builtin)' : '(custom)';
+      console.log(`  ${service.name} ${source}`);
+      console.log(`    Upstream: ${service.upstream}`);
+      console.log(`    Auth: ${service.authHeader}${service.authPrefix ? ` (prefix: "${service.authPrefix}")` : ''}`);
+      console.log(`    Credential key: ${service.credentialKey}`);
+      if (service.description) {
+        console.log(`    Description: ${service.description}`);
+      }
+      console.log('');
+    }
+  });
+
+services
+  .command('validate')
+  .description('Validate services.yaml configuration')
+  .option('-p, --path <path>', 'Path to services.yaml')
+  .action(async (options) => {
+    const configPath = options.path || path.join(getConfigDir(), 'services.yaml');
+
+    if (!fs.existsSync(configPath)) {
+      console.log(`No services file found at ${configPath}`);
+      console.log('\nTo create a custom services file:');
+      console.log(`  1. Create ${configPath}`);
+      console.log('  2. Add services in YAML format:');
+      console.log('');
+      console.log('services:');
+      console.log('  - name: my-api');
+      console.log('    upstream: https://api.example.com');
+      console.log('    authHeader: Authorization');
+      console.log('    authPrefix: "Bearer "');
+      console.log('    credentialKey: api_key');
+      return;
+    }
+
+    const result = ServiceRegistry.validateConfigFile(configPath);
+
+    if (result.valid) {
+      console.log(`\u2713 ${configPath} is valid`);
+      const registry = createServiceRegistry({ configPath });
+      console.log(`  Found ${registry.getAll().length} services`);
+    } else {
+      console.log(`\u2717 ${configPath} has errors:\n`);
+      for (const error of result.errors) {
+        console.log(`  - ${error}`);
+      }
+      process.exit(1);
+    }
   });
 
 // Approval commands

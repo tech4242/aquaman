@@ -130,6 +130,20 @@ export interface WrapperConfig {
     backend: 'keychain' | '1password' | 'vault' | 'encrypted-file';
     proxyPort: number;
     proxiedServices: string[];
+    tls?: {
+      enabled: boolean;
+      certPath?: string;
+      keyPath?: string;
+      autoGenerate?: boolean;
+    };
+    // 1Password options
+    onePasswordVault?: string;
+    onePasswordAccount?: string;
+    // HashiCorp Vault options
+    vaultAddress?: string;
+    vaultToken?: string;
+    vaultNamespace?: string;
+    vaultMountPath?: string;
   };
   approval: {
     channels: ApprovalChannel[];

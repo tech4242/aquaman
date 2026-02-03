@@ -63,17 +63,27 @@ export function generateComposeConfig(config: WrapperConfig): ComposeConfig {
   const workspaceContainer = sandbox.workspace.containerPath;
   const readOnlyFlag = sandbox.workspace.readOnly ? 'ro' : 'rw';
 
+  // Determine protocol based on TLS configuration
+  const useTls = config.credentials.tls?.enabled === true;
+  const protocol = useTls ? 'https' : 'http';
+  const credProxyPort = config.credentials.proxyPort;
+
   // Build environment variables for OpenClaw
   const openclawEnv = [
-    // Point to aquaman proxies
-    'ANTHROPIC_BASE_URL=http://aquaman:8081/anthropic',
-    'OPENAI_BASE_URL=http://aquaman:8081/openai',
+    // Point to aquaman proxies (use https:// when TLS is enabled)
+    `ANTHROPIC_BASE_URL=${protocol}://aquaman:${credProxyPort}/anthropic`,
+    `OPENAI_BASE_URL=${protocol}://aquaman:${credProxyPort}/openai`,
     // Gateway configuration
     'OPENCLAW_GATEWAY_HOST=aquaman',
     `OPENCLAW_GATEWAY_PORT=${config.wrapper.proxyPort}`,
     // Disable direct credential loading
     'OPENCLAW_NO_CREDENTIALS=true',
   ];
+
+  // If using TLS with self-signed certs, disable certificate verification in container
+  if (useTls) {
+    openclawEnv.push('NODE_TLS_REJECT_UNAUTHORIZED=0');
+  }
 
   // Enable OpenClaw's internal sandbox if configured
   if (sandbox.enableOpenclawSandbox) {

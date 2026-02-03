@@ -6,6 +6,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { computeChainedHash, generateId } from '../utils/hash.js';
 import { expandPath } from '../utils/config.js';
+import { CredentialScanner } from '../credentials/scanner.js';
 import type {
   AuditEntry,
   ToolCall,
@@ -32,6 +33,7 @@ export class AuditLogger {
   private lastHash: string = GENESIS_HASH;
   private entryCount: number = 0;
   private initialized: boolean = false;
+  private credentialScanner: CredentialScanner;
 
   constructor(options: AuditLoggerOptions) {
     this.logDir = expandPath(options.logDir);
@@ -39,6 +41,7 @@ export class AuditLogger {
     this.walPath = path.join(this.logDir, 'current.wal');
     this.enabled = options.enabled ?? true;
     this.walEnabled = options.walEnabled ?? true;
+    this.credentialScanner = new CredentialScanner();
   }
 
   async initialize(): Promise<void> {
@@ -125,12 +128,15 @@ export class AuditLogger {
   ): Promise<AuditEntry | null> {
     if (!this.enabled) return null;
 
+    // Redact any credentials in params BEFORE logging
+    const redactedParams = this.credentialScanner.redactObject(params);
+
     const toolCall: ToolCall = {
       id: generateId(),
       sessionId,
       agentId,
       tool,
-      params,
+      params: redactedParams,
       timestamp: new Date()
     };
 
@@ -146,11 +152,15 @@ export class AuditLogger {
   ): Promise<AuditEntry | null> {
     if (!this.enabled) return null;
 
+    // Redact any credentials in result BEFORE logging
+    const redactedResult = this.credentialScanner.redactObject(result);
+    const redactedError = error ? this.credentialScanner.scan(error).redacted : undefined;
+
     const toolResult: ToolResult = {
       id: generateId(),
       toolCallId,
-      result,
-      error,
+      result: redactedResult,
+      error: redactedError,
       timestamp: new Date()
     };
 
