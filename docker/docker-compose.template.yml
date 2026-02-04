@@ -1,4 +1,4 @@
-# Docker Compose template for aquaman-clawed
+# Docker Compose template for aquaman
 # This file is generated automatically by `aquaman start`
 # You can use this as a reference for custom configurations
 
@@ -6,7 +6,7 @@ version: '3.8'
 
 services:
   aquaman:
-    image: aquaman-clawed:local
+    image: aquaman:local
     container_name: aquaman-control-plane
     build:
       context: ..

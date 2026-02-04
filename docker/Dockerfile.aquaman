@@ -7,10 +7,13 @@ RUN apk add --no-cache wget
 
 # Copy package files and install dependencies
 COPY package*.json ./
-RUN npm ci --only=production
+COPY packages/core/package.json ./packages/core/
+COPY packages/proxy/package.json ./packages/proxy/
+RUN npm ci --only=production --workspaces
 
-# Copy built application
-COPY dist/ ./dist/
+# Copy built packages
+COPY packages/core/dist/ ./packages/core/dist/
+COPY packages/proxy/dist/ ./packages/proxy/dist/
 COPY config/ ./config/
 
 # Create non-root user for security
@@ -22,11 +25,9 @@ RUN addgroup -g 1001 -S aquaman && \
 USER aquaman
 
 # Expose proxy ports
-# 18790 - Gateway proxy (WebSocket)
 # 8081  - Credential proxy (HTTP)
-# 18791 - Approval API (HTTP)
-EXPOSE 18790 8081 18791
+EXPOSE 8081
 
-# Run the daemon (proxies only, not orchestration)
-ENTRYPOINT ["node", "dist/cli/index.js"]
+# Run the daemon
+ENTRYPOINT ["node", "packages/proxy/dist/cli/index.js"]
 CMD ["daemon"]

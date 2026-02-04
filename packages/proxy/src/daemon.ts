@@ -7,8 +7,7 @@ import * as http from 'node:http';
 import * as https from 'node:https';
 import * as fs from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { CredentialStore } from './store.js';
-import { generateId } from '../utils/hash.js';
+import { type CredentialStore, generateId } from '@aquaman/core';
 import { ServiceRegistry, createServiceRegistry, type ServiceDefinition } from './service-registry.js';
 
 export interface TlsOptions {
@@ -25,6 +24,7 @@ export interface CredentialProxyOptions {
   onRequest?: (info: RequestInfo) => void;
   tls?: TlsOptions;
   serviceRegistry?: ServiceRegistry;
+  requestTimeout?: number; // Upstream request timeout in ms, defaults to 30000 (30s)
 }
 
 export interface RequestInfo {
@@ -51,6 +51,7 @@ export class CredentialProxy {
   private running = false;
   private tlsEnabled = false;
   private serviceRegistry: ServiceRegistry;
+  private actualPort: number = 0;
 
   constructor(options: CredentialProxyOptions) {
     this.options = options;
@@ -95,8 +96,16 @@ export class CredentialProxy {
 
     return new Promise((resolve, reject) => {
       this.server!.listen(this.options.port, bindAddress, () => {
+        // Get actual port (important when port 0 is used for dynamic allocation)
+        const address = this.server!.address();
+        if (address && typeof address === 'object') {
+          this.actualPort = address.port;
+        } else {
+          this.actualPort = this.options.port;
+        }
+
         this.running = true;
-        console.log(`Credential proxy listening on ${protocol}://${bindAddress}:${this.options.port}`);
+        console.log(`Credential proxy listening on ${protocol}://${bindAddress}:${this.actualPort}`);
         resolve();
       });
 
@@ -234,8 +243,25 @@ export class CredentialProxy {
         requestInfo.statusCode = 502;
         this.emitRequest(requestInfo);
 
-        clientRes.statusCode = 502;
-        clientRes.end('Upstream error');
+        if (!clientRes.headersSent) {
+          clientRes.statusCode = 502;
+          clientRes.end('Upstream error');
+        }
+        resolve();
+      });
+
+      // Add timeout to prevent indefinite hangs
+      const timeout = this.options.requestTimeout ?? 30000;
+      proxyReq.setTimeout(timeout, () => {
+        proxyReq.destroy();
+        requestInfo.error = 'Gateway timeout';
+        requestInfo.statusCode = 504;
+        this.emitRequest(requestInfo);
+
+        if (!clientRes.headersSent) {
+          clientRes.statusCode = 504;
+          clientRes.end('Gateway Timeout');
+        }
         resolve();
       });
 
@@ -276,6 +302,10 @@ export class CredentialProxy {
     return this.tlsEnabled;
   }
 
+  getPort(): number {
+    return this.actualPort;
+  }
+
   getServiceRegistry(): ServiceRegistry {
     return this.serviceRegistry;
   }
@@ -286,7 +316,7 @@ export class CredentialProxy {
 
   getBaseUrl(service: string): string {
     const protocol = this.tlsEnabled ? 'https' : 'http';
-    return `${protocol}://127.0.0.1:${this.options.port}/${service}`;
+    return `${protocol}://127.0.0.1:${this.actualPort}/${service}`;
   }
 
   static getBaseUrl(service: string, proxyPort: number, useTls = false): string {
@@ -298,3 +328,5 @@ export class CredentialProxy {
 export function createCredentialProxy(options: CredentialProxyOptions): CredentialProxy {
   return new CredentialProxy(options);
 }
+
+export type { ServiceDefinition };

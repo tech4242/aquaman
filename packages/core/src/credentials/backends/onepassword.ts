@@ -3,7 +3,7 @@
  * Requires: 1Password CLI installed and signed in
  */
 
-import { execSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import type { CredentialStore } from '../store.js';
 
 export interface OnePasswordStoreOptions {
@@ -11,7 +11,7 @@ export interface OnePasswordStoreOptions {
   account?: string;
 }
 
-const DEFAULT_VAULT = 'aquaman-clawed';
+const DEFAULT_VAULT = 'aquaman';
 const ITEM_PREFIX = 'aquaman';
 
 export class OnePasswordStore implements CredentialStore {

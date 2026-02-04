@@ -6,16 +6,19 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
     "resolveJsonModule": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "composite": true
   },
-  "files": [],
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"],
   "references": [
-    { "path": "./packages/core" },
-    { "path": "./packages/proxy" },
-    { "path": "./packages/openclaw" }
+    { "path": "../core" },
+    { "path": "../proxy" }
   ]
 }

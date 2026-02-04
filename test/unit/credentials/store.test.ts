@@ -10,7 +10,7 @@ import {
   MemoryStore,
   EncryptedFileStore,
   createCredentialStore
-} from '../../../src/credentials/store.js';
+} from '@aquaman/core';
 
 describe('MemoryStore', () => {
   let store: MemoryStore;

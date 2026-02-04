@@ -4,26 +4,32 @@
  * These tests verify the core claim: credentials are actually injected into upstream requests.
  *
  * Architecture:
- *   Test → Proxy (:18081) → Mock Upstream (:19000)
+ *   Test → Proxy (dynamic port) → Mock Upstream (dynamic port)
  *                ↓
  *        Credential Store (Memory)
+ *
+ * Tests cover:
+ * - Credential injection for Anthropic, OpenAI, GitHub
+ * - Missing credential handling (401)
+ * - Request/response body forwarding
+ * - Streaming SSE responses
+ * - Concurrent request handling
+ * - Upstream failure/timeout handling
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { CredentialProxy, createCredentialProxy } from '../../src/credentials/proxy-daemon.js';
-import { MemoryStore } from '../../src/credentials/store.js';
-import { createServiceRegistry } from '../../src/credentials/service-registry.js';
+import { CredentialProxy, createCredentialProxy, createServiceRegistry } from '@aquaman/proxy';
+import { MemoryStore } from '@aquaman/core';
 import { MockUpstream, createMockUpstream } from '../helpers/mock-upstream.js';
-import type { RequestInfo } from '../../src/credentials/proxy-daemon.js';
+import type { RequestInfo } from '@aquaman/proxy';
 
 describe('Credential Injection E2E', () => {
   let proxy: CredentialProxy;
   let upstream: MockUpstream;
   let store: MemoryStore;
   let requestLog: RequestInfo[];
-
-  const PROXY_PORT = 18081;
-  const UPSTREAM_PORT = 19000;
+  let proxyPort: number;
+  let upstreamPort: number;
 
   // Test credentials
   const TEST_ANTHROPIC_KEY = 'sk-ant-test-123';
@@ -31,9 +37,10 @@ describe('Credential Injection E2E', () => {
   const TEST_GITHUB_TOKEN = 'ghp-token-789';
 
   beforeEach(async () => {
-    // Start mock upstream server
+    // Start mock upstream server with dynamic port allocation
     upstream = createMockUpstream();
-    await upstream.start(UPSTREAM_PORT);
+    await upstream.start(0); // OS assigns available port
+    upstreamPort = upstream.port;
 
     // Configure credential store with test credentials
     store = new MemoryStore();
@@ -46,18 +53,18 @@ describe('Credential Injection E2E', () => {
     // Create service registry and override upstreams to point to mock
     const registry = createServiceRegistry();
     registry.override('anthropic', {
-      upstream: `http://127.0.0.1:${UPSTREAM_PORT}`
+      upstream: `http://127.0.0.1:${upstreamPort}`
     });
     registry.override('openai', {
-      upstream: `http://127.0.0.1:${UPSTREAM_PORT}`
+      upstream: `http://127.0.0.1:${upstreamPort}`
     });
     registry.override('github', {
-      upstream: `http://127.0.0.1:${UPSTREAM_PORT}`
+      upstream: `http://127.0.0.1:${upstreamPort}`
     });
 
-    // Start proxy with custom registry
+    // Start proxy with dynamic port allocation
     proxy = createCredentialProxy({
-      port: PROXY_PORT,
+      port: 0, // OS assigns available port
       store,
       serviceRegistry: registry,
       allowedServices: ['anthropic', 'openai', 'github'],
@@ -67,6 +74,7 @@ describe('Credential Injection E2E', () => {
     });
 
     await proxy.start();
+    proxyPort = proxy.getPort();
   });
 
   afterEach(async () => {
@@ -77,7 +85,7 @@ describe('Credential Injection E2E', () => {
 
   describe('Anthropic credential injection', () => {
     it('injects x-api-key header for Anthropic requests', async () => {
-      const response = await fetch(`http://127.0.0.1:${PROXY_PORT}/anthropic/v1/messages`, {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: 'claude-3', messages: [] })
@@ -95,7 +103,7 @@ describe('Credential Injection E2E', () => {
     });
 
     it('does not leak x-api-key header in response to client', async () => {
-      const response = await fetch(`http://127.0.0.1:${PROXY_PORT}/anthropic/v1/messages`, {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: 'claude-3', messages: [] })
@@ -108,7 +116,7 @@ describe('Credential Injection E2E', () => {
 
   describe('OpenAI credential injection', () => {
     it('injects Authorization header with Bearer prefix for OpenAI requests', async () => {
-      const response = await fetch(`http://127.0.0.1:${PROXY_PORT}/openai/v1/chat/completions`, {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/openai/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -128,7 +136,7 @@ describe('Credential Injection E2E', () => {
 
   describe('GitHub credential injection', () => {
     it('injects Authorization header with Bearer prefix for GitHub requests', async () => {
-      const response = await fetch(`http://127.0.0.1:${PROXY_PORT}/github/repos/test/test`, {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/github/repos/test/test`, {
         method: 'GET',
         headers: { 'Accept': 'application/vnd.github.v3+json' }
       });
@@ -147,7 +155,7 @@ describe('Credential Injection E2E', () => {
       // Remove the anthropic credential
       await store.delete('anthropic', 'api_key');
 
-      const response = await fetch(`http://127.0.0.1:${PROXY_PORT}/anthropic/v1/messages`, {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: 'claude-3', messages: [] })
@@ -162,7 +170,7 @@ describe('Credential Injection E2E', () => {
     it('logs authentication failure in request log', async () => {
       await store.delete('anthropic', 'api_key');
 
-      await fetch(`http://127.0.0.1:${PROXY_PORT}/anthropic/v1/messages`, {
+      await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
         method: 'POST'
       });
 
@@ -183,7 +191,7 @@ describe('Credential Injection E2E', () => {
         ]
       };
 
-      await fetch(`http://127.0.0.1:${PROXY_PORT}/anthropic/v1/messages`, {
+      await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(testBody)
@@ -195,7 +203,7 @@ describe('Credential Injection E2E', () => {
     });
 
     it('forwards request headers to upstream (except host and auth)', async () => {
-      await fetch(`http://127.0.0.1:${PROXY_PORT}/anthropic/v1/messages`, {
+      await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -213,7 +221,7 @@ describe('Credential Injection E2E', () => {
     });
 
     it('strips client-provided auth header (prevents override)', async () => {
-      await fetch(`http://127.0.0.1:${PROXY_PORT}/anthropic/v1/messages`, {
+      await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -243,7 +251,7 @@ describe('Credential Injection E2E', () => {
         body: mockResponseBody
       });
 
-      const response = await fetch(`http://127.0.0.1:${PROXY_PORT}/anthropic/v1/messages`, {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: 'claude-3', messages: [] })
@@ -259,7 +267,7 @@ describe('Credential Injection E2E', () => {
         body: { error: { type: 'rate_limit_error', message: 'Rate limited' } }
       });
 
-      const response = await fetch(`http://127.0.0.1:${PROXY_PORT}/anthropic/v1/messages`, {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
@@ -279,7 +287,7 @@ describe('Credential Injection E2E', () => {
         body: { success: true }
       });
 
-      const response = await fetch(`http://127.0.0.1:${PROXY_PORT}/anthropic/v1/messages`, {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
@@ -293,7 +301,7 @@ describe('Credential Injection E2E', () => {
   describe('Service routing', () => {
     it('routes requests to correct service based on path prefix', async () => {
       // Make requests to different services
-      await fetch(`http://127.0.0.1:${PROXY_PORT}/anthropic/v1/messages`, {
+      await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
@@ -304,7 +312,7 @@ describe('Credential Injection E2E', () => {
 
       upstream.clearRequests();
 
-      await fetch(`http://127.0.0.1:${PROXY_PORT}/openai/v1/chat/completions`, {
+      await fetch(`http://127.0.0.1:${proxyPort}/openai/v1/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
@@ -316,7 +324,7 @@ describe('Credential Injection E2E', () => {
 
     it('returns 404 for unknown service', async () => {
       try {
-        const response = await fetch(`http://127.0.0.1:${PROXY_PORT}/unknown-service/api`, {
+        const response = await fetch(`http://127.0.0.1:${proxyPort}/unknown-service/api`, {
           method: 'GET'
         });
 
@@ -332,7 +340,7 @@ describe('Credential Injection E2E', () => {
 
     it('returns 404 for service not in allowedServices', async () => {
       // slack is a builtin service but not in our allowedServices list
-      const response = await fetch(`http://127.0.0.1:${PROXY_PORT}/slack/api/chat.postMessage`, {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/slack/api/chat.postMessage`, {
         method: 'POST'
       });
 
@@ -343,7 +351,7 @@ describe('Credential Injection E2E', () => {
 
   describe('HTTP methods', () => {
     it('forwards GET requests', async () => {
-      await fetch(`http://127.0.0.1:${PROXY_PORT}/github/user`, {
+      await fetch(`http://127.0.0.1:${proxyPort}/github/user`, {
         method: 'GET'
       });
 
@@ -354,7 +362,7 @@ describe('Credential Injection E2E', () => {
     });
 
     it('forwards POST requests', async () => {
-      await fetch(`http://127.0.0.1:${PROXY_PORT}/anthropic/v1/messages`, {
+      await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ test: true })
@@ -365,7 +373,7 @@ describe('Credential Injection E2E', () => {
     });
 
     it('forwards PUT requests', async () => {
-      await fetch(`http://127.0.0.1:${PROXY_PORT}/github/repos/owner/repo`, {
+      await fetch(`http://127.0.0.1:${proxyPort}/github/repos/owner/repo`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: 'new-name' })
@@ -376,7 +384,7 @@ describe('Credential Injection E2E', () => {
     });
 
     it('forwards DELETE requests', async () => {
-      await fetch(`http://127.0.0.1:${PROXY_PORT}/github/repos/owner/repo`, {
+      await fetch(`http://127.0.0.1:${proxyPort}/github/repos/owner/repo`, {
         method: 'DELETE'
       });
 
@@ -385,7 +393,7 @@ describe('Credential Injection E2E', () => {
     });
 
     it('forwards PATCH requests', async () => {
-      await fetch(`http://127.0.0.1:${PROXY_PORT}/github/repos/owner/repo`, {
+      await fetch(`http://127.0.0.1:${proxyPort}/github/repos/owner/repo`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ description: 'Updated' })
@@ -398,7 +406,7 @@ describe('Credential Injection E2E', () => {
 
   describe('Request logging', () => {
     it('logs successful authenticated requests', async () => {
-      await fetch(`http://127.0.0.1:${PROXY_PORT}/anthropic/v1/messages`, {
+      await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
@@ -412,18 +420,240 @@ describe('Credential Injection E2E', () => {
     });
 
     it('logs each request with unique ID', async () => {
-      await fetch(`http://127.0.0.1:${PROXY_PORT}/anthropic/v1/messages`, {
+      await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
         method: 'POST',
         body: JSON.stringify({})
       });
 
-      await fetch(`http://127.0.0.1:${PROXY_PORT}/openai/v1/chat/completions`, {
+      await fetch(`http://127.0.0.1:${proxyPort}/openai/v1/chat/completions`, {
         method: 'POST',
         body: JSON.stringify({})
       });
 
       expect(requestLog.length).toBe(2);
       expect(requestLog[0].id).not.toBe(requestLog[1].id);
+    });
+  });
+
+  describe('Streaming responses (SSE)', () => {
+    it('forwards streaming SSE responses correctly', async () => {
+      // Set up SSE streaming response like Anthropic's streaming API
+      const sseChunks = [
+        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1"}}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"text":"Hello"}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"text":" world"}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+      ];
+
+      upstream.setStreamingResponse({
+        statusCode: 200,
+        chunks: sseChunks,
+        delayMs: 10
+      });
+
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-3', stream: true, messages: [] })
+      });
+
+      expect(response.ok).toBe(true);
+      expect(response.headers.get('content-type')).toBe('text/event-stream');
+
+      // Read the streaming response
+      const text = await response.text();
+
+      // Verify all chunks were received
+      expect(text).toContain('event: message_start');
+      expect(text).toContain('event: content_block_delta');
+      expect(text).toContain('Hello');
+      expect(text).toContain(' world');
+      expect(text).toContain('event: message_stop');
+
+      // Verify credential was injected
+      const lastRequest = upstream.getLastRequest();
+      expect(lastRequest!.headers['x-api-key']).toBe(TEST_ANTHROPIC_KEY);
+    });
+
+    it('handles multiple SSE chunks with credentials', async () => {
+      const chunks = Array.from({ length: 20 }, (_, i) =>
+        `data: {"index":${i},"content":"chunk${i}"}\n\n`
+      );
+
+      upstream.setStreamingResponse({
+        statusCode: 200,
+        chunks,
+        delayMs: 5
+      });
+
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/openai/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-4', stream: true })
+      });
+
+      const text = await response.text();
+
+      // Verify all 20 chunks received
+      for (let i = 0; i < 20; i++) {
+        expect(text).toContain(`"index":${i}`);
+      }
+
+      // Verify credential was injected
+      const lastRequest = upstream.getLastRequest();
+      expect(lastRequest!.headers['authorization']).toBe(`Bearer ${TEST_OPENAI_KEY}`);
+    });
+  });
+
+  describe('Concurrent requests', () => {
+    it('handles 10 parallel requests with correct credentials', async () => {
+      const requests = Array.from({ length: 10 }, (_, i) =>
+        fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ request_id: i })
+        })
+      );
+
+      const responses = await Promise.all(requests);
+
+      // All requests should succeed
+      for (const response of responses) {
+        expect(response.ok).toBe(true);
+      }
+
+      // All upstream requests should have correct credentials
+      const allRequests = upstream.requests;
+      expect(allRequests.length).toBe(10);
+      for (const req of allRequests) {
+        expect(req.headers['x-api-key']).toBe(TEST_ANTHROPIC_KEY);
+      }
+    });
+
+    it('handles concurrent requests to different services', async () => {
+      const anthropicRequests = Array.from({ length: 5 }, () =>
+        fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        })
+      );
+
+      const openaiRequests = Array.from({ length: 5 }, () =>
+        fetch(`http://127.0.0.1:${proxyPort}/openai/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        })
+      );
+
+      const responses = await Promise.all([...anthropicRequests, ...openaiRequests]);
+
+      // All requests should succeed
+      for (const response of responses) {
+        expect(response.ok).toBe(true);
+      }
+
+      // Verify credentials are not mixed between services
+      const allRequests = upstream.requests;
+      expect(allRequests.length).toBe(10);
+
+      for (const req of allRequests) {
+        // Each request should have exactly one auth header
+        const hasAnthropic = req.headers['x-api-key'] === TEST_ANTHROPIC_KEY;
+        const hasOpenai = req.headers['authorization'] === `Bearer ${TEST_OPENAI_KEY}`;
+        expect(hasAnthropic || hasOpenai).toBe(true);
+        expect(hasAnthropic && hasOpenai).toBe(false);
+      }
+    });
+
+    it('does not leak credentials between concurrent requests', async () => {
+      // Make interleaved requests to different services
+      const requests: Promise<Response>[] = [];
+      for (let i = 0; i < 20; i++) {
+        const service = i % 3 === 0 ? 'anthropic' : i % 3 === 1 ? 'openai' : 'github';
+        const path = service === 'anthropic' ? 'v1/messages' :
+                     service === 'openai' ? 'v1/chat/completions' : 'user';
+        requests.push(
+          fetch(`http://127.0.0.1:${proxyPort}/${service}/${path}`, {
+            method: service === 'github' ? 'GET' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: service === 'github' ? undefined : JSON.stringify({ index: i })
+          })
+        );
+      }
+
+      await Promise.all(requests);
+
+      // Verify each request has only its service's credential
+      const allRequests = upstream.requests;
+      expect(allRequests.length).toBe(20);
+
+      for (const req of allRequests) {
+        const path = req.path;
+        if (path.includes('v1/messages')) {
+          expect(req.headers['x-api-key']).toBe(TEST_ANTHROPIC_KEY);
+          expect(req.headers['authorization']).toBeUndefined();
+        } else if (path.includes('v1/chat')) {
+          expect(req.headers['authorization']).toBe(`Bearer ${TEST_OPENAI_KEY}`);
+          expect(req.headers['x-api-key']).toBeUndefined();
+        } else if (path.includes('user')) {
+          expect(req.headers['authorization']).toBe(`Bearer ${TEST_GITHUB_TOKEN}`);
+          expect(req.headers['x-api-key']).toBeUndefined();
+        }
+      }
+    });
+  });
+
+  describe('Upstream failure handling', () => {
+    it('returns 502 when upstream connection fails', async () => {
+      // Point to a port that doesn't have a server
+      const registry = proxy.getServiceRegistry();
+      registry.override('anthropic', {
+        upstream: 'http://127.0.0.1:59999'  // Non-existent server
+      });
+
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+
+      expect(response.status).toBe(502);
+
+      // Check request log shows error
+      const lastLog = requestLog[requestLog.length - 1];
+      expect(lastLog.statusCode).toBe(502);
+      expect(lastLog.error).toBeDefined();
+    });
+
+    it('returns 504 on upstream timeout', async () => {
+      // Create a new proxy with a very short timeout
+      await proxy.stop();
+
+      const timeoutProxy = createCredentialProxy({
+        port: 0,
+        store,
+        serviceRegistry: proxy.getServiceRegistry(),
+        allowedServices: ['anthropic'],
+        requestTimeout: 100, // 100ms timeout
+        onRequest: (info) => requestLog.push(info)
+      });
+      await timeoutProxy.start();
+
+      // Set upstream to delay longer than timeout
+      upstream.setResponseDelay(500);
+
+      const response = await fetch(`http://127.0.0.1:${timeoutProxy.getPort()}/anthropic/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+
+      expect(response.status).toBe(504);
+
+      await timeoutProxy.stop();
     });
   });
 });

@@ -6,8 +6,8 @@ import {
   generateOpenClawEnv,
   writeEnvFile,
   formatEnvForDisplay
-} from '../../../src/openclaw/env-writer.js';
-import type { ServiceConfig } from '../../../src/types.js';
+} from '@aquaman/proxy';
+import type { ServiceConfig } from '@aquaman/core';
 
 describe('env-writer', () => {
   let tempDir: string;

@@ -349,7 +349,6 @@ function buildExtensions(commonName: string): Buffer {
   ]);
 
   // Key Usage (digitalSignature, keyEncipherment)
-  const keyUsageBits = Buffer.from([0x05, 0xa0]); // bits for digitalSignature and keyEncipherment
   const keyUsage = encodeSequence([
     encodeOID('2.5.29.15'), // id-ce-keyUsage
     Buffer.from([0x01, 0x01, 0xff]), // critical = true

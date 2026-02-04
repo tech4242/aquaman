@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { OpenClawIntegration, createOpenClawIntegration } from '../../../src/openclaw/integration.js';
-import type { WrapperConfig, ServiceConfig } from '../../../src/types.js';
+import { OpenClawIntegration, createOpenClawIntegration } from '@aquaman/proxy';
+import type { WrapperConfig, ServiceConfig } from '@aquaman/core';
 
 describe('OpenClawIntegration', () => {
   let tempDir: string;

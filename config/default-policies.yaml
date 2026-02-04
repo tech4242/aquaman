@@ -1,4 +1,4 @@
-# Default security policies for aquaman-clawed
+# Default security policies for aquaman
 # Copy to ~/.aquaman/config.yaml and customize
 
 wrapper:

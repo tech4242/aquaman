@@ -7,6 +7,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { encryptWithPassword, decryptWithPassword } from '../utils/hash.js';
+import type { CredentialBackend } from '../types.js';
 
 export interface Credential {
   service: string;
@@ -26,8 +27,6 @@ export interface CredentialStore {
   exists(service: string, key: string): Promise<boolean>;
 }
 
-export type CredentialBackend = 'keychain' | '1password' | 'vault' | 'encrypted-file';
-
 export interface CredentialStoreOptions {
   backend: CredentialBackend;
   encryptionPassword?: string;
@@ -46,7 +45,7 @@ export interface CredentialStoreOptions {
  */
 export class KeychainStore implements CredentialStore {
   private keytar: typeof import('keytar') | null = null;
-  private serviceName = 'aquaman-clawed';
+  private serviceName = 'aquaman';
 
   private async getKeytar(): Promise<typeof import('keytar')> {
     if (!this.keytar) {

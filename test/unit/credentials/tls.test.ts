@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import * as crypto from 'node:crypto';
-import { generateSelfSignedCert } from '../../../src/utils/hash.js';
+import { generateSelfSignedCert } from '@aquaman/core';
 
 describe('TLS Certificate Generation', () => {
   describe('generateSelfSignedCert', () => {

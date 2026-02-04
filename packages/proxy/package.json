@@ -1,0 +1,50 @@
+{
+  "name": "@aquaman/proxy",
+  "version": "0.1.0",
+  "description": "Credential isolation proxy daemon for OpenClaw",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "aquaman": "dist/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./daemon": {
+      "types": "./dist/daemon.d.ts",
+      "import": "./dist/daemon.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/cli/index.js",
+    "dev": "tsx watch src/cli/index.ts"
+  },
+  "keywords": [
+    "aquaman",
+    "openclaw",
+    "security",
+    "credentials",
+    "proxy"
+  ],
+  "author": "tech4242",
+  "license": "MIT",
+  "dependencies": {
+    "@aquaman/core": "*",
+    "commander": "^12.0.0",
+    "yaml": "^2.3.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

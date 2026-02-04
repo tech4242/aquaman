@@ -8,7 +8,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import type { ServiceConfig } from '../types.js';
+import type { ServiceConfig } from '@aquaman/core';
 
 export interface EnvConfig {
   proxyHost: string;
@@ -91,8 +91,8 @@ export function appendToShellRc(env: Record<string, string>): string {
     ? path.join(os.homedir(), '.zshrc')
     : path.join(os.homedir(), '.bashrc');
 
-  const marker = '# aquaman-clawed environment';
-  const endMarker = '# end aquaman-clawed environment';
+  const marker = '# aquaman environment';
+  const endMarker = '# end aquaman environment';
 
   let content = '';
   if (fs.existsSync(rcFile)) {

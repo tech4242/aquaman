@@ -3,16 +3,15 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { CredentialProxy, createCredentialProxy } from '../../src/credentials/proxy-daemon.js';
-import { MemoryStore } from '../../src/credentials/store.js';
-import type { RequestInfo } from '../../src/credentials/proxy-daemon.js';
+import { CredentialProxy, createCredentialProxy } from '@aquaman/proxy';
+import { MemoryStore } from '@aquaman/core';
+import type { RequestInfo } from '@aquaman/proxy';
 
 describe('CredentialProxy E2E', () => {
   let proxy: CredentialProxy;
   let store: MemoryStore;
   let requestLog: RequestInfo[];
-
-  const PROXY_PORT = 18081;
+  let proxyPort: number;
 
   beforeEach(async () => {
     store = new MemoryStore();
@@ -23,7 +22,7 @@ describe('CredentialProxy E2E', () => {
     await store.set('openai', 'api_key', 'sk-openai-test-key');
 
     proxy = createCredentialProxy({
-      port: PROXY_PORT,
+      port: 0, // Dynamic port allocation
       store,
       allowedServices: ['anthropic', 'openai'],
       onRequest: (info) => {
@@ -32,6 +31,7 @@ describe('CredentialProxy E2E', () => {
     });
 
     await proxy.start();
+    proxyPort = proxy.getPort();
   });
 
   afterEach(async () => {

@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import path from 'path';
 
 export default defineConfig({
   test: {
@@ -7,5 +8,12 @@ export default defineConfig({
     include: ['test/e2e/**/*.test.ts'],
     testTimeout: 30000,
     hookTimeout: 30000
+  },
+  resolve: {
+    alias: {
+      '@aquaman/core': path.resolve(__dirname, 'packages/core/src/index.ts'),
+      '@aquaman/proxy': path.resolve(__dirname, 'packages/proxy/src/index.ts'),
+      '@aquaman/openclaw': path.resolve(__dirname, 'packages/openclaw/src/index.ts')
+    }
   }
 });

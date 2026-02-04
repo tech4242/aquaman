@@ -1,5 +1,5 @@
 /**
- * Core types for aquaman-clawed credential isolation layer
+ * Core types for aquaman credential isolation layer
  *
  * This module focuses on unique features NOT in OpenClaw:
  * - Credential proxy with TLS
@@ -93,3 +93,5 @@ export interface WrapperConfig {
   services: ServicesConfig;
   openclaw: OpenClawConfig;
 }
+
+export type CredentialBackend = 'keychain' | '1password' | 'vault' | 'encrypted-file';

@@ -14,7 +14,23 @@ import { Command } from 'commander';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 
-import { loadConfig, getConfigDir, ensureConfigDir, getDefaultConfig, expandPath } from '../utils/config.js';
+import {
+  loadConfig,
+  getConfigDir,
+  ensureConfigDir,
+  getDefaultConfig,
+  expandPath,
+  createAuditLogger,
+  createCredentialStore,
+  MemoryStore,
+  generateSelfSignedCert,
+  type WrapperConfig
+} from '@aquaman/core';
+
+import { createCredentialProxy, type CredentialProxy } from '../daemon.js';
+import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
+import { createOpenClawIntegration } from '../openclaw/integration.js';
+import { stringify as yamlStringify } from 'yaml';
 
 // PID file management
 const getPidFile = () => path.join(getConfigDir(), 'daemon.pid');
@@ -43,21 +59,13 @@ const isProcessRunning = (pid: number): boolean => {
     return false;
   }
 };
-import { createAuditLogger } from '../audit/logger.js';
-import { createCredentialProxy, type CredentialProxy } from '../credentials/proxy-daemon.js';
-import { createCredentialStore, MemoryStore } from '../credentials/store.js';
-import { createServiceRegistry, ServiceRegistry } from '../credentials/service-registry.js';
-import { createOpenClawIntegration } from '../openclaw/integration.js';
-import { generateSelfSignedCert } from '../utils/hash.js';
-import type { WrapperConfig, ServiceConfig } from '../types.js';
-import { stringify as yamlStringify } from 'yaml';
 
 const program = new Command();
 
 program
   .name('aquaman')
   .description('Credential isolation layer for OpenClaw - keeps API keys outside the agent process')
-  .version('0.2.0');
+  .version('0.1.0');
 
 // Start command - launches credential proxy + OpenClaw
 program
@@ -321,6 +329,70 @@ program
       console.log('\nShutting down daemon...');
       await credentialProxy.stop();
       removePidFile();
+      process.exit(0);
+    };
+
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+  });
+
+// Plugin mode command - for use when managed by OpenClaw plugin
+program
+  .command('plugin-mode')
+  .description('Run in plugin mode (managed by OpenClaw plugin)')
+  .option('--port <port>', 'Port to listen on', '8081')
+  .option('--ipc', 'Use IPC instead of HTTP for communication')
+  .action(async (options) => {
+    const config = loadConfig();
+    const port = parseInt(options.port, 10);
+
+    // Initialize credential store
+    let credentialStore;
+    try {
+      credentialStore = createCredentialStore({
+        backend: config.credentials.backend,
+        vaultAddress: config.credentials.vaultAddress,
+        vaultToken: config.credentials.vaultToken,
+        vaultNamespace: config.credentials.vaultNamespace,
+        vaultMountPath: config.credentials.vaultMountPath,
+        onePasswordVault: config.credentials.onePasswordVault,
+        onePasswordAccount: config.credentials.onePasswordAccount
+      });
+    } catch {
+      credentialStore = new MemoryStore();
+    }
+
+    // Initialize service registry
+    const serviceRegistry = createServiceRegistry({ configPath: config.services.configPath });
+
+    // Start credential proxy
+    const credentialProxy = createCredentialProxy({
+      port,
+      bindAddress: '127.0.0.1',
+      store: credentialStore,
+      allowedServices: config.credentials.proxiedServices,
+      serviceRegistry,
+      tls: config.credentials.tls
+    });
+    await credentialProxy.start();
+
+    const protocol = credentialProxy.isTlsEnabled() ? 'https' : 'http';
+
+    // Output connection info as JSON for plugin to parse
+    const connectionInfo = {
+      ready: true,
+      port: credentialProxy.getPort(),
+      protocol,
+      baseUrl: `${protocol}://127.0.0.1:${credentialProxy.getPort()}`,
+      services: config.credentials.proxiedServices,
+      backend: config.credentials.backend
+    };
+
+    console.log(JSON.stringify(connectionInfo));
+
+    // Handle shutdown
+    const shutdown = async () => {
+      await credentialProxy.stop();
       process.exit(0);
     };
 
@@ -698,7 +770,7 @@ program
   .action(async () => {
     const config = loadConfig();
 
-    console.log('aquaman-clawed status\n');
+    console.log('aquaman status\n');
 
     console.log('Configuration:');
     console.log(`  Config dir: ${getConfigDir()}`);
@@ -729,10 +801,10 @@ program
 
     // Check for OpenClaw
     const registry = createServiceRegistry({ configPath: config.services.configPath });
-    const services = registry.getAll().filter(s =>
+    const registryServices = registry.getAll().filter(s =>
       config.credentials.proxiedServices.includes(s.name)
     );
-    const integration = createOpenClawIntegration(config, services);
+    const integration = createOpenClawIntegration(config, registryServices);
     const info = await integration.detectOpenClaw();
 
     console.log(`\nOpenClaw: ${info.installed ? `installed (${info.version})` : 'not found'}`);

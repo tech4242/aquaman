@@ -1,5 +1,5 @@
 /**
- * Configuration loader and validator for aquaman-clawed
+ * Configuration loader and validator for aquaman
  *
  * Focused on credential isolation features:
  * - Credential proxy settings

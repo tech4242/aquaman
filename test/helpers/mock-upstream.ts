@@ -23,6 +23,13 @@ export interface MockResponse {
   body?: string | object;
 }
 
+export interface StreamingResponse {
+  statusCode?: number;
+  headers?: Record<string, string>;
+  chunks: string[];
+  delayMs?: number; // Delay between chunks
+}
+
 export interface ExpectedAuth {
   header: string;
   value?: string;
@@ -39,7 +46,9 @@ export class MockUpstream {
     headers: { 'Content-Type': 'application/json' },
     body: { success: true, mock: true }
   };
+  private streamingResponse: StreamingResponse | null = null;
   private rejectUnauthorized = false;
+  private responseDelay = 0; // Optional delay before any response
 
   /**
    * Get all captured requests
@@ -57,13 +66,12 @@ export class MockUpstream {
 
   /**
    * Start the mock server
+   * @param port Port to listen on. Use 0 for dynamic port allocation.
    */
-  async start(port: number): Promise<void> {
+  async start(port: number = 0): Promise<void> {
     if (this.server) {
       throw new Error('Mock upstream already running');
     }
-
-    this._port = port;
 
     return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => {
@@ -73,6 +81,12 @@ export class MockUpstream {
       this.server.on('error', reject);
 
       this.server.listen(port, '127.0.0.1', () => {
+        const address = this.server!.address();
+        if (address && typeof address === 'object') {
+          this._port = address.port;
+        } else {
+          this._port = port;
+        }
         resolve();
       });
     });
@@ -118,6 +132,21 @@ export class MockUpstream {
    */
   setMockResponse(response: MockResponse): void {
     this.mockResponse = response;
+    this.streamingResponse = null;
+  }
+
+  /**
+   * Set a streaming response (SSE) that sends chunks with delay
+   */
+  setStreamingResponse(response: StreamingResponse): void {
+    this.streamingResponse = response;
+  }
+
+  /**
+   * Set a delay before responding (useful for timeout tests)
+   */
+  setResponseDelay(delayMs: number): void {
+    this.responseDelay = delayMs;
   }
 
   /**
@@ -218,25 +247,69 @@ export class MockUpstream {
         }
       }
 
-      // Send mock response
-      res.statusCode = this.mockResponse.statusCode || 200;
-
-      if (this.mockResponse.headers) {
-        for (const [key, value] of Object.entries(this.mockResponse.headers)) {
-          res.setHeader(key, value);
+      // Apply response delay if set
+      const sendResponse = async () => {
+        if (this.responseDelay > 0) {
+          await new Promise(r => setTimeout(r, this.responseDelay));
         }
-      }
 
-      let responseBody: string;
-      if (typeof this.mockResponse.body === 'object') {
-        res.setHeader('Content-Type', 'application/json');
-        responseBody = JSON.stringify(this.mockResponse.body);
-      } else {
-        responseBody = this.mockResponse.body || '';
-      }
+        // Check if streaming response is configured
+        if (this.streamingResponse) {
+          await this.sendStreamingResponse(res);
+        } else {
+          this.sendMockResponse(res);
+        }
+      };
 
-      res.end(responseBody);
+      sendResponse();
     });
+  }
+
+  private sendMockResponse(res: http.ServerResponse): void {
+    res.statusCode = this.mockResponse.statusCode || 200;
+
+    if (this.mockResponse.headers) {
+      for (const [key, value] of Object.entries(this.mockResponse.headers)) {
+        res.setHeader(key, value);
+      }
+    }
+
+    let responseBody: string;
+    if (typeof this.mockResponse.body === 'object') {
+      res.setHeader('Content-Type', 'application/json');
+      responseBody = JSON.stringify(this.mockResponse.body);
+    } else {
+      responseBody = this.mockResponse.body || '';
+    }
+
+    res.end(responseBody);
+  }
+
+  private async sendStreamingResponse(res: http.ServerResponse): Promise<void> {
+    const streaming = this.streamingResponse!;
+
+    res.statusCode = streaming.statusCode || 200;
+
+    // Set SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    if (streaming.headers) {
+      for (const [key, value] of Object.entries(streaming.headers)) {
+        res.setHeader(key, value);
+      }
+    }
+
+    // Send chunks with optional delay
+    for (const chunk of streaming.chunks) {
+      res.write(chunk);
+      if (streaming.delayMs && streaming.delayMs > 0) {
+        await new Promise(r => setTimeout(r, streaming.delayMs));
+      }
+    }
+
+    res.end();
   }
 
   private validateAuth(headers: Record<string, string>): boolean {

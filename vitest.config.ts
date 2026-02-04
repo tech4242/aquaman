@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import path from 'path';
 
 export default defineConfig({
   test: {
@@ -8,8 +9,8 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
-      include: ['src/**/*.ts'],
-      exclude: ['src/cli/index.ts', 'src/types.ts'],
+      include: ['src/**/*.ts', 'packages/*/src/**/*.ts'],
+      exclude: ['src/cli/index.ts', 'src/types.ts', 'packages/*/src/cli/**'],
       // Core business logic has 86-98% coverage
       // WebSocket/HTTP proxies have lower coverage (integration tests)
       thresholds: {
@@ -18,6 +19,14 @@ export default defineConfig({
         branches: 60,
         statements: 60
       }
+    }
+  },
+  resolve: {
+    alias: {
+      // Map package imports to source for development/testing
+      '@aquaman/core': path.resolve(__dirname, 'packages/core/src/index.ts'),
+      '@aquaman/proxy': path.resolve(__dirname, 'packages/proxy/src/index.ts'),
+      '@aquaman/openclaw': path.resolve(__dirname, 'packages/openclaw/src/index.ts')
     }
   }
 });

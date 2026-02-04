@@ -1,31 +1,38 @@
 {
-  "name": "aquaman-clawed",
+  "name": "aquaman",
   "version": "0.1.0",
-  "description": "Security wrapper for OpenClaw - audit logging, guardrails, and credential isolation",
+  "private": true,
+  "description": "Zero-trust credential isolation for OpenClaw - keeps API keys outside the agent process",
   "type": "module",
-  "main": "dist/cli/index.js",
-  "bin": {
-    "aquaman": "dist/cli/index.js"
-  },
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "build": "tsc",
+    "build": "npm run build --workspaces",
+    "build:core": "npm run build -w @aquaman/core",
+    "build:proxy": "npm run build -w @aquaman/proxy",
+    "build:openclaw": "npm run build -w @aquaman/openclaw",
+    "clean": "npm run clean --workspaces && rm -rf dist",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "lint": "oxlint src test --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage",
-    "lint:fix": "oxlint src test --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage --fix",
-    "typecheck": "tsc --noEmit",
-    "start": "node dist/cli/index.js",
-    "dev": "tsx watch src/cli/index.ts"
+    "lint": "oxlint src test packages --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage",
+    "lint:fix": "oxlint src test packages --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage --fix",
+    "typecheck": "tsc -b packages/core packages/proxy packages/openclaw",
+    "start": "node packages/proxy/dist/cli/index.js",
+    "dev": "tsx watch packages/proxy/src/cli/index.ts"
   },
   "keywords": [
     "openclaw",
     "security",
     "audit",
     "credentials",
-    "ai-agent"
+    "ai-agent",
+    "keychain",
+    "vault",
+    "1password"
   ],
   "author": "tech4242",
   "license": "MIT",
@@ -37,13 +44,6 @@
     "tsx": "^4.7.0",
     "typescript": "^5.3.0",
     "vitest": "^1.2.0"
-  },
-  "dependencies": {
-    "commander": "^12.0.0",
-    "keytar": "^7.9.0",
-    "minimatch": "^9.0.3",
-    "ws": "^8.16.0",
-    "yaml": "^2.3.4"
   },
   "engines": {
     "node": ">=18.0.0"
