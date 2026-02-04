@@ -14,32 +14,32 @@ describe('config utilities', () => {
     it('should return valid default config', () => {
       const config = getDefaultConfig();
 
-      expect(config.wrapper.proxyPort).toBe(18790);
-      expect(config.wrapper.upstreamPort).toBe(18789);
-      expect(config.audit.enabled).toBe(true);
+      expect(config.credentials.proxyPort).toBe(8081);
       expect(config.credentials.backend).toBe('keychain');
-      expect(config.approval.timeout).toBe(300);
+      expect(config.audit.enabled).toBe(true);
+      expect(config.openclaw.autoLaunch).toBe(true);
     });
 
-    it('should include default alert rules', () => {
+    it('should include default proxied services', () => {
       const config = getDefaultConfig();
 
-      expect(config.audit.alertRules.length).toBeGreaterThan(0);
-      expect(config.audit.alertRules.some(r => r.id === 'dangerous-command-pipe')).toBe(true);
+      expect(config.credentials.proxiedServices).toContain('anthropic');
+      expect(config.credentials.proxiedServices).toContain('openai');
+      expect(config.credentials.proxiedServices.length).toBeGreaterThan(0);
     });
 
-    it('should include default file permissions', () => {
+    it('should enable TLS by default', () => {
       const config = getDefaultConfig();
 
-      expect(config.permissions.files.allowedPaths.length).toBeGreaterThan(0);
-      expect(config.permissions.files.deniedPaths.length).toBeGreaterThan(0);
+      expect(config.credentials.tls?.enabled).toBe(true);
+      expect(config.credentials.tls?.autoGenerate).toBe(true);
     });
 
-    it('should include default network permissions', () => {
+    it('should include OpenClaw config', () => {
       const config = getDefaultConfig();
 
-      expect(config.permissions.network.defaultAction).toBe('deny');
-      expect(config.permissions.network.allowedDomains).toContain('api.anthropic.com');
+      expect(config.openclaw.autoLaunch).toBe(true);
+      expect(config.openclaw.configMethod).toBe('env');
     });
   });
 

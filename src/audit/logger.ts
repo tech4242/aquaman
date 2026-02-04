@@ -1,18 +1,18 @@
 /**
  * Hash-chained audit logger with tamper-evident storage
+ *
+ * Provides cryptographic integrity verification for audit logs.
+ * Note: Credential redaction is handled by OpenClaw's built-in redaction.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { computeChainedHash, generateId } from '../utils/hash.js';
 import { expandPath } from '../utils/config.js';
-import { CredentialScanner } from '../credentials/scanner.js';
 import type {
   AuditEntry,
   ToolCall,
   ToolResult,
-  PolicyViolation,
-  ApprovalRequest,
   CredentialAccess
 } from '../types.js';
 
@@ -33,7 +33,6 @@ export class AuditLogger {
   private lastHash: string = GENESIS_HASH;
   private entryCount: number = 0;
   private initialized: boolean = false;
-  private credentialScanner: CredentialScanner;
 
   constructor(options: AuditLoggerOptions) {
     this.logDir = expandPath(options.logDir);
@@ -41,7 +40,6 @@ export class AuditLogger {
     this.walPath = path.join(this.logDir, 'current.wal');
     this.enabled = options.enabled ?? true;
     this.walEnabled = options.walEnabled ?? true;
-    this.credentialScanner = new CredentialScanner();
   }
 
   async initialize(): Promise<void> {
@@ -128,15 +126,12 @@ export class AuditLogger {
   ): Promise<AuditEntry | null> {
     if (!this.enabled) return null;
 
-    // Redact any credentials in params BEFORE logging
-    const redactedParams = this.credentialScanner.redactObject(params);
-
     const toolCall: ToolCall = {
       id: generateId(),
       sessionId,
       agentId,
       tool,
-      params: redactedParams,
+      params,
       timestamp: new Date()
     };
 
@@ -152,37 +147,15 @@ export class AuditLogger {
   ): Promise<AuditEntry | null> {
     if (!this.enabled) return null;
 
-    // Redact any credentials in result BEFORE logging
-    const redactedResult = this.credentialScanner.redactObject(result);
-    const redactedError = error ? this.credentialScanner.scan(error).redacted : undefined;
-
     const toolResult: ToolResult = {
       id: generateId(),
       toolCallId,
-      result: redactedResult,
-      error: redactedError,
+      result,
+      error,
       timestamp: new Date()
     };
 
     return this.writeEntry('tool_result', sessionId, agentId, toolResult);
-  }
-
-  async logPolicyViolation(
-    sessionId: string,
-    agentId: string,
-    violation: PolicyViolation
-  ): Promise<AuditEntry | null> {
-    if (!this.enabled) return null;
-    return this.writeEntry('policy_violation', sessionId, agentId, violation);
-  }
-
-  async logApprovalRequest(
-    sessionId: string,
-    agentId: string,
-    request: ApprovalRequest
-  ): Promise<AuditEntry | null> {
-    if (!this.enabled) return null;
-    return this.writeEntry('approval_request', sessionId, agentId, request);
   }
 
   async logCredentialAccess(

@@ -239,6 +239,28 @@ export class ServiceRegistry {
     this.services.clear();
     this.load();
   }
+
+  /**
+   * Override a service definition (useful for testing to redirect to mock servers)
+   */
+  override(name: string, partial: Partial<ServiceDefinition>): void {
+    const existing = this.services.get(name);
+    if (!existing) {
+      throw new Error(`Service "${name}" not found in registry`);
+    }
+    this.services.set(name, { ...existing, ...partial });
+  }
+
+  /**
+   * Add a new service dynamically (useful for testing)
+   */
+  register(service: ServiceDefinition): void {
+    const validation = this.validateService(service);
+    if (!validation.valid) {
+      throw new Error(`Invalid service: ${validation.error}`);
+    }
+    this.services.set(service.name, service);
+  }
 }
 
 export function createServiceRegistry(options?: ServiceRegistryOptions): ServiceRegistry {

@@ -1,12 +1,18 @@
 /**
- * Configuration loader and validator
+ * Configuration loader and validator for aquaman-clawed
+ *
+ * Focused on credential isolation features:
+ * - Credential proxy settings
+ * - Enterprise backend configuration
+ * - Audit logging configuration
+ * - OpenClaw integration settings
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { parse as parseYaml } from 'yaml';
-import type { WrapperConfig, AlertRule } from '../types.js';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import type { WrapperConfig } from '../types.js';
 
 const DEFAULT_CONFIG_DIR = path.join(os.homedir(), '.aquaman');
 const CONFIG_FILE = 'config.yaml';
@@ -31,74 +37,10 @@ export function expandPath(p: string): string {
 
 export function getDefaultConfig(): WrapperConfig {
   return {
-    wrapper: {
-      proxyPort: 18790,
-      upstreamPort: 18789
-    },
-    audit: {
-      enabled: true,
-      logDir: path.join(getConfigDir(), 'audit'),
-      alertRules: getDefaultAlertRules()
-    },
-    permissions: {
-      files: {
-        allowedPaths: [
-          `${os.homedir()}/workspace/**`,
-          '/tmp/openclaw/**',
-          '/tmp/aquaman/**'
-        ],
-        deniedPaths: [
-          '**/.env',
-          '**/.env.*',
-          '**/*.pem',
-          '**/*.key',
-          '~/.ssh/**',
-          '~/.aws/**',
-          '~/.openclaw/auth-profiles.json'
-        ],
-        sensitivePatterns: [
-          '**/credentials*',
-          '**/secrets*'
-        ]
-      },
-      commands: {
-        allowedCommands: [
-          { command: 'git', deniedArgs: ['push --force', 'reset --hard'] },
-          { command: 'npm', allowedArgs: ['install', 'test', 'build', 'run'] },
-          { command: 'node' },
-          { command: 'ls' },
-          { command: 'cat' },
-          { command: 'grep' },
-          { command: 'find' }
-        ],
-        deniedCommands: ['sudo', 'su', 'rm -rf /', 'dd', 'mkfs'],
-        dangerousPatterns: [
-          'curl.*\\|.*sh',
-          'wget.*\\|.*sh',
-          'eval\\s+\\$'
-        ]
-      },
-      network: {
-        defaultAction: 'deny',
-        allowedDomains: [
-          'api.anthropic.com',
-          'api.openai.com',
-          '*.slack.com',
-          '*.discord.com',
-          'api.github.com'
-        ],
-        deniedDomains: [
-          '*.onion',
-          'localhost',
-          '127.0.0.1'
-        ],
-        deniedPorts: [22, 23, 25, 3389]
-      }
-    },
     credentials: {
       backend: 'keychain',
       proxyPort: 8081,
-      proxiedServices: ['anthropic', 'openai', 'slack', 'discord'],
+      proxiedServices: ['anthropic', 'openai', 'slack', 'discord', 'github'],
       tls: {
         enabled: true,
         autoGenerate: true,
@@ -107,71 +49,18 @@ export function getDefaultConfig(): WrapperConfig {
       },
       vaultMountPath: 'secret'
     },
-    approval: {
-      channels: [{ type: 'console' }],
-      timeout: 300,
-      defaultOnTimeout: 'deny'
+    audit: {
+      enabled: true,
+      logDir: path.join(getConfigDir(), 'audit')
     },
-    sandbox: {
-      openclawImage: 'openclaw/openclaw:latest',
-      workspace: {
-        hostPath: path.join(os.homedir(), 'workspace'),
-        containerPath: '/workspace',
-        readOnly: false
-      },
-      resources: {
-        cpus: '2',
-        memory: '4g'
-      },
-      environment: {},
-      enableOpenclawSandbox: true // Double isolation: OpenClaw's sandbox inside our container
+    services: {
+      configPath: path.join(getConfigDir(), 'services.yaml')
+    },
+    openclaw: {
+      autoLaunch: true,
+      configMethod: 'env'
     }
   };
-}
-
-function getDefaultAlertRules(): AlertRule[] {
-  return [
-    {
-      id: 'dangerous-command-pipe',
-      name: 'Dangerous command piping',
-      pattern: 'curl.*\\|.*sh',
-      action: 'block',
-      severity: 'critical',
-      message: 'Blocked dangerous command pattern: piping download to shell'
-    },
-    {
-      id: 'sudo-command',
-      name: 'Sudo command',
-      pattern: '^sudo\\s+',
-      action: 'require_approval',
-      severity: 'critical',
-      message: 'Sudo command requires approval'
-    },
-    {
-      id: 'rm-rf',
-      name: 'Recursive force delete',
-      pattern: 'rm\\s+-rf\\s+[/~]',
-      action: 'block',
-      severity: 'critical',
-      message: 'Blocked dangerous recursive delete'
-    },
-    {
-      id: 'critical-tools',
-      name: 'Critical tool access',
-      tools: ['sessions_spawn', 'cron_create', 'camera_access', 'screen_record', 'location_access'],
-      action: 'require_approval',
-      severity: 'critical',
-      message: 'Critical tool requires approval'
-    },
-    {
-      id: 'mass-spawn',
-      name: 'Mass agent spawning',
-      tools: ['sessions_spawn'],
-      action: 'warn',
-      severity: 'high',
-      message: 'High rate of agent spawning detected'
-    }
-  ];
 }
 
 export function loadConfig(): WrapperConfig {
@@ -196,29 +85,33 @@ function mergeConfig(
   base: WrapperConfig,
   override: Partial<WrapperConfig>
 ): WrapperConfig {
+  // Merge TLS config, ensuring enabled has a value
+  const baseTls = base.credentials.tls;
+  const overrideTls = override.credentials?.tls;
+  const mergedTls = baseTls || overrideTls ? {
+    enabled: overrideTls?.enabled ?? baseTls?.enabled ?? true,
+    certPath: overrideTls?.certPath ?? baseTls?.certPath,
+    keyPath: overrideTls?.keyPath ?? baseTls?.keyPath,
+    autoGenerate: overrideTls?.autoGenerate ?? baseTls?.autoGenerate
+  } : undefined;
+
   return {
-    wrapper: { ...base.wrapper, ...override.wrapper },
+    credentials: {
+      ...base.credentials,
+      ...override.credentials,
+      tls: mergedTls
+    },
     audit: {
       ...base.audit,
-      ...override.audit,
-      alertRules: override.audit?.alertRules ?? base.audit.alertRules
+      ...override.audit
     },
-    permissions: {
-      files: { ...base.permissions.files, ...override.permissions?.files },
-      commands: { ...base.permissions.commands, ...override.permissions?.commands },
-      network: { ...base.permissions.network, ...override.permissions?.network }
+    services: {
+      ...base.services,
+      ...override.services
     },
-    credentials: { ...base.credentials, ...override.credentials },
-    approval: {
-      ...base.approval,
-      ...override.approval,
-      channels: override.approval?.channels ?? base.approval.channels
-    },
-    sandbox: {
-      ...base.sandbox,
-      ...override.sandbox,
-      workspace: { ...base.sandbox.workspace, ...override.sandbox?.workspace },
-      resources: { ...base.sandbox.resources, ...override.sandbox?.resources }
+    openclaw: {
+      ...base.openclaw,
+      ...override.openclaw
     }
   };
 }
@@ -233,6 +126,5 @@ export function ensureConfigDir(): void {
 export function saveConfig(config: WrapperConfig): void {
   ensureConfigDir();
   const configPath = getConfigPath();
-  const yaml = require('yaml');
-  fs.writeFileSync(configPath, yaml.stringify(config), 'utf-8');
+  fs.writeFileSync(configPath, stringifyYaml(config), 'utf-8');
 }

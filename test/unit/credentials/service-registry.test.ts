@@ -271,6 +271,57 @@ services:
 
       expect(registry.has('new-service')).toBe(true);
     });
+
+    it('override modifies existing service', () => {
+      const registry = createServiceRegistry({ configPath });
+
+      // Override anthropic to point to a different upstream
+      registry.override('anthropic', {
+        upstream: 'http://localhost:9000'
+      });
+
+      const service = registry.get('anthropic');
+      expect(service!.upstream).toBe('http://localhost:9000');
+      // Other fields should be preserved
+      expect(service!.authHeader).toBe('x-api-key');
+      expect(service!.credentialKey).toBe('api_key');
+    });
+
+    it('override throws for non-existent service', () => {
+      const registry = createServiceRegistry({ configPath });
+
+      expect(() => {
+        registry.override('nonexistent', { upstream: 'http://localhost:9000' });
+      }).toThrow('Service "nonexistent" not found');
+    });
+
+    it('register adds new service dynamically', () => {
+      const registry = createServiceRegistry({ configPath });
+
+      registry.register({
+        name: 'dynamic-service',
+        upstream: 'https://dynamic.api.com',
+        authHeader: 'X-Dynamic-Key',
+        credentialKey: 'dynamic_key'
+      });
+
+      expect(registry.has('dynamic-service')).toBe(true);
+      const service = registry.get('dynamic-service');
+      expect(service!.upstream).toBe('https://dynamic.api.com');
+    });
+
+    it('register throws for invalid service', () => {
+      const registry = createServiceRegistry({ configPath });
+
+      expect(() => {
+        registry.register({
+          name: 'invalid',
+          upstream: 'not-a-url',
+          authHeader: 'X-Key',
+          credentialKey: 'key'
+        });
+      }).toThrow('Invalid service');
+    });
   });
 
   describe('Error Handling', () => {

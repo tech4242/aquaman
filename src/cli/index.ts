@@ -1,135 +1,96 @@
 #!/usr/bin/env node
 
 /**
- * aquaman CLI - Secure sandbox control plane for OpenClaw
+ * aquaman CLI - Credential isolation layer for OpenClaw
+ *
+ * Features NOT in OpenClaw:
+ * - Credential proxy: API keys never touch OpenClaw process
+ * - Enterprise backends: 1Password, HashiCorp Vault
+ * - Hash-chained audit logs: Tamper-evident logging
+ * - Custom service registry: YAML-based service config
  */
 
 import { Command } from 'commander';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 
 import { loadConfig, getConfigDir, ensureConfigDir, getDefaultConfig, expandPath } from '../utils/config.js';
+
+// PID file management
+const getPidFile = () => path.join(getConfigDir(), 'daemon.pid');
+
+const writePidFile = () => {
+  fs.writeFileSync(getPidFile(), process.pid.toString(), 'utf-8');
+};
+
+const readPidFile = (): number | null => {
+  const pidFile = getPidFile();
+  if (!fs.existsSync(pidFile)) return null;
+  const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10);
+  return isNaN(pid) ? null : pid;
+};
+
+const removePidFile = () => {
+  const pidFile = getPidFile();
+  if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
+};
+
+const isProcessRunning = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 import { createAuditLogger } from '../audit/logger.js';
-import { createAlertEngine } from '../audit/alerting.js';
-import { createGatewayProxy, type GatewayProxy } from '../proxy/gateway-proxy.js';
 import { createCredentialProxy, type CredentialProxy } from '../credentials/proxy-daemon.js';
 import { createCredentialStore, MemoryStore } from '../credentials/store.js';
-import { createApprovalManager } from '../approval/manager.js';
-import { createApprovalApi, apiApprove, apiDeny, apiGetPending } from '../approval/api.js';
-import { createSandboxOrchestrator } from '../sandbox/orchestrator.js';
-import { generateComposeConfig, writeComposeFile } from '../sandbox/compose-generator.js';
 import { createServiceRegistry, ServiceRegistry } from '../credentials/service-registry.js';
+import { createOpenClawIntegration } from '../openclaw/integration.js';
 import { generateSelfSignedCert } from '../utils/hash.js';
-import type { WrapperConfig } from '../types.js';
+import type { WrapperConfig, ServiceConfig } from '../types.js';
 import { stringify as yamlStringify } from 'yaml';
-
-const APPROVAL_API_PORT = 18791;
 
 const program = new Command();
 
 program
   .name('aquaman')
-  .description('Secure sandbox control plane for OpenClaw - credential isolation, audit logging, and guardrails')
-  .version('0.1.0');
+  .description('Credential isolation layer for OpenClaw - keeps API keys outside the agent process')
+  .version('0.2.0');
 
-// Start command - launches sandboxed OpenClaw
+// Start command - launches credential proxy + OpenClaw
 program
   .command('start')
-  .description('Start OpenClaw in a secure sandbox (requires Docker)')
-  .option('-w, --workspace <path>', 'Workspace directory to mount')
-  .option('--read-only', 'Mount workspace as read-only')
-  .option('-i, --image <image>', 'OpenClaw Docker image')
-  .option('-d, --detach', 'Run in background')
+  .description('Start credential proxy and launch OpenClaw')
+  .option('-w, --workspace <path>', 'Workspace directory for OpenClaw')
+  .option('--no-launch', 'Start daemon only, do not launch OpenClaw')
+  .option('--dry-run', 'Show what would be done without executing')
   .action(async (options) => {
     const config = loadConfig();
 
-    // Override config with CLI options
-    if (options.workspace) {
-      config.sandbox.workspace.hostPath = expandPath(options.workspace);
+    if (options.dryRun) {
+      console.log('Dry run - would start with this configuration:\n');
+      console.log('Credential proxy:');
+      console.log(`  Port: ${config.credentials.proxyPort}`);
+      console.log(`  TLS: ${config.credentials.tls?.enabled ? 'enabled' : 'disabled'}`);
+      console.log(`  Backend: ${config.credentials.backend}`);
+      console.log(`  Services: ${config.credentials.proxiedServices.join(', ')}`);
+      console.log('');
+
+      const registry = createServiceRegistry({ configPath: config.services.configPath });
+      const services = registry.getAll().filter(s =>
+        config.credentials.proxiedServices.includes(s.name)
+      );
+      const integration = createOpenClawIntegration(config, services);
+      const envDisplay = await integration.getEnvForDisplay();
+
+      console.log('OpenClaw environment variables:');
+      console.log(envDisplay);
+      return;
     }
-    if (options.readOnly) {
-      config.sandbox.workspace.readOnly = true;
-    }
-    if (options.image) {
-      config.sandbox.openclawImage = options.image;
-    }
 
-    const orchestrator = createSandboxOrchestrator(config);
-
-    console.log('Starting aquaman sandbox...\n');
-    console.log('Security guarantees:');
-    console.log('  Network isolation: ENABLED (internal Docker network)');
-    console.log('  Credential isolation: ENABLED (credentials never in container)');
-    console.log('  Audit logging: ENABLED (hash-chained logs)');
-    console.log('');
-    console.log('Configuration:');
-    console.log(`  Workspace: ${config.sandbox.workspace.hostPath}`);
-    console.log(`  Read-only: ${config.sandbox.workspace.readOnly}`);
-    console.log(`  OpenClaw image: ${config.sandbox.openclawImage}`);
-    console.log(`  OpenClaw sandbox mode: ${config.sandbox.enableOpenclawSandbox ? 'enabled' : 'disabled'}`);
-    console.log('');
-
-    try {
-      await orchestrator.start({ detach: options.detach });
-
-      if (options.detach) {
-        console.log('\nSandbox started in background.');
-        console.log('Use "aquaman status" to check status.');
-        console.log('Use "aquaman logs -f" to follow logs.');
-        console.log('Use "aquaman stop" to stop.');
-      }
-    } catch (error) {
-      console.error('\nFailed to start sandbox:', error instanceof Error ? error.message : error);
-      process.exit(1);
-    }
-  });
-
-// Stop command
-program
-  .command('stop')
-  .description('Stop the sandboxed OpenClaw environment')
-  .action(async () => {
-    const config = loadConfig();
-    const orchestrator = createSandboxOrchestrator(config);
-
-    console.log('Stopping sandbox...');
-    try {
-      await orchestrator.stop();
-      console.log('Sandbox stopped.');
-    } catch (error) {
-      console.error('Failed to stop:', error instanceof Error ? error.message : error);
-      process.exit(1);
-    }
-  });
-
-// Logs command
-program
-  .command('logs')
-  .description('View sandbox container logs')
-  .option('-f, --follow', 'Follow log output')
-  .option('--aquaman', 'Show only aquaman control plane logs')
-  .option('--openclaw', 'Show only OpenClaw logs')
-  .action(async (options) => {
-    const config = loadConfig();
-    const orchestrator = createSandboxOrchestrator(config);
-
-    let service: 'aquaman' | 'openclaw' | undefined;
-    if (options.aquaman) service = 'aquaman';
-    if (options.openclaw) service = 'openclaw';
-
-    await orchestrator.logs(service, options.follow);
-  });
-
-// Daemon command (internal - used inside container)
-program
-  .command('daemon')
-  .description('Run the proxy daemon (used internally by container)')
-  .action(async () => {
-    const config = loadConfig();
-    const bindAddress = process.env['AQUAMAN_BIND_ADDRESS'] || '0.0.0.0';
-
-    console.log('Starting aquaman daemon...\n');
+    console.log('Starting aquaman...\n');
 
     // Initialize audit logger
     const auditLogger = createAuditLogger({
@@ -137,23 +98,6 @@ program
       enabled: config.audit.enabled
     });
     await auditLogger.initialize();
-
-    // Initialize alert engine
-    const alertEngine = createAlertEngine({
-      rules: config.audit.alertRules,
-      onAlert: (result) => {
-        if (result.matched) {
-          console.log(`[${result.severity.toUpperCase()}] ${result.message}`);
-        }
-      }
-    });
-
-    // Initialize approval manager
-    const approvalManager = createApprovalManager({
-      channels: config.approval.channels,
-      timeout: config.approval.timeout,
-      defaultOnTimeout: config.approval.defaultOnTimeout
-    });
 
     // Initialize credential store
     let credentialStore;
@@ -173,12 +117,12 @@ program
     }
 
     // Initialize service registry
-    const serviceRegistry = createServiceRegistry();
+    const serviceRegistry = createServiceRegistry({ configPath: config.services.configPath });
 
-    // Start credential proxy with TLS and service registry
+    // Start credential proxy
     const credentialProxy = createCredentialProxy({
       port: config.credentials.proxyPort,
-      bindAddress,
+      bindAddress: '127.0.0.1',
       store: credentialStore,
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
@@ -194,41 +138,62 @@ program
     });
     await credentialProxy.start();
 
-    // Start gateway proxy
-    const gatewayProxy = createGatewayProxy({
-      proxyPort: config.wrapper.proxyPort,
-      bindAddress,
-      upstreamHost: '127.0.0.1',
-      upstreamPort: config.wrapper.upstreamPort,
-      auditLogger,
-      alertEngine,
-      onToolCall: async (toolCall, alertResult) => {
-        if (alertResult.requiresApproval) {
-          return approvalManager.requestApproval(toolCall, alertResult.message);
+    const protocol = credentialProxy.isTlsEnabled() ? 'https' : 'http';
+    console.log(`Credential proxy started on ${protocol}://127.0.0.1:${config.credentials.proxyPort}`);
+
+    if (options.launch !== false && config.openclaw.autoLaunch) {
+      // Get services for OpenClaw integration
+      const services = serviceRegistry.getAll().filter(s =>
+        config.credentials.proxiedServices.includes(s.name)
+      );
+
+      const integration = createOpenClawIntegration(config, services);
+
+      // Check if OpenClaw is installed
+      const info = await integration.detectOpenClaw();
+      if (!info.installed) {
+        console.log('\nOpenClaw not found. Credential proxy is running.');
+        console.log('To use with OpenClaw, set these environment variables:\n');
+        const envDisplay = await integration.getEnvForDisplay();
+        console.log(envDisplay);
+      } else {
+        console.log(`\nLaunching OpenClaw ${info.version}...`);
+
+        const args: string[] = [];
+        if (options.workspace) {
+          args.push('--cwd', expandPath(options.workspace));
         }
-        return true;
+
+        const proc = await integration.launchOpenClaw({
+          args,
+          inheritStdio: true
+        });
+
+        // Handle process exit
+        proc.on('close', async (code) => {
+          console.log(`\nOpenClaw exited with code ${code}`);
+          await credentialProxy.stop();
+          process.exit(code ?? 0);
+        });
       }
-    });
-    await gatewayProxy.start();
+    } else {
+      console.log('\nDaemon mode - credential proxy running.');
+      console.log('Press Ctrl+C to stop.\n');
 
-    // Start approval API
-    const approvalApi = createApprovalApi({
-      port: APPROVAL_API_PORT,
-      bindAddress,
-      manager: approvalManager
-    });
-    await approvalApi.start();
+      // Get services for display
+      const services = serviceRegistry.getAll().filter(s =>
+        config.credentials.proxiedServices.includes(s.name)
+      );
+      const integration = createOpenClawIntegration(config, services);
+      const envDisplay = await integration.getEnvForDisplay();
 
-    console.log('\nDaemon ready!');
-    console.log(`  Gateway proxy: ${bindAddress}:${config.wrapper.proxyPort}`);
-    console.log(`  Credential proxy: ${bindAddress}:${config.credentials.proxyPort}`);
-    console.log(`  Approval API: ${bindAddress}:${APPROVAL_API_PORT}`);
+      console.log('To use with OpenClaw, set these environment variables:');
+      console.log(envDisplay);
+    }
 
     // Handle shutdown
     const shutdown = async () => {
-      console.log('\nShutting down daemon...');
-      await approvalApi.stop();
-      await gatewayProxy.stop();
+      console.log('\nShutting down...');
       await credentialProxy.stop();
       process.exit(0);
     };
@@ -237,22 +202,166 @@ program
     process.on('SIGTERM', shutdown);
   });
 
-// Generate compose file command
+// Stop command
 program
-  .command('generate-compose')
-  .description('Generate docker-compose.yml without starting')
-  .option('-o, --output <path>', 'Output path', './docker-compose.yml')
-  .action(async (options) => {
-    const config = loadConfig();
-    const composeConfig = generateComposeConfig(config);
-    writeComposeFile(composeConfig, options.output);
+  .command('stop')
+  .description('Stop the credential proxy daemon')
+  .action(async () => {
+    const pid = readPidFile();
 
-    console.log(`Generated: ${options.output}`);
-    console.log('\nTo start manually:');
-    console.log('  docker compose up -d');
+    if (!pid) {
+      console.log('No daemon PID file found. Daemon may not be running.');
+      return;
+    }
+
+    if (!isProcessRunning(pid)) {
+      console.log(`Daemon (PID ${pid}) is not running. Cleaning up stale PID file.`);
+      removePidFile();
+      return;
+    }
+
+    console.log(`Stopping daemon (PID ${pid})...`);
+    try {
+      process.kill(pid, 'SIGTERM');
+
+      // Wait for process to exit (max 5 seconds)
+      let attempts = 0;
+      while (isProcessRunning(pid) && attempts < 50) {
+        await new Promise(r => setTimeout(r, 100));
+        attempts++;
+      }
+
+      if (isProcessRunning(pid)) {
+        console.log('Daemon did not stop gracefully, sending SIGKILL...');
+        process.kill(pid, 'SIGKILL');
+      }
+
+      removePidFile();
+      console.log('Daemon stopped.');
+    } catch (err) {
+      console.error('Failed to stop daemon:', err);
+    }
   });
 
-// Init command - simplified for sandbox-only mode
+// Daemon command (runs credential proxy only)
+program
+  .command('daemon')
+  .description('Run the credential proxy daemon (for advanced users)')
+  .action(async () => {
+    // Check if daemon is already running
+    const existingPid = readPidFile();
+    if (existingPid && isProcessRunning(existingPid)) {
+      console.error(`Daemon is already running (PID ${existingPid}). Use 'aquaman stop' first.`);
+      process.exit(1);
+    }
+
+    const config = loadConfig();
+
+    console.log('Starting aquaman credential proxy daemon...\n');
+
+    // Initialize audit logger
+    const auditLogger = createAuditLogger({
+      logDir: config.audit.logDir,
+      enabled: config.audit.enabled
+    });
+    await auditLogger.initialize();
+
+    // Initialize credential store
+    let credentialStore;
+    try {
+      credentialStore = createCredentialStore({
+        backend: config.credentials.backend,
+        vaultAddress: config.credentials.vaultAddress,
+        vaultToken: config.credentials.vaultToken,
+        vaultNamespace: config.credentials.vaultNamespace,
+        vaultMountPath: config.credentials.vaultMountPath,
+        onePasswordVault: config.credentials.onePasswordVault,
+        onePasswordAccount: config.credentials.onePasswordAccount
+      });
+    } catch {
+      console.log('Note: Using memory store for credentials');
+      credentialStore = new MemoryStore();
+    }
+
+    // Initialize service registry
+    const serviceRegistry = createServiceRegistry({ configPath: config.services.configPath });
+
+    // Start credential proxy
+    const credentialProxy = createCredentialProxy({
+      port: config.credentials.proxyPort,
+      bindAddress: '127.0.0.1',
+      store: credentialStore,
+      allowedServices: config.credentials.proxiedServices,
+      serviceRegistry,
+      tls: config.credentials.tls,
+      onRequest: (info) => {
+        auditLogger.logCredentialAccess('system', 'system', {
+          service: info.service,
+          operation: 'use',
+          success: !info.error,
+          error: info.error
+        });
+      }
+    });
+    await credentialProxy.start();
+
+    // Write PID file
+    writePidFile();
+
+    const protocol = credentialProxy.isTlsEnabled() ? 'https' : 'http';
+    console.log(`Credential proxy: ${protocol}://127.0.0.1:${config.credentials.proxyPort}`);
+    console.log(`Audit logging: ${config.audit.enabled ? 'enabled' : 'disabled'}`);
+    console.log(`Credential backend: ${config.credentials.backend}`);
+    console.log(`PID file: ${getPidFile()}`);
+    console.log('');
+    console.log('Press Ctrl+C to stop, or run: aquaman stop\n');
+
+    // Handle shutdown
+    const shutdown = async () => {
+      console.log('\nShutting down daemon...');
+      await credentialProxy.stop();
+      removePidFile();
+      process.exit(0);
+    };
+
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+  });
+
+// Configure command - write OpenClaw environment configuration
+program
+  .command('configure')
+  .description('Generate environment configuration for OpenClaw')
+  .option('--method <method>', 'Output method: env, dotenv, shell-rc', 'env')
+  .option('--dry-run', 'Show configuration without writing')
+  .action(async (options) => {
+    const config = loadConfig();
+    config.openclaw.configMethod = options.method;
+
+    const registry = createServiceRegistry({ configPath: config.services.configPath });
+    const services = registry.getAll().filter(s =>
+      config.credentials.proxiedServices.includes(s.name)
+    );
+
+    const integration = createOpenClawIntegration(config, services);
+    const env = await integration.configureOpenClaw(
+      config.credentials.proxyPort,
+      config.credentials.tls?.enabled ?? false
+    );
+
+    if (options.dryRun || options.method === 'env') {
+      console.log('Environment variables for OpenClaw:\n');
+      for (const [key, value] of Object.entries(env)) {
+        console.log(`export ${key}="${value}"`);
+      }
+      console.log('\nCopy and paste these into your shell, or use --method dotenv/shell-rc');
+    } else {
+      const result = await integration.writeConfiguration(env);
+      console.log(`Configuration written to: ${result}`);
+    }
+  });
+
+// Init command
 program
   .command('init')
   .description('Initialize aquaman configuration')
@@ -304,7 +413,7 @@ program
 
     console.log('\nNext steps:');
     console.log('1. Add your API keys: aquaman credentials add anthropic api_key');
-    console.log('2. Start the sandbox:  aquaman start');
+    console.log('2. Start the proxy:   aquaman start');
   });
 
 // Audit commands
@@ -314,7 +423,6 @@ audit
   .command('tail')
   .description('Show recent audit entries')
   .option('-n, --lines <count>', 'Number of lines', '20')
-  .option('-f, --follow', 'Follow mode (not implemented)')
   .action(async (options) => {
     const config = loadConfig();
     const auditLogger = createAuditLogger({
@@ -351,12 +459,12 @@ audit
     const result = await auditLogger.verifyIntegrity();
 
     if (result.valid) {
-      console.log('✓ Audit log integrity verified');
+      console.log('Audit log integrity verified');
       const stats = auditLogger.getStats();
       console.log(`  Entries: ${stats.entryCount}`);
       console.log(`  Last hash: ${stats.lastHash.slice(0, 16)}...`);
     } else {
-      console.log('✗ Audit log integrity FAILED');
+      console.log('Audit log integrity FAILED');
       for (const error of result.errors) {
         console.log(`  - ${error}`);
       }
@@ -390,13 +498,24 @@ const credentials = program.command('credentials').description('Credential manag
 credentials
   .command('add <service> <key>')
   .description('Add a credential')
-  .action(async (service: string, key: string) => {
+  .option('--backend <backend>', 'Override credential backend')
+  .action(async (service: string, key: string, options) => {
     const config = loadConfig();
+    const backend = options.backend || config.credentials.backend;
+
     let store;
     try {
-      store = createCredentialStore({ backend: config.credentials.backend });
-    } catch {
-      console.error('Credential store not available. Install keytar: npm install keytar');
+      store = createCredentialStore({
+        backend,
+        vaultAddress: config.credentials.vaultAddress,
+        vaultToken: config.credentials.vaultToken,
+        vaultNamespace: config.credentials.vaultNamespace,
+        vaultMountPath: config.credentials.vaultMountPath,
+        onePasswordVault: config.credentials.onePasswordVault,
+        onePasswordAccount: config.credentials.onePasswordAccount
+      });
+    } catch (error) {
+      console.error('Credential store not available:', error instanceof Error ? error.message : error);
       process.exit(1);
     }
 
@@ -442,7 +561,13 @@ credentials
     const config = loadConfig();
     let store;
     try {
-      store = createCredentialStore({ backend: config.credentials.backend });
+      store = createCredentialStore({
+        backend: config.credentials.backend,
+        vaultAddress: config.credentials.vaultAddress,
+        vaultToken: config.credentials.vaultToken,
+        onePasswordVault: config.credentials.onePasswordVault,
+        onePasswordAccount: config.credentials.onePasswordAccount
+      });
     } catch {
       console.error('Credential store not available.');
       process.exit(1);
@@ -468,7 +593,13 @@ credentials
     const config = loadConfig();
     let store;
     try {
-      store = createCredentialStore({ backend: config.credentials.backend });
+      store = createCredentialStore({
+        backend: config.credentials.backend,
+        vaultAddress: config.credentials.vaultAddress,
+        vaultToken: config.credentials.vaultToken,
+        onePasswordVault: config.credentials.onePasswordVault,
+        onePasswordAccount: config.credentials.onePasswordAccount
+      });
     } catch {
       console.error('Credential store not available.');
       process.exit(1);
@@ -482,32 +613,6 @@ credentials
     }
   });
 
-credentials
-  .command('revoke')
-  .description('Revoke all credentials')
-  .option('--all', 'Revoke all credentials')
-  .action(async (options) => {
-    if (!options.all) {
-      console.log('Use --all to revoke all credentials');
-      return;
-    }
-
-    const config = loadConfig();
-    let store;
-    try {
-      store = createCredentialStore({ backend: config.credentials.backend });
-    } catch {
-      console.error('Credential store not available.');
-      process.exit(1);
-    }
-
-    const creds = await store.list();
-    for (const cred of creds) {
-      await store.delete(cred.service, cred.key);
-    }
-    console.log(`Revoked ${creds.length} credentials`);
-  });
-
 // Services commands
 const services = program.command('services').description('Service registry management');
 
@@ -517,7 +622,8 @@ services
   .option('--builtin', 'Show only builtin services')
   .option('--custom', 'Show only custom services')
   .action(async (options) => {
-    const registry = createServiceRegistry();
+    const config = loadConfig();
+    const registry = createServiceRegistry({ configPath: config.services.configPath });
     const builtinNames = new Set(ServiceRegistry.getBuiltinServiceNames());
     const allServices = registry.getAll();
 
@@ -552,7 +658,8 @@ services
   .description('Validate services.yaml configuration')
   .option('-p, --path <path>', 'Path to services.yaml')
   .action(async (options) => {
-    const configPath = options.path || path.join(getConfigDir(), 'services.yaml');
+    const config = loadConfig();
+    const configPath = options.path || config.services.configPath;
 
     if (!fs.existsSync(configPath)) {
       console.log(`No services file found at ${configPath}`);
@@ -572,11 +679,11 @@ services
     const result = ServiceRegistry.validateConfigFile(configPath);
 
     if (result.valid) {
-      console.log(`\u2713 ${configPath} is valid`);
+      console.log(`${configPath} is valid`);
       const registry = createServiceRegistry({ configPath });
       console.log(`  Found ${registry.getAll().length} services`);
     } else {
-      console.log(`\u2717 ${configPath} has errors:\n`);
+      console.log(`${configPath} has errors:\n`);
       for (const error of result.errors) {
         console.log(`  - ${error}`);
       }
@@ -584,97 +691,51 @@ services
     }
   });
 
-// Approval commands
-program
-  .command('approve <request-id>')
-  .description('Approve a pending request')
-  .action(async (requestId: string) => {
-    const success = await apiApprove(APPROVAL_API_PORT, requestId);
-    if (success) {
-      console.log(`✓ Approved: ${requestId}`);
-    } else {
-      console.log(`✗ Failed - request not found or daemon not running`);
-      process.exit(1);
-    }
-  });
-
-program
-  .command('deny <request-id>')
-  .description('Deny a pending request')
-  .action(async (requestId: string) => {
-    const success = await apiDeny(APPROVAL_API_PORT, requestId);
-    if (success) {
-      console.log(`✓ Denied: ${requestId}`);
-    } else {
-      console.log(`✗ Failed - request not found or daemon not running`);
-      process.exit(1);
-    }
-  });
-
-program
-  .command('pending')
-  .description('List pending approval requests')
-  .action(async () => {
-    try {
-      const pending = await apiGetPending(APPROVAL_API_PORT);
-      if (pending.length === 0) {
-        console.log('No pending requests.');
-        return;
-      }
-      console.log('Pending approval requests:\n');
-      for (const req of pending as any[]) {
-        console.log(`  ID: ${req.id}`);
-        console.log(`  Tool: ${req.toolCall?.tool}`);
-        console.log(`  Reason: ${req.reason}`);
-        console.log('');
-      }
-    } catch {
-      console.log('Daemon not running. Start with: aquaman start');
-      process.exit(1);
-    }
-  });
-
 // Status command
 program
   .command('status')
-  .description('Show sandbox status')
+  .description('Show aquaman status')
   .action(async () => {
     const config = loadConfig();
-    const orchestrator = createSandboxOrchestrator(config);
 
     console.log('aquaman-clawed status\n');
 
-    // Get container status
-    const status = await orchestrator.getStatus();
-
-    const statusIcon = (s: string) => {
-      switch (s) {
-        case 'running': return '\x1b[32m●\x1b[0m'; // green
-        case 'stopped': return '\x1b[31m○\x1b[0m'; // red
-        case 'starting': return '\x1b[33m◐\x1b[0m'; // yellow
-        case 'unhealthy': return '\x1b[33m●\x1b[0m'; // yellow
-        default: return '\x1b[90m?\x1b[0m'; // gray
-      }
-    };
-
-    console.log('Sandbox:');
-    console.log(`  ${statusIcon(status.aquaman)} Control plane: ${status.aquaman}`);
-    console.log(`  ${statusIcon(status.openclaw)} OpenClaw: ${status.openclaw}`);
-    console.log(`  Network: ${status.network}`);
-
-    console.log('\nConfiguration:');
+    console.log('Configuration:');
     console.log(`  Config dir: ${getConfigDir()}`);
-    console.log(`  OpenClaw image: ${config.sandbox.openclawImage}`);
-    console.log(`  Workspace: ${config.sandbox.workspace.hostPath}`);
-    console.log(`  Read-only: ${config.sandbox.workspace.readOnly}`);
     console.log(`  Credential backend: ${config.credentials.backend}`);
-
-    console.log('\nSecurity:');
-    console.log(`  Network isolation: enabled (internal Docker network)`);
-    console.log(`  Credential isolation: enabled (never in container)`);
-    console.log(`  OpenClaw sandbox: ${config.sandbox.enableOpenclawSandbox ? 'enabled' : 'disabled'}`);
+    console.log(`  Proxy port: ${config.credentials.proxyPort}`);
+    console.log(`  TLS: ${config.credentials.tls?.enabled ? 'enabled' : 'disabled'}`);
     console.log(`  Audit logging: ${config.audit.enabled ? 'enabled' : 'disabled'}`);
-    console.log(`  Alert rules: ${config.audit.alertRules.length}`);
+
+    console.log('\nProxied services:');
+    for (const service of config.credentials.proxiedServices) {
+      console.log(`  - ${service}`);
+    }
+
+    // Check for stored credentials
+    try {
+      const store = createCredentialStore({
+        backend: config.credentials.backend,
+        vaultAddress: config.credentials.vaultAddress,
+        vaultToken: config.credentials.vaultToken,
+        onePasswordVault: config.credentials.onePasswordVault,
+        onePasswordAccount: config.credentials.onePasswordAccount
+      });
+      const creds = await store.list();
+      console.log(`\nStored credentials: ${creds.length}`);
+    } catch {
+      console.log('\nStored credentials: (backend unavailable)');
+    }
+
+    // Check for OpenClaw
+    const registry = createServiceRegistry({ configPath: config.services.configPath });
+    const services = registry.getAll().filter(s =>
+      config.credentials.proxiedServices.includes(s.name)
+    );
+    const integration = createOpenClawIntegration(config, services);
+    const info = await integration.detectOpenClaw();
+
+    console.log(`\nOpenClaw: ${info.installed ? `installed (${info.version})` : 'not found'}`);
   });
 
 function formatEntry(entry: any): string {
@@ -683,12 +744,8 @@ function formatEntry(entry: any): string {
       return `${entry.data.tool} ${JSON.stringify(entry.data.params).slice(0, 80)}`;
     case 'tool_result':
       return `Result for ${entry.data.toolCallId}`;
-    case 'policy_violation':
-      return `[${entry.data.severity}] ${entry.data.reason}`;
-    case 'approval_request':
-      return `[${entry.data.status}] ${entry.data.reason}`;
     case 'credential_access':
-      return `${entry.data.service} ${entry.data.operation} ${entry.data.success ? '✓' : '✗'}`;
+      return `${entry.data.service} ${entry.data.operation} ${entry.data.success ? 'OK' : 'FAIL'}`;
     default:
       return JSON.stringify(entry.data).slice(0, 80);
   }

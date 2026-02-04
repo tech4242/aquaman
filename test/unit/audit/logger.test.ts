@@ -103,26 +103,32 @@ describe('AuditLogger', () => {
     });
   });
 
-  describe('logPolicyViolation', () => {
-    it('should log policy violations', async () => {
-      const entry = await logger.logPolicyViolation('session1', 'agent1', {
-        rule: 'dangerous-command',
-        action: 'block',
-        severity: 'critical',
-        toolCall: {
-          id: 'call-123',
-          sessionId: 'session1',
-          agentId: 'agent1',
-          tool: 'bash',
-          params: { command: 'rm -rf /' },
-          timestamp: new Date()
-        },
-        reason: 'Dangerous command blocked'
+  describe('logCredentialAccess', () => {
+    it('should log credential access', async () => {
+      const entry = await logger.logCredentialAccess('session1', 'agent1', {
+        service: 'anthropic',
+        operation: 'use',
+        success: true
       });
 
       expect(entry).not.toBeNull();
-      expect(entry!.type).toBe('policy_violation');
-      expect((entry!.data as any).severity).toBe('critical');
+      expect(entry!.type).toBe('credential_access');
+      expect((entry!.data as any).service).toBe('anthropic');
+      expect((entry!.data as any).operation).toBe('use');
+      expect((entry!.data as any).success).toBe(true);
+    });
+
+    it('should log credential access errors', async () => {
+      const entry = await logger.logCredentialAccess('session1', 'agent1', {
+        service: 'anthropic',
+        operation: 'use',
+        success: false,
+        error: 'Credential not found'
+      });
+
+      expect(entry).not.toBeNull();
+      expect((entry!.data as any).success).toBe(false);
+      expect((entry!.data as any).error).toBe('Credential not found');
     });
   });
 

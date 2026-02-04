@@ -1,28 +1,40 @@
-# 🔱🦞🪸 aquaman-clawed
+# aquaman-clawed
 
-Security control plane for OpenClaw - audit logging, guardrails, and credential isolation.
+Credential isolation for AI agents. Your API keys never touch the agent process.
 
-## Why This Exists
+## The Problem
+
+AI agents can read files, execute commands, and access the filesystem. If an agent is compromised through prompt injection, any credentials in its environment or accessible files can be exfiltrated.
+
+Storing API keys in environment variables or `.env` files means a single malicious prompt could steal them all.
+
+## The Solution
+
+aquaman-clawed runs a credential proxy that:
+
+1. **Stores API keys in secure backends** - Keychain, 1Password, or HashiCorp Vault
+2. **Proxies API requests** - Intercepts calls and injects auth headers on-the-fly
+3. **Never exposes credentials** - The agent process only sees proxy URLs, never actual keys
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  WITHOUT aquaman-clawed                                         │
-├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  ┌─────────────┐         ┌─────────────────────────────────┐   │
-│  │  OpenClaw   │ ──────> │  ~/.openclaw/auth-profiles.json │   │
-│  │   Agent     │  CAN    │  (plaintext API keys!)          │   │
-│  │             │  READ   │  - Claude API key               │   │
-│  │  "Read my   │         │  - OpenAI key                   │   │
-│  │  config"    │         │  - Slack/Discord tokens         │   │
-│  └─────────────┘         └─────────────────────────────────┘   │
-│        │                                                        │
-│        │  Prompt injection → credentials leaked                 │
-│        ▼                                                        │
+│  ┌──────────────────┐         ┌─────────────────────────────┐  │
+│  │  Credential      │ HTTPS   │  AI Agent                   │  │
+│  │  Proxy :8081     │◄────────│  (uses ANTHROPIC_BASE_URL   │  │
+│  │                  │         │   pointing to proxy)        │  │
+│  │  - Keychain      │         │                             │  │
+│  │  - 1Password     │         │  API keys NEVER here        │  │
+│  │  - Vault         │         └─────────────────────────────┘  │
+│  └────────┬─────────┘                                          │
+│           │                                                    │
+│           │ Adds auth headers                                  │
+│           ▼                                                    │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Credentials exfiltrated via file_read or message_send   │   │
+│  │  api.anthropic.com / api.openai.com / etc.              │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                 │
+│  Audit Log: ~/.aquaman/audit/current.jsonl (hash-chained)      │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -32,237 +44,193 @@ Security control plane for OpenClaw - audit logging, guardrails, and credential 
 # Install
 npm install -g aquaman-clawed
 
+# Initialize configuration and TLS certificates
+aquaman init
+
 # Add your API keys to secure storage
 aquaman credentials add anthropic api_key
 aquaman credentials add openai api_key
 
-# Start the secure sandbox (requires Docker)
+# Start credential proxy
 aquaman start
-
-# Or run in background
-aquaman start --detach
 ```
 
-## How It Works
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                          HOST MACHINE                               │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌───────────────────────────────────────────────────────────────┐ │
-│  │  aquaman (control plane container)                             │ │
-│  │                                                                 │ │
-│  │  Gateway Proxy :18790  ──> Intercepts all tool calls          │ │
-│  │  Credential Proxy :8081 ──> Injects API keys from Keychain    │ │
-│  │  Audit Logger ──────────> Hash-chained tamper-evident logs    │ │
-│  │  Alert Engine ──────────> Blocks dangerous patterns           │ │
-│  │  Approval Manager ──────> Requires approval for sudo, etc.    │ │
-│  │                                                                 │ │
-│  └───────────────────────────────────────────────────────────────┘ │
-│                               │                                     │
-│                    aquaman_net (internal, NO internet)              │
-│                               │                                     │
-│  ┌───────────────────────────▼───────────────────────────────────┐ │
-│  │  openclaw (sandboxed container)                                │ │
-│  │                                                                 │ │
-│  │  - NO credential files mounted                                 │ │
-│  │  - NO access to ~/.ssh, ~/.aws, ~/.gnupg                       │ │
-│  │  - Workspace: /workspace (your project, optionally read-only) │ │
-│  │  - Can ONLY reach aquaman proxy (no internet)                  │ │
-│  │  - OpenClaw sandbox mode enabled for double isolation          │ │
-│  │                                                                 │ │
-│  └───────────────────────────────────────────────────────────────┘ │
-│                                                                     │
-│  Credentials: Stored in macOS Keychain (never in container)        │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-## Security Features
+## Features
 
 | Feature | Description |
 |---------|-------------|
-| **Container Isolation** | OpenClaw runs in Docker with no internet access |
-| **Credential Proxy** | API keys injected via HTTPS, never in container |
-| **TLS Encryption** | Self-signed certs, no external CA needed |
-| **Audit Logging** | Hash-chained, tamper-evident logs |
-| **Secret Redaction** | 16+ patterns auto-redacted from logs |
-| **Approval Workflow** | Block dangerous commands until approved |
-| **macOS Keychain** | Native credential storage |
-| **Encrypted File** | AES-256-GCM with PBKDF2 |
-| **1Password** | Team credential sharing via `op` CLI |
-| **HashiCorp Vault** | Enterprise secrets management |
-| **Custom Services** | YAML-based service registry |
-| **Policy Engine** | Block/allow commands, files, network |
+| **Credential Proxy** | API keys injected via HTTPS proxy, never exposed to agents |
+| **1Password Integration** | Team credential sharing via `op` CLI |
+| **HashiCorp Vault** | Enterprise secrets management with rotation support |
+| **Hash-chained Audit Logs** | Tamper-evident, append-only logging for compliance |
+| **Custom Service Registry** | Define your own API endpoints via YAML |
 
-## Credential Backends
-
-| Backend | Use Case | Setup |
-|---------|----------|-------|
-| `keychain` | macOS local development | Default, no setup |
-| `encrypted-file` | Linux, CI/CD | Set encryption password |
-| `1password` | Team sharing, enterprise | Install `op` CLI, sign in |
-| `vault` | Enterprise secrets management | Vault server + token |
-
-## CLI Commands
+## CLI Reference
 
 ```bash
-# Sandbox lifecycle
-aquaman start                    # Start sandboxed OpenClaw
-aquaman start -w ~/myproject     # Custom workspace
-aquaman start --read-only        # Read-only workspace
-aquaman start --detach           # Run in background
-aquaman stop                     # Stop everything
-aquaman status                   # Show container status
-aquaman logs [-f]                # View logs
+# Lifecycle
+aquaman start                    # Start credential proxy
+aquaman start --no-launch        # Start proxy only (daemon mode)
+aquaman start --dry-run          # Show configuration without starting
+aquaman stop                     # Stop the daemon
+aquaman status                   # Show configuration and status
 
-# Credentials (stored on host, never in container)
-aquaman credentials add <svc> <key>  # Store API key securely
-aquaman credentials list             # List stored credentials
-aquaman credentials delete <svc> <key>
+# Configuration
+aquaman init                     # Initialize config + TLS certs
+aquaman configure                # Generate environment vars
+aquaman configure --method dotenv   # Write to .env.aquaman file
+
+# Credentials (stored in secure backend)
+aquaman credentials add <service> <key>
+aquaman credentials list
+aquaman credentials delete <service> <key>
 
 # Services (custom API configurations)
-aquaman services list            # List all configured services
+aquaman services list
+aquaman services list --custom   # Show only user-defined services
 aquaman services validate        # Validate services.yaml
 
 # Audit
-aquaman audit tail               # View recent audit entries
-aquaman audit verify             # Verify log integrity
-
-# Approval workflow
-aquaman pending                  # List pending approvals
-aquaman approve <id>             # Approve a request
-aquaman deny <id>                # Deny a request
+aquaman audit tail               # View recent entries
+aquaman audit verify             # Verify hash chain integrity
+aquaman audit rotate             # Archive current log
 ```
-
-## Approval Flow
-
-```
-Terminal 1 (aquaman start):             Terminal 2:
-
-  [APPROVAL REQUIRED]                   $ aquaman pending
-  Request ID: abc-123
-  Tool: bash                              ID: abc-123
-  Reason: Sudo command                    Tool: bash
-  Params: {"command": "sudo apt..."}      Reason: Sudo command
-
-  Use: aquaman approve abc-123          $ aquaman approve abc-123
-                                        Approved: abc-123
-```
-
-Or configure Slack/Discord webhooks in `~/.aquaman/config.yaml` for remote approval.
 
 ## Configuration
 
 Edit `~/.aquaman/config.yaml`:
 
 ```yaml
-sandbox:
-  openclawImage: "openclaw/openclaw:latest"
-  workspace:
-    hostPath: "${HOME}/workspace"
-    containerPath: "/workspace"
-    readOnly: false
-  resources:
-    cpus: "2"
-    memory: "4g"
-  enableOpenclawSandbox: true  # Double isolation
+credentials:
+  backend: keychain          # keychain | 1password | vault | encrypted-file
+  proxyPort: 8081
+  proxiedServices:
+    - anthropic
+    - openai
+    - slack
+    - discord
+    - github
+  tls:
+    enabled: true
+    autoGenerate: true
 
 audit:
   enabled: true
   logDir: ~/.aquaman/audit
-  alertRules:
-    - id: dangerous-command-pipe
-      pattern: "curl.*\\|.*sh"
-      action: block
-      severity: critical
 
-permissions:
-  files:
-    deniedPaths: ['~/.ssh/**', '**/.env', '**/*.pem']
-  commands:
-    deniedCommands: ['sudo', 'rm -rf /']
-  network:
-    defaultAction: deny
-    allowedDomains: ['api.anthropic.com', 'api.openai.com']
-
-credentials:
-  backend: keychain  # or: encrypted-file, 1password, vault
-  tls:
-    enabled: true
-    autoGenerate: true
-  # For 1Password backend
-  # onePasswordVault: aquaman-clawed
-  # For Vault backend
-  # vaultAddress: https://vault.company.com:8200
-
-approval:
-  timeout: 300
-  defaultOnTimeout: deny
-  channels:
-    - type: console
-    # - type: slack
-    #   webhook: https://hooks.slack.com/...
+services:
+  configPath: ~/.aquaman/services.yaml
 ```
 
-## aquaman-clawed vs OpenClaw's Sandbox Mode
+## Credential Backends
 
-OpenClaw has its own sandbox mode (`sandbox.mode: "non-main"`). These are **complementary**:
+| Backend | Use Case | Setup |
+|---------|----------|-------|
+| `keychain` | macOS local development | Default, no setup needed |
+| `encrypted-file` | Linux, CI/CD | Set `AQUAMAN_ENCRYPTION_PASSWORD` |
+| `1password` | Team sharing, enterprise | Install `op` CLI, sign in |
+| `vault` | Enterprise secrets management | Set `VAULT_ADDR` + `VAULT_TOKEN` |
 
-| Feature | OpenClaw Sandbox | aquaman-clawed |
-|---------|-----------------|----------------|
-| **What it isolates** | Non-main sessions (groups/channels) | Entire OpenClaw instance |
-| **Who manages containers** | OpenClaw | aquaman |
-| **Credential storage** | Still in OpenClaw config | Keychain (never in container) |
-| **Audit logging** | No | Hash-chained, tamper-evident |
-| **Approval workflow** | No | Yes, with Slack/Discord |
-| **Network isolation** | Per-session | Entire instance |
-
-**Recommended:** Enable both for maximum security. aquaman automatically enables OpenClaw's sandbox mode inside the container (`enableOpenclawSandbox: true`).
-
-## Quick Examples
+### Using 1Password
 
 ```bash
-# Use 1Password for credentials
-aquaman config set credentials.backend 1password
-aquaman credentials add anthropic api_key
+# Install 1Password CLI
+brew install --cask 1password/tap/1password-cli
 
-# Use HashiCorp Vault
+# Sign in
+op signin
+
+# Configure aquaman to use 1Password
+# Edit ~/.aquaman/config.yaml:
+#   credentials:
+#     backend: 1password
+#     onePasswordVault: aquaman-clawed
+
+# Add credentials
+aquaman credentials add anthropic api_key
+```
+
+### Using HashiCorp Vault
+
+```bash
+# Set Vault environment
 export VAULT_ADDR=https://vault.company.com:8200
 export VAULT_TOKEN=hvs.xxxxx
-aquaman config set credentials.backend vault
-aquaman credentials add anthropic api_key
 
-# Add custom service
-cat >> ~/.aquaman/services.yaml << EOF
+# Configure aquaman
+# Edit ~/.aquaman/config.yaml:
+#   credentials:
+#     backend: vault
+#     vaultMountPath: secret
+
+# Add credentials
+aquaman credentials add anthropic api_key
+```
+
+## Custom Services
+
+Add your own API endpoints in `~/.aquaman/services.yaml`:
+
+```yaml
 services:
   - name: github
     upstream: https://api.github.com
     authHeader: Authorization
     authPrefix: "Bearer "
     credentialKey: token
-  - name: custom-llm
+    description: GitHub API
+
+  - name: internal-llm
     upstream: https://llm.internal.company.com/v1
     authHeader: X-API-Key
     credentialKey: api_key
-EOF
-aquaman services validate
-
-# Verify audit log has no leaked secrets
-cat ~/.aquaman/audit/current.jsonl | grep -o 'sk-ant-[^"]*'  # Should be redacted
+    description: Internal LLM service
 ```
 
-## Advanced: Generate Compose File
+Then add to proxied services in `~/.aquaman/config.yaml`:
 
-If you want to customize the Docker setup:
+```yaml
+credentials:
+  proxiedServices:
+    - anthropic
+    - openai
+    - github
+    - internal-llm
+```
+
+## Audit Logs
+
+The audit log uses hash chains for tamper detection:
 
 ```bash
-# Generate docker-compose.yml without starting
-aquaman generate-compose -o ./docker-compose.yml
+# Verify integrity
+aquaman audit verify
 
-# Edit as needed, then:
-docker compose up -d
+# View recent entries
+aquaman audit tail -n 50
+
+# Each entry contains:
+# - previousHash: links to prior entry
+# - hash: SHA-256 of (previousHash + entry data)
+# - Tampering breaks the chain
+```
+
+## Environment Variables
+
+When aquaman starts, it sets these environment variables:
+
+```bash
+ANTHROPIC_BASE_URL=https://127.0.0.1:8081/anthropic
+OPENAI_BASE_URL=https://127.0.0.1:8081/openai
+GITHUB_API_URL=https://127.0.0.1:8081/github
+# ... one for each proxied service
+```
+
+Generate these manually with:
+
+```bash
+aquaman configure
+# Output: export ANTHROPIC_BASE_URL="https://127.0.0.1:8081/anthropic"
 ```
 
 ## License
