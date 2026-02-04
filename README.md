@@ -43,19 +43,59 @@ The agent only knows a localhost URL. It never sees a key.
 
 ### OpenClaw Plugin (recommended)
 
+**1. Install the plugin:**
+
 ```bash
-cp -r packages/openclaw ~/.openclaw/extensions/aquaman
-aquaman credentials add anthropic api_key
-# Plugin auto-starts proxy when Gateway launches
+openclaw plugins install ./packages/openclaw
 ```
 
+**2. Add credentials:**
+
+```bash
+aquaman credentials add anthropic api_key
+# Prompts for key — stored in Keychain, never on disk in plaintext
+```
+
+**3. Configure plugin in `~/.openclaw/openclaw.json`:**
+
+```json5
+{
+  plugins: {
+    entries: {
+      aquaman: {
+        enabled: true,
+        config: {
+          mode: "proxy",              // "proxy" for full isolation, "embedded" for simpler setup
+          backend: "keychain",        // keychain | encrypted-file | 1password | vault
+          services: ["anthropic", "openai"],
+          proxyPort: 8081,
+          proxyAutoStart: true,
+          auditEnabled: true
+        }
+      }
+    }
+  }
+}
+```
+
+**4. Launch OpenClaw:**
+
+```bash
+openclaw
+```
+
+The plugin auto-starts the proxy, sets `ANTHROPIC_BASE_URL=http://127.0.0.1:8081/anthropic`, and routes all API calls through it. Credentials never enter the Gateway process.
+
 ### Standalone
+
+For use outside OpenClaw:
 
 ```bash
 npm install -g @aquaman/proxy
 aquaman init                            # Create config + generate TLS certs
 aquaman credentials add anthropic api_key
-aquaman daemon                          # Start proxy
+aquaman start                           # Start proxy + launch OpenClaw
+# or: aquaman daemon                    # Run proxy only (no OpenClaw launch)
 ```
 
 ## Why Aquaman
@@ -81,12 +121,21 @@ aquaman daemon                          # Start proxy
 
 | | Plugin Mode | Standalone Mode |
 |-|-------------|-----------------|
-| **Setup** | Copy to `~/.openclaw/extensions/` | `npm install -g @aquaman/proxy` |
-| **Lifecycle** | Managed by Gateway | Manual `aquaman daemon` / `aquaman stop` |
+| **Setup** | `openclaw plugins install` | `npm install -g @aquaman/proxy` |
+| **Lifecycle** | Managed by Gateway | Manual `aquaman start` / `aquaman stop` |
 | **Use case** | OpenClaw users | Any application |
-| **Config** | `openclaw.json` | `~/.aquaman/config.yaml` |
+| **Config** | `~/.openclaw/openclaw.json` | `~/.aquaman/config.yaml` |
 
-The plugin supports two sub-modes: **proxy** (maximum isolation — credentials in a separate process) and **embedded** (simpler setup — credentials loaded in-process with OpenClaw redaction). Both provide audit logging.
+The plugin supports two sub-modes:
+
+| | Proxy Mode | Embedded Mode |
+|-|------------|---------------|
+| **Isolation** | Credentials in separate OS process | Credentials in Gateway process |
+| **Security** | Agent cannot access keys even if compromised | Relies on OpenClaw redaction |
+| **Setup** | Requires `aquaman` CLI installed | No extra binary needed |
+| **Config** | `mode: "proxy"` | `mode: "embedded"` (default) |
+
+Use **proxy mode** for production and high-security environments. Use **embedded mode** for quick local development.
 
 ## Audit & Compliance
 
@@ -118,7 +167,32 @@ Aquaman is complementary to sandbox-based tools — it handles credential isolat
 
 ## Configuration
 
-`~/.aquaman/config.yaml`:
+### Plugin mode — `~/.openclaw/openclaw.json`
+
+```json5
+{
+  plugins: {
+    entries: {
+      aquaman: {
+        enabled: true,
+        config: {
+          mode: "proxy",
+          backend: "keychain",
+          services: ["anthropic", "openai", "github"],
+          proxyPort: 8081,
+          proxyAutoStart: true,
+          tlsEnabled: false,          // set true + provide certs for production
+          auditEnabled: true
+          // 1Password: onePasswordVault, onePasswordAccount
+          // Vault: vaultAddress, vaultToken, vaultNamespace, vaultMountPath
+        }
+      }
+    }
+  }
+}
+```
+
+### Standalone mode — `~/.aquaman/config.yaml`
 
 ```yaml
 credentials:
