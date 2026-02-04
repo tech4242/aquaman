@@ -1,5 +1,5 @@
 /**
- * @aquaman/openclaw - Zero-trust credential isolation plugin for OpenClaw
+ * @aquaman/aquaman - Zero-trust credential isolation plugin for OpenClaw
  *
  * This package provides an OpenClaw plugin that enables:
  * - Secure credential storage using enterprise backends (Keychain, 1Password, Vault)
@@ -10,12 +10,12 @@
  * - Slash commands for credential management
  *
  * Installation:
- *   npm install @aquaman/openclaw
+ *   npm install @aquaman/aquaman
  *
  * Configuration in openclaw.json:
  *   {
  *     "plugins": {
- *       "@aquaman/openclaw": {
+ *       "@aquaman/aquaman": {
  *         "mode": "embedded",
  *         "backend": "keychain",
  *         "services": ["anthropic", "openai"]

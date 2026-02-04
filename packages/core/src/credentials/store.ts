@@ -44,13 +44,14 @@ export interface CredentialStoreOptions {
  * macOS Keychain backend using the keytar library
  */
 export class KeychainStore implements CredentialStore {
-  private keytar: typeof import('keytar') | null = null;
+  private keytar: any = null;
   private serviceName = 'aquaman';
 
   private async getKeytar(): Promise<typeof import('keytar')> {
     if (!this.keytar) {
       try {
-        this.keytar = await import('keytar');
+        const mod: any = await import('keytar');
+        this.keytar = mod.default || mod;
       } catch {
         throw new Error('keytar not available - install with: npm install keytar');
       }

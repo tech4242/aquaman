@@ -246,7 +246,7 @@ export async function modeCommand(ctx: CommandContext, mode: 'embedded' | 'proxy
   return {
     success: true,
     message: `To switch to ${mode} mode, update your openclaw.json:\n\n` +
-      `{\n  "plugins": {\n    "@aquaman/openclaw": {\n      "mode": "${mode}"\n    }\n  }\n}\n\n` +
+      `{\n  "plugins": {\n    "aquaman": {\n      "mode": "${mode}"\n    }\n  }\n}\n\n` +
       `Then restart OpenClaw.`
   };
 }

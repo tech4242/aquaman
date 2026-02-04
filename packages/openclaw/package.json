@@ -1,5 +1,5 @@
 {
-  "name": "@aquaman/openclaw",
+  "name": "@aquaman/aquaman",
   "version": "0.1.0",
   "description": "Zero-trust credential isolation plugin for OpenClaw",
   "type": "module",

@@ -195,18 +195,23 @@ export class AquamanPlugin {
       switch (service) {
         case 'anthropic':
           this.setEnvVar('ANTHROPIC_BASE_URL', serviceUrl);
+          this.setEnvVar('ANTHROPIC_API_KEY', 'aquaman-proxy-managed');
           break;
         case 'openai':
           this.setEnvVar('OPENAI_BASE_URL', serviceUrl);
+          this.setEnvVar('OPENAI_API_KEY', 'aquaman-proxy-managed');
           break;
         case 'github':
           this.setEnvVar('GITHUB_API_URL', serviceUrl);
+          this.setEnvVar('GITHUB_TOKEN', 'aquaman-proxy-managed');
           break;
         case 'slack':
           this.setEnvVar('SLACK_API_URL', serviceUrl);
+          this.setEnvVar('SLACK_BOT_TOKEN', 'aquaman-proxy-managed');
           break;
         case 'discord':
           this.setEnvVar('DISCORD_API_URL', serviceUrl);
+          this.setEnvVar('DISCORD_BOT_TOKEN', 'aquaman-proxy-managed');
           break;
         default:
           const envKey = `${service.toUpperCase().replace(/-/g, '_')}_BASE_URL`;

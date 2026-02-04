@@ -33,7 +33,7 @@ Agent Process                    Proxy Process (aquaman)
 packages/
 ├── core/       # @aquaman/core - credential stores, audit logger, crypto
 ├── proxy/      # @aquaman/proxy - HTTP proxy daemon, CLI
-└── openclaw/   # @aquaman/openclaw - OpenClaw plugin
+└── openclaw/   # @aquaman/aquaman - OpenClaw plugin
 ```
 
 ## OpenClaw Gateway Integration
@@ -47,19 +47,84 @@ The plugin (`packages/openclaw/`) integrates with the OpenClaw Gateway's plugin 
 4. On `onGatewayStop`: kills proxy process (SIGTERM)
 5. Registers `/aquaman` CLI commands and `aquaman_status` tool
 
-**Why this matters:** The Gateway makes LLM API calls (Anthropic, OpenAI) on behalf of agents. By intercepting these at the environment variable level, we route all LLM traffic through our proxy without modifying OpenClaw itself.
-
 **Key files:**
-- `index.ts` - Plugin entry point with `export default function register(api)`
+- `index.ts` - Plugin entry point with `export default function register(api)` — this is the actual running code OpenClaw loads
+- `src/plugin.ts` - Class-based plugin implementation (alternative architecture, used by standalone tests)
 - `openclaw.plugin.json` - Manifest with `id: "aquaman"`, config schema
-- `package.json` - Has `openclaw.extensions: ["./index.ts"]`
+- `package.json` - Has `openclaw.extensions: ["./index.ts"]`, package name `@aquaman/aquaman`
 
 **Installation location:** `~/.openclaw/extensions/aquaman/`
 
-**Why plugin + proxy (not pure plugin):**
-A pure plugin would fetch credentials into Gateway memory—defeating isolation. Our plugin only manages the proxy lifecycle; credentials never enter OpenClaw's process.
+### Plugin Config Schema
 
-**Unix assumption:** The plugin uses `which aquaman` to detect the CLI and spawns processes with Unix semantics. This matches the Gateway's supported platforms.
+The `openclaw.plugin.json` manifest defines `additionalProperties: false` with only these keys:
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `mode` | `"embedded"` \| `"proxy"` | `"embedded"` | Isolation mode |
+| `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` | `"keychain"` | Credential store |
+| `services` | `string[]` | `["anthropic", "openai"]` | Services to proxy |
+| `proxyPort` | `number` | `8081` | Proxy listen port |
+
+**Do NOT add extra keys** (like `proxyAutoStart`, `tlsEnabled`, `auditEnabled`) to `openclaw.json` — OpenClaw validates against the manifest schema and will reject them. Use `~/.aquaman/config.yaml` for advanced settings.
+
+### OpenClaw Auth Profiles
+
+OpenClaw checks its own auth store (`~/.openclaw/agents/<id>/agent/auth-profiles.json`) BEFORE making API calls. If no key is found, the request never reaches the proxy.
+
+**Solution:** Register a placeholder key so OpenClaw proceeds with the request. The proxy strips it and injects the real credential.
+
+```json
+{
+  "version": 1,
+  "profiles": {
+    "anthropic:default": {
+      "type": "api_key",
+      "provider": "anthropic",
+      "key": "aquaman-proxy-managed"
+    }
+  },
+  "order": { "anthropic": ["anthropic:default"] }
+}
+```
+
+**Auth resolution order:** auth-profiles.json → env vars → config file → error
+
+### Plugin ID Naming
+
+The package name's last segment must match the manifest `id`. OpenClaw derives a "hint" from the scoped package name (`@scope/name` → `name`).
+
+- **Correct:** `@aquaman/aquaman` (last segment `aquaman` matches manifest id `"aquaman"`)
+- **Wrong:** `@aquaman/openclaw` (last segment `openclaw` ≠ manifest id `"aquaman"`)
+- **Wrong:** `@aquaman/plugin` (last segment `plugin` ≠ manifest id `"aquaman"`)
+
+## Known Issues & Fixes
+
+### Keytar ESM/CJS Interop (Node 24+)
+
+`keytar` is a CommonJS native module. When imported via `import()` in an ESM context, the exports are wrapped in a `default` property:
+
+```typescript
+// BROKEN: keytar.findCredentials is undefined
+this.keytar = await import('keytar');
+
+// FIXED: unwrap the default export
+const mod: any = await import('keytar');
+this.keytar = mod.default || mod;
+```
+
+**Location:** `packages/core/src/credentials/store.ts` — `KeychainStore.getKeytar()`
+
+### Proxy Request Flow
+
+1. Agent sends request to `http://127.0.0.1:8081/anthropic/v1/messages`
+2. Proxy parses service name from path (`anthropic`)
+3. Looks up credential from vault: `anthropic/api_key`
+4. Strips any existing auth header from the request
+5. Injects real auth header: `x-api-key: <actual-key-from-vault>`
+6. Forwards to upstream: `https://api.anthropic.com/v1/messages`
+7. Response piped back to agent
+8. Access logged in audit trail with hash chaining
 
 ## Development Commands
 
@@ -67,6 +132,7 @@ A pure plugin would fetch credentials into Gateway memory—defeating isolation.
 npm test                    # All tests
 npm run test:e2e            # E2E tests (including OpenClaw plugin)
 npm run build               # Build all packages
+npm run build:core          # Build core only (needed after editing store.ts)
 npm run typecheck           # TypeScript validation
 npm run lint                # oxlint
 
@@ -88,15 +154,104 @@ Since the Gateway runs on Unix-like systems, backend choice depends on deploymen
 
 ## Testing the OpenClaw Plugin
 
+### Manual end-to-end test:
+
 ```bash
-# Install plugin to OpenClaw
-cp -r packages/openclaw ~/.openclaw/extensions/aquaman
+# 1. Install plugin
+openclaw plugins install ./packages/openclaw
+# or: cp -r packages/openclaw ~/.openclaw/extensions/aquaman
 
-# Verify it loads
-openclaw plugins list 2>&1 | grep -A2 aquaman
+# 2. Sync after code changes
+cp packages/openclaw/package.json ~/.openclaw/extensions/aquaman/package.json
+cp packages/openclaw/index.ts ~/.openclaw/extensions/aquaman/index.ts
+cp -r packages/openclaw/src/ ~/.openclaw/extensions/aquaman/src/
 
-# Run E2E tests
-npm run test:e2e -- test/e2e/openclaw-plugin.test.ts
+# 3. Rebuild core if store.ts changed
+npm run build:core
+
+# 4. Add test credential (dummy key for testing)
+node -e "
+const kt = require('./node_modules/keytar');
+const k = kt.default || kt;
+k.setPassword('aquaman', 'anthropic:api_key', 'sk-ant-test-key').then(() => console.log('stored'));
+"
+
+# 5. Create auth-profiles.json placeholder
+mkdir -p ~/.openclaw/agents/main/agent
+cat > ~/.openclaw/agents/main/agent/auth-profiles.json << 'EOF'
+{
+  "version": 1,
+  "profiles": {
+    "anthropic:default": {
+      "type": "api_key",
+      "provider": "anthropic",
+      "key": "aquaman-proxy-managed"
+    }
+  },
+  "order": { "anthropic": ["anthropic:default"] }
+}
+EOF
+
+# 6. Ensure openclaw.json has plugin config
+cat > ~/.openclaw/openclaw.json << 'EOF'
+{
+  "plugins": {
+    "entries": {
+      "aquaman": {
+        "enabled": true,
+        "config": {
+          "mode": "proxy",
+          "backend": "keychain",
+          "services": ["anthropic", "openai"],
+          "proxyPort": 8081
+        }
+      }
+    }
+  }
+}
+EOF
+
+# 7. Test via OpenClaw agent
+openclaw agent --local --message "hello" --session-id test --json 2>&1 | head -8
+```
+
+### What success looks like:
+
+```
+[plugins] Aquaman plugin loaded
+[plugins] aquaman CLI found, will start proxy on gateway start
+[plugins] Set ANTHROPIC_BASE_URL=http://127.0.0.1:8081/anthropic
+[plugins] Set OPENAI_BASE_URL=http://127.0.0.1:8081/openai
+[plugins] Aquaman plugin registered successfully
+{ "payloads": [{ "text": "HTTP 401 authentication_error: invalid x-api-key ..." }] }
+```
+
+- **No mismatch warnings** — package name `@aquaman/aquaman` matches manifest id `"aquaman"`
+- **Plugin loads and sets env vars** — `ANTHROPIC_BASE_URL` pointed to localhost proxy
+- **401 from Anthropic** — confirms the proxy injected the dummy key (real key would get a response)
+- **No credentials in agent process** — only the proxy URL was visible to the agent
+
+### Automated tests:
+
+```bash
+npm run test:e2e                # All 73 e2e tests (7 files)
+npm run test:unit               # All 134 unit tests (9 files)
+npm test                        # Everything
+```
+
+### Quick proxy-only smoke test:
+
+```bash
+# Start proxy
+npx tsx packages/proxy/src/cli/index.ts daemon &
+
+# Curl through it (expect 401 with dummy key = proxy injected it)
+curl -sk https://localhost:8081/anthropic/v1/messages \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-sonnet-4-20250514","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}'
+
+# Stop
+npx tsx packages/proxy/src/cli/index.ts stop
 ```
 
 ## Key Design Principles
@@ -110,8 +265,17 @@ npm run test:e2e -- test/e2e/openclaw-plugin.test.ts
 
 | File | Purpose |
 |------|---------|
-| `packages/core/src/credentials/store.ts` | Backend abstraction |
+| `packages/core/src/credentials/store.ts` | Backend abstraction (keychain, encrypted-file, memory) |
+| `packages/core/src/credentials/backends/` | 1Password and Vault backend implementations |
 | `packages/core/src/audit/logger.ts` | Hash-chained logging |
-| `packages/proxy/src/daemon.ts` | HTTP proxy server |
-| `packages/openclaw/index.ts` | OpenClaw plugin entry |
+| `packages/proxy/src/daemon.ts` | HTTP/HTTPS proxy server |
+| `packages/proxy/src/cli/index.ts` | CLI (Commander.js, 15 commands) |
+| `packages/proxy/src/service-registry.ts` | Builtin service definitions (5 services) |
+| `packages/proxy/src/openclaw/env-writer.ts` | Generates env vars for OpenClaw integration |
+| `packages/proxy/src/openclaw/integration.ts` | Detects and launches OpenClaw with env vars |
+| `packages/openclaw/index.ts` | OpenClaw plugin entry point (what Gateway loads) |
+| `packages/openclaw/openclaw.plugin.json` | Plugin manifest + config schema |
+| `packages/openclaw/src/plugin.ts` | Class-based plugin (standalone/test use) |
+| `packages/openclaw/src/proxy-manager.ts` | Spawns/manages proxy child process |
 | `test/e2e/openclaw-plugin.test.ts` | Plugin integration tests |
+| `test/e2e/credential-proxy.test.ts` | Proxy E2E tests |

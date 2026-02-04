@@ -43,34 +43,55 @@ The agent only knows a localhost URL. It never sees a key.
 
 ### OpenClaw Plugin (recommended)
 
-**1. Install the plugin:**
+**1. Install the plugin and CLI:**
 
 ```bash
 openclaw plugins install ./packages/openclaw
+npm install -g @aquaman/proxy
 ```
 
-**2. Add credentials:**
+**2. Initialize and add credentials:**
 
 ```bash
+aquaman init
 aquaman credentials add anthropic api_key
 # Prompts for key — stored in Keychain, never on disk in plaintext
 ```
 
-**3. Configure plugin in `~/.openclaw/openclaw.json`:**
+**3. Register a placeholder key with OpenClaw:**
 
-```json5
+OpenClaw requires an API key in its auth store before making requests. The proxy will replace it with the real key from your vault:
+
+```bash
+mkdir -p ~/.openclaw/agents/main/agent
+cat > ~/.openclaw/agents/main/agent/auth-profiles.json << 'EOF'
 {
-  plugins: {
-    entries: {
-      aquaman: {
-        enabled: true,
-        config: {
-          mode: "proxy",              // "proxy" for full isolation, "embedded" for simpler setup
-          backend: "keychain",        // keychain | encrypted-file | 1password | vault
-          services: ["anthropic", "openai"],
-          proxyPort: 8081,
-          proxyAutoStart: true,
-          auditEnabled: true
+  "version": 1,
+  "profiles": {
+    "anthropic:default": {
+      "type": "api_key",
+      "provider": "anthropic",
+      "key": "aquaman-proxy-managed"
+    }
+  },
+  "order": { "anthropic": ["anthropic:default"] }
+}
+EOF
+```
+
+**4. Configure plugin in `~/.openclaw/openclaw.json`:**
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "aquaman": {
+        "enabled": true,
+        "config": {
+          "mode": "proxy",
+          "backend": "keychain",
+          "services": ["anthropic", "openai"],
+          "proxyPort": 8081
         }
       }
     }
@@ -78,13 +99,21 @@ aquaman credentials add anthropic api_key
 }
 ```
 
-**4. Launch OpenClaw:**
+> **Note:** The plugin config schema only accepts `mode`, `backend`, `services`, and `proxyPort`. Other options (TLS, audit, vault settings) are configured in `~/.aquaman/config.yaml`.
+
+**5. Launch OpenClaw:**
 
 ```bash
 openclaw
 ```
 
-The plugin auto-starts the proxy, sets `ANTHROPIC_BASE_URL=http://127.0.0.1:8081/anthropic`, and routes all API calls through it. Credentials never enter the Gateway process.
+The plugin auto-starts the proxy, sets `ANTHROPIC_BASE_URL=http://127.0.0.1:8081/anthropic`, and routes all API calls through it. The placeholder key is replaced by the real credential from your vault — it never enters the Gateway process.
+
+**Verify it works:**
+
+```bash
+openclaw agent --local --message "hello" --session-id test
+```
 
 ### Standalone
 
@@ -169,28 +198,25 @@ Aquaman is complementary to sandbox-based tools — it handles credential isolat
 
 ### Plugin mode — `~/.openclaw/openclaw.json`
 
-```json5
+```json
 {
-  plugins: {
-    entries: {
-      aquaman: {
-        enabled: true,
-        config: {
-          mode: "proxy",
-          backend: "keychain",
-          services: ["anthropic", "openai", "github"],
-          proxyPort: 8081,
-          proxyAutoStart: true,
-          tlsEnabled: false,          // set true + provide certs for production
-          auditEnabled: true
-          // 1Password: onePasswordVault, onePasswordAccount
-          // Vault: vaultAddress, vaultToken, vaultNamespace, vaultMountPath
+  "plugins": {
+    "entries": {
+      "aquaman": {
+        "enabled": true,
+        "config": {
+          "mode": "proxy",
+          "backend": "keychain",
+          "services": ["anthropic", "openai", "github"],
+          "proxyPort": 8081
         }
       }
     }
   }
 }
 ```
+
+Plugin config accepts: `mode`, `backend`, `services`, `proxyPort`. For TLS, audit, vault, and 1Password settings, use the standalone config below — the proxy reads both.
 
 ### Standalone mode — `~/.aquaman/config.yaml`
 
@@ -267,7 +293,7 @@ Monorepo with three packages:
 |---------|------|
 | `@aquaman/core` | Credential backends, audit logger, crypto utilities |
 | `@aquaman/proxy` | HTTP/HTTPS proxy daemon and CLI |
-| `@aquaman/openclaw` | OpenClaw Gateway plugin (embedded + proxy modes) |
+| `@aquaman/aquaman` | OpenClaw Gateway plugin (embedded + proxy modes) |
 
 ## License
 
