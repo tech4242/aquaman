@@ -1,8 +1,10 @@
-# aquaman 🔱
-
-Credential isolation for AI agents. API keys never enter the agent process.
+# 🔱🦞🪸 aquaman 
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+Security control plane for OpenClaw - audit logging, guardrails, and credential isolation.
+
+Zero-trust credential isolation for **OpenClaw Gateway**. API keys never enter the Gateway process—they're stored in secure backends and injected by a separate proxy.
 
 ## The Problem
 
@@ -13,7 +15,7 @@ Detection-based approaches catch exposure *after* the fact. Aquaman makes exfilt
 ## How It Works
 
 ```
-Agent / OpenClaw Gateway              Aquaman Proxy (separate process)
+Agent / OpenClaw Gateway              Aquaman Proxy
 ┌──────────────────────┐              ┌──────────────────────┐
 │                      │              │                      │
 │  ANTHROPIC_BASE_URL  │──request────>│  Keychain / 1Pass /  │
