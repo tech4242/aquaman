@@ -20,10 +20,18 @@ export {
 
 // Service Registry
 export {
+  type AuthMode,
+  type OAuthConfig,
   type ServiceRegistryOptions,
   ServiceRegistry,
   createServiceRegistry
 } from './service-registry.js';
+
+// OAuth Token Cache
+export {
+  OAuthTokenCache,
+  createOAuthTokenCache
+} from './oauth-token-cache.js';
 
 // OpenClaw Integration
 export {

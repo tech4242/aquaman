@@ -8,7 +8,8 @@ import * as https from 'node:https';
 import * as fs from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { type CredentialStore, generateId } from '@aquaman/core';
-import { ServiceRegistry, createServiceRegistry, type ServiceDefinition } from './service-registry.js';
+import { ServiceRegistry, createServiceRegistry, type ServiceDefinition, type AuthMode } from './service-registry.js';
+import { OAuthTokenCache, createOAuthTokenCache } from './oauth-token-cache.js';
 
 export interface TlsOptions {
   enabled: boolean;
@@ -51,11 +52,13 @@ export class CredentialProxy {
   private running = false;
   private tlsEnabled = false;
   private serviceRegistry: ServiceRegistry;
+  private oauthCache: OAuthTokenCache;
   private actualPort: number = 0;
 
   constructor(options: CredentialProxyOptions) {
     this.options = options;
     this.serviceRegistry = options.serviceRegistry || createServiceRegistry();
+    this.oauthCache = createOAuthTokenCache();
   }
 
   async start(): Promise<void> {
@@ -134,6 +137,14 @@ export class CredentialProxy {
       return;
     }
 
+    const authMode: AuthMode = serviceDef.authMode || 'header';
+
+    if (authMode === 'none') {
+      res.statusCode = 400;
+      res.end(`Service "${service}" is at-rest storage only and does not support proxying`);
+      return;
+    }
+
     const config: ServiceConfig = {
       upstream: serviceDef.upstream,
       authHeader: serviceDef.authHeader,
@@ -151,7 +162,7 @@ export class CredentialProxy {
     };
 
     try {
-      // Get credential from store
+      // Get primary credential from store
       const credential = await this.options.store.get(service, config.credentialKey);
 
       if (!credential) {
@@ -165,12 +176,22 @@ export class CredentialProxy {
 
       requestInfo.authenticated = true;
 
-      // Build upstream URL (strip service prefix from path)
-      const upstreamPath = '/' + pathParts.slice(1).join('/');
+      // Build upstream URL based on auth mode
+      const remainingPath = '/' + pathParts.slice(1).join('/');
+      let upstreamPath: string;
+
+      if (authMode === 'url-path' && serviceDef.authPathTemplate) {
+        // Inject token into URL path: /bot{token}/getUpdates
+        const tokenPath = serviceDef.authPathTemplate.replace('{token}', credential);
+        upstreamPath = tokenPath + remainingPath;
+      } else {
+        upstreamPath = remainingPath;
+      }
+
       const upstreamUrl = new URL(upstreamPath, config.upstream);
 
-      // Forward the request
-      await this.proxyRequest(req, res, upstreamUrl, config, credential, requestInfo);
+      // Forward the request with auth mode context
+      await this.proxyRequest(req, res, upstreamUrl, serviceDef, credential, requestInfo);
 
     } catch (error) {
       requestInfo.error = error instanceof Error ? error.message : String(error);
@@ -185,32 +206,73 @@ export class CredentialProxy {
     clientReq: IncomingMessage,
     clientRes: ServerResponse,
     upstreamUrl: URL,
-    config: ServiceConfig,
+    serviceDef: ServiceDefinition,
     credential: string,
     requestInfo: RequestInfo
   ): Promise<void> {
-    return new Promise((resolve) => {
-      const isHttps = upstreamUrl.protocol === 'https:';
-      const transport = isHttps ? https : http;
+    const isHttps = upstreamUrl.protocol === 'https:';
+    const transport = isHttps ? https : http;
+    const authMode: AuthMode = serviceDef.authMode || 'header';
 
-      // Copy headers, add auth, remove problematic ones
-      const headers: Record<string, string> = {};
+    // Copy headers, strip auth-related ones
+    const headers: Record<string, string> = {};
 
-      if (clientReq.headers) {
-        for (const [key, value] of Object.entries(clientReq.headers)) {
-          if (key.toLowerCase() === 'host') continue;
-          if (key.toLowerCase() === config.authHeader.toLowerCase()) continue;
-          if (value) {
-            headers[key] = Array.isArray(value) ? value[0] : value;
-          }
+    if (clientReq.headers) {
+      for (const [key, value] of Object.entries(clientReq.headers)) {
+        if (key.toLowerCase() === 'host') continue;
+        // Strip existing auth header if we're injecting one
+        if (serviceDef.authHeader && key.toLowerCase() === serviceDef.authHeader.toLowerCase()) continue;
+        if (key.toLowerCase() === 'authorization') continue;
+        if (value) {
+          headers[key] = Array.isArray(value) ? value[0] : value;
         }
       }
+    }
 
-      // Add authentication
-      const authValue = config.authPrefix
-        ? `${config.authPrefix}${credential}`
+    // Inject authentication based on auth mode
+    if (authMode === 'header') {
+      const authValue = serviceDef.authPrefix
+        ? `${serviceDef.authPrefix}${credential}`
         : credential;
-      headers[config.authHeader] = authValue;
+      headers[serviceDef.authHeader] = authValue;
+    } else if (authMode === 'basic') {
+      // Basic auth: base64(primary:secondary)
+      let password = '';
+      if (serviceDef.additionalCredentialKeys?.length) {
+        password = await this.options.store.get(
+          requestInfo.service, serviceDef.additionalCredentialKeys[0]
+        ) || '';
+      }
+      const encoded = Buffer.from(`${credential}:${password}`).toString('base64');
+      headers['Authorization'] = `Basic ${encoded}`;
+    }
+    // url-path mode: credential already injected into URL by handleRequest, no header needed
+    else if (authMode === 'oauth' && serviceDef.oauthConfig) {
+      const accessToken = await this.oauthCache.getToken(
+        requestInfo.service, serviceDef.oauthConfig, this.options.store
+      );
+      const authValue = serviceDef.authPrefix
+        ? `${serviceDef.authPrefix}${accessToken}`
+        : `Bearer ${accessToken}`;
+      headers[serviceDef.authHeader || 'Authorization'] = authValue;
+    }
+
+    // Inject additional headers (e.g. Twitch Client-Id)
+    if (serviceDef.additionalHeaders) {
+      for (const [headerName, headerDef] of Object.entries(serviceDef.additionalHeaders)) {
+        const headerCredential = await this.options.store.get(
+          requestInfo.service, headerDef.credentialKey
+        );
+        if (headerCredential) {
+          const headerValue = headerDef.prefix
+            ? `${headerDef.prefix}${headerCredential}`
+            : headerCredential;
+          headers[headerName] = headerValue;
+        }
+      }
+    }
+
+    return new Promise((resolve) => {
 
       const options = {
         hostname: upstreamUrl.hostname,

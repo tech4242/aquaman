@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Zero-trust credential isolation for **OpenClaw Gateway**. API keys never enter the Gateway process—they're stored in secure backends and injected by a separate proxy.
+Zero-trust credential isolation for **OpenClaw Gateway**. API keys and channel tokens never enter the Gateway process—they're stored in secure backends and injected by a separate proxy. Covers LLM providers (Anthropic, OpenAI) **and** all OpenClaw channel credentials (Telegram, Slack, Discord, MS Teams, Matrix, LINE, Twitch, Twilio, etc.).
 
 **Target platform:** OpenClaw Gateway on Unix-like systems (Linux, macOS, WSL2). The Gateway is OpenClaw's core server component—a Node.js/TypeScript service that runs as a systemd user service (Linux/WSL2) or LaunchAgent (macOS).
 
@@ -44,8 +44,9 @@ The plugin (`packages/openclaw/`) integrates with the OpenClaw Gateway's plugin 
 1. Plugin exports `register(api)` function (not a class)
 2. On load: sets `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` to route through proxy
 3. On `onGatewayStart`: spawns `aquaman plugin-mode --port 8081` as child process
-4. On `onGatewayStop`: kills proxy process (SIGTERM)
-5. Registers `/aquaman` CLI commands and `aquaman_status` tool
+4. On `onGatewayStart`: activates `globalThis.fetch` interceptor to redirect channel API traffic through proxy
+5. On `onGatewayStop`: deactivates interceptor, kills proxy process (SIGTERM)
+6. Registers `/aquaman` CLI commands and `aquaman_status` tool
 
 **Key files:**
 - `index.ts` - Plugin entry point with `export default function register(api)` — this is the actual running code OpenClaw loads
@@ -117,6 +118,7 @@ this.keytar = mod.default || mod;
 
 ### Proxy Request Flow
 
+**Standard (header auth):**
 1. Agent sends request to `http://127.0.0.1:8081/anthropic/v1/messages`
 2. Proxy parses service name from path (`anthropic`)
 3. Looks up credential from vault: `anthropic/api_key`
@@ -125,6 +127,17 @@ this.keytar = mod.default || mod;
 6. Forwards to upstream: `https://api.anthropic.com/v1/messages`
 7. Response piped back to agent
 8. Access logged in audit trail with hash chaining
+
+**Channel traffic (via fetch interceptor):**
+1. Channel code calls `fetch('https://api.telegram.org/bot.../sendMessage')`
+2. `globalThis.fetch` interceptor matches hostname → service name
+3. Rewrites URL to `http://127.0.0.1:8081/telegram/sendMessage`
+4. Proxy handles auth based on `authMode`:
+   - `header`: injects `Authorization: Bearer <token>` (Slack, Discord, Matrix, etc.)
+   - `url-path`: rewrites path to `/bot<TOKEN>/sendMessage` (Telegram)
+   - `basic`: injects `Authorization: Basic base64(sid:token)` (Twilio)
+   - `oauth`: exchanges stored client credentials for access token (MS Teams, Feishu, Google Chat)
+5. Forwards to upstream, response piped back
 
 ## Development Commands
 
@@ -234,9 +247,9 @@ openclaw agent --local --message "hello" --session-id test --json 2>&1 | head -8
 ### Automated tests:
 
 ```bash
-npm run test:e2e                # All 73 e2e tests (7 files)
-npm run test:unit               # All 134 unit tests (9 files)
-npm test                        # Everything
+npm run test:e2e                # All e2e tests (8 files)
+npm run test:unit               # All unit tests (13 files)
+npm test                        # Everything (267 tests, 21 files)
 ```
 
 ### Quick proxy-only smoke test:
@@ -268,14 +281,18 @@ npx tsx packages/proxy/src/cli/index.ts stop
 | `packages/core/src/credentials/store.ts` | Backend abstraction (keychain, encrypted-file, memory) |
 | `packages/core/src/credentials/backends/` | 1Password and Vault backend implementations |
 | `packages/core/src/audit/logger.ts` | Hash-chained logging |
-| `packages/proxy/src/daemon.ts` | HTTP/HTTPS proxy server |
-| `packages/proxy/src/cli/index.ts` | CLI (Commander.js, 15 commands) |
-| `packages/proxy/src/service-registry.ts` | Builtin service definitions (5 services) |
+| `packages/proxy/src/daemon.ts` | HTTP/HTTPS proxy server (header, url-path, basic, oauth auth modes) |
+| `packages/proxy/src/cli/index.ts` | CLI (Commander.js, 16 commands incl. `migrate openclaw`) |
+| `packages/proxy/src/service-registry.ts` | Builtin service definitions (21 services) |
+| `packages/proxy/src/oauth-token-cache.ts` | OAuth client credentials token exchange + caching |
+| `packages/proxy/src/migration/openclaw-migrator.ts` | Migrates channel creds from openclaw.json to secure store |
 | `packages/proxy/src/openclaw/env-writer.ts` | Generates env vars for OpenClaw integration |
 | `packages/proxy/src/openclaw/integration.ts` | Detects and launches OpenClaw with env vars |
 | `packages/openclaw/index.ts` | OpenClaw plugin entry point (what Gateway loads) |
 | `packages/openclaw/openclaw.plugin.json` | Plugin manifest + config schema |
 | `packages/openclaw/src/plugin.ts` | Class-based plugin (standalone/test use) |
 | `packages/openclaw/src/proxy-manager.ts` | Spawns/manages proxy child process |
+| `packages/openclaw/src/http-interceptor.ts` | `globalThis.fetch` override for channel traffic interception |
 | `test/e2e/openclaw-plugin.test.ts` | Plugin integration tests |
 | `test/e2e/credential-proxy.test.ts` | Proxy E2E tests |
+| `test/e2e/channel-credential-injection.test.ts` | Channel auth mode E2E tests (Telegram, Twilio, Twitch, etc.) |

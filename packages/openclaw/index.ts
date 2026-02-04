@@ -18,8 +18,10 @@
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
+import { HttpInterceptor, createHttpInterceptor } from "./src/http-interceptor.js";
 
 let proxyProcess: ChildProcess | null = null;
+let httpInterceptor: HttpInterceptor | null = null;
 const proxyPort = 8081;
 const services = ["anthropic", "openai"];
 
@@ -90,13 +92,63 @@ async function startProxy(port: number, log: OpenClawPluginApi["logger"]): Promi
 }
 
 /**
- * Stop the proxy daemon
+ * Stop the proxy daemon and deactivate the HTTP interceptor
  */
 function stopProxy(): void {
+  if (httpInterceptor) {
+    httpInterceptor.deactivate();
+    httpInterceptor = null;
+  }
   if (proxyProcess) {
     proxyProcess.kill("SIGTERM");
     proxyProcess = null;
   }
+}
+
+/**
+ * Activate the HTTP fetch interceptor to redirect channel API traffic through the proxy.
+ * This is what provides credential isolation for channels that don't support base URL overrides.
+ */
+function activateHttpInterceptor(log: OpenClawPluginApi["logger"]): void {
+  // Build host-to-service map for all known channel APIs
+  const hostMap = new Map<string, string>([
+    // LLM providers (also have env var overrides, but interceptor provides defense-in-depth)
+    ['api.anthropic.com', 'anthropic'],
+    ['api.openai.com', 'openai'],
+    ['api.github.com', 'github'],
+    // Channel APIs
+    ['slack.com', 'slack'],
+    ['*.slack.com', 'slack'],
+    ['discord.com', 'discord'],
+    ['*.discord.com', 'discord'],
+    ['api.telegram.org', 'telegram'],
+    ['matrix.org', 'matrix'],
+    ['*.matrix.org', 'matrix'],
+    ['api.line.me', 'line'],
+    ['api-data.line.me', 'line'],
+    ['api.twitch.tv', 'twitch'],
+    ['id.twitch.tv', 'twitch'],
+    ['api.twilio.com', 'twilio'],
+    ['*.twilio.com', 'twilio'],
+    ['api.telnyx.com', 'telnyx'],
+    ['api.elevenlabs.io', 'elevenlabs'],
+    ['openapi.zalo.me', 'zalo'],
+    ['graph.microsoft.com', 'ms-teams'],
+    ['open.feishu.cn', 'feishu'],
+    ['open.larksuite.com', 'feishu'],
+    ['chat.googleapis.com', 'google-chat'],
+  ]);
+
+  const baseUrl = `http://127.0.0.1:${proxyPort}`;
+
+  httpInterceptor = createHttpInterceptor({
+    proxyBaseUrl: baseUrl,
+    hostMap,
+    log: (msg) => log.info(msg),
+  });
+
+  httpInterceptor.activate();
+  log.info(`HTTP interceptor active: ${hostMap.size} host patterns redirected through proxy`);
 }
 
 /**
@@ -161,6 +213,8 @@ export default function register(api: OpenClawPluginApi): void {
         const started = await startProxy(proxyPort, api.logger);
         if (started) {
           api.logger.info("Aquaman proxy started successfully");
+          // Activate fetch interceptor to redirect channel HTTP traffic through proxy
+          activateHttpInterceptor(api.logger);
         } else {
           api.logger.error("Failed to start aquaman proxy");
           api.logger.warn("Run 'aquaman daemon' manually to enable credential injection");
@@ -251,6 +305,7 @@ export default function register(api: OpenClawPluginApi): void {
             proxyRunning: proxyProcess !== null,
             proxyPort,
             services,
+            httpInterceptorActive: httpInterceptor?.isActive() ?? false,
             environmentVariables: Object.fromEntries(
               services.map((s) => {
                 const key =

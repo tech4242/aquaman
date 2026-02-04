@@ -12,6 +12,7 @@ import { type PluginConfig, mergeConfig, defaultConfig } from './config-schema.j
 import { createEmbeddedMode, type EmbeddedMode } from './embedded.js';
 import { createProxyManager, type ProxyManager, type ProxyConnectionInfo } from './proxy-manager.js';
 import { executeCommand, type CommandContext, type CommandResult, getAvailableCommands, type PluginCommand } from './commands.js';
+import { HttpInterceptor, createHttpInterceptor } from './http-interceptor.js';
 
 /**
  * OpenClaw Plugin Interface (simplified for standalone use)
@@ -31,6 +32,7 @@ export class AquamanPlugin {
   private config: PluginConfig;
   private embeddedMode: EmbeddedMode | null = null;
   private proxyManager: ProxyManager | null = null;
+  private httpInterceptor: HttpInterceptor | null = null;
   private initialized = false;
   private environmentVariables: Record<string, string> = {};
 
@@ -87,6 +89,11 @@ export class AquamanPlugin {
    */
   async onUnload(): Promise<void> {
     console.log('[aquaman] Unloading plugin...');
+
+    if (this.httpInterceptor) {
+      this.httpInterceptor.deactivate();
+      this.httpInterceptor = null;
+    }
 
     if (this.proxyManager) {
       await this.proxyManager.stop();
@@ -146,11 +153,52 @@ export class AquamanPlugin {
     try {
       const info = await this.proxyManager.start();
       this.configureEnvironmentForProxy(info);
+      this.activateHttpInterceptor(info.baseUrl);
     } catch (error) {
       console.error('[aquaman] Failed to start proxy:', error);
       console.log('[aquaman] Falling back to embedded mode');
       this.configureEnvironment();
     }
+  }
+
+  /**
+   * Activate HTTP fetch interceptor for channel credential isolation.
+   */
+  private activateHttpInterceptor(proxyBaseUrl: string): void {
+    // Build host map from the service registry's host patterns
+    const hostMap = new Map<string, string>([
+      ['api.anthropic.com', 'anthropic'],
+      ['api.openai.com', 'openai'],
+      ['api.github.com', 'github'],
+      ['slack.com', 'slack'],
+      ['*.slack.com', 'slack'],
+      ['discord.com', 'discord'],
+      ['*.discord.com', 'discord'],
+      ['api.telegram.org', 'telegram'],
+      ['matrix.org', 'matrix'],
+      ['*.matrix.org', 'matrix'],
+      ['api.line.me', 'line'],
+      ['api-data.line.me', 'line'],
+      ['api.twitch.tv', 'twitch'],
+      ['id.twitch.tv', 'twitch'],
+      ['api.twilio.com', 'twilio'],
+      ['*.twilio.com', 'twilio'],
+      ['api.telnyx.com', 'telnyx'],
+      ['api.elevenlabs.io', 'elevenlabs'],
+      ['openapi.zalo.me', 'zalo'],
+      ['graph.microsoft.com', 'ms-teams'],
+      ['open.feishu.cn', 'feishu'],
+      ['open.larksuite.com', 'feishu'],
+      ['chat.googleapis.com', 'google-chat'],
+    ]);
+
+    this.httpInterceptor = createHttpInterceptor({
+      proxyBaseUrl,
+      hostMap,
+      log: (msg) => console.log(msg),
+    });
+
+    this.httpInterceptor.activate();
   }
 
   /**

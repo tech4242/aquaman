@@ -763,6 +763,67 @@ services
     }
   });
 
+// Migration commands
+const migrate = program.command('migrate').description('Migrate credentials from other sources');
+
+migrate
+  .command('openclaw')
+  .description('Migrate channel credentials from openclaw.json into aquaman')
+  .option('-c, --config <path>', 'Path to openclaw.json')
+  .option('--dry-run', 'Show what would be migrated without writing')
+  .option('--overwrite', 'Overwrite existing credentials in store')
+  .action(async (opts: { config?: string; dryRun?: boolean; overwrite?: boolean }) => {
+    const { findOpenClawConfig, migrateFromOpenClaw } = await import('../migration/openclaw-migrator.js');
+    const appConfig = loadConfig();
+
+    const configPath = findOpenClawConfig(opts.config);
+    console.log(`Reading: ${configPath}`);
+
+    if (opts.dryRun) {
+      console.log('(dry run - no credentials will be written)\n');
+    }
+
+    const store = createCredentialStore({
+      backend: appConfig.credentials.backend,
+      vaultAddress: appConfig.credentials.vaultAddress,
+      vaultToken: appConfig.credentials.vaultToken,
+      onePasswordVault: appConfig.credentials.onePasswordVault,
+      onePasswordAccount: appConfig.credentials.onePasswordAccount
+    });
+
+    const result = await migrateFromOpenClaw(configPath, store, {
+      dryRun: opts.dryRun,
+      overwrite: opts.overwrite,
+    });
+
+    if (result.migrated.length > 0) {
+      console.log(`${opts.dryRun ? 'Would migrate' : 'Migrated'} ${result.migrated.length} credential(s):`);
+      for (const m of result.migrated) {
+        console.log(`  ${m.service}:${m.key} ← ${m.source}`);
+      }
+    }
+
+    if (result.skipped.length > 0) {
+      console.log(`\nSkipped ${result.skipped.length}:`);
+      for (const s of result.skipped) {
+        console.log(`  ${s.service}:${s.key} - ${s.reason}`);
+      }
+    }
+
+    if (result.errors.length > 0) {
+      console.log(`\nErrors ${result.errors.length}:`);
+      for (const e of result.errors) {
+        console.log(`  ${e.service}:${e.key} - ${e.error}`);
+      }
+      process.exit(1);
+    }
+
+    if (!opts.dryRun && result.migrated.length > 0) {
+      console.log('\nCredentials stored securely. You can now remove plaintext tokens from openclaw.json.');
+      console.log('Add the migrated services to your aquaman config: services: [...]');
+    }
+  });
+
 // Status command
 program
   .command('status')

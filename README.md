@@ -1,13 +1,12 @@
 # 🔱🦞🪸 aquaman 
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Vitest](https://img.shields.io/badge/Tested_with-Vitest-6E9F18?logo=vitest&logoColor=white)](https://vitest.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Security control plane for OpenClaw - audit logging, guardrails, and credential isolation.
 
-Zero-trust credential isolation for **OpenClaw Gateway**. API keys never enter the Gateway process—they're stored in secure backends and injected by a separate proxy.
+Zero-trust credential isolation for **OpenClaw Gateway**. API keys and channel tokens never enter the Gateway process—they're stored in secure backends and injected by a separate proxy. Supports 21 services out of the box: LLM providers, messaging channels, voice providers, and more.
 
 ## The Problem
 
@@ -24,13 +23,21 @@ Agent / OpenClaw Gateway              Aquaman Proxy
 │  ANTHROPIC_BASE_URL  │──request────>│  Keychain / 1Pass /  │
 │  = localhost:8081    │              │  Vault / Encrypted   │
 │                      │<─response────│                      │
-│  No credentials.     │              │  + Auth header       │
-│  Nothing to steal.   │              │  injected on-the-fly │
+│  fetch() interceptor │──channel────>│  + Auth injected:    │
+│  redirects channel   │   traffic    │    header / url-path │
+│  API traffic         │              │    basic / oauth     │
 │                      │              │                      │
-└──────────────────────┘              └──────────┬───────────┘
-                                                 │
-                                                 ▼
-                                       api.anthropic.com
+│  No credentials.     │              │                      │
+│  Nothing to steal.   │              │                      │
+└──────────────────────┘              └───┬──────────┬───────┘
+                                          │          │
+                                          │          ▼
+                                          │  ~/.aquaman/audit/
+                                          │  (hash-chained log)
+                                          ▼
+                                api.anthropic.com
+                                api.telegram.org
+                                slack.com/api  ...
 ```
 
 1. **Store** — Credentials live in a vault backend (Keychain, 1Password, HashiCorp Vault, or an encrypted file)
@@ -230,6 +237,8 @@ credentials:
     - github
     - slack
     - discord
+    - telegram
+    - twilio
   tls:
     enabled: true
     autoGenerate: true
@@ -263,6 +272,13 @@ aquaman audit verify                          Verify hash chain integrity
 aquaman audit rotate                          Archive and rotate log
 ```
 
+**Migration**
+```
+aquaman migrate openclaw [--config <path>]    Migrate channel creds from openclaw.json
+                         [--dry-run]          to secure store
+                         [--overwrite]
+```
+
 **Setup & Services**
 ```
 aquaman init [--force] [--no-tls]             Initialize config + TLS certs
@@ -273,7 +289,16 @@ aquaman services validate                     Validate services.yaml
 
 ## Custom Services
 
-Aquaman ships with 5 builtin services: **Anthropic**, **OpenAI**, **GitHub**, **Slack**, and **Discord**.
+Aquaman ships with 21 builtin services covering LLM providers, messaging channels, and voice/media APIs:
+
+| Category | Services |
+|----------|----------|
+| **LLM / AI** | Anthropic, OpenAI, GitHub |
+| **Header auth channels** | Slack, Discord, Matrix, Mattermost, LINE, Twitch, Telnyx, ElevenLabs, Zalo |
+| **URL-path auth** | Telegram |
+| **HTTP Basic auth** | Twilio, BlueBubbles, Nextcloud Talk |
+| **OAuth** | MS Teams, Feishu, Google Chat |
+| **At-rest storage** | Nostr, Tlon |
 
 Add your own in `~/.aquaman/services.yaml`:
 
