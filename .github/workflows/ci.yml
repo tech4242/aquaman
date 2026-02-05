@@ -8,7 +8,7 @@ on:
 
 jobs:
   lint:
-    name: Lint
+    name: Lint & Typecheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,8 +23,7 @@ jobs:
       - run: npm run typecheck
 
   test:
-    name: Test
-    needs: lint
+    name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -38,15 +37,11 @@ jobs:
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
-      - name: Install openclaw
-        run: npm install -g openclaw
       - run: npm ci --legacy-peer-deps
-      - run: npm run build
       - run: npm test
 
   coverage:
     name: Coverage
-    needs: lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -56,13 +51,36 @@ jobs:
           cache: npm
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
-      - name: Install openclaw
-        run: npm install -g openclaw
       - run: npm ci --legacy-peer-deps
-      - run: npm run build
       - run: npm run test:coverage
       - uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage/lcov.info
           fail_ci_if_error: true
+
+  e2e-openclaw:
+    name: E2E OpenClaw Plugin
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
+      - run: npm ci --legacy-peer-deps
+      - name: Cache openclaw global install
+        id: cache-openclaw
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/node_modules/openclaw
+            /usr/local/bin/openclaw
+          key: openclaw-${{ runner.os }}-node22-v1
+      - name: Install openclaw
+        if: steps.cache-openclaw.outputs.cache-hit != 'true'
+        run: npm install -g openclaw
+      - run: npx vitest run test/e2e/openclaw-plugin.test.ts
