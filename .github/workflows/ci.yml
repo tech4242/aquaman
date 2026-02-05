@@ -26,7 +26,6 @@ jobs:
       - name: Install npm dependencies
         if: steps.cache-nm.outputs.cache-hit != 'true'
         run: npm ci --legacy-peer-deps
-      - run: npm run build
       - run: npm run lint
       - run: npm run typecheck
 
@@ -53,7 +52,6 @@ jobs:
       - name: Install npm dependencies
         if: steps.cache-nm.outputs.cache-hit != 'true'
         run: npm ci --legacy-peer-deps
-      - run: npm run build
       - run: npm test
 
   coverage:
@@ -75,7 +73,6 @@ jobs:
       - name: Install npm dependencies
         if: steps.cache-nm.outputs.cache-hit != 'true'
         run: npm ci --legacy-peer-deps
-      - run: npm run build
       - run: npm run test:coverage
       - uses: codecov/codecov-action@v5
         with:
@@ -103,7 +100,6 @@ jobs:
       - name: Install npm dependencies
         if: steps.cache-nm.outputs.cache-hit != 'true'
         run: npm ci --legacy-peer-deps
-      - run: npm run build
       - name: Cache openclaw global install
         id: cache-openclaw
         uses: actions/cache@v4
