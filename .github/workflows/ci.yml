@@ -28,6 +28,8 @@ jobs:
         run: |
           rm -f package-lock.json
           npm install --legacy-peer-deps
+      - name: Build core package
+        run: npm run build:core
       - run: npm run lint
       - run: npm run typecheck
 
