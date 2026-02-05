@@ -17,15 +17,15 @@ jobs:
           node-version: 22
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
-      - name: Cache node_modules
-        id: cache-nm
+      - name: Cache npm download cache
         uses: actions/cache@v4
         with:
-          path: node_modules
-          key: nm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
       - name: Install npm dependencies
-        if: steps.cache-nm.outputs.cache-hit != 'true'
-        run: npm ci --legacy-peer-deps
+        run: npm install --legacy-peer-deps
       - run: npm run lint
       - run: npm run typecheck
 
@@ -43,15 +43,15 @@ jobs:
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
-      - name: Cache node_modules
-        id: cache-nm
+      - name: Cache npm download cache
         uses: actions/cache@v4
         with:
-          path: node_modules
-          key: nm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
       - name: Install npm dependencies
-        if: steps.cache-nm.outputs.cache-hit != 'true'
-        run: npm ci --legacy-peer-deps
+        run: npm install --legacy-peer-deps
       - run: npm test
 
   coverage:
@@ -64,15 +64,15 @@ jobs:
           node-version: 22
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
-      - name: Cache node_modules
-        id: cache-nm
+      - name: Cache npm download cache
         uses: actions/cache@v4
         with:
-          path: node_modules
-          key: nm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
       - name: Install npm dependencies
-        if: steps.cache-nm.outputs.cache-hit != 'true'
-        run: npm ci --legacy-peer-deps
+        run: npm install --legacy-peer-deps
       - run: npm run test:coverage
       - uses: codecov/codecov-action@v5
         with:
@@ -91,15 +91,15 @@ jobs:
           node-version: 22
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
-      - name: Cache node_modules
-        id: cache-nm
+      - name: Cache npm download cache
         uses: actions/cache@v4
         with:
-          path: node_modules
-          key: nm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
       - name: Install npm dependencies
-        if: steps.cache-nm.outputs.cache-hit != 'true'
-        run: npm ci --legacy-peer-deps
+        run: npm install --legacy-peer-deps
       - name: Cache openclaw global install
         id: cache-openclaw
         uses: actions/cache@v4

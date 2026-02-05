@@ -27,9 +27,14 @@ function isOpenClawInstalled(): boolean {
 
 // Run openclaw with the temp state dir
 function runOpenClaw(args: string): string {
+  const testBinDir = path.join(testStateDir, 'bin');
   return execSync(`npx openclaw ${args} 2>&1`, {
     encoding: 'utf-8',
-    env: { ...process.env, OPENCLAW_STATE_DIR: testStateDir }
+    env: {
+      ...process.env,
+      OPENCLAW_STATE_DIR: testStateDir,
+      PATH: `${testBinDir}:${process.env.PATH}`
+    }
   });
 }
 
@@ -44,6 +49,15 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
     const installPath = path.join(testStateDir, 'extensions', 'aquaman-plugin');
     mkdirSync(path.join(testStateDir, 'extensions'), { recursive: true });
     cpSync(PLUGIN_SRC, installPath, { recursive: true });
+
+    // Create a dummy aquaman CLI script so isAquamanInstalled() finds it via `which`
+    const testBinDir = path.join(testStateDir, 'bin');
+    mkdirSync(testBinDir, { recursive: true });
+    writeFileSync(
+      path.join(testBinDir, 'aquaman'),
+      '#!/bin/sh\nexit 0\n',
+      { mode: 0o755 }
+    );
 
     // Write openclaw.json with both entries and installs (OpenClaw validates installs)
     writeFileSync(
