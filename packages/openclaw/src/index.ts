@@ -1,5 +1,5 @@
 /**
- * aquaman-plugin - Zero-trust credential isolation plugin for OpenClaw
+ * aquaman-plugin - Credential isolation plugin for OpenClaw
  *
  * This package provides an OpenClaw plugin that enables:
  * - Secure credential storage using enterprise backends (Keychain, 1Password, Vault)

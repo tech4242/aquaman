@@ -1,7 +1,7 @@
 /**
  * Aquaman OpenClaw Plugin
  *
- * Zero-trust credential isolation for OpenClaw.
+ * Credential isolation for OpenClaw.
  * Credentials never enter the agent process - they're managed by a separate proxy.
  *
  * Usage:

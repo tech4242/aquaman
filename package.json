@@ -2,7 +2,7 @@
   "name": "aquaman",
   "version": "0.1.0",
   "private": true,
-  "description": "Zero-trust credential isolation for OpenClaw - keeps API keys outside the agent process",
+  "description": "Credential isolation for OpenClaw - keeps API keys outside the agent process",
   "type": "module",
   "workspaces": [
     "packages/*"

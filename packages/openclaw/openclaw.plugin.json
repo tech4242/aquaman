@@ -1,7 +1,7 @@
 {
   "id": "aquaman-plugin",
   "name": "Aquaman Vault",
-  "description": "Zero-trust credential isolation - API keys never touch the agent process",
+  "description": "Credential isolation - API keys never touch the agent process",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -1,7 +1,7 @@
 {
   "name": "aquaman-plugin",
   "version": "0.1.0",
-  "description": "Zero-trust credential isolation plugin for OpenClaw",
+  "description": "Credential isolation plugin for OpenClaw",
   "type": "module",
   "scripts": {
     "build": "echo 'OpenClaw runs TypeScript directly - no build needed'",

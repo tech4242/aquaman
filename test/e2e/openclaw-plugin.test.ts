@@ -95,7 +95,7 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
       // Should show loaded status
       expect(result).toContain('loaded');
       // Should show our description
-      expect(result).toContain('credential isolation');
+      expect(result).toContain('Credential isolation');
     });
 
     it('plugin doctor reports no issues', () => {

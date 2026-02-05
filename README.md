@@ -1,12 +1,14 @@
 # 🔱🦞🪸 aquaman 
 
+[![CI](https://github.com/tech4242/aquaman/actions/workflows/ci.yml/badge.svg)](https://github.com/tech4242/aquaman/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/tech4242/aquaman/branch/main/graph/badge.svg)](https://codecov.io/gh/tech4242/aquaman)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Vitest](https://img.shields.io/badge/Tested_with-Vitest-6E9F18?logo=vitest&logoColor=white)](https://vitest.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Security control plane for OpenClaw - audit logging, guardrails, and credential isolation.
 
-Zero-trust credential isolation for **OpenClaw Gateway**. API keys and channel tokens never enter the Gateway process—they're stored in secure backends and injected by a separate proxy. Supports 21 services out of the box: LLM providers, messaging channels, voice providers, and more.
+Credential isolation for **OpenClaw Gateway**. API keys and channel tokens never enter the Gateway process—they're stored in secure backends and injected by a separate proxy. Supports 21 services out of the box: LLM providers, messaging channels, voice providers, and more.
 
 ## The Problem
 
@@ -136,7 +138,7 @@ aquaman start                           # Start proxy + launch OpenClaw
 
 ## Why Aquaman
 
-**Security** — Process-level isolation, zero-trust credential access, tamper-evident audit logs with SHA-256 hash chains
+**Security** — Process-level credential isolation, tamper-evident audit logs with SHA-256 hash chains
 
 **DevOps** — Plugs into Keychain, 1Password, and HashiCorp Vault; YAML-based service config; optional TLS between agent and proxy
 

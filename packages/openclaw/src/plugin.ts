@@ -2,7 +2,7 @@
  * OpenClaw Plugin Entry Point
  *
  * This is the main plugin that implements the OpenClaw plugin interface.
- * It provides zero-trust credential isolation through two modes:
+ * It provides credential isolation through two modes:
  *
  * 1. Embedded Mode (default): Direct vault access, simpler setup
  * 2. Proxy Mode: Separate process, stronger credential isolation
