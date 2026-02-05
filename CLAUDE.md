@@ -133,10 +133,11 @@ this.keytar = mod.default || mod;
 2. `globalThis.fetch` interceptor matches hostname → service name
 3. Rewrites URL to `http://127.0.0.1:8081/telegram/sendMessage`
 4. Proxy handles auth based on `authMode`:
-   - `header`: injects `Authorization: Bearer <token>` (Slack, Discord, Matrix, etc.)
-   - `url-path`: rewrites path to `/bot<TOKEN>/sendMessage` (Telegram)
-   - `basic`: injects `Authorization: Basic base64(sid:token)` (Twilio)
-   - `oauth`: exchanges stored client credentials for access token (MS Teams, Feishu, Google Chat)
+   - `header`: injects auth header (Anthropic, OpenAI, GitHub, Slack, Discord, Matrix, Mattermost, LINE, Twitch, ElevenLabs, Telnyx, Zalo)
+   - `url-path`: rewrites path to `/bot<TOKEN>/method` (Telegram)
+   - `basic`: injects `Authorization: Basic base64(user:pass)` (Twilio, BlueBubbles, Nextcloud Talk)
+   - `oauth`: exchanges client credentials for access token (MS Teams, Feishu, Google Chat)
+   - `none`: at-rest storage only, proxy rejects traffic (Nostr, Tlon)
 5. Forwards to upstream, response piped back
 
 ## Development Commands
@@ -247,9 +248,9 @@ openclaw agent --local --message "hello" --session-id test --json 2>&1 | head -8
 ### Automated tests:
 
 ```bash
-npm run test:e2e                # All e2e tests (8 files)
+npm run test:e2e                # All e2e tests (11 files)
 npm run test:unit               # All unit tests (13 files)
-npm test                        # Everything (267 tests, 21 files)
+npm test                        # Everything (~283 tests, 24 files)
 ```
 
 ### Quick proxy-only smoke test:
@@ -265,6 +266,106 @@ curl -sk https://localhost:8081/anthropic/v1/messages \
 
 # Stop
 npx tsx packages/proxy/src/cli/index.ts stop
+```
+
+## Manual Channel Testing
+
+Step-by-step guide for manually testing credential injection across all auth modes.
+
+### 1. Store test credentials
+
+```bash
+# Store dummy credentials for each auth mode
+node -e "
+const kt = require('./node_modules/keytar');
+const k = kt.default || kt;
+Promise.all([
+  // Header auth
+  k.setPassword('aquaman', 'anthropic:api_key', 'sk-ant-manual-test'),
+  k.setPassword('aquaman', 'slack:bot_token', 'xoxb-manual-test-token'),
+  k.setPassword('aquaman', 'discord:bot_token', 'discord-manual-test-token'),
+  // URL-path auth
+  k.setPassword('aquaman', 'telegram:bot_token', '123456:MANUAL-TEST-TOKEN'),
+  // Basic auth
+  k.setPassword('aquaman', 'twilio:account_sid', 'AC-manual-test-sid'),
+  k.setPassword('aquaman', 'twilio:auth_token', 'manual-test-auth-token'),
+]).then(() => console.log('All test credentials stored'));
+"
+```
+
+### 2. Start the proxy
+
+```bash
+npx tsx packages/proxy/src/cli/index.ts plugin-mode --port 18081
+# Should output JSON with ready:true
+```
+
+### 3. Test each auth mode
+
+**Header auth (Anthropic):**
+```bash
+curl -s http://127.0.0.1:18081/anthropic/v1/messages \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-sonnet-4-20250514","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}'
+# Expect: 401 from Anthropic (confirms proxy injected the test key)
+```
+
+**Header auth (Slack):**
+```bash
+curl -s http://127.0.0.1:18081/slack/auth.test
+# Expect: {"ok":false,"error":"invalid_auth"} (confirms Bearer token injected)
+```
+
+**Header auth (Discord):**
+```bash
+curl -s http://127.0.0.1:18081/discord/api/v10/users/@me
+# Expect: 401 from Discord (confirms Bot token injected)
+```
+
+**URL-path auth (Telegram):**
+```bash
+curl -s http://127.0.0.1:18081/telegram/getMe
+# Expect: {"ok":false,"error_code":401} (token injected into URL path)
+```
+
+**Basic auth (Twilio):**
+```bash
+curl -s http://127.0.0.1:18081/twilio/2010-04-01/Accounts.json
+# Expect: 401 from Twilio (Basic auth header injected)
+```
+
+### 4. Verify via CLI commands
+
+```bash
+# List stored credentials
+npx tsx packages/proxy/src/cli/index.ts credentials list
+
+# Check proxy status
+npx tsx packages/proxy/src/cli/index.ts status
+```
+
+### 5. Check audit logs
+
+```bash
+# Logs are written to ~/.aquaman/audit.log
+cat ~/.aquaman/audit.log | tail -20
+```
+
+### 6. Cleanup test credentials
+
+```bash
+node -e "
+const kt = require('./node_modules/keytar');
+const k = kt.default || kt;
+Promise.all([
+  k.deletePassword('aquaman', 'anthropic:api_key'),
+  k.deletePassword('aquaman', 'slack:bot_token'),
+  k.deletePassword('aquaman', 'discord:bot_token'),
+  k.deletePassword('aquaman', 'telegram:bot_token'),
+  k.deletePassword('aquaman', 'twilio:account_sid'),
+  k.deletePassword('aquaman', 'twilio:auth_token'),
+]).then(() => console.log('All test credentials removed'));
+"
 ```
 
 ## Key Design Principles
@@ -296,3 +397,6 @@ npx tsx packages/proxy/src/cli/index.ts stop
 | `test/e2e/openclaw-plugin.test.ts` | Plugin integration tests |
 | `test/e2e/credential-proxy.test.ts` | Proxy E2E tests |
 | `test/e2e/channel-credential-injection.test.ts` | Channel auth mode E2E tests (Telegram, Twilio, Twitch, etc.) |
+| `test/e2e/oauth-credential-injection.test.ts` | OAuth flow E2E tests (mock token server) |
+| `test/e2e/keychain-proxy-flow.test.ts` | Real keychain backend E2E (macOS only) |
+| `test/e2e/cli-plugin-mode.test.ts` | CLI startup/output E2E tests |

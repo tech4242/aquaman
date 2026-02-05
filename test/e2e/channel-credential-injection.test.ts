@@ -33,6 +33,11 @@ describe('Channel Credential Injection E2E', () => {
   const TEST_TWITCH_TOKEN = 'twitch-oauth-token-abc';
   const TEST_TWITCH_CLIENT_ID = 'twitch-client-id-xyz';
   const TEST_ELEVENLABS_KEY = 'el-api-key-test-456';
+  const TEST_SLACK_TOKEN = 'xoxb-slack-bot-token-test';
+  const TEST_DISCORD_TOKEN = 'discord-bot-token-test-123';
+  const TEST_MATRIX_TOKEN = 'syt_matrix_access_token_test';
+  const TEST_LINE_TOKEN = 'line-channel-access-token-test';
+  const TEST_ZALO_TOKEN = 'zalo-bot-token-test-456';
 
   beforeEach(async () => {
     upstream = createMockUpstream();
@@ -46,6 +51,11 @@ describe('Channel Credential Injection E2E', () => {
     await store.set('twitch', 'access_token', TEST_TWITCH_TOKEN);
     await store.set('twitch', 'client_id', TEST_TWITCH_CLIENT_ID);
     await store.set('elevenlabs', 'api_key', TEST_ELEVENLABS_KEY);
+    await store.set('slack', 'bot_token', TEST_SLACK_TOKEN);
+    await store.set('discord', 'bot_token', TEST_DISCORD_TOKEN);
+    await store.set('matrix', 'access_token', TEST_MATRIX_TOKEN);
+    await store.set('line', 'channel_access_token', TEST_LINE_TOKEN);
+    await store.set('zalo', 'bot_token', TEST_ZALO_TOKEN);
 
     requestLog = [];
 
@@ -64,12 +74,27 @@ describe('Channel Credential Injection E2E', () => {
     registry.override('elevenlabs', {
       upstream: `http://127.0.0.1:${upstreamPort}`
     });
+    registry.override('slack', {
+      upstream: `http://127.0.0.1:${upstreamPort}`
+    });
+    registry.override('discord', {
+      upstream: `http://127.0.0.1:${upstreamPort}`
+    });
+    registry.override('matrix', {
+      upstream: `http://127.0.0.1:${upstreamPort}`
+    });
+    registry.override('line', {
+      upstream: `http://127.0.0.1:${upstreamPort}`
+    });
+    registry.override('zalo', {
+      upstream: `http://127.0.0.1:${upstreamPort}`
+    });
 
     proxy = createCredentialProxy({
       port: 0,
       store,
       serviceRegistry: registry,
-      allowedServices: ['telegram', 'twilio', 'twitch', 'elevenlabs'],
+      allowedServices: ['telegram', 'twilio', 'twitch', 'elevenlabs', 'slack', 'discord', 'matrix', 'line', 'zalo'],
       onRequest: (info) => {
         requestLog.push(info);
       }
@@ -181,6 +206,88 @@ describe('Channel Credential Injection E2E', () => {
       const lastRequest = upstream.getLastRequest();
       expect(lastRequest).toBeDefined();
       expect(lastRequest!.headers['xi-api-key']).toBe(TEST_ELEVENLABS_KEY);
+    });
+  });
+
+  describe('Slack header auth', () => {
+    it('injects Bearer token for Slack requests', async () => {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/slack/chat.postMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: '#test', text: 'hello' })
+      });
+
+      expect(response.ok).toBe(true);
+
+      const lastRequest = upstream.getLastRequest();
+      expect(lastRequest).toBeDefined();
+      expect(lastRequest!.headers['authorization']).toBe(`Bearer ${TEST_SLACK_TOKEN}`);
+    });
+  });
+
+  describe('Discord header auth', () => {
+    it('injects Bot-prefixed token for Discord requests', async () => {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/discord/channels/123/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: 'hello' })
+      });
+
+      expect(response.ok).toBe(true);
+
+      const lastRequest = upstream.getLastRequest();
+      expect(lastRequest).toBeDefined();
+      // Discord uses "Bot " prefix, not "Bearer "
+      expect(lastRequest!.headers['authorization']).toBe(`Bot ${TEST_DISCORD_TOKEN}`);
+    });
+  });
+
+  describe('Matrix header auth', () => {
+    it('injects Bearer token for Matrix requests', async () => {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/matrix/_matrix/client/v3/rooms/!abc:matrix.org/send/m.room.message`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ msgtype: 'm.text', body: 'hello' })
+      });
+
+      expect(response.ok).toBe(true);
+
+      const lastRequest = upstream.getLastRequest();
+      expect(lastRequest).toBeDefined();
+      expect(lastRequest!.headers['authorization']).toBe(`Bearer ${TEST_MATRIX_TOKEN}`);
+    });
+  });
+
+  describe('LINE header auth', () => {
+    it('injects Bearer token for LINE requests', async () => {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/line/v2/bot/message/push`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: 'U123', messages: [{ type: 'text', text: 'hello' }] })
+      });
+
+      expect(response.ok).toBe(true);
+
+      const lastRequest = upstream.getLastRequest();
+      expect(lastRequest).toBeDefined();
+      expect(lastRequest!.headers['authorization']).toBe(`Bearer ${TEST_LINE_TOKEN}`);
+    });
+  });
+
+  describe('Zalo custom header auth', () => {
+    it('injects access_token header without prefix for Zalo requests', async () => {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/zalo/v3.0/oa/message/cs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipient: { user_id: '123' }, message: { text: 'hello' } })
+      });
+
+      expect(response.ok).toBe(true);
+
+      const lastRequest = upstream.getLastRequest();
+      expect(lastRequest).toBeDefined();
+      // Zalo uses custom header 'access_token' with no prefix
+      expect(lastRequest!.headers['access_token']).toBe(TEST_ZALO_TOKEN);
     });
   });
 
