@@ -59,7 +59,7 @@ describe('AquamanPlugin', () => {
     });
 
     it('has correct plugin name', () => {
-      expect(plugin.name).toBe('aquaman');
+      expect(plugin.name).toBe('aquaman-plugin');
     });
 
     it('onLoad returns void or Promise<void>', async () => {

@@ -35,7 +35,7 @@ describe('OnePasswordStore', () => {
       });
 
       // Dynamically import to apply mocks
-      const { OnePasswordStore } = await import('@aquaman/core');
+      const { OnePasswordStore } = await import('aquaman-core');
 
       expect(() => new OnePasswordStore()).toThrow('1Password CLI (op) not found');
     });
@@ -61,7 +61,7 @@ describe('OnePasswordStore', () => {
           output: []
         });
 
-      const { OnePasswordStore } = await import('@aquaman/core');
+      const { OnePasswordStore } = await import('aquaman-core');
 
       expect(() => new OnePasswordStore()).toThrow('Not signed in to 1Password');
     });
@@ -103,14 +103,14 @@ describe('OnePasswordStore', () => {
     });
 
     it('creates store with default vault', async () => {
-      const { OnePasswordStore } = await import('@aquaman/core');
+      const { OnePasswordStore } = await import('aquaman-core');
       const store = new OnePasswordStore();
 
       expect(store.getVault()).toBe('aquaman');
     });
 
     it('creates store with custom vault', async () => {
-      const { OnePasswordStore } = await import('@aquaman/core');
+      const { OnePasswordStore } = await import('aquaman-core');
       const store = new OnePasswordStore({ vault: 'custom-vault' });
 
       expect(store.getVault()).toBe('custom-vault');
@@ -140,7 +140,7 @@ describe('OnePasswordStore', () => {
         return { status: 0, stdout: '{}', stderr: '', pid: 6, signal: null, output: [] };
       });
 
-      const { OnePasswordStore } = await import('@aquaman/core');
+      const { OnePasswordStore } = await import('aquaman-core');
       const store = new OnePasswordStore();
 
       await store.set('anthropic', 'api_key', 'test-value');
@@ -170,7 +170,7 @@ describe('OnePasswordStore', () => {
         return { status: 0, stdout: '{}', stderr: '', pid: 4, signal: null, output: [] };
       });
 
-      const { OnePasswordStore } = await import('@aquaman/core');
+      const { OnePasswordStore } = await import('aquaman-core');
       const store = new OnePasswordStore();
 
       const value = await store.get('anthropic', 'api_key');
@@ -191,7 +191,7 @@ describe('OnePasswordStore', () => {
         return { status: 0, stdout: '{}', stderr: '', pid: 4, signal: null, output: [] };
       });
 
-      const { OnePasswordStore } = await import('@aquaman/core');
+      const { OnePasswordStore } = await import('aquaman-core');
       const store = new OnePasswordStore();
 
       const value = await store.get('nonexistent', 'key');
@@ -222,7 +222,7 @@ describe('OnePasswordStore', () => {
         return { status: 0, stdout: '{}', stderr: '', pid: 4, signal: null, output: [] };
       });
 
-      const { OnePasswordStore } = await import('@aquaman/core');
+      const { OnePasswordStore } = await import('aquaman-core');
       const store = new OnePasswordStore();
 
       const creds = await store.list();
@@ -249,7 +249,7 @@ describe('OnePasswordStore', () => {
         return { status: 0, stdout: '{}', stderr: '', pid: 4, signal: null, output: [] };
       });
 
-      const { OnePasswordStore } = await import('@aquaman/core');
+      const { OnePasswordStore } = await import('aquaman-core');
       const store = new OnePasswordStore();
 
       const result = await store.delete('anthropic', 'api_key');
@@ -270,7 +270,7 @@ describe('OnePasswordStore', () => {
         output: []
       });
 
-      const { OnePasswordStore } = await import('@aquaman/core');
+      const { OnePasswordStore } = await import('aquaman-core');
       expect(OnePasswordStore.isAvailable()).toBe(false);
     });
 
@@ -293,7 +293,7 @@ describe('OnePasswordStore', () => {
           output: []
         });
 
-      const { OnePasswordStore } = await import('@aquaman/core');
+      const { OnePasswordStore } = await import('aquaman-core');
       expect(OnePasswordStore.isAvailable()).toBe(false);
     });
 
@@ -308,7 +308,7 @@ describe('OnePasswordStore', () => {
         return { status: 0, stdout: '{}', stderr: '', pid: 3, signal: null, output: [] };
       });
 
-      const { OnePasswordStore } = await import('@aquaman/core');
+      const { OnePasswordStore } = await import('aquaman-core');
       expect(OnePasswordStore.isAvailable()).toBe(true);
     });
   });

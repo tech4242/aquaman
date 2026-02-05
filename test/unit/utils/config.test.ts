@@ -7,7 +7,7 @@ import * as os from 'node:os';
 import {
   getDefaultConfig,
   expandPath
-} from '@aquaman/core';
+} from 'aquaman-core';
 
 describe('config utilities', () => {
   describe('getDefaultConfig', () => {

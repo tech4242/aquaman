@@ -20,7 +20,7 @@ describe('Plugin Config Schema', () => {
     const raw = fs.readFileSync(MANIFEST_PATH, 'utf-8');
     manifest = JSON.parse(raw);
 
-    expect(manifest.id).toBe('aquaman');
+    expect(manifest.id).toBe('aquaman-plugin');
     expect(manifest.name).toBe('Aquaman Vault');
     expect(manifest.configSchema).toBeDefined();
     expect(manifest.configSchema.additionalProperties).toBe(false);

@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { CredentialProxy, createCredentialProxy } from '@aquaman/proxy';
-import { MemoryStore } from '@aquaman/core';
-import type { RequestInfo } from '@aquaman/proxy';
+import { CredentialProxy, createCredentialProxy } from 'aquaman-proxy';
+import { MemoryStore } from 'aquaman-core';
+import type { RequestInfo } from 'aquaman-proxy';
 
 describe('CredentialProxy E2E', () => {
   let proxy: CredentialProxy;

@@ -4,8 +4,8 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { OAuthTokenCache, createOAuthTokenCache } from '../../packages/proxy/src/oauth-token-cache.js';
-import { MemoryStore } from '@aquaman/core';
-import type { OAuthConfig } from '@aquaman/proxy';
+import { MemoryStore } from 'aquaman-core';
+import type { OAuthConfig } from 'aquaman-proxy';
 
 describe('OAuthTokenCache', () => {
   let cache: OAuthTokenCache;

@@ -6,8 +6,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { CredentialProxy, createCredentialProxy, createServiceRegistry } from '@aquaman/proxy';
-import { MemoryStore } from '@aquaman/core';
+import { CredentialProxy, createCredentialProxy, createServiceRegistry } from 'aquaman-proxy';
+import { MemoryStore } from 'aquaman-core';
 import { MockUpstream, createMockUpstream } from '../helpers/mock-upstream.js';
 
 describe('Auth Profiles Placeholder Pattern', () => {

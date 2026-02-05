@@ -8,7 +8,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import type { ServiceConfig } from '@aquaman/core';
+import type { ServiceConfig } from 'aquaman-core';
 
 export interface EnvConfig {
   proxyHost: string;

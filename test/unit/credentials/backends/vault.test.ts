@@ -26,7 +26,7 @@ describe('VaultStore', () => {
 
   describe('constructor', () => {
     it('throws if no token provided', async () => {
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
 
       expect(() => new VaultStore({ address: VAULT_ADDR })).toThrow('Vault token required');
     });
@@ -34,14 +34,14 @@ describe('VaultStore', () => {
     it('uses VAULT_TOKEN env var if not provided in options', async () => {
       process.env['VAULT_TOKEN'] = VAULT_TOKEN;
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({ address: VAULT_ADDR });
 
       expect(store.getAddress()).toBe(VAULT_ADDR);
     });
 
     it('removes trailing slash from address', async () => {
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({
         address: 'https://vault.example.com:8200/',
         token: VAULT_TOKEN
@@ -51,7 +51,7 @@ describe('VaultStore', () => {
     });
 
     it('uses default mount path of "secret"', async () => {
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({
         address: VAULT_ADDR,
         token: VAULT_TOKEN
@@ -61,7 +61,7 @@ describe('VaultStore', () => {
     });
 
     it('accepts custom mount path', async () => {
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({
         address: VAULT_ADDR,
         token: VAULT_TOKEN,
@@ -86,7 +86,7 @@ describe('VaultStore', () => {
         })
       });
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
 
       const value = await store.get('anthropic', 'api_key');
@@ -109,7 +109,7 @@ describe('VaultStore', () => {
         status: 404
       });
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
 
       const value = await store.get('nonexistent', 'key');
@@ -125,7 +125,7 @@ describe('VaultStore', () => {
         })
       });
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({
         address: VAULT_ADDR,
         token: VAULT_TOKEN,
@@ -153,7 +153,7 @@ describe('VaultStore', () => {
         json: async () => ({ data: {} })
       });
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
 
       await store.set('anthropic', 'api_key', 'sk-ant-secret');
@@ -179,7 +179,7 @@ describe('VaultStore', () => {
         };
       });
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
 
       await store.set('service', 'key', 'my-value');
@@ -200,7 +200,7 @@ describe('VaultStore', () => {
         };
       });
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
 
       await store.set('service', 'key', 'value', { env: 'prod', team: 'platform' });
@@ -218,7 +218,7 @@ describe('VaultStore', () => {
         status: 204
       });
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
 
       const result = await store.delete('anthropic', 'api_key');
@@ -238,7 +238,7 @@ describe('VaultStore', () => {
         status: 404
       });
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
 
       const result = await store.delete('nonexistent', 'key');
@@ -258,7 +258,7 @@ describe('VaultStore', () => {
         })
       });
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
 
       const creds = await store.list('anthropic');
@@ -292,7 +292,7 @@ describe('VaultStore', () => {
           })
         });
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
 
       const creds = await store.list();
@@ -309,7 +309,7 @@ describe('VaultStore', () => {
         status: 404
       });
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
 
       const creds = await store.list();
@@ -327,7 +327,7 @@ describe('VaultStore', () => {
         })
       });
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
 
       const exists = await store.exists('service', 'key');
@@ -340,7 +340,7 @@ describe('VaultStore', () => {
         status: 404
       });
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
 
       const exists = await store.exists('service', 'key');
@@ -358,7 +358,7 @@ describe('VaultStore', () => {
         })
       });
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
 
       const health = await store.healthCheck();
@@ -373,7 +373,7 @@ describe('VaultStore', () => {
         status: 403
       });
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
 
       const health = await store.healthCheck();
@@ -385,7 +385,7 @@ describe('VaultStore', () => {
     it('returns unhealthy when connection fails', async () => {
       mockFetch.mockRejectedValueOnce(new Error('Connection refused'));
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
       const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
 
       const health = await store.healthCheck();
@@ -403,7 +403,7 @@ describe('VaultStore', () => {
         json: async () => ({ data: {} })
       });
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
 
       const available = await VaultStore.isAvailable({
         address: VAULT_ADDR,
@@ -416,7 +416,7 @@ describe('VaultStore', () => {
     it('returns false when Vault is not reachable', async () => {
       mockFetch.mockRejectedValueOnce(new Error('Connection refused'));
 
-      const { VaultStore } = await import('@aquaman/core');
+      const { VaultStore } = await import('aquaman-core');
 
       const available = await VaultStore.isAvailable({
         address: VAULT_ADDR,

@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { MemoryStore } from '@aquaman/core';
+import { MemoryStore } from 'aquaman-core';
 import {
   extractCredentials,
   migrateFromOpenClaw,

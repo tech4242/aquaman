@@ -25,7 +25,7 @@ import {
   MemoryStore,
   generateSelfSignedCert,
   type WrapperConfig
-} from '@aquaman/core';
+} from 'aquaman-core';
 
 import { createCredentialProxy, type CredentialProxy } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';

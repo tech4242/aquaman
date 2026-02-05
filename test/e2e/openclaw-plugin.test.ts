@@ -1,57 +1,96 @@
 /**
  * E2E tests for OpenClaw plugin integration
  *
- * PREREQUISITES:
- * - OpenClaw CLI installed: npm install -g openclaw
- * - Aquaman proxy linked: npm link -w @aquaman/proxy
- * - Plugin installed: cp -r packages/openclaw ~/.openclaw/extensions/aquaman
- *
- * These tests verify the plugin works correctly when loaded by OpenClaw.
+ * Self-contained: creates a temporary OPENCLAW_STATE_DIR with the plugin
+ * copied in, so no global install or manual setup is needed.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execSync } from 'node:child_process';
-import * as fs from 'node:fs';
+import { mkdtempSync, mkdirSync, cpSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 
-// Check if OpenClaw is installed
+const PLUGIN_SRC = path.resolve(__dirname, '../../packages/openclaw');
+
+let testStateDir: string;
+
+// Check if OpenClaw is available via npx
 function isOpenClawInstalled(): boolean {
   try {
-    execSync('openclaw --version', { stdio: 'pipe' });
+    execSync('npx openclaw --version', { stdio: 'pipe' });
     return true;
   } catch {
     return false;
   }
 }
 
-// Check if aquaman plugin is loaded
-function isPluginLoaded(): boolean {
-  try {
-    const result = execSync('openclaw plugins list 2>&1', { encoding: 'utf-8' });
-    return result.includes('aquaman') && result.includes('loaded');
-  } catch {
-    return false;
-  }
+// Run openclaw with the temp state dir
+function runOpenClaw(args: string): string {
+  return execSync(`npx openclaw ${args} 2>&1`, {
+    encoding: 'utf-8',
+    env: { ...process.env, OPENCLAW_STATE_DIR: testStateDir }
+  });
 }
 
 const OPENCLAW_AVAILABLE = isOpenClawInstalled();
-const PLUGIN_LOADED = OPENCLAW_AVAILABLE && isPluginLoaded();
 
 describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
+  beforeAll(() => {
+    // Create temp OPENCLAW_STATE_DIR
+    testStateDir = mkdtempSync(path.join(tmpdir(), 'aquaman-e2e-'));
+
+    // Copy plugin into extensions dir
+    const installPath = path.join(testStateDir, 'extensions', 'aquaman-plugin');
+    mkdirSync(path.join(testStateDir, 'extensions'), { recursive: true });
+    cpSync(PLUGIN_SRC, installPath, { recursive: true });
+
+    // Write openclaw.json with both entries and installs (OpenClaw validates installs)
+    writeFileSync(
+      path.join(testStateDir, 'openclaw.json'),
+      JSON.stringify({
+        plugins: {
+          entries: {
+            'aquaman-plugin': {
+              enabled: true,
+              config: {
+                mode: 'proxy',
+                backend: 'keychain',
+                services: ['anthropic', 'openai'],
+                proxyPort: 8081
+              }
+            }
+          },
+          installs: {
+            'aquaman-plugin': {
+              source: 'path',
+              sourcePath: PLUGIN_SRC,
+              installPath,
+              version: '0.1.0',
+              installedAt: new Date().toISOString()
+            }
+          }
+        }
+      })
+    );
+  });
+
+  afterAll(() => {
+    if (testStateDir) {
+      rmSync(testStateDir, { recursive: true, force: true });
+    }
+  });
+
   describe('Plugin Discovery', () => {
     it('OpenClaw discovers the aquaman plugin', () => {
-      const result = execSync('openclaw plugins list 2>&1', {
-        encoding: 'utf-8'
-      });
+      const result = runOpenClaw('plugins list');
 
-      expect(result).toContain('aquaman');
+      expect(result).toContain('aquaman-plugin');
       expect(result).toContain('Aquaman');
     });
 
     it('plugin shows as loaded', () => {
-      const result = execSync('openclaw plugins list 2>&1', {
-        encoding: 'utf-8'
-      });
+      const result = runOpenClaw('plugins list');
 
       // Should show loaded status
       expect(result).toContain('loaded');
@@ -60,9 +99,7 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
     });
 
     it('plugin doctor reports no issues', () => {
-      const result = execSync('openclaw plugins doctor 2>&1', {
-        encoding: 'utf-8'
-      });
+      const result = runOpenClaw('plugins doctor');
 
       expect(result).toContain('No plugin issues detected');
     });
@@ -70,63 +107,57 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
 
   describe('Plugin Initialization', () => {
     it('detects aquaman CLI when installed', () => {
-      const result = execSync('openclaw plugins list 2>&1', {
-        encoding: 'utf-8'
-      });
+      const result = runOpenClaw('plugins list');
 
       // Should find the CLI (we linked it earlier)
       expect(result).toContain('aquaman CLI found');
     });
 
     it('sets ANTHROPIC_BASE_URL environment variable', () => {
-      const result = execSync('openclaw plugins list 2>&1', {
-        encoding: 'utf-8'
-      });
+      const result = runOpenClaw('plugins list');
 
       expect(result).toContain('ANTHROPIC_BASE_URL=http://127.0.0.1:8081/anthropic');
     });
 
     it('sets OPENAI_BASE_URL environment variable', () => {
-      const result = execSync('openclaw plugins list 2>&1', {
-        encoding: 'utf-8'
-      });
+      const result = runOpenClaw('plugins list');
 
       expect(result).toContain('OPENAI_BASE_URL=http://127.0.0.1:8081/openai');
     });
 
     it('registers successfully', () => {
-      const result = execSync('openclaw plugins list 2>&1', {
-        encoding: 'utf-8'
-      });
+      const result = runOpenClaw('plugins list');
 
       expect(result).toContain('Aquaman plugin registered successfully');
     });
   });
 
   describe('Plugin Structure', () => {
-    const pluginPath = path.join(process.env.HOME || '', '.openclaw/extensions/aquaman');
-
     it('plugin directory exists', () => {
-      expect(fs.existsSync(pluginPath)).toBe(true);
+      const pluginPath = path.join(testStateDir, 'extensions', 'aquaman-plugin');
+      expect(existsSync(pluginPath)).toBe(true);
     });
 
     it('has openclaw.plugin.json manifest', () => {
+      const pluginPath = path.join(testStateDir, 'extensions', 'aquaman-plugin');
       const manifestPath = path.join(pluginPath, 'openclaw.plugin.json');
-      expect(fs.existsSync(manifestPath)).toBe(true);
+      expect(existsSync(manifestPath)).toBe(true);
 
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-      expect(manifest.id).toBe('aquaman');
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+      expect(manifest.id).toBe('aquaman-plugin');
       expect(manifest.name).toBe('Aquaman Vault');
     });
 
     it('has index.ts entry point', () => {
+      const pluginPath = path.join(testStateDir, 'extensions', 'aquaman-plugin');
       const indexPath = path.join(pluginPath, 'index.ts');
-      expect(fs.existsSync(indexPath)).toBe(true);
+      expect(existsSync(indexPath)).toBe(true);
     });
 
     it('entry point exports register function', () => {
+      const pluginPath = path.join(testStateDir, 'extensions', 'aquaman-plugin');
       const indexPath = path.join(pluginPath, 'index.ts');
-      const content = fs.readFileSync(indexPath, 'utf-8');
+      const content = readFileSync(indexPath, 'utf-8');
 
       expect(content).toContain('export default function register');
     });
@@ -135,26 +166,23 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
 
 describe('Plugin Test Infrastructure', () => {
   it('correctly detects OpenClaw availability', () => {
-    console.log(`OpenClaw installed: ${OPENCLAW_AVAILABLE}`);
-    console.log(`Plugin loaded: ${PLUGIN_LOADED}`);
     expect(typeof OPENCLAW_AVAILABLE).toBe('boolean');
   });
 
   it('has correct plugin source structure', () => {
-    const pluginSrcPath = path.join(__dirname, '../../packages/openclaw');
-    expect(fs.existsSync(pluginSrcPath)).toBe(true);
+    expect(existsSync(PLUGIN_SRC)).toBe(true);
 
     // Check required files
-    expect(fs.existsSync(path.join(pluginSrcPath, 'index.ts'))).toBe(true);
-    expect(fs.existsSync(path.join(pluginSrcPath, 'openclaw.plugin.json'))).toBe(true);
-    expect(fs.existsSync(path.join(pluginSrcPath, 'package.json'))).toBe(true);
+    expect(existsSync(path.join(PLUGIN_SRC, 'index.ts'))).toBe(true);
+    expect(existsSync(path.join(PLUGIN_SRC, 'openclaw.plugin.json'))).toBe(true);
+    expect(existsSync(path.join(PLUGIN_SRC, 'package.json'))).toBe(true);
   });
 
   it('plugin manifest has correct structure', () => {
-    const manifestPath = path.join(__dirname, '../../packages/openclaw/openclaw.plugin.json');
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    const manifestPath = path.join(PLUGIN_SRC, 'openclaw.plugin.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
 
-    expect(manifest.id).toBe('aquaman');
+    expect(manifest.id).toBe('aquaman-plugin');
     expect(manifest.name).toBeDefined();
     expect(manifest.description).toBeDefined();
     expect(manifest.configSchema).toBeDefined();
@@ -162,8 +190,8 @@ describe('Plugin Test Infrastructure', () => {
   });
 
   it('package.json has openclaw extension config', () => {
-    const pkgPath = path.join(__dirname, '../../packages/openclaw/package.json');
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+    const pkgPath = path.join(PLUGIN_SRC, 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
 
     expect(pkg.openclaw).toBeDefined();
     expect(pkg.openclaw.extensions).toContain('./index.ts');

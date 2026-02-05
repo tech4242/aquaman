@@ -31,9 +31,9 @@ Agent Process                    Proxy Process (aquaman)
 
 ```
 packages/
-├── core/       # @aquaman/core - credential stores, audit logger, crypto
-├── proxy/      # @aquaman/proxy - HTTP proxy daemon, CLI
-└── openclaw/   # @aquaman/aquaman - OpenClaw plugin
+├── core/       # aquaman-core - credential stores, audit logger, crypto
+├── proxy/      # aquaman-proxy - HTTP proxy daemon, CLI
+└── openclaw/   # aquaman-plugin - OpenClaw plugin
 ```
 
 ## OpenClaw Gateway Integration
@@ -51,10 +51,10 @@ The plugin (`packages/openclaw/`) integrates with the OpenClaw Gateway's plugin 
 **Key files:**
 - `index.ts` - Plugin entry point with `export default function register(api)` — this is the actual running code OpenClaw loads
 - `src/plugin.ts` - Class-based plugin implementation (alternative architecture, used by standalone tests)
-- `openclaw.plugin.json` - Manifest with `id: "aquaman"`, config schema
-- `package.json` - Has `openclaw.extensions: ["./index.ts"]`, package name `@aquaman/aquaman`
+- `openclaw.plugin.json` - Manifest with `id: "aquaman-plugin"`, config schema
+- `package.json` - Has `openclaw.extensions: ["./index.ts"]`, package name `aquaman-plugin`
 
-**Installation location:** `~/.openclaw/extensions/aquaman/`
+**Installation location:** `~/.openclaw/extensions/aquaman-plugin/`
 
 ### Plugin Config Schema
 
@@ -93,11 +93,10 @@ OpenClaw checks its own auth store (`~/.openclaw/agents/<id>/agent/auth-profiles
 
 ### Plugin ID Naming
 
-The package name's last segment must match the manifest `id`. OpenClaw derives a "hint" from the scoped package name (`@scope/name` → `name`).
+The unscoped package name must match the manifest `id`.
 
-- **Correct:** `@aquaman/aquaman` (last segment `aquaman` matches manifest id `"aquaman"`)
-- **Wrong:** `@aquaman/openclaw` (last segment `openclaw` ≠ manifest id `"aquaman"`)
-- **Wrong:** `@aquaman/plugin` (last segment `plugin` ≠ manifest id `"aquaman"`)
+- **Correct:** `aquaman-plugin` (package name matches manifest id `"aquaman-plugin"`)
+- **Wrong:** `aquaman-openclaw` (name `aquaman-openclaw` ≠ manifest id `"aquaman-plugin"`)
 
 ## Known Issues & Fixes
 
@@ -173,12 +172,12 @@ Since the Gateway runs on Unix-like systems, backend choice depends on deploymen
 ```bash
 # 1. Install plugin
 openclaw plugins install ./packages/openclaw
-# or: cp -r packages/openclaw ~/.openclaw/extensions/aquaman
+# or: cp -r packages/openclaw ~/.openclaw/extensions/aquaman-plugin
 
 # 2. Sync after code changes
-cp packages/openclaw/package.json ~/.openclaw/extensions/aquaman/package.json
-cp packages/openclaw/index.ts ~/.openclaw/extensions/aquaman/index.ts
-cp -r packages/openclaw/src/ ~/.openclaw/extensions/aquaman/src/
+cp packages/openclaw/package.json ~/.openclaw/extensions/aquaman-plugin/package.json
+cp packages/openclaw/index.ts ~/.openclaw/extensions/aquaman-plugin/index.ts
+cp -r packages/openclaw/src/ ~/.openclaw/extensions/aquaman-plugin/src/
 
 # 3. Rebuild core if store.ts changed
 npm run build:core
@@ -211,7 +210,7 @@ cat > ~/.openclaw/openclaw.json << 'EOF'
 {
   "plugins": {
     "entries": {
-      "aquaman": {
+      "aquaman-plugin": {
         "enabled": true,
         "config": {
           "mode": "proxy",
@@ -240,7 +239,7 @@ openclaw agent --local --message "hello" --session-id test --json 2>&1 | head -8
 { "payloads": [{ "text": "HTTP 401 authentication_error: invalid x-api-key ..." }] }
 ```
 
-- **No mismatch warnings** — package name `@aquaman/aquaman` matches manifest id `"aquaman"`
+- **No mismatch warnings** — package name `aquaman-plugin` matches manifest id `"aquaman-plugin"`
 - **Plugin loads and sets env vars** — `ANTHROPIC_BASE_URL` pointed to localhost proxy
 - **401 from Anthropic** — confirms the proxy injected the dummy key (real key would get a response)
 - **No credentials in agent process** — only the proxy URL was visible to the agent

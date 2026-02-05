@@ -11,7 +11,7 @@ import {
   type CredentialStore,
   type AuditLogger,
   type CredentialBackend
-} from '@aquaman/core';
+} from 'aquaman-core';
 import type { PluginConfig } from './config-schema.js';
 
 export interface EmbeddedModeOptions {

@@ -54,7 +54,7 @@ The agent only knows a localhost URL. It never sees a key.
 
 ```bash
 openclaw plugins install ./packages/openclaw
-npm install -g @aquaman/proxy
+npm install -g aquaman-proxy
 ```
 
 **2. Initialize and add credentials:**
@@ -92,7 +92,7 @@ EOF
 {
   "plugins": {
     "entries": {
-      "aquaman": {
+      "aquaman-plugin": {
         "enabled": true,
         "config": {
           "mode": "proxy",
@@ -127,7 +127,7 @@ openclaw agent --local --message "hello" --session-id test
 For use outside OpenClaw:
 
 ```bash
-npm install -g @aquaman/proxy
+npm install -g aquaman-proxy
 aquaman init                            # Create config + generate TLS certs
 aquaman credentials add anthropic api_key
 aquaman start                           # Start proxy + launch OpenClaw
@@ -157,7 +157,7 @@ aquaman start                           # Start proxy + launch OpenClaw
 
 | | Plugin Mode | Standalone Mode |
 |-|-------------|-----------------|
-| **Setup** | `openclaw plugins install` | `npm install -g @aquaman/proxy` |
+| **Setup** | `openclaw plugins install` | `npm install -g aquaman-proxy` |
 | **Lifecycle** | Managed by Gateway | Manual `aquaman start` / `aquaman stop` |
 | **Use case** | OpenClaw users | Any application |
 | **Config** | `~/.openclaw/openclaw.json` | `~/.aquaman/config.yaml` |
@@ -209,7 +209,7 @@ Aquaman is complementary to sandbox-based tools — it handles credential isolat
 {
   "plugins": {
     "entries": {
-      "aquaman": {
+      "aquaman-plugin": {
         "enabled": true,
         "config": {
           "mode": "proxy",
@@ -316,9 +316,9 @@ Monorepo with three packages:
 
 | Package | Role |
 |---------|------|
-| `@aquaman/core` | Credential backends, audit logger, crypto utilities |
-| `@aquaman/proxy` | HTTP/HTTPS proxy daemon and CLI |
-| `@aquaman/aquaman` | OpenClaw Gateway plugin (embedded + proxy modes) |
+| `aquaman-core` | Credential backends, audit logger, crypto utilities |
+| `aquaman-proxy` | HTTP/HTTPS proxy daemon and CLI |
+| `aquaman-plugin` | OpenClaw Gateway plugin (embedded + proxy modes) |
 
 ## License
 

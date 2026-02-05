@@ -5,7 +5,7 @@
  * Credentials never enter the agent process - they're managed by a separate proxy.
  *
  * Usage:
- *   1. Install aquaman: npm install -g @aquaman/proxy
+ *   1. Install aquaman: npm install -g aquaman-proxy
  *   2. Store credentials: aquaman credentials add anthropic api_key
  *   3. Enable this plugin in openclaw.json
  *
@@ -190,7 +190,7 @@ export default function register(api: OpenClawPluginApi): void {
   // Check if aquaman CLI is installed
   if (!isAquamanInstalled()) {
     api.logger.warn(
-      "aquaman CLI not found. Install with: npm install -g @aquaman/proxy"
+      "aquaman CLI not found. Install with: npm install -g aquaman-proxy"
     );
     api.logger.warn(
       "Configuring environment variables, but credential injection requires the proxy to be running"
@@ -266,7 +266,7 @@ export default function register(api: OpenClawPluginApi): void {
               });
             } catch {
               console.error(
-                "Failed to add credential. Is aquaman installed? npm install -g @aquaman/proxy"
+                "Failed to add credential. Is aquaman installed? npm install -g aquaman-proxy"
               );
             }
           });

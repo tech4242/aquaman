@@ -6,7 +6,7 @@
  * handles the exchange and caches tokens until near-expiry.
  */
 
-import type { CredentialStore } from '@aquaman/core';
+import type { CredentialStore } from 'aquaman-core';
 import type { OAuthConfig } from './service-registry.js';
 
 interface CachedToken {

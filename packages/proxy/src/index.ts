@@ -1,5 +1,5 @@
 /**
- * @aquaman/proxy - Credential isolation proxy daemon for OpenClaw
+ * aquaman-proxy - Credential isolation proxy daemon for OpenClaw
  *
  * This package provides:
  * - Credential proxy daemon that injects API keys into requests

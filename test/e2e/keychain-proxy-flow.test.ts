@@ -12,10 +12,10 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { CredentialProxy, createCredentialProxy, createServiceRegistry } from '@aquaman/proxy';
-import type { CredentialStore } from '@aquaman/core';
+import { CredentialProxy, createCredentialProxy, createServiceRegistry } from 'aquaman-proxy';
+import type { CredentialStore } from 'aquaman-core';
 import { MockUpstream, createMockUpstream } from '../helpers/mock-upstream.js';
-import type { RequestInfo } from '@aquaman/proxy';
+import type { RequestInfo } from 'aquaman-proxy';
 
 // Check if keytar is available before defining tests
 let keychainAvailable = false;

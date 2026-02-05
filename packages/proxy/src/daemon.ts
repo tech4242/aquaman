@@ -7,7 +7,7 @@ import * as http from 'node:http';
 import * as https from 'node:https';
 import * as fs from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { type CredentialStore, generateId } from '@aquaman/core';
+import { type CredentialStore, generateId } from 'aquaman-core';
 import { ServiceRegistry, createServiceRegistry, type ServiceDefinition, type AuthMode } from './service-registry.js';
 import { OAuthTokenCache, createOAuthTokenCache } from './oauth-token-cache.js';
 

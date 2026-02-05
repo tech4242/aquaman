@@ -11,7 +11,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { generateOpenClawEnv, writeEnvFile, appendToShellRc, formatEnvForDisplay } from './env-writer.js';
-import type { WrapperConfig, ServiceConfig } from '@aquaman/core';
+import type { WrapperConfig, ServiceConfig } from 'aquaman-core';
 
 export interface OpenClawInfo {
   installed: boolean;

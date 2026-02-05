@@ -6,8 +6,8 @@ import {
   generateOpenClawEnv,
   writeEnvFile,
   formatEnvForDisplay
-} from '@aquaman/proxy';
-import type { ServiceConfig } from '@aquaman/core';
+} from 'aquaman-proxy';
+import type { ServiceConfig } from 'aquaman-core';
 
 describe('env-writer', () => {
   let tempDir: string;

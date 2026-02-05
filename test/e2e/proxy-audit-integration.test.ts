@@ -9,10 +9,10 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { CredentialProxy, createCredentialProxy, createServiceRegistry } from '@aquaman/proxy';
-import { MemoryStore, AuditLogger, createAuditLogger } from '@aquaman/core';
+import { CredentialProxy, createCredentialProxy, createServiceRegistry } from 'aquaman-proxy';
+import { MemoryStore, AuditLogger, createAuditLogger } from 'aquaman-core';
 import { MockUpstream, createMockUpstream } from '../helpers/mock-upstream.js';
-import type { RequestInfo } from '@aquaman/proxy';
+import type { RequestInfo } from 'aquaman-proxy';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';

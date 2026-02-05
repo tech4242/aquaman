@@ -1,5 +1,5 @@
 /**
- * @aquaman/core - Core credential storage, audit logging, and utilities
+ * aquaman-core - Core credential storage, audit logging, and utilities
  *
  * This package provides the shared functionality for:
  * - Credential storage backends (Keychain, 1Password, Vault, encrypted file)

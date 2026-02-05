@@ -19,10 +19,10 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as http from 'node:http';
-import { CredentialProxy, createCredentialProxy, createServiceRegistry } from '@aquaman/proxy';
-import { MemoryStore } from '@aquaman/core';
+import { CredentialProxy, createCredentialProxy, createServiceRegistry } from 'aquaman-proxy';
+import { MemoryStore } from 'aquaman-core';
 import { MockUpstream, createMockUpstream } from '../helpers/mock-upstream.js';
-import type { RequestInfo } from '@aquaman/proxy';
+import type { RequestInfo } from 'aquaman-proxy';
 
 // Test credentials (all fake, never leave localhost)
 const TEST_CLIENT_ID = 'test-client-id-abc';

@@ -70,7 +70,7 @@ export class ProxyManager {
 
       if (!binaryPath) {
         const error = new Error(
-          'aquaman proxy binary not found. Install with: npm install -g @aquaman/proxy'
+          'aquaman proxy binary not found. Install with: npm install -g aquaman-proxy'
         );
         this.options.onError?.(error);
         reject(error);

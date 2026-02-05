@@ -27,7 +27,7 @@ export class AquamanPlugin {
   /**
    * Plugin name - required by OpenClaw ToolPlugin interface
    */
-  readonly name = 'aquaman';
+  readonly name = 'aquaman-plugin';
 
   private config: PluginConfig;
   private embeddedMode: EmbeddedMode | null = null;

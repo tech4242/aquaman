@@ -8,8 +8,8 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import * as https from 'node:https';
 import * as http from 'node:http';
-import { CredentialProxy, createCredentialProxy, createServiceRegistry } from '@aquaman/proxy';
-import { MemoryStore, generateSelfSignedCert } from '@aquaman/core';
+import { CredentialProxy, createCredentialProxy, createServiceRegistry } from 'aquaman-proxy';
+import { MemoryStore, generateSelfSignedCert } from 'aquaman-core';
 import { createMockUpstream, MockUpstream } from '../helpers/mock-upstream.js';
 
 describe('TLS Credential Proxy Integration', () => {
