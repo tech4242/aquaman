@@ -26,7 +26,7 @@ export default defineConfig({
       // Map package imports to source for development/testing
       'aquaman-core': path.resolve(__dirname, 'packages/core/src/index.ts'),
       'aquaman-proxy': path.resolve(__dirname, 'packages/proxy/src/index.ts'),
-      'aquaman-plugin': path.resolve(__dirname, 'packages/openclaw/src/index.ts')
+      'aquaman-plugin': path.resolve(__dirname, 'packages/plugin/src/index.ts')
     }
   }
 });

@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { HttpInterceptor, createHttpInterceptor } from '../../packages/openclaw/src/http-interceptor.js';
+import { HttpInterceptor, createHttpInterceptor } from '../../packages/plugin/src/http-interceptor.js';
 
 describe('HttpInterceptor', () => {
   let interceptor: HttpInterceptor;

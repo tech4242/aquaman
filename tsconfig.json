@@ -16,6 +16,6 @@
   "references": [
     { "path": "./packages/core" },
     { "path": "./packages/proxy" },
-    { "path": "./packages/openclaw" }
+    { "path": "./packages/plugin" }
   ]
 }

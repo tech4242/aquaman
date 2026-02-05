@@ -1,4 +1,4 @@
-# 🔱🦞🪸 aquaman 
+# 🔱🦞 aquaman 
 
 [![CI](https://github.com/tech4242/aquaman/actions/workflows/ci.yml/badge.svg)](https://github.com/tech4242/aquaman/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/tech4242/aquaman/branch/main/graph/badge.svg)](https://codecov.io/gh/tech4242/aquaman)
@@ -6,7 +6,7 @@
 [![Vitest](https://img.shields.io/badge/Tested_with-Vitest-6E9F18?logo=vitest&logoColor=white)](https://vitest.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Security control plane for OpenClaw - audit logging, guardrails, and credential isolation.
+Credential isolation proxy for OpenClaw — secrets stay submerged, agents stay dry.
 
 Credential isolation for **OpenClaw Gateway**. API keys and channel tokens never enter the Gateway process—they're stored in secure backends and injected by a separate proxy. Supports 21 services out of the box: LLM providers, messaging channels, voice providers, and more.
 
@@ -55,7 +55,7 @@ The agent only knows a localhost URL. It never sees a key.
 **1. Install the plugin and CLI:**
 
 ```bash
-openclaw plugins install ./packages/openclaw
+openclaw plugins install ./packages/plugin
 npm install -g aquaman-proxy
 ```
 

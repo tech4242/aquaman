@@ -11,7 +11,7 @@ import { mkdtempSync, mkdirSync, cpSync, writeFileSync, rmSync, existsSync, read
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 
-const PLUGIN_SRC = path.resolve(__dirname, '../../packages/openclaw');
+const PLUGIN_SRC = path.resolve(__dirname, '../../packages/plugin');
 
 let testStateDir: string;
 

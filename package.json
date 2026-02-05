@@ -2,7 +2,7 @@
   "name": "aquaman",
   "version": "0.1.0",
   "private": true,
-  "description": "Credential isolation for OpenClaw - keeps API keys outside the agent process",
+  "description": "Credential isolation proxy for OpenClaw — secrets stay submerged, agents stay dry. 🔱🦞",
   "type": "module",
   "workspaces": [
     "packages/*"
@@ -11,7 +11,7 @@
     "build": "npm run build --workspaces",
     "build:core": "npm run build -w aquaman-core",
     "build:proxy": "npm run build -w aquaman-proxy",
-    "build:openclaw": "npm run build -w aquaman-plugin",
+    "build:plugin": "npm run build -w aquaman-plugin",
     "clean": "npm run clean --workspaces && rm -rf dist",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -20,7 +20,7 @@
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "lint": "oxlint src test packages --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage",
     "lint:fix": "oxlint src test packages --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage --fix",
-    "typecheck": "tsc -b packages/core packages/proxy packages/openclaw",
+    "typecheck": "tsc -b packages/core packages/proxy packages/plugin",
     "start": "node packages/proxy/dist/cli/index.js",
     "dev": "tsx watch packages/proxy/src/cli/index.ts"
   },

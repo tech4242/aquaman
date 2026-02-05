@@ -10,7 +10,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import Ajv from 'ajv';
 
-const MANIFEST_PATH = path.resolve(__dirname, '../../packages/openclaw/openclaw.plugin.json');
+const MANIFEST_PATH = path.resolve(__dirname, '../../packages/plugin/openclaw.plugin.json');
 
 describe('Plugin Config Schema', () => {
   let manifest: any;

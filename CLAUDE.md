@@ -33,12 +33,12 @@ Agent Process                    Proxy Process (aquaman)
 packages/
 ├── core/       # aquaman-core - credential stores, audit logger, crypto
 ├── proxy/      # aquaman-proxy - HTTP proxy daemon, CLI
-└── openclaw/   # aquaman-plugin - OpenClaw plugin
+└── plugin/    # aquaman-plugin - OpenClaw plugin
 ```
 
 ## OpenClaw Gateway Integration
 
-The plugin (`packages/openclaw/`) integrates with the OpenClaw Gateway's plugin SDK. Plugins run inside the Gateway process and have access to lifecycle hooks, CLI registration, and tool registration.
+The plugin (`packages/plugin/`) integrates with the OpenClaw Gateway's plugin SDK. Plugins run inside the Gateway process and have access to lifecycle hooks, CLI registration, and tool registration.
 
 **How it works:**
 1. Plugin exports `register(api)` function (not a class)
@@ -171,13 +171,13 @@ Since the Gateway runs on Unix-like systems, backend choice depends on deploymen
 
 ```bash
 # 1. Install plugin
-openclaw plugins install ./packages/openclaw
-# or: cp -r packages/openclaw ~/.openclaw/extensions/aquaman-plugin
+openclaw plugins install ./packages/plugin
+# or: cp -r packages/plugin ~/.openclaw/extensions/aquaman-plugin
 
 # 2. Sync after code changes
-cp packages/openclaw/package.json ~/.openclaw/extensions/aquaman-plugin/package.json
-cp packages/openclaw/index.ts ~/.openclaw/extensions/aquaman-plugin/index.ts
-cp -r packages/openclaw/src/ ~/.openclaw/extensions/aquaman-plugin/src/
+cp packages/plugin/package.json ~/.openclaw/extensions/aquaman-plugin/package.json
+cp packages/plugin/index.ts ~/.openclaw/extensions/aquaman-plugin/index.ts
+cp -r packages/plugin/src/ ~/.openclaw/extensions/aquaman-plugin/src/
 
 # 3. Rebuild core if store.ts changed
 npm run build:core
@@ -388,11 +388,11 @@ Promise.all([
 | `packages/proxy/src/migration/openclaw-migrator.ts` | Migrates channel creds from openclaw.json to secure store |
 | `packages/proxy/src/openclaw/env-writer.ts` | Generates env vars for OpenClaw integration |
 | `packages/proxy/src/openclaw/integration.ts` | Detects and launches OpenClaw with env vars |
-| `packages/openclaw/index.ts` | OpenClaw plugin entry point (what Gateway loads) |
-| `packages/openclaw/openclaw.plugin.json` | Plugin manifest + config schema |
-| `packages/openclaw/src/plugin.ts` | Class-based plugin (standalone/test use) |
-| `packages/openclaw/src/proxy-manager.ts` | Spawns/manages proxy child process |
-| `packages/openclaw/src/http-interceptor.ts` | `globalThis.fetch` override for channel traffic interception |
+| `packages/plugin/index.ts` | OpenClaw plugin entry point (what Gateway loads) |
+| `packages/plugin/openclaw.plugin.json` | Plugin manifest + config schema |
+| `packages/plugin/src/plugin.ts` | Class-based plugin (standalone/test use) |
+| `packages/plugin/src/proxy-manager.ts` | Spawns/manages proxy child process |
+| `packages/plugin/src/http-interceptor.ts` | `globalThis.fetch` override for channel traffic interception |
 | `test/e2e/openclaw-plugin.test.ts` | Plugin integration tests |
 | `test/e2e/credential-proxy.test.ts` | Proxy E2E tests |
 | `test/e2e/channel-credential-injection.test.ts` | Channel auth mode E2E tests (Telegram, Twilio, Twitch, etc.) |
