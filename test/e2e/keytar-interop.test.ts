@@ -45,6 +45,11 @@ describe('Keytar ESM/CJS Interop', () => {
   });
 
   it('should round-trip a credential through keytar', async () => {
+    if (process.platform !== 'darwin') {
+      // keytar operations hang on Linux CI without D-Bus Secret Service
+      return;
+    }
+
     let keytar: any;
     try {
       const mod: any = await import('keytar');

@@ -20,12 +20,14 @@ import type { RequestInfo } from 'aquaman-proxy';
 // Check if keytar is available before defining tests
 let keychainAvailable = false;
 let keytar: any;
-try {
-  const mod: any = await import('keytar');
-  keytar = mod.default || mod;
-  keychainAvailable = typeof keytar.getPassword === 'function';
-} catch {
-  keychainAvailable = false;
+if (process.platform === 'darwin') {
+  try {
+    const mod: any = await import('keytar');
+    keytar = mod.default || mod;
+    keychainAvailable = typeof keytar.getPassword === 'function';
+  } catch {
+    keychainAvailable = false;
+  }
 }
 
 /**
