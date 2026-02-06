@@ -8,11 +8,11 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces",
+    "build": "npm run build:core && npm run build -w aquaman-proxy -w aquaman-plugin",
     "build:core": "npm run build -w aquaman-core",
     "build:proxy": "npm run build -w aquaman-proxy",
     "build:plugin": "npm run build -w aquaman-plugin",
-    "clean": "npm run clean --workspaces && rm -rf dist",
+    "clean": "npm run clean --workspaces && rm -rf dist packages/*/tsconfig.tsbuildinfo",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

@@ -125,4 +125,6 @@ jobs:
       - name: Install openclaw
         if: steps.cache-openclaw.outputs.cache-hit != 'true'
         run: npm install -g openclaw
+      - name: Build core package
+        run: npm run build:core
       - run: npx vitest run test/e2e/openclaw-plugin.test.ts

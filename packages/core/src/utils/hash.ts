@@ -3,6 +3,10 @@
  */
 
 import * as crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
 
 const HASH_ALGORITHM = 'sha256';
 
@@ -98,29 +102,31 @@ export interface SelfSignedCert {
 }
 
 /**
- * Generate a self-signed TLS certificate using Node.js crypto
- * No external dependencies required
+ * Generate a self-signed TLS certificate.
+ * Prefers openssl CLI (correct DER encoding on all platforms),
+ * falls back to manual ASN.1 DER encoding if openssl is unavailable.
  */
 export function generateSelfSignedCert(commonName: string, days = 365): SelfSignedCert {
-  // Generate RSA key pair
+  // Generate RSA key pair using Node.js crypto (always reliable)
   const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
     modulusLength: 2048,
     publicKeyEncoding: { type: 'spki', format: 'pem' },
     privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
   });
 
-  // Create a self-signed certificate using the built-in X509Certificate
-  // We need to manually construct the certificate since Node.js doesn't have
-  // a built-in certificate generation API
+  // Try openssl CLI first — produces correct DER across all OpenSSL/LibreSSL versions
+  try {
+    const cert = generateCertWithOpenSSL(commonName, days, privateKey);
+    return { cert, key: privateKey };
+  } catch {
+    // Fall back to manual ASN.1 DER encoding
+  }
 
   const now = new Date();
   const notBefore = now;
   const notAfter = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
-
-  // Generate serial number
   const serialNumber = crypto.randomBytes(16).toString('hex');
 
-  // Build certificate using ASN.1 DER encoding
   const cert = buildSelfSignedCert({
     commonName,
     publicKey,
@@ -130,10 +136,44 @@ export function generateSelfSignedCert(commonName: string, days = 365): SelfSign
     serialNumber
   });
 
-  return {
-    cert,
-    key: privateKey
-  };
+  return { cert, key: privateKey };
+}
+
+function generateCertWithOpenSSL(commonName: string, days: number, privateKey: string): string {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-cert-'));
+  const keyFile = path.join(tmpDir, 'key.pem');
+  const certFile = path.join(tmpDir, 'cert.pem');
+  const configFile = path.join(tmpDir, 'openssl.cnf');
+
+  try {
+    fs.writeFileSync(keyFile, privateKey, { mode: 0o600 });
+
+    // Minimal openssl config with SAN extension
+    fs.writeFileSync(configFile, [
+      '[req]',
+      'distinguished_name = dn',
+      'x509_extensions = ext',
+      'prompt = no',
+      '[dn]',
+      `CN = ${commonName}`,
+      '[ext]',
+      `subjectAltName = DNS:${commonName}`,
+      'basicConstraints = critical, CA:FALSE',
+      'keyUsage = critical, digitalSignature, keyEncipherment',
+    ].join('\n'));
+
+    execFileSync('openssl', [
+      'req', '-x509',
+      '-key', keyFile,
+      '-out', certFile,
+      '-days', String(days),
+      '-config', configFile,
+    ], { stdio: 'pipe' });
+
+    return fs.readFileSync(certFile, 'utf-8');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 }
 
 interface CertParams {
