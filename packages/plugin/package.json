@@ -21,6 +21,9 @@
   ],
   "author": "tech4242",
   "license": "MIT",
+  "dependencies": {
+    "aquaman-core": "^0.1.0"
+  },
   "peerDependencies": {
     "openclaw": ">=2026.1.0"
   },
@@ -28,7 +31,7 @@
     "@types/node": "^20.10.0",
     "typescript": "^5.3.0"
   },
-  "files": ["index.ts", "src", "openclaw.plugin.json"],
+  "files": ["index.ts", "src", "openclaw.plugin.json", "LICENSE", "README.md"],
   "repository": {
     "type": "git",
     "url": "https://github.com/tech4242/aquaman.git",
@@ -36,5 +39,9 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "homepage": "https://github.com/tech4242/aquaman/tree/main/packages/plugin#readme",
+  "bugs": {
+    "url": "https://github.com/tech4242/aquaman/issues"
   }
 }
