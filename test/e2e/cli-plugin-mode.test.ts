@@ -130,6 +130,28 @@ describe('CLI plugin-mode E2E', () => {
     expect(connectionInfo.baseUrl).toMatch(/^https?:\/\/127\.0\.0\.1:\d+$/);
   }, TEST_TIMEOUT);
 
+  it('credentials guide outputs setup commands', async () => {
+    const proc = spawn('npx', ['tsx', CLI_PATH, 'credentials', 'guide', '--service', 'anthropic'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout!.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr!.on('data', (d: Buffer) => { stderr += d.toString(); });
+
+    const exitCode = await new Promise<number | null>((resolve) => {
+      proc.on('exit', (code) => resolve(code));
+    });
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('Credential setup guide');
+    expect(stdout).toContain('anthropic');
+    expect(stdout).toContain('aquaman credentials add anthropic api_key');
+  }, TEST_TIMEOUT);
+
   it('exits cleanly on SIGTERM', async () => {
     const { connectionInfo, child: proc } = await spawnPluginMode();
 

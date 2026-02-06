@@ -56,6 +56,8 @@ export interface CredentialsConfig {
   backend: 'keychain' | '1password' | 'vault' | 'encrypted-file';
   proxyPort: number;
   proxiedServices: string[];
+  bindAddress?: string;
+  encryptionPassword?: string;
   tls?: {
     enabled: boolean;
     certPath?: string;

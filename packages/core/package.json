@@ -40,8 +40,10 @@
   "author": "tech4242",
   "license": "MIT",
   "dependencies": {
-    "keytar": "^7.9.0",
     "yaml": "^2.3.4"
+  },
+  "optionalDependencies": {
+    "keytar": "^7.9.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

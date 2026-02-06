@@ -2,11 +2,12 @@
  * Tests for config utilities
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import * as os from 'node:os';
 import {
   getDefaultConfig,
-  expandPath
+  expandPath,
+  applyEnvOverrides
 } from 'aquaman-core';
 
 describe('config utilities', () => {
@@ -40,6 +41,76 @@ describe('config utilities', () => {
 
       expect(config.openclaw.autoLaunch).toBe(true);
       expect(config.openclaw.configMethod).toBe('env');
+    });
+  });
+
+  describe('applyEnvOverrides', () => {
+    const originalEnv = { ...process.env };
+
+    afterEach(() => {
+      // Restore original env
+      for (const key of Object.keys(process.env)) {
+        if (!(key in originalEnv)) {
+          delete process.env[key];
+        }
+      }
+      Object.assign(process.env, originalEnv);
+    });
+
+    it('should override port from AQUAMAN_PORT', () => {
+      process.env['AQUAMAN_PORT'] = '9999';
+      const config = applyEnvOverrides(getDefaultConfig());
+      expect(config.credentials.proxyPort).toBe(9999);
+    });
+
+    it('should override backend from AQUAMAN_BACKEND', () => {
+      process.env['AQUAMAN_BACKEND'] = 'vault';
+      const config = applyEnvOverrides(getDefaultConfig());
+      expect(config.credentials.backend).toBe('vault');
+    });
+
+    it('should ignore invalid backend values', () => {
+      process.env['AQUAMAN_BACKEND'] = 'invalid';
+      const config = applyEnvOverrides(getDefaultConfig());
+      expect(config.credentials.backend).toBe('keychain');
+    });
+
+    it('should override services from AQUAMAN_SERVICES', () => {
+      process.env['AQUAMAN_SERVICES'] = 'anthropic,slack';
+      const config = applyEnvOverrides(getDefaultConfig());
+      expect(config.credentials.proxiedServices).toEqual(['anthropic', 'slack']);
+    });
+
+    it('should override bind address from AQUAMAN_BIND_ADDRESS', () => {
+      process.env['AQUAMAN_BIND_ADDRESS'] = '0.0.0.0';
+      const config = applyEnvOverrides(getDefaultConfig());
+      expect(config.credentials.bindAddress).toBe('0.0.0.0');
+    });
+
+    it('should override TLS enabled from AQUAMAN_TLS_ENABLED', () => {
+      process.env['AQUAMAN_TLS_ENABLED'] = 'false';
+      const config = applyEnvOverrides(getDefaultConfig());
+      expect(config.credentials.tls?.enabled).toBe(false);
+    });
+
+    it('should override audit enabled from AQUAMAN_AUDIT_ENABLED', () => {
+      process.env['AQUAMAN_AUDIT_ENABLED'] = 'false';
+      const config = applyEnvOverrides(getDefaultConfig());
+      expect(config.audit.enabled).toBe(false);
+    });
+
+    it('should set vault config from VAULT_ADDR and VAULT_TOKEN', () => {
+      process.env['VAULT_ADDR'] = 'https://vault.example.com';
+      process.env['VAULT_TOKEN'] = 'hvs.test';
+      const config = applyEnvOverrides(getDefaultConfig());
+      expect(config.credentials.vaultAddress).toBe('https://vault.example.com');
+      expect(config.credentials.vaultToken).toBe('hvs.test');
+    });
+
+    it('should set encryption password from AQUAMAN_ENCRYPTION_PASSWORD', () => {
+      process.env['AQUAMAN_ENCRYPTION_PASSWORD'] = 'secret123';
+      const config = applyEnvOverrides(getDefaultConfig());
+      expect(config.credentials.encryptionPassword).toBe('secret123');
     });
   });
 

@@ -1,0 +1,23 @@
+FROM alpine/openclaw:latest
+
+ARG OPENCLAW_CONFIG=docker/openclaw-config.json
+
+# Aquaman plugin (TypeScript — OpenClaw loads .ts directly)
+# In external proxy mode the plugin has zero npm dependencies
+COPY packages/plugin/index.ts             /home/node/.openclaw/extensions/aquaman-plugin/
+COPY packages/plugin/src/                 /home/node/.openclaw/extensions/aquaman-plugin/src/
+COPY packages/plugin/openclaw.plugin.json /home/node/.openclaw/extensions/aquaman-plugin/
+COPY packages/plugin/package.json         /home/node/.openclaw/extensions/aquaman-plugin/
+
+# OpenClaw config: enable aquaman plugin in proxy mode
+COPY ${OPENCLAW_CONFIG}                   /home/node/.openclaw/openclaw.json
+
+# Placeholder auth profiles (proxy strips these, injects real credentials)
+COPY docker/auth-profiles.json            /home/node/.openclaw/agents/main/agent/auth-profiles.json
+
+# Ensure node user owns the config files we just copied
+USER root
+RUN chown -R node:node /home/node/.openclaw
+USER node
+
+CMD ["node", "dist/index.js", "gateway", "--allow-unconfigured", "--bind", "lan"]

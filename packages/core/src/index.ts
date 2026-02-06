@@ -55,5 +55,6 @@ export {
   getDefaultConfig,
   loadConfig,
   ensureConfigDir,
-  saveConfig
+  saveConfig,
+  applyEnvOverrides
 } from './utils/index.js';

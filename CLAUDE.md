@@ -139,6 +139,16 @@ this.keytar = mod.default || mod;
    - `none`: at-rest storage only, proxy rejects traffic (Nostr, Tlon)
 5. Forwards to upstream, response piped back
 
+### Docker Two-Container Architecture
+
+- **Base image:** `alpine/openclaw:latest` (community-maintained, runs as `node` uid 1000, config at `/home/node/.openclaw/`)
+- `aquaman` container: proxy daemon on `backend` (internet) + `frontend` (internal) networks
+- `openclaw` container (`openclaw-gateway`): Gateway + plugin on `frontend` only (sandboxed, no internet)
+- Plugin reads `AQUAMAN_PROXY_URL` env var → skips local proxy spawn, points env vars + fetch interceptor at external proxy
+- `frontend` network is `internal: true` (`name: aquaman-frontend`) — openclaw can only reach aquaman, not the internet
+- `OPENCLAW_GATEWAY_TOKEN` env var is required when binding to lan (defaults to `aquaman-internal` in compose)
+- **Sandbox profile** (`--profile with-openclaw-sandboxed`): mounts Docker socket, enables OpenClaw's built-in sandbox so tool execution runs in ephemeral containers with `network: aquaman-frontend`, `cap-drop: ALL`, read-only root fs
+
 ## Development Commands
 
 ```bash
@@ -249,7 +259,7 @@ openclaw agent --local --message "hello" --session-id test --json 2>&1 | head -8
 ```bash
 npm run test:e2e                # All e2e tests (11 files)
 npm run test:unit               # All unit tests (13 files)
-npm test                        # Everything (~283 tests, 24 files)
+npm test                        # Everything (~295 tests, 24 files)
 ```
 
 ### Quick proxy-only smoke test:
@@ -399,3 +409,10 @@ Promise.all([
 | `test/e2e/oauth-credential-injection.test.ts` | OAuth flow E2E tests (mock token server) |
 | `test/e2e/keychain-proxy-flow.test.ts` | Real keychain backend E2E (macOS only) |
 | `test/e2e/cli-plugin-mode.test.ts` | CLI startup/output E2E tests |
+| `docker/Dockerfile.aquaman` | Multi-stage Docker build (builder + runtime) |
+| `docker/Dockerfile.openclaw` | OpenClaw + aquaman plugin Docker image |
+| `docker/docker-compose.yml` | Compose file with aquaman + optional openclaw services |
+| `docker/openclaw-config.json` | Plugin config for Docker OpenClaw container |
+| `docker/openclaw-config-sandboxed.json` | Plugin + sandbox config for Docker (sandboxed profile) |
+| `docker/auth-profiles.json` | Placeholder auth profiles for Docker |
+| `docker/.env.example` | Template for Docker env var configuration |

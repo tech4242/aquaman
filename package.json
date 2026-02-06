@@ -22,7 +22,10 @@
     "lint:fix": "oxlint src test packages --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage --fix",
     "typecheck": "tsc -b packages/core packages/proxy packages/plugin",
     "start": "node packages/proxy/dist/cli/index.js",
-    "dev": "tsx watch packages/proxy/src/cli/index.ts"
+    "dev": "tsx watch packages/proxy/src/cli/index.ts",
+    "docker:build": "docker compose -f docker/docker-compose.yml build",
+    "docker:up": "docker compose -f docker/docker-compose.yml up",
+    "docker:down": "docker compose -f docker/docker-compose.yml down"
   },
   "keywords": [
     "openclaw",

@@ -24,5 +24,6 @@ export {
   getDefaultConfig,
   loadConfig,
   ensureConfigDir,
-  saveConfig
+  saveConfig,
+  applyEnvOverrides
 } from './config.js';

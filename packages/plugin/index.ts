@@ -26,6 +26,14 @@ const proxyPort = 8081;
 const services = ["anthropic", "openai"];
 
 /**
+ * Get external proxy URL from environment (for Docker two-container mode).
+ * When set, the plugin skips spawning a local proxy and routes traffic to the external URL.
+ */
+function getExternalProxyUrl(): string | null {
+  return process.env.AQUAMAN_PROXY_URL || null;
+}
+
+/**
  * Check if aquaman CLI is installed
  */
 function isAquamanInstalled(): boolean {
@@ -139,7 +147,7 @@ function activateHttpInterceptor(log: OpenClawPluginApi["logger"]): void {
     ['chat.googleapis.com', 'google-chat'],
   ]);
 
-  const baseUrl = `http://127.0.0.1:${proxyPort}`;
+  const baseUrl = getExternalProxyUrl() || `http://127.0.0.1:${proxyPort}`;
 
   httpInterceptor = createHttpInterceptor({
     proxyBaseUrl: baseUrl,
@@ -155,7 +163,7 @@ function activateHttpInterceptor(log: OpenClawPluginApi["logger"]): void {
  * Set environment variables for SDK clients
  */
 function configureEnvironment(log: OpenClawPluginApi["logger"]): void {
-  const baseUrl = `http://127.0.0.1:${proxyPort}`;
+  const baseUrl = getExternalProxyUrl() || `http://127.0.0.1:${proxyPort}`;
 
   for (const service of services) {
     const serviceUrl = `${baseUrl}/${service}`;
@@ -182,12 +190,82 @@ function configureEnvironment(log: OpenClawPluginApi["logger"]): void {
 }
 
 /**
+ * Register the aquaman_status tool (shared between local and external proxy modes)
+ */
+function registerStatusTool(api: OpenClawPluginApi): void {
+  const externalUrl = getExternalProxyUrl();
+  api.registerTool(
+    () => {
+      return {
+        name: "aquaman_status",
+        description:
+          "Check aquaman credential proxy status and configured services",
+        parameters: {
+          type: "object" as const,
+          properties: {},
+          required: [] as string[],
+        },
+        async execute() {
+          return {
+            externalProxy: externalUrl !== null,
+            proxyUrl: externalUrl || `http://127.0.0.1:${proxyPort}`,
+            proxyRunning: externalUrl !== null || proxyProcess !== null,
+            proxyPort,
+            services,
+            httpInterceptorActive: httpInterceptor?.isActive() ?? false,
+            environmentVariables: Object.fromEntries(
+              services.map((s) => {
+                const key =
+                  s === "anthropic"
+                    ? "ANTHROPIC_BASE_URL"
+                    : s === "openai"
+                      ? "OPENAI_BASE_URL"
+                      : `${s.toUpperCase()}_BASE_URL`;
+                return [key, process.env[key] ?? null];
+              })
+            ),
+          };
+        },
+      };
+    },
+    { names: ["aquaman_status"] }
+  );
+}
+
+/**
  * OpenClaw plugin register function
  */
 export default function register(api: OpenClawPluginApi): void {
   api.logger.info("Aquaman plugin loaded");
 
-  // Check if aquaman CLI is installed
+  const externalUrl = getExternalProxyUrl();
+
+  // External proxy mode (Docker two-container architecture)
+  if (externalUrl) {
+    api.logger.info(`External proxy mode: ${externalUrl}`);
+    configureEnvironment(api.logger);
+
+    if (api.registerLifecycle) {
+      api.registerLifecycle({
+        async onGatewayStart() {
+          activateHttpInterceptor(api.logger);
+          api.logger.info("HTTP interceptor active (external proxy mode)");
+        },
+        async onGatewayStop() {
+          if (httpInterceptor) {
+            httpInterceptor.deactivate();
+            httpInterceptor = null;
+          }
+        },
+      });
+    }
+
+    registerStatusTool(api);
+    api.logger.info("Aquaman plugin registered successfully");
+    return;
+  }
+
+  // Local proxy mode — requires aquaman CLI
   if (!isAquamanInstalled()) {
     api.logger.warn(
       "aquaman CLI not found. Install with: npm install -g aquaman-proxy"
@@ -288,41 +366,6 @@ export default function register(api: OpenClawPluginApi): void {
     );
   }
 
-  // Register a tool for agents to check credential status
-  api.registerTool(
-    () => {
-      return {
-        name: "aquaman_status",
-        description:
-          "Check aquaman credential proxy status and configured services",
-        parameters: {
-          type: "object" as const,
-          properties: {},
-          required: [] as string[],
-        },
-        async execute() {
-          return {
-            proxyRunning: proxyProcess !== null,
-            proxyPort,
-            services,
-            httpInterceptorActive: httpInterceptor?.isActive() ?? false,
-            environmentVariables: Object.fromEntries(
-              services.map((s) => {
-                const key =
-                  s === "anthropic"
-                    ? "ANTHROPIC_BASE_URL"
-                    : s === "openai"
-                      ? "OPENAI_BASE_URL"
-                      : `${s.toUpperCase()}_BASE_URL`;
-                return [key, process.env[key] ?? null];
-              })
-            ),
-          };
-        },
-      };
-    },
-    { names: ["aquaman_status"] }
-  );
-
+  registerStatusTool(api);
   api.logger.info("Aquaman plugin registered successfully");
 }

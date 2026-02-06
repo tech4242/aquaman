@@ -120,6 +120,14 @@ export class CredentialProxy {
     const requestId = generateId();
     const url = req.url || '/';
 
+    // Health check endpoint
+    if (url === '/_health' || url === '/_health/') {
+      res.setHeader('Content-Type', 'application/json');
+      res.statusCode = 200;
+      res.end(JSON.stringify({ status: 'ok', uptime: process.uptime(), services: this.options.allowedServices }));
+      return;
+    }
+
     // Parse service from path: /anthropic/v1/messages -> anthropic
     const pathParts = url.split('/').filter(p => p);
     const service = pathParts[0];

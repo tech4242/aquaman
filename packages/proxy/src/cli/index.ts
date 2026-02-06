@@ -112,6 +112,7 @@ program
     try {
       credentialStore = createCredentialStore({
         backend: config.credentials.backend,
+        encryptionPassword: config.credentials.encryptionPassword,
         vaultAddress: config.credentials.vaultAddress,
         vaultToken: config.credentials.vaultToken,
         vaultNamespace: config.credentials.vaultNamespace,
@@ -128,9 +129,10 @@ program
     const serviceRegistry = createServiceRegistry({ configPath: config.services.configPath });
 
     // Start credential proxy
+    const bindAddr = config.credentials.bindAddress || '127.0.0.1';
     const credentialProxy = createCredentialProxy({
       port: config.credentials.proxyPort,
-      bindAddress: '127.0.0.1',
+      bindAddress: bindAddr,
       store: credentialStore,
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
@@ -147,7 +149,7 @@ program
     await credentialProxy.start();
 
     const protocol = credentialProxy.isTlsEnabled() ? 'https' : 'http';
-    console.log(`Credential proxy started on ${protocol}://127.0.0.1:${config.credentials.proxyPort}`);
+    console.log(`Credential proxy started on ${protocol}://${bindAddr}:${config.credentials.proxyPort}`);
 
     if (options.launch !== false && config.openclaw.autoLaunch) {
       // Get services for OpenClaw integration
@@ -279,6 +281,7 @@ program
     try {
       credentialStore = createCredentialStore({
         backend: config.credentials.backend,
+        encryptionPassword: config.credentials.encryptionPassword,
         vaultAddress: config.credentials.vaultAddress,
         vaultToken: config.credentials.vaultToken,
         vaultNamespace: config.credentials.vaultNamespace,
@@ -295,9 +298,10 @@ program
     const serviceRegistry = createServiceRegistry({ configPath: config.services.configPath });
 
     // Start credential proxy
+    const bindAddr = config.credentials.bindAddress || '127.0.0.1';
     const credentialProxy = createCredentialProxy({
       port: config.credentials.proxyPort,
-      bindAddress: '127.0.0.1',
+      bindAddress: bindAddr,
       store: credentialStore,
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
@@ -317,7 +321,7 @@ program
     writePidFile();
 
     const protocol = credentialProxy.isTlsEnabled() ? 'https' : 'http';
-    console.log(`Credential proxy: ${protocol}://127.0.0.1:${config.credentials.proxyPort}`);
+    console.log(`Credential proxy: ${protocol}://${bindAddr}:${config.credentials.proxyPort}`);
     console.log(`Audit logging: ${config.audit.enabled ? 'enabled' : 'disabled'}`);
     console.log(`Credential backend: ${config.credentials.backend}`);
     console.log(`PID file: ${getPidFile()}`);
@@ -351,6 +355,7 @@ program
     try {
       credentialStore = createCredentialStore({
         backend: config.credentials.backend,
+        encryptionPassword: config.credentials.encryptionPassword,
         vaultAddress: config.credentials.vaultAddress,
         vaultToken: config.credentials.vaultToken,
         vaultNamespace: config.credentials.vaultNamespace,
@@ -368,7 +373,7 @@ program
     // Start credential proxy
     const credentialProxy = createCredentialProxy({
       port,
-      bindAddress: '127.0.0.1',
+      bindAddress: config.credentials.bindAddress || '127.0.0.1',
       store: credentialStore,
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
@@ -579,6 +584,7 @@ credentials
     try {
       store = createCredentialStore({
         backend,
+        encryptionPassword: config.credentials.encryptionPassword,
         vaultAddress: config.credentials.vaultAddress,
         vaultToken: config.credentials.vaultToken,
         vaultNamespace: config.credentials.vaultNamespace,
@@ -635,6 +641,7 @@ credentials
     try {
       store = createCredentialStore({
         backend: config.credentials.backend,
+        encryptionPassword: config.credentials.encryptionPassword,
         vaultAddress: config.credentials.vaultAddress,
         vaultToken: config.credentials.vaultToken,
         onePasswordVault: config.credentials.onePasswordVault,
@@ -667,6 +674,7 @@ credentials
     try {
       store = createCredentialStore({
         backend: config.credentials.backend,
+        encryptionPassword: config.credentials.encryptionPassword,
         vaultAddress: config.credentials.vaultAddress,
         vaultToken: config.credentials.vaultToken,
         onePasswordVault: config.credentials.onePasswordVault,
@@ -682,6 +690,66 @@ credentials
       console.log(`Credential deleted: ${service}/${key}`);
     } else {
       console.log(`Credential not found: ${service}/${key}`);
+    }
+  });
+
+credentials
+  .command('guide')
+  .description('Show setup commands for seeding credentials based on your backend')
+  .option('--backend <backend>', 'Override backend (keychain, encrypted-file, vault, 1password)')
+  .option('--service <name>', 'Show commands for a single service only')
+  .action(async (options) => {
+    const config = loadConfig();
+    const backend = options.backend || config.credentials.backend;
+    const registry = createServiceRegistry({ configPath: config.services.configPath });
+
+    let serviceNames = config.credentials.proxiedServices;
+    if (options.service) {
+      if (!registry.has(options.service)) {
+        console.error(`Unknown service: ${options.service}`);
+        process.exit(1);
+      }
+      serviceNames = [options.service];
+    }
+
+    console.log(`Credential setup guide (backend: ${backend})\n`);
+
+    for (const name of serviceNames) {
+      const def = registry.get(name);
+      if (!def) continue;
+
+      // Collect all credential keys for this service
+      const keys: string[] = [def.credentialKey];
+      if (def.additionalCredentialKeys) {
+        keys.push(...def.additionalCredentialKeys);
+      }
+      if (def.additionalHeaders) {
+        for (const h of Object.values(def.additionalHeaders)) {
+          if (!keys.includes(h.credentialKey)) {
+            keys.push(h.credentialKey);
+          }
+        }
+      }
+
+      console.log(`${name} (${def.description || 'no description'}):`);
+      if (keys.length > 1) {
+        console.log(`  [multi-credential service: ${keys.length} keys required]`);
+      }
+
+      for (const key of keys) {
+        switch (backend) {
+          case 'vault':
+            console.log(`  vault kv put secret/aquaman/${name}/${key} credential="YOUR_KEY"`);
+            break;
+          case '1password':
+            console.log(`  op item create --vault aquaman --category "API Credential" --title aquaman-${name}-${key} credential="YOUR_KEY"`);
+            break;
+          default:
+            console.log(`  aquaman credentials add ${name} ${key}`);
+            break;
+        }
+      }
+      console.log('');
     }
   });
 
@@ -785,6 +853,7 @@ migrate
 
     const store = createCredentialStore({
       backend: appConfig.credentials.backend,
+      encryptionPassword: appConfig.credentials.encryptionPassword,
       vaultAddress: appConfig.credentials.vaultAddress,
       vaultToken: appConfig.credentials.vaultToken,
       onePasswordVault: appConfig.credentials.onePasswordVault,
@@ -849,6 +918,7 @@ program
     try {
       const store = createCredentialStore({
         backend: config.credentials.backend,
+        encryptionPassword: config.credentials.encryptionPassword,
         vaultAddress: config.credentials.vaultAddress,
         vaultToken: config.credentials.vaultToken,
         onePasswordVault: config.credentials.onePasswordVault,

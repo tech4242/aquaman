@@ -1,0 +1,15 @@
+{
+  "plugins": {
+    "entries": {
+      "aquaman-plugin": {
+        "enabled": true,
+        "config": {
+          "mode": "proxy",
+          "backend": "encrypted-file",
+          "services": ["anthropic", "openai"],
+          "proxyPort": 8081
+        }
+      }
+    }
+  }
+}

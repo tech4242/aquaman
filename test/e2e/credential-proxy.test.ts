@@ -64,6 +64,24 @@ describe('CredentialProxy E2E', () => {
     });
   });
 
+  describe('health endpoint', () => {
+    it('should respond to /_health with status ok', async () => {
+      const res = await fetch(`http://127.0.0.1:${proxyPort}/_health`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.status).toBe('ok');
+      expect(typeof body.uptime).toBe('number');
+      expect(body.services).toEqual(['anthropic', 'openai']);
+    });
+
+    it('should respond to /_health/ with trailing slash', async () => {
+      const res = await fetch(`http://127.0.0.1:${proxyPort}/_health/`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.status).toBe('ok');
+    });
+  });
+
   describe('static helpers', () => {
     it('should generate correct base URL', () => {
       const url = CredentialProxy.getBaseUrl('anthropic', 8081);

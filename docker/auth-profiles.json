@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "profiles": {
+    "anthropic:default": {
+      "type": "api_key",
+      "provider": "anthropic",
+      "key": "aquaman-proxy-managed"
+    },
+    "openai:default": {
+      "type": "api_key",
+      "provider": "openai",
+      "key": "aquaman-proxy-managed"
+    }
+  },
+  "order": {
+    "anthropic": ["anthropic:default"],
+    "openai": ["openai:default"]
+  }
+}

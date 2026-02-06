@@ -124,6 +124,52 @@ The plugin auto-starts the proxy, sets `ANTHROPIC_BASE_URL=http://127.0.0.1:8081
 openclaw agent --local --message "hello" --session-id test
 ```
 
+### Docker (recommended for servers)
+
+Run the proxy from a clean clone with no local Node/npm required:
+
+```bash
+git clone https://github.com/tech4242/aquaman.git && cd aquaman
+cp docker/.env.example docker/.env
+# Edit docker/.env — set AQUAMAN_BACKEND and credentials (see comments in file)
+npm run docker:up   # or: docker compose -f docker/docker-compose.yml up -d
+```
+
+Add credentials (encrypted-file backend):
+
+```bash
+docker compose -f docker/docker-compose.yml run --rm aquaman credentials add anthropic api_key
+```
+
+Verify:
+
+```bash
+curl http://localhost:8081/_health
+# {"status":"ok","uptime":12.3,"services":["anthropic","openai",...]}
+```
+
+Run `aquaman credentials guide` inside the container for backend-specific setup commands. For Vault or 1Password backends, set the relevant env vars in `docker/.env` and no credential seeding is needed.
+
+To run OpenClaw with the aquaman plugin (full credential isolation for LLM + channel traffic):
+
+```bash
+docker compose -f docker/docker-compose.yml --profile with-openclaw up -d
+```
+
+This starts two containers:
+- **aquaman** (`aquaman-proxy`) — credential proxy (manages all secrets, has internet access)
+- **openclaw** (`openclaw-gateway`) — Gateway with aquaman plugin pre-installed (sandboxed, no direct internet)
+
+The plugin's fetch interceptor redirects all API traffic through the proxy. The OpenClaw container cannot reach external APIs directly. Set `OPENCLAW_GATEWAY_TOKEN` in `docker/.env` for production (defaults to `aquaman-internal`).
+
+For maximum isolation (adds OpenClaw's built-in tool sandbox):
+
+```bash
+docker compose -f docker/docker-compose.yml --profile with-openclaw-sandboxed up -d
+```
+
+This additionally runs tool execution in ephemeral Docker containers with no capabilities, read-only filesystems, and network access restricted to the aquaman proxy. Requires Docker socket access.
+
 ### Standalone
 
 For use outside OpenClaw:
@@ -257,6 +303,8 @@ audit:
 aquaman credentials add <service> <key>       Add a credential
 aquaman credentials list                      List stored credentials
 aquaman credentials delete <service> <key>    Remove a credential
+aquaman credentials guide [--backend <b>]     Show setup commands for seeding credentials
+                          [--service <name>]
 ```
 
 **Proxy**

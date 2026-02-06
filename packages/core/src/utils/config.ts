@@ -67,18 +67,74 @@ export function loadConfig(): WrapperConfig {
   const configPath = getConfigPath();
   const defaultConfig = getDefaultConfig();
 
+  let config: WrapperConfig;
   if (!fs.existsSync(configPath)) {
-    return defaultConfig;
+    config = defaultConfig;
+  } else {
+    try {
+      const content = fs.readFileSync(configPath, 'utf-8');
+      const userConfig = parseYaml(content) as Partial<WrapperConfig>;
+      config = mergeConfig(defaultConfig, userConfig);
+    } catch (error) {
+      console.error(`Warning: Failed to load config from ${configPath}, using defaults`);
+      config = defaultConfig;
+    }
   }
 
-  try {
-    const content = fs.readFileSync(configPath, 'utf-8');
-    const userConfig = parseYaml(content) as Partial<WrapperConfig>;
-    return mergeConfig(defaultConfig, userConfig);
-  } catch (error) {
-    console.error(`Warning: Failed to load config from ${configPath}, using defaults`);
-    return defaultConfig;
+  return applyEnvOverrides(config);
+}
+
+export function applyEnvOverrides(config: WrapperConfig): WrapperConfig {
+  const env = process.env;
+
+  if (env['AQUAMAN_PORT']) {
+    const port = parseInt(env['AQUAMAN_PORT'], 10);
+    if (!isNaN(port)) config.credentials.proxyPort = port;
   }
+
+  if (env['AQUAMAN_BACKEND']) {
+    const b = env['AQUAMAN_BACKEND'] as WrapperConfig['credentials']['backend'];
+    if (['keychain', '1password', 'vault', 'encrypted-file'].includes(b)) {
+      config.credentials.backend = b;
+    }
+  }
+
+  if (env['AQUAMAN_SERVICES']) {
+    config.credentials.proxiedServices = env['AQUAMAN_SERVICES'].split(',').map(s => s.trim()).filter(Boolean);
+  }
+
+  if (env['AQUAMAN_BIND_ADDRESS']) {
+    config.credentials.bindAddress = env['AQUAMAN_BIND_ADDRESS'];
+  }
+
+  if (env['AQUAMAN_ENCRYPTION_PASSWORD']) {
+    config.credentials.encryptionPassword = env['AQUAMAN_ENCRYPTION_PASSWORD'];
+  }
+
+  if (env['AQUAMAN_TLS_ENABLED']) {
+    if (!config.credentials.tls) {
+      config.credentials.tls = { enabled: false };
+    }
+    config.credentials.tls.enabled = env['AQUAMAN_TLS_ENABLED'] === 'true';
+  }
+
+  if (env['AQUAMAN_AUDIT_ENABLED']) {
+    config.audit.enabled = env['AQUAMAN_AUDIT_ENABLED'] === 'true';
+  }
+
+  if (env['VAULT_ADDR']) {
+    config.credentials.vaultAddress = env['VAULT_ADDR'];
+  }
+
+  if (env['VAULT_TOKEN']) {
+    config.credentials.vaultToken = env['VAULT_TOKEN'];
+  }
+
+  if (env['VAULT_NAMESPACE']) {
+    config.credentials.vaultNamespace = env['VAULT_NAMESPACE'];
+  }
+
+  return config;
 }
 
 function mergeConfig(
