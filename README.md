@@ -55,7 +55,7 @@ The agent only knows a localhost URL. It never sees a key.
 **1. Install the plugin and CLI:**
 
 ```bash
-openclaw plugins install ./packages/plugin
+openclaw plugins install aquaman-plugin
 npm install -g aquaman-proxy
 ```
 
