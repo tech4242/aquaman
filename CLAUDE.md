@@ -214,6 +214,7 @@ aquaman doctor    # Exit code 0 = all pass, 1 = issues found
 6. Plugin installed in extensions dir
 7. `openclaw.json` has aquaman-plugin entry
 8. `auth-profiles.json` exists
+9. Unmigrated plaintext credentials (cross-references against secure store — already-migrated show "Cleanup needed" instead of "Unmigrated")
 
 ## Auto auth-profiles Generation
 
