@@ -79,6 +79,26 @@ const BUILTIN_SERVICES: ServiceDefinition[] = [
     authMode: 'header',
     hostPatterns: ['api.github.com']
   },
+  {
+    name: 'xai',
+    upstream: 'https://api.x.ai',
+    authHeader: 'Authorization',
+    authPrefix: 'Bearer ',
+    credentialKey: 'api_key',
+    description: 'xAI Grok API',
+    authMode: 'header',
+    hostPatterns: ['api.x.ai']
+  },
+  {
+    name: 'cloudflare-ai',
+    upstream: 'https://gateway.ai.cloudflare.com',
+    authHeader: 'cf-aig-authorization',
+    authPrefix: 'Bearer ',
+    credentialKey: 'api_token',
+    description: 'Cloudflare AI Gateway',
+    authMode: 'header',
+    hostPatterns: ['gateway.ai.cloudflare.com']
+  },
 
   // ── Header Auth Channels ────────────────────────────────────────────
   {

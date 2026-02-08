@@ -146,6 +146,36 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
     });
   });
 
+  describe('OpenClaw 2026.2.x Compatibility', () => {
+    it('gateway accepts localhost base URL override', () => {
+      const result = runOpenClaw('plugins list');
+      expect(result).toContain('ANTHROPIC_BASE_URL=http://127.0.0.1:8081/anthropic');
+      // No warnings about URL overrides requiring credentials
+      expect(result).not.toMatch(/credential.*required.*override/i);
+      expect(result).not.toMatch(/rejected.*base.?url/i);
+    });
+
+    it('plugin name passes install path validation', () => {
+      const result = runOpenClaw('plugins doctor');
+      // No path traversal or invalid name warnings
+      expect(result).not.toMatch(/invalid.*path/i);
+      expect(result).not.toMatch(/traversal/i);
+      expect(result).toContain('No plugin issues detected');
+    });
+
+    it('plugin code passes safety scanner', () => {
+      const result = runOpenClaw('plugins doctor');
+      // No safety/security warnings about fetch interceptor or child process
+      expect(result).not.toMatch(/unsafe|blocked|security.*warning/i);
+    });
+
+    it('plugin config schema accepted by OpenClaw', () => {
+      const result = runOpenClaw('plugins list');
+      expect(result).not.toMatch(/invalid.*config|schema.*error/i);
+      expect(result).toContain('loaded');
+    });
+  });
+
   describe('Plugin Structure', () => {
     it('plugin directory exists', () => {
       const pluginPath = path.join(testStateDir, 'extensions', 'aquaman-plugin');

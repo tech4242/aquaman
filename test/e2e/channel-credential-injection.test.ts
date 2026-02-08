@@ -38,6 +38,8 @@ describe('Channel Credential Injection E2E', () => {
   const TEST_MATRIX_TOKEN = 'syt_matrix_access_token_test';
   const TEST_LINE_TOKEN = 'line-channel-access-token-test';
   const TEST_ZALO_TOKEN = 'zalo-bot-token-test-456';
+  const TEST_XAI_KEY = 'xai-api-key-test-789';
+  const TEST_CLOUDFLARE_AI_TOKEN = 'cf-ai-api-token-test-012';
 
   beforeEach(async () => {
     upstream = createMockUpstream();
@@ -56,6 +58,8 @@ describe('Channel Credential Injection E2E', () => {
     await store.set('matrix', 'access_token', TEST_MATRIX_TOKEN);
     await store.set('line', 'channel_access_token', TEST_LINE_TOKEN);
     await store.set('zalo', 'bot_token', TEST_ZALO_TOKEN);
+    await store.set('xai', 'api_key', TEST_XAI_KEY);
+    await store.set('cloudflare-ai', 'api_token', TEST_CLOUDFLARE_AI_TOKEN);
 
     requestLog = [];
 
@@ -89,12 +93,18 @@ describe('Channel Credential Injection E2E', () => {
     registry.override('zalo', {
       upstream: `http://127.0.0.1:${upstreamPort}`
     });
+    registry.override('xai', {
+      upstream: `http://127.0.0.1:${upstreamPort}`
+    });
+    registry.override('cloudflare-ai', {
+      upstream: `http://127.0.0.1:${upstreamPort}`
+    });
 
     proxy = createCredentialProxy({
       port: 0,
       store,
       serviceRegistry: registry,
-      allowedServices: ['telegram', 'twilio', 'twitch', 'elevenlabs', 'slack', 'discord', 'matrix', 'line', 'zalo'],
+      allowedServices: ['telegram', 'twilio', 'twitch', 'elevenlabs', 'slack', 'discord', 'matrix', 'line', 'zalo', 'xai', 'cloudflare-ai'],
       onRequest: (info) => {
         requestLog.push(info);
       }
@@ -288,6 +298,40 @@ describe('Channel Credential Injection E2E', () => {
       expect(lastRequest).toBeDefined();
       // Zalo uses custom header 'access_token' with no prefix
       expect(lastRequest!.headers['access_token']).toBe(TEST_ZALO_TOKEN);
+    });
+  });
+
+  describe('xAI header auth', () => {
+    it('injects Bearer token for xAI Grok requests', async () => {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/xai/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'grok-3', messages: [{ role: 'user', content: 'hi' }] })
+      });
+
+      expect(response.ok).toBe(true);
+
+      const lastRequest = upstream.getLastRequest();
+      expect(lastRequest).toBeDefined();
+      expect(lastRequest!.headers['authorization']).toBe(`Bearer ${TEST_XAI_KEY}`);
+      expect(lastRequest!.path).toBe('/v1/chat/completions');
+    });
+  });
+
+  describe('Cloudflare AI Gateway header auth', () => {
+    it('injects cf-aig-authorization header for Cloudflare AI Gateway requests', async () => {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/cloudflare-ai/v1/account-id/gateway-id/anthropic/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 5, messages: [{ role: 'user', content: 'hi' }] })
+      });
+
+      expect(response.ok).toBe(true);
+
+      const lastRequest = upstream.getLastRequest();
+      expect(lastRequest).toBeDefined();
+      expect(lastRequest!.headers['cf-aig-authorization']).toBe(`Bearer ${TEST_CLOUDFLARE_AI_TOKEN}`);
+      expect(lastRequest!.path).toBe('/v1/account-id/gateway-id/anthropic/v1/messages');
     });
   });
 

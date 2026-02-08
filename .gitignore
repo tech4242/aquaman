@@ -35,3 +35,6 @@ credentials.enc
 *.pem
 *.key
 *.p12
+
+# Internal planning docs
+ROADMAP.md

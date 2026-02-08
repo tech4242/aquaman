@@ -134,7 +134,7 @@ this.keytar = mod.default || mod;
 2. `globalThis.fetch` interceptor matches hostname → service name
 3. Rewrites URL to `http://127.0.0.1:8081/telegram/sendMessage`
 4. Proxy handles auth based on `authMode`:
-   - `header`: injects auth header (Anthropic, OpenAI, GitHub, Slack, Discord, Matrix, Mattermost, LINE, Twitch, ElevenLabs, Telnyx, Zalo)
+   - `header`: injects auth header (Anthropic, OpenAI, GitHub, xAI, Cloudflare AI Gateway, Slack, Discord, Matrix, Mattermost, LINE, Twitch, ElevenLabs, Telnyx, Zalo)
    - `url-path`: rewrites path to `/bot<TOKEN>/method` (Telegram)
    - `basic`: injects `Authorization: Basic base64(user:pass)` (Twilio, BlueBubbles, Nextcloud Talk)
    - `oauth`: exchanges client credentials for access token (MS Teams, Feishu, Google Chat)
@@ -419,7 +419,7 @@ Promise.all([
 | `packages/core/src/audit/logger.ts` | Hash-chained logging |
 | `packages/proxy/src/daemon.ts` | HTTP/HTTPS proxy server (header, url-path, basic, oauth auth modes) |
 | `packages/proxy/src/cli/index.ts` | CLI (Commander.js, 16 commands incl. `migrate openclaw`) |
-| `packages/proxy/src/service-registry.ts` | Builtin service definitions (21 services) |
+| `packages/proxy/src/service-registry.ts` | Builtin service definitions (23 services) |
 | `packages/proxy/src/oauth-token-cache.ts` | OAuth client credentials token exchange + caching |
 | `packages/proxy/src/migration/openclaw-migrator.ts` | Migrates channel creds from openclaw.json to secure store |
 | `packages/proxy/src/openclaw/env-writer.ts` | Generates env vars for OpenClaw integration |
@@ -444,10 +444,6 @@ Promise.all([
 | `docker/auth-profiles.json` | Placeholder auth profiles for Docker |
 | `docker/.env.example` | Template for Docker env var configuration |
 
-## Roadmap (v0.3.0)
+## Roadmap
 
-- Unix domain socket option for proxy auth (OS-level access control, no network surface)
-- Rate limiting / per-service request budgets
-- Request-level policy (method allowlisting per service)
-- Audit logger hooks (allow/deny callbacks for real-time blocking)
-- Request size caps
+See `ROADMAP.md` (gitignored) for competitive research, UX analysis, and detailed roadmap.

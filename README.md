@@ -8,7 +8,7 @@
 
 Credential isolation proxy for OpenClaw — secrets stay submerged, agents stay dry.
 
-Credential isolation for **OpenClaw Gateway**. API keys and channel tokens never enter the Gateway process—they're stored in secure backends and injected by a separate proxy. Supports 21 services out of the box: LLM providers, messaging channels, voice providers, and more.
+Credential isolation for **OpenClaw Gateway**. API keys and channel tokens never enter the Gateway process—they're stored in secure backends and injected by a separate proxy. Supports 23 services out of the box: LLM providers, messaging channels, voice providers, and more.
 
 ## The Problem
 
@@ -341,11 +341,11 @@ aquaman services validate                     Validate services.yaml
 
 ## Custom Services
 
-Aquaman ships with 21 builtin services covering LLM providers, messaging channels, and voice/media APIs:
+Aquaman ships with 23 builtin services covering LLM providers, messaging channels, and voice/media APIs:
 
 | Category | Services |
 |----------|----------|
-| **LLM / AI** | Anthropic, OpenAI, GitHub |
+| **LLM / AI** | Anthropic, OpenAI, GitHub, xAI, Cloudflare AI Gateway |
 | **Header auth channels** | Slack, Discord, Matrix, Mattermost, LINE, Twitch, Telnyx, ElevenLabs, Zalo |
 | **URL-path auth** | Telegram |
 | **HTTP Basic auth** | Twilio, BlueBubbles, Nextcloud Talk |
@@ -371,15 +371,6 @@ Monorepo with three packages:
 | `aquaman-core` | Credential backends, audit logger, crypto utilities |
 | `aquaman-proxy` | HTTP/HTTPS proxy daemon and CLI |
 | `aquaman-plugin` | OpenClaw Gateway plugin (embedded + proxy modes) |
-
-## Roadmap
-
-Planned for v0.3.0:
-- Unix domain socket option for proxy (OS-level access control, no network surface)
-- Rate limiting / per-service request budgets
-- Request-level policy (method allowlisting per service)
-- Audit logger hooks (allow/deny callbacks for real-time blocking)
-- Request size caps
 
 ## License
 

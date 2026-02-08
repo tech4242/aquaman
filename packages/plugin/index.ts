@@ -155,6 +155,8 @@ function activateHttpInterceptor(log: OpenClawPluginApi["logger"]): void {
     ['api.anthropic.com', 'anthropic'],
     ['api.openai.com', 'openai'],
     ['api.github.com', 'github'],
+    ['api.x.ai', 'xai'],
+    ['gateway.ai.cloudflare.com', 'cloudflare-ai'],
     // Channel APIs
     ['slack.com', 'slack'],
     ['*.slack.com', 'slack'],
