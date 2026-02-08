@@ -149,6 +149,92 @@ describe('OnePasswordStore', () => {
       expect(capturedArgs).toContain('aquaman-anthropic-api_key');
     });
 
+    it('pipes credential via stdin on create (not in argv)', async () => {
+      let capturedArgs: string[] = [];
+      let capturedInput: string | undefined;
+
+      mockSpawnSync.mockImplementation((command, args, options) => {
+        if (command === 'which') {
+          return { status: 0, stdout: '/usr/local/bin/op\n', stderr: '', pid: 1, signal: null, output: [] };
+        }
+        if (args?.[0] === 'account') {
+          return { status: 0, stdout: '{}', stderr: '', pid: 2, signal: null, output: [] };
+        }
+        if (args?.[0] === 'vault' && args?.[1] === 'get') {
+          return { status: 0, stdout: '{}', stderr: '', pid: 3, signal: null, output: [] };
+        }
+        if (args?.[0] === 'item' && args?.[1] === 'get') {
+          return { status: 1, stdout: '', stderr: 'not found', pid: 4, signal: null, output: [] };
+        }
+        if (args?.[0] === 'item' && args?.[1] === 'create') {
+          capturedArgs = args as string[];
+          capturedInput = (options as any)?.input;
+          return { status: 0, stdout: '{}', stderr: '', pid: 5, signal: null, output: [] };
+        }
+        return { status: 0, stdout: '{}', stderr: '', pid: 6, signal: null, output: [] };
+      });
+
+      const { OnePasswordStore } = await import('aquaman-core');
+      const store = new OnePasswordStore();
+      const secretValue = 'sk-ant-super-secret-key';
+
+      await store.set('anthropic', 'api_key', secretValue);
+
+      // credential=- means "read from stdin"
+      expect(capturedArgs).toContain('credential=-');
+      // Credential must NOT appear in argv
+      expect(capturedArgs.join(' ')).not.toContain(secretValue);
+      // Credential must be piped via stdin
+      expect(capturedInput).toBe(secretValue);
+    });
+
+    it('pipes credential via stdin on edit (not in argv)', async () => {
+      let capturedEditArgs: string[] = [];
+      let capturedEditInput: string | undefined;
+
+      mockSpawnSync.mockImplementation((command, args, options) => {
+        if (command === 'which') {
+          return { status: 0, stdout: '/usr/local/bin/op\n', stderr: '', pid: 1, signal: null, output: [] };
+        }
+        if (args?.[0] === 'account') {
+          return { status: 0, stdout: '{}', stderr: '', pid: 2, signal: null, output: [] };
+        }
+        if (args?.[0] === 'vault' && args?.[1] === 'get') {
+          return { status: 0, stdout: '{}', stderr: '', pid: 3, signal: null, output: [] };
+        }
+        if (args?.[0] === 'item' && args?.[1] === 'get') {
+          // Item exists — triggers edit path
+          return {
+            status: 0,
+            stdout: JSON.stringify({ value: 'old-value' }),
+            stderr: '',
+            pid: 4,
+            signal: null,
+            output: []
+          };
+        }
+        if (args?.[0] === 'item' && args?.[1] === 'edit') {
+          capturedEditArgs = args as string[];
+          capturedEditInput = (options as any)?.input;
+          return { status: 0, stdout: '{}', stderr: '', pid: 5, signal: null, output: [] };
+        }
+        return { status: 0, stdout: '{}', stderr: '', pid: 6, signal: null, output: [] };
+      });
+
+      const { OnePasswordStore } = await import('aquaman-core');
+      const store = new OnePasswordStore();
+      const secretValue = 'sk-ant-updated-secret-key';
+
+      await store.set('anthropic', 'api_key', secretValue);
+
+      // credential=- means "read from stdin"
+      expect(capturedEditArgs).toContain('credential=-');
+      // Credential must NOT appear in argv
+      expect(capturedEditArgs.join(' ')).not.toContain(secretValue);
+      // Credential must be piped via stdin
+      expect(capturedEditInput).toBe(secretValue);
+    });
+
     it('retrieves credential by service/key', async () => {
       mockSpawnSync.mockImplementation((command, args) => {
         if (command === 'which') {

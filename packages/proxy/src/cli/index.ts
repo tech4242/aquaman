@@ -23,7 +23,6 @@ import {
   expandPath,
   createAuditLogger,
   createCredentialStore,
-  MemoryStore,
   generateSelfSignedCert,
   type WrapperConfig
 } from 'aquaman-core';
@@ -147,9 +146,10 @@ program
         onePasswordVault: config.credentials.onePasswordVault,
         onePasswordAccount: config.credentials.onePasswordAccount
       });
-    } catch {
-      console.log('Note: Using memory store for credentials');
-      credentialStore = new MemoryStore();
+    } catch (err) {
+      console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
+      console.error('Fix the backend configuration and retry. Run: aquaman doctor');
+      process.exit(1);
     }
 
     // Initialize service registry
@@ -317,9 +317,10 @@ program
         onePasswordVault: config.credentials.onePasswordVault,
         onePasswordAccount: config.credentials.onePasswordAccount
       });
-    } catch {
-      console.log('Note: Using memory store for credentials');
-      credentialStore = new MemoryStore();
+    } catch (err) {
+      console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
+      console.error('Fix the backend configuration and retry. Run: aquaman doctor');
+      process.exit(1);
     }
 
     // Initialize service registry
@@ -398,8 +399,10 @@ program
         onePasswordVault: config.credentials.onePasswordVault,
         onePasswordAccount: config.credentials.onePasswordAccount
       });
-    } catch {
-      credentialStore = new MemoryStore();
+    } catch (err) {
+      console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
+      console.error('Fix the backend configuration and retry. Run: aquaman doctor');
+      process.exit(1);
     }
 
     // Initialize service registry

@@ -379,8 +379,11 @@ export class CredentialProxy {
     const a = Buffer.from(provided);
     const b = Buffer.from(expected);
     if (a.length !== b.length) {
-      // Perform constant-time comparison anyway to avoid leaking length info through timing
-      crypto.timingSafeEqual(b, b);
+      // Pad provided buffer to expected length so timingSafeEqual doesn't throw,
+      // then compare — constant time regardless of length mismatch
+      const aPadded = Buffer.alloc(b.length);
+      a.copy(aPadded);
+      crypto.timingSafeEqual(aPadded, b);
       return false;
     }
     return crypto.timingSafeEqual(a, b);

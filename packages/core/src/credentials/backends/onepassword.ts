@@ -134,20 +134,20 @@ export class OnePasswordStore implements CredentialStore {
     const existing = await this.get(service, key);
 
     if (existing !== null) {
-      // Update existing item
+      // Update existing item — pipe credential via stdin to avoid /proc/cmdline exposure
       this.runOp([
         'item', 'edit', itemName,
         '--vault', this.vault,
-        `credential=${value}`
-      ]);
+        'credential=-'
+      ], value);
     } else {
-      // Create new item
+      // Create new item — pipe credential via stdin to avoid /proc/cmdline exposure
       const createArgs = [
         'item', 'create',
         '--category', 'API Credential',
         '--vault', this.vault,
         '--title', itemName,
-        `credential=${value}`,
+        'credential=-',
         '--tags', tags.join(',')
       ];
 
@@ -158,7 +158,7 @@ export class OnePasswordStore implements CredentialStore {
         }
       }
 
-      this.runOp(createArgs);
+      this.runOp(createArgs, value);
     }
   }
 

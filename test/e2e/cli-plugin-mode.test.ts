@@ -247,6 +247,70 @@ describe('CLI plugin-mode E2E', () => {
     expect(serviceRes.statusCode).not.toBe(403);
   }, TEST_TIMEOUT);
 
+  it('exits with error when credential backend fails to initialize', async () => {
+    // Create a temp config dir with vault backend but no VAULT_ADDR → guaranteed failure
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-fail-test-'));
+    fs.writeFileSync(
+      path.join(tmpDir, 'config.yaml'),
+      [
+        'credentials:',
+        '  backend: vault',
+        '  proxyPort: 0',
+        '  proxiedServices:',
+        '    - anthropic',
+        '  tls:',
+        '    enabled: false',
+        'audit:',
+        '  enabled: false',
+        `  logDir: ${tmpDir}`,
+        '',
+      ].join('\n'),
+      'utf-8'
+    );
+
+    // Remove VAULT_ADDR and VAULT_TOKEN from env to ensure failure
+    const cleanEnv = { ...process.env };
+    delete cleanEnv['VAULT_ADDR'];
+    delete cleanEnv['VAULT_TOKEN'];
+
+    const proc = spawn('npx', ['tsx', CLI_PATH, 'plugin-mode', '--port', '0'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...cleanEnv, AQUAMAN_CONFIG_DIR: tmpDir },
+    });
+    child = proc;
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout!.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr!.on('data', (d: Buffer) => { stderr += d.toString(); });
+
+    const exitCode = await new Promise<number | null>((resolve) => {
+      const timeout = setTimeout(() => {
+        proc.kill('SIGKILL');
+        resolve(null);
+      }, 15_000);
+      proc.on('exit', (code) => {
+        clearTimeout(timeout);
+        resolve(code);
+      });
+    });
+
+    // Cleanup temp dir
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+
+    // Must NOT output ready:true JSON (no silent MemoryStore fallback)
+    expect(stdout).not.toContain('"ready":true');
+    expect(stdout).not.toContain('"ready": true');
+    // Must exit with non-zero code
+    expect(exitCode).toBe(1);
+    // Stderr should mention the backend failure
+    expect(stderr).toContain('failed to initialize');
+    expect(stderr).toContain('aquaman doctor');
+  }, TEST_TIMEOUT);
+
   it('exits cleanly on SIGTERM', async () => {
     const { connectionInfo, child: proc } = await spawnPluginMode();
 

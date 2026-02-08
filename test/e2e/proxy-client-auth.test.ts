@@ -63,6 +63,47 @@ describe('Proxy Client Authentication E2E', () => {
     store.clear();
   });
 
+  describe('Different-length token rejection (timing side-channel fix)', () => {
+    it('rejects shorter token with 403', async () => {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Aquaman-Token': 'short'
+        },
+        body: JSON.stringify({ model: 'test', max_tokens: 5, messages: [] })
+      });
+
+      expect(response.status).toBe(403);
+    });
+
+    it('rejects longer token with 403', async () => {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Aquaman-Token': TEST_TOKEN + 'extra-bytes-appended'
+        },
+        body: JSON.stringify({ model: 'test', max_tokens: 5, messages: [] })
+      });
+
+      expect(response.status).toBe(403);
+    });
+
+    it('rejects single-character token with 403', async () => {
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Aquaman-Token': 'x'
+        },
+        body: JSON.stringify({ model: 'test', max_tokens: 5, messages: [] })
+      });
+
+      expect(response.status).toBe(403);
+    });
+  });
+
   describe('Token enforcement', () => {
     it('rejects requests without token → 403', async () => {
       const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
