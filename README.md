@@ -160,7 +160,7 @@ This starts two containers:
 - **aquaman** (`aquaman-proxy`) — credential proxy (manages all secrets, has internet access)
 - **openclaw** (`openclaw-gateway`) — Gateway with aquaman plugin pre-installed (sandboxed, no direct internet)
 
-The plugin's fetch interceptor redirects all API traffic through the proxy. The OpenClaw container cannot reach external APIs directly. Set `OPENCLAW_GATEWAY_TOKEN` in `docker/.env` for production (defaults to `aquaman-internal`).
+The plugin's fetch interceptor redirects all API traffic through the proxy. The OpenClaw container cannot reach external APIs directly. Set `OPENCLAW_GATEWAY_TOKEN` in `docker/.env` for production (defaults to `aquaman-internal`). For client-authenticated proxy access, set `AQUAMAN_CLIENT_TOKEN` (generate with `openssl rand -hex 32`).
 
 For maximum isolation (adds OpenClaw's built-in tool sandbox):
 
@@ -241,6 +241,8 @@ Each log entry includes a SHA-256 hash linking to the previous entry — tamperi
 - Prompt injection attempting to exfiltrate API keys
 - Environment variable scraping (`$ANTHROPIC_API_KEY` doesn't exist)
 - Agent process memory dumps (credentials are in a different process)
+- Unauthorized local processes using the proxy (client token authentication)
+- Service config poisoning via `services.yaml` (builtin override protection)
 
 **What aquaman does NOT protect against:**
 - PII or sensitive data in model outputs
@@ -369,6 +371,15 @@ Monorepo with three packages:
 | `aquaman-core` | Credential backends, audit logger, crypto utilities |
 | `aquaman-proxy` | HTTP/HTTPS proxy daemon and CLI |
 | `aquaman-plugin` | OpenClaw Gateway plugin (embedded + proxy modes) |
+
+## Roadmap
+
+Planned for v0.3.0:
+- Unix domain socket option for proxy (OS-level access control, no network surface)
+- Rate limiting / per-service request budgets
+- Request-level policy (method allowlisting per service)
+- Audit logger hooks (allow/deny callbacks for real-time blocking)
+- Request size caps
 
 ## License
 

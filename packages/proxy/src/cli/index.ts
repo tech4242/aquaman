@@ -11,6 +11,7 @@
  */
 
 import { Command } from 'commander';
+import * as crypto from 'node:crypto';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 
@@ -257,7 +258,8 @@ program
 program
   .command('daemon')
   .description('Run the credential proxy daemon (for advanced users)')
-  .action(async () => {
+  .option('--token <token>', 'Client authentication token (reads AQUAMAN_CLIENT_TOKEN env if not set)')
+  .action(async (options) => {
     // Check if daemon is already running
     const existingPid = readPidFile();
     if (existingPid && isProcessRunning(existingPid)) {
@@ -297,6 +299,9 @@ program
     // Initialize service registry
     const serviceRegistry = createServiceRegistry({ configPath: config.services.configPath });
 
+    // Client token: CLI flag → env var → none
+    const daemonClientToken: string | undefined = options.token || process.env.AQUAMAN_CLIENT_TOKEN || undefined;
+
     // Start credential proxy
     const bindAddr = config.credentials.bindAddress || '127.0.0.1';
     const credentialProxy = createCredentialProxy({
@@ -306,6 +311,7 @@ program
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
       tls: config.credentials.tls,
+      clientToken: daemonClientToken,
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
@@ -322,6 +328,7 @@ program
 
     const protocol = credentialProxy.isTlsEnabled() ? 'https' : 'http';
     console.log(`Credential proxy: ${protocol}://${bindAddr}:${config.credentials.proxyPort}`);
+    console.log(`Client auth: ${daemonClientToken ? 'enabled' : 'disabled'}`);
     console.log(`Audit logging: ${config.audit.enabled ? 'enabled' : 'disabled'}`);
     console.log(`Credential backend: ${config.credentials.backend}`);
     console.log(`PID file: ${getPidFile()}`);
@@ -345,10 +352,12 @@ program
   .command('plugin-mode')
   .description('Run in plugin mode (managed by OpenClaw plugin)')
   .option('--port <port>', 'Port to listen on', '8081')
+  .option('--token <token>', 'Client authentication token (generated if not provided)')
   .option('--ipc', 'Use IPC instead of HTTP for communication')
   .action(async (options) => {
     const config = loadConfig();
     const port = parseInt(options.port, 10);
+    const clientToken: string = options.token || crypto.randomBytes(32).toString('hex');
 
     // Initialize credential store
     let credentialStore;
@@ -377,7 +386,8 @@ program
       store: credentialStore,
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
-      tls: config.credentials.tls
+      tls: config.credentials.tls,
+      clientToken
     });
     await credentialProxy.start();
 
@@ -390,7 +400,8 @@ program
       protocol,
       baseUrl: `${protocol}://127.0.0.1:${credentialProxy.getPort()}`,
       services: config.credentials.proxiedServices,
-      backend: config.credentials.backend
+      backend: config.credentials.backend,
+      token: clientToken
     };
 
     console.log(JSON.stringify(connectionInfo));

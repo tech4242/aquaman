@@ -11,6 +11,41 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import * as path from 'node:path';
+import * as http from 'node:http';
+import * as https from 'node:https';
+
+/**
+ * Make an HTTP(S) request that accepts self-signed certs.
+ * Returns { statusCode, body }.
+ */
+function httpRequest(
+  url: string,
+  options: { method?: string; headers?: Record<string, string>; body?: string } = {}
+): Promise<{ statusCode: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const transport = parsed.protocol === 'https:' ? https : http;
+    const reqOpts: https.RequestOptions = {
+      hostname: parsed.hostname,
+      port: parsed.port,
+      path: parsed.pathname + parsed.search,
+      method: options.method || 'GET',
+      headers: options.headers || {},
+      rejectUnauthorized: false, // Accept self-signed certs
+    };
+
+    const req = transport.request(reqOpts, (res) => {
+      let body = '';
+      res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+      res.on('end', () => resolve({ statusCode: res.statusCode!, body }));
+    });
+    req.on('error', reject);
+    if (options.body) {
+      req.write(options.body);
+    }
+    req.end();
+  });
+}
 
 const CLI_PATH = path.resolve('packages/proxy/src/cli/index.ts');
 
@@ -42,9 +77,12 @@ describe('CLI plugin-mode E2E', () => {
    * Spawn the CLI in plugin-mode and collect stdout until we see the
    * JSON connection info line or a timeout expires.
    */
-  function spawnPluginMode(port = '0'): Promise<{ connectionInfo: any; child: ChildProcess }> {
+  function spawnPluginMode(
+    port = '0',
+    extraArgs: string[] = []
+  ): Promise<{ connectionInfo: any; child: ChildProcess; stderr: string }> {
     return new Promise((resolve, reject) => {
-      const proc = spawn('npx', ['tsx', CLI_PATH, 'plugin-mode', '--port', port], {
+      const proc = spawn('npx', ['tsx', CLI_PATH, 'plugin-mode', '--port', port, ...extraArgs], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env },
       });
@@ -75,7 +113,7 @@ describe('CLI plugin-mode E2E', () => {
               if (parsed.ready === true) {
                 resolved = true;
                 clearTimeout(timeout);
-                resolve({ connectionInfo: parsed, child: proc });
+                resolve({ connectionInfo: parsed, child: proc, stderr });
                 return;
               }
             } catch {
@@ -117,6 +155,11 @@ describe('CLI plugin-mode E2E', () => {
     expect(Array.isArray(connectionInfo.services)).toBe(true);
     expect(connectionInfo.services.length).toBeGreaterThan(0);
     expect(typeof connectionInfo.backend).toBe('string');
+
+    // Token field must be present
+    expect(typeof connectionInfo.token).toBe('string');
+    // Should be 64-char hex string (32 bytes)
+    expect(connectionInfo.token).toMatch(/^[0-9a-f]{64}$/);
   }, TEST_TIMEOUT);
 
   it('includes expected fields in connection info', async () => {
@@ -150,6 +193,58 @@ describe('CLI plugin-mode E2E', () => {
     expect(stdout).toContain('Credential setup guide');
     expect(stdout).toContain('anthropic');
     expect(stdout).toContain('aquaman credentials add anthropic api_key');
+  }, TEST_TIMEOUT);
+
+  it('--token flag uses provided value exactly', async () => {
+    const customToken = 'my-custom-test-token-value';
+    const { connectionInfo } = await spawnPluginMode('0', ['--token', customToken]);
+
+    expect(connectionInfo.token).toBe(customToken);
+  }, TEST_TIMEOUT);
+
+  it('token NOT in stderr output', async () => {
+    const { connectionInfo, stderr } = await spawnPluginMode();
+
+    // Wait a bit for any stderr to flush
+    await new Promise(r => setTimeout(r, 500));
+
+    expect(connectionInfo.token).toBeDefined();
+    expect(stderr).not.toContain(connectionInfo.token);
+  }, TEST_TIMEOUT);
+
+  it('proxy rejects requests without the output token', async () => {
+    const { connectionInfo } = await spawnPluginMode();
+    const baseUrl = connectionInfo.baseUrl;
+
+    // /_health should work without token
+    const healthRes = await httpRequest(`${baseUrl}/_health`);
+    expect(healthRes.statusCode).toBe(200);
+
+    // Service request without token → 403
+    const serviceRes = await httpRequest(`${baseUrl}/anthropic/v1/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'test', max_tokens: 5, messages: [] }),
+    });
+    expect(serviceRes.statusCode).toBe(403);
+  }, TEST_TIMEOUT);
+
+  it('proxy accepts requests with the output token', async () => {
+    const { connectionInfo } = await spawnPluginMode();
+    const baseUrl = connectionInfo.baseUrl;
+    const token = connectionInfo.token;
+
+    // Service request with token should pass auth (may get 401 from missing credential, but not 403)
+    const serviceRes = await httpRequest(`${baseUrl}/anthropic/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Aquaman-Token': token,
+      },
+      body: JSON.stringify({ model: 'test', max_tokens: 5, messages: [] }),
+    });
+    // Should not be 403 (token auth passed). May be 401 (no credential in keychain) or other.
+    expect(serviceRes.statusCode).not.toBe(403);
   }, TEST_TIMEOUT);
 
   it('exits cleanly on SIGTERM', async () => {

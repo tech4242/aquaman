@@ -5,6 +5,7 @@
 
 import * as http from 'node:http';
 import * as https from 'node:https';
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { type CredentialStore, generateId } from 'aquaman-core';
@@ -25,6 +26,7 @@ export interface CredentialProxyOptions {
   onRequest?: (info: RequestInfo) => void;
   tls?: TlsOptions;
   serviceRegistry?: ServiceRegistry;
+  clientToken?: string; // Shared-secret bearer token for client authentication
   requestTimeout?: number; // Upstream request timeout in ms, defaults to 30000 (30s)
 }
 
@@ -126,6 +128,16 @@ export class CredentialProxy {
       res.statusCode = 200;
       res.end(JSON.stringify({ status: 'ok', uptime: process.uptime(), services: this.options.allowedServices }));
       return;
+    }
+
+    // Validate client token if configured
+    if (this.options.clientToken) {
+      const provided = this.extractClientToken(req);
+      if (!provided || !this.verifyToken(provided, this.options.clientToken)) {
+        res.statusCode = 403;
+        res.end('Forbidden');
+        return;
+      }
     }
 
     // Parse service from path: /anthropic/v1/messages -> anthropic
@@ -231,6 +243,8 @@ export class CredentialProxy {
         // Strip existing auth header if we're injecting one
         if (serviceDef.authHeader && key.toLowerCase() === serviceDef.authHeader.toLowerCase()) continue;
         if (key.toLowerCase() === 'authorization') continue;
+        // Strip client token — must not leak upstream
+        if (key.toLowerCase() === 'x-aquaman-token') continue;
         if (value) {
           headers[key] = Array.isArray(value) ? value[0] : value;
         }
@@ -340,6 +354,34 @@ export class CredentialProxy {
     });
   }
 
+  private extractClientToken(req: IncomingMessage): string | null {
+    // Check X-Aquaman-Token header first
+    const tokenHeader = req.headers['x-aquaman-token'];
+    if (tokenHeader) {
+      return Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
+    }
+    // Fall back to Authorization: Bearer <token>
+    const authHeader = req.headers['authorization'];
+    if (authHeader) {
+      const val = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+      if (val.startsWith('Bearer ')) {
+        return val.slice(7);
+      }
+    }
+    return null;
+  }
+
+  private verifyToken(provided: string, expected: string): boolean {
+    const a = Buffer.from(provided);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length) {
+      // Perform constant-time comparison anyway to avoid leaking length info through timing
+      crypto.timingSafeEqual(b, b);
+      return false;
+    }
+    return crypto.timingSafeEqual(a, b);
+  }
+
   private emitRequest(info: RequestInfo): void {
     if (this.options.onRequest) {
       this.options.onRequest(info);
@@ -358,6 +400,8 @@ export class CredentialProxy {
         } else {
           this.running = false;
           this.server = null;
+          // Clear token reference on shutdown
+          this.options = { ...this.options, clientToken: undefined };
           resolve();
         }
       });

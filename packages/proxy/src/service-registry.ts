@@ -290,6 +290,8 @@ const BUILTIN_SERVICES: ServiceDefinition[] = [
   }
 ];
 
+const BUILTIN_SERVICE_NAMES = new Set(BUILTIN_SERVICES.map(s => s.name));
+
 export class ServiceRegistry {
   private services: Map<string, ServiceDefinition> = new Map();
   private configPath: string;
@@ -309,7 +311,7 @@ export class ServiceRegistry {
       }
     }
 
-    // Load user services (override builtins if same name)
+    // Load user services (builtins cannot be overridden via YAML)
     this.loadUserServices();
   }
 
@@ -324,6 +326,10 @@ export class ServiceRegistry {
 
       if (config?.services && Array.isArray(config.services)) {
         for (const service of config.services) {
+          if (BUILTIN_SERVICE_NAMES.has(service.name)) {
+            console.warn(`Cannot override builtin service "${service.name}" via config file — ignoring`);
+            continue;
+          }
           const validation = this.validateService(service);
           if (validation.valid) {
             this.services.set(service.name, service);
@@ -455,6 +461,8 @@ export class ServiceRegistry {
 
         if (!validation.valid) {
           errors.push(`Service ${i + 1}: ${validation.error}`);
+        } else if (BUILTIN_SERVICE_NAMES.has(service.name)) {
+          errors.push(`Service ${i + 1}: cannot override builtin service "${service.name}"`);
         } else if (names.has(service.name)) {
           errors.push(`Service ${i + 1}: duplicate name "${service.name}"`);
         } else {
@@ -492,6 +500,13 @@ export class ServiceRegistry {
   }
 
   /**
+   * Check whether a service name is a builtin (protected from override via config/register)
+   */
+  static isBuiltinService(name: string): boolean {
+    return BUILTIN_SERVICE_NAMES.has(name);
+  }
+
+  /**
    * Reload services from config file
    */
   reload(): void {
@@ -514,6 +529,9 @@ export class ServiceRegistry {
    * Add a new service dynamically (useful for testing)
    */
   register(service: ServiceDefinition): void {
+    if (BUILTIN_SERVICE_NAMES.has(service.name)) {
+      throw new Error(`Cannot register service "${service.name}": name conflicts with a builtin service`);
+    }
     const validation = this.validateService(service);
     if (!validation.valid) {
       throw new Error(`Invalid service: ${validation.error}`);

@@ -6,6 +6,8 @@ Credential isolation for **OpenClaw Gateway**. API keys and channel tokens never
 
 **Target platform:** OpenClaw Gateway on Unix-like systems (Linux, macOS, WSL2). The Gateway is OpenClaw's core server component—a Node.js/TypeScript service that runs as a systemd user service (Linux/WSL2) or LaunchAgent (macOS).
 
+**Published on npm** as `aquaman-plugin`, `aquaman-proxy`, and `aquaman-core`. Install via `openclaw plugins install aquaman-plugin`.
+
 ## Architecture Decision: Isolation vs Detection
 
 We chose **process isolation** over **detection-based** approaches.
@@ -139,12 +141,36 @@ this.keytar = mod.default || mod;
    - `none`: at-rest storage only, proxy rejects traffic (Nostr, Tlon)
 5. Forwards to upstream, response piped back
 
+### Proxy Client Authentication
+
+Shared-secret bearer token prevents unauthorized local processes from using the proxy.
+
+- **Generation:** `crypto.randomBytes(32)` → 256-bit CSPRNG token (BSI TR-02102 aligned)
+- **Local mode:** Proxy outputs token in JSON on stdout. Plugin reads it and injects `X-Aquaman-Token` header via fetch interceptor on ALL proxy-bound requests (SDK + channel traffic)
+- **Docker mode:** Shared via `AQUAMAN_CLIENT_TOKEN` env var between containers. Daemon reads from env or `--token` flag
+- **Comparison:** `crypto.timingSafeEqual()` prevents timing side-channel attacks
+- **Lifetime:** Per-session only, regenerated on every proxy startup, not persisted to disk
+- **Cleanup:** Token reference nulled on proxy shutdown
+- **Backward compat:** No `clientToken` configured = no enforcement (standalone mode)
+- **Exempt:** `/_health` endpoint always accessible without token
+
+### Builtin Service Protection
+
+Builtin service definitions (anthropic, openai, telegram, etc.) cannot be overridden via `~/.aquaman/services.yaml` or `register()`. This prevents attackers from redirecting traffic + real credentials to malicious servers by poisoning the config file.
+
+- YAML with a builtin name → logged warning, entry ignored, builtin definition preserved
+- `register()` with a builtin name → throws error
+- `validateConfigFile()` → reports builtin name conflicts as errors
+- `override()` still works — only used programmatically in tests (requires code-level access)
+- `ServiceRegistry.isBuiltinService(name)` checks whether a name is protected
+
 ### Docker Two-Container Architecture
 
 - **Base image:** `alpine/openclaw:latest` (community-maintained, runs as `node` uid 1000, config at `/home/node/.openclaw/`)
 - `aquaman` container: proxy daemon on `backend` (internet) + `frontend` (internal) networks
 - `openclaw` container (`openclaw-gateway`): Gateway + plugin on `frontend` only (sandboxed, no internet)
 - Plugin reads `AQUAMAN_PROXY_URL` env var → skips local proxy spawn, points env vars + fetch interceptor at external proxy
+- `AQUAMAN_CLIENT_TOKEN` env var: shared between containers for proxy client auth (generate with `openssl rand -hex 32`)
 - `frontend` network is `internal: true` (`name: aquaman-frontend`) — openclaw can only reach aquaman, not the internet
 - `OPENCLAW_GATEWAY_TOKEN` env var is required when binding to lan (defaults to `aquaman-internal` in compose)
 - **Sandbox profile** (`--profile with-openclaw-sandboxed`): mounts Docker socket, enables OpenClaw's built-in sandbox so tool execution runs in ephemeral containers with `network: aquaman-frontend`, `cap-drop: ALL`, read-only root fs
@@ -408,6 +434,7 @@ Promise.all([
 | `test/e2e/channel-credential-injection.test.ts` | Channel auth mode E2E tests (Telegram, Twilio, Twitch, etc.) |
 | `test/e2e/oauth-credential-injection.test.ts` | OAuth flow E2E tests (mock token server) |
 | `test/e2e/keychain-proxy-flow.test.ts` | Real keychain backend E2E (macOS only) |
+| `test/e2e/proxy-client-auth.test.ts` | Client token auth E2E tests |
 | `test/e2e/cli-plugin-mode.test.ts` | CLI startup/output E2E tests |
 | `docker/Dockerfile.aquaman` | Multi-stage Docker build (builder + runtime) |
 | `docker/Dockerfile.openclaw` | OpenClaw + aquaman plugin Docker image |
@@ -416,3 +443,11 @@ Promise.all([
 | `docker/openclaw-config-sandboxed.json` | Plugin + sandbox config for Docker (sandboxed profile) |
 | `docker/auth-profiles.json` | Placeholder auth profiles for Docker |
 | `docker/.env.example` | Template for Docker env var configuration |
+
+## Roadmap (v0.3.0)
+
+- Unix domain socket option for proxy auth (OS-level access control, no network surface)
+- Rate limiting / per-service request budgets
+- Request-level policy (method allowlisting per service)
+- Audit logger hooks (allow/deny callbacks for real-time blocking)
+- Request size caps

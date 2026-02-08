@@ -15,6 +15,8 @@ export interface HttpInterceptorOptions {
   proxyBaseUrl: string;
   /** Map of hostname (or *.domain wildcard) → service name */
   hostMap: Map<string, string>;
+  /** Client authentication token for the proxy */
+  clientToken?: string;
   /** Optional logger */
   log?: (msg: string) => void;
 }
@@ -23,6 +25,7 @@ export class HttpInterceptor {
   private proxyBaseUrl: string;
   private proxyHost: string;
   private hostMap: Map<string, string>;
+  private clientToken: string | null;
   private originalFetch: typeof globalThis.fetch | null = null;
   private active = false;
   private log: (msg: string) => void;
@@ -30,6 +33,7 @@ export class HttpInterceptor {
   constructor(options: HttpInterceptorOptions) {
     this.proxyBaseUrl = options.proxyBaseUrl.replace(/\/$/, '');
     this.hostMap = options.hostMap;
+    this.clientToken = options.clientToken || null;
     this.log = options.log || (() => {});
 
     // Extract proxy hostname to avoid intercepting requests to the proxy itself
@@ -51,9 +55,11 @@ export class HttpInterceptor {
     const origFetch = this.originalFetch;
     const proxyBase = this.proxyBaseUrl;
     const proxyHostname = this.proxyHost;
+    const token = this.clientToken;
     const matchHost = this.matchHost.bind(this);
     const extractUrl = this.extractUrl.bind(this);
     const stripAuthHeaders = this.stripAuthHeaders.bind(this);
+    const injectToken = this.injectTokenHeader.bind(this);
     const logFn = this.log;
 
     globalThis.fetch = (
@@ -65,8 +71,12 @@ export class HttpInterceptor {
         return origFetch.call(globalThis, input, init);
       }
 
-      // Don't intercept requests to the proxy itself
+      // Requests to the proxy itself (SDK traffic via env vars) — inject token, pass through
       if (url.hostname === proxyHostname || url.hostname === 'localhost') {
+        if (token) {
+          const tokenInit = injectToken(init, token);
+          return origFetch.call(globalThis, input, tokenInit);
+        }
         return origFetch.call(globalThis, input, init);
       }
 
@@ -84,6 +94,11 @@ export class HttpInterceptor {
       if (init?.headers) {
         const stripped = stripAuthHeaders(init.headers);
         newInit = { ...init, headers: stripped };
+      }
+
+      // Inject client token for proxy authentication
+      if (token) {
+        newInit = injectToken(newInit, token);
       }
 
       return origFetch.call(globalThis, proxyUrl, newInit);
@@ -136,6 +151,28 @@ export class HttpInterceptor {
       // Not a valid URL — pass through
     }
     return null;
+  }
+
+  private injectTokenHeader(init: RequestInit | undefined, token: string): RequestInit {
+    const base = init || {};
+    const headers = base.headers;
+
+    if (!headers) {
+      return { ...base, headers: { 'x-aquaman-token': token } };
+    }
+
+    if (headers instanceof Headers) {
+      const h = new Headers(headers);
+      h.set('x-aquaman-token', token);
+      return { ...base, headers: h };
+    }
+
+    if (Array.isArray(headers)) {
+      return { ...base, headers: [...headers, ['x-aquaman-token', token]] };
+    }
+
+    // Plain object
+    return { ...base, headers: { ...headers, 'x-aquaman-token': token } };
   }
 
   private stripAuthHeaders(headers: HeadersInit): HeadersInit {

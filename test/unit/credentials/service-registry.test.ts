@@ -94,7 +94,7 @@ services:
       expect(service!.description).toBe('Custom API service');
     });
 
-    it('custom services override builtins', () => {
+    it('YAML with builtin name is rejected and builtin is preserved', () => {
       const yaml = `
 services:
   - name: anthropic
@@ -107,9 +107,10 @@ services:
       const registry = createServiceRegistry({ configPath });
 
       const service = registry.get('anthropic');
-      expect(service!.upstream).toBe('https://custom.anthropic.proxy.com');
-      expect(service!.authHeader).toBe('X-Custom-Key');
-      expect(service!.credentialKey).toBe('custom_key');
+      // Should keep the builtin definition, not the custom one
+      expect(service!.upstream).toBe('https://api.anthropic.com');
+      expect(service!.authHeader).toBe('x-api-key');
+      expect(service!.credentialKey).toBe('api_key');
     });
 
     it('handles authPrefix in custom services', () => {
@@ -321,6 +322,89 @@ services:
           credentialKey: 'key'
         });
       }).toThrow('Invalid service');
+    });
+  });
+
+  describe('Builtin Service Protection', () => {
+    it('YAML with non-builtin name loads normally alongside builtins', () => {
+      const yaml = `
+services:
+  - name: my-custom
+    upstream: https://api.custom.com
+    authHeader: X-Key
+    credentialKey: key
+`;
+      fs.writeFileSync(configPath, yaml);
+
+      const registry = createServiceRegistry({ configPath });
+
+      expect(registry.has('my-custom')).toBe(true);
+      expect(registry.has('anthropic')).toBe(true); // builtins still present
+    });
+
+    it('register() with builtin name throws', () => {
+      const registry = createServiceRegistry({ configPath });
+
+      expect(() => {
+        registry.register({
+          name: 'anthropic',
+          upstream: 'https://evil.com',
+          authHeader: 'Authorization',
+          credentialKey: 'key'
+        });
+      }).toThrow('builtin service');
+    });
+
+    it('register() with non-builtin name works', () => {
+      const registry = createServiceRegistry({ configPath });
+
+      registry.register({
+        name: 'my-new-service',
+        upstream: 'https://api.new.com',
+        authHeader: 'Authorization',
+        credentialKey: 'key'
+      });
+
+      expect(registry.has('my-new-service')).toBe(true);
+    });
+
+    it('override() still works for builtin services (test use)', () => {
+      const registry = createServiceRegistry({ configPath });
+
+      registry.override('anthropic', {
+        upstream: 'http://localhost:9999'
+      });
+
+      const service = registry.get('anthropic');
+      expect(service!.upstream).toBe('http://localhost:9999');
+      expect(service!.authHeader).toBe('x-api-key');
+    });
+
+    it('isBuiltinService() returns true for builtins', () => {
+      expect(ServiceRegistry.isBuiltinService('anthropic')).toBe(true);
+      expect(ServiceRegistry.isBuiltinService('openai')).toBe(true);
+      expect(ServiceRegistry.isBuiltinService('telegram')).toBe(true);
+    });
+
+    it('isBuiltinService() returns false for non-builtins', () => {
+      expect(ServiceRegistry.isBuiltinService('my-custom')).toBe(false);
+      expect(ServiceRegistry.isBuiltinService('some-service')).toBe(false);
+    });
+
+    it('validateConfigFile reports builtin name conflict', () => {
+      const yaml = `
+services:
+  - name: anthropic
+    upstream: https://evil.com
+    authHeader: Authorization
+    credentialKey: key
+`;
+      fs.writeFileSync(configPath, yaml);
+
+      const result = ServiceRegistry.validateConfigFile(configPath);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.some(e => e.includes('builtin'))).toBe(true);
     });
   });
 

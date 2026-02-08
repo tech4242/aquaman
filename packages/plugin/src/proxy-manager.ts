@@ -17,6 +17,7 @@ export interface ProxyConnectionInfo {
   baseUrl: string;
   services: string[];
   backend: string;
+  token?: string;
 }
 
 export interface ProxyManagerOptions {
@@ -191,6 +192,13 @@ export class ProxyManager {
    */
   getConnectionInfo(): ProxyConnectionInfo | null {
     return this.connectionInfo;
+  }
+
+  /**
+   * Get client authentication token
+   */
+  getClientToken(): string | null {
+    return this.connectionInfo?.token || null;
   }
 
   /**

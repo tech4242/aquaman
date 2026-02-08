@@ -22,6 +22,7 @@ import { HttpInterceptor, createHttpInterceptor } from "./src/http-interceptor.j
 
 let proxyProcess: ChildProcess | null = null;
 let httpInterceptor: HttpInterceptor | null = null;
+let clientToken: string | null = null;
 const proxyPort = 8081;
 const services = ["anthropic", "openai"];
 
@@ -31,6 +32,13 @@ const services = ["anthropic", "openai"];
  */
 function getExternalProxyUrl(): string | null {
   return process.env.AQUAMAN_PROXY_URL || null;
+}
+
+/**
+ * Get external client token from environment (for Docker two-container mode).
+ */
+function getExternalClientToken(): string | null {
+  return process.env.AQUAMAN_CLIENT_TOKEN || null;
 }
 
 /**
@@ -62,11 +70,33 @@ async function startProxy(port: number, log: OpenClawPluginApi["logger"]): Promi
     }
 
     let started = false;
+    let stdoutBuffer = "";
 
     proxyProcess.stdout?.on("data", (data: Buffer) => {
-      const output = data.toString();
-      log.debug(`[aquaman] ${output.trim()}`);
-      if (output.includes("listening") || output.includes("started")) {
+      stdoutBuffer += data.toString();
+      log.debug(`[aquaman] ${data.toString().trim()}`);
+      if (started) return;
+
+      // Try to parse JSON connection info from stdout
+      const lines = stdoutBuffer.split("\n");
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("{")) continue;
+        try {
+          const info = JSON.parse(trimmed);
+          if (info.ready === true) {
+            started = true;
+            clientToken = info.token || null;
+            resolve(true);
+            return;
+          }
+        } catch {
+          // Not valid JSON yet, keep buffering
+        }
+      }
+
+      // Fall back to string matching for backward compat
+      if (stdoutBuffer.includes("listening") || stdoutBuffer.includes("started")) {
         started = true;
         resolve(true);
       }
@@ -111,6 +141,7 @@ function stopProxy(): void {
     proxyProcess.kill("SIGTERM");
     proxyProcess = null;
   }
+  clientToken = null;
 }
 
 /**
@@ -152,6 +183,7 @@ function activateHttpInterceptor(log: OpenClawPluginApi["logger"]): void {
   httpInterceptor = createHttpInterceptor({
     proxyBaseUrl: baseUrl,
     hostMap,
+    clientToken: clientToken || undefined,
     log: (msg) => log.info(msg),
   });
 
@@ -243,6 +275,7 @@ export default function register(api: OpenClawPluginApi): void {
   // External proxy mode (Docker two-container architecture)
   if (externalUrl) {
     api.logger.info(`External proxy mode: ${externalUrl}`);
+    clientToken = getExternalClientToken();
     configureEnvironment(api.logger);
 
     if (api.registerLifecycle) {

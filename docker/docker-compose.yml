@@ -13,6 +13,7 @@ services:
         required: false
     environment:
       - AQUAMAN_BIND_ADDRESS=0.0.0.0
+      - AQUAMAN_CLIENT_TOKEN=${AQUAMAN_CLIENT_TOKEN:-}
     networks:
       - backend
       - frontend
@@ -35,6 +36,7 @@ services:
         condition: service_healthy
     environment:
       - AQUAMAN_PROXY_URL=http://aquaman:8081
+      - AQUAMAN_CLIENT_TOKEN=${AQUAMAN_CLIENT_TOKEN:-}
       - OPENCLAW_NO_CREDENTIALS=true
       - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-aquaman-internal}
     networks:
@@ -59,6 +61,7 @@ services:
         condition: service_healthy
     environment:
       - AQUAMAN_PROXY_URL=http://aquaman:8081
+      - AQUAMAN_CLIENT_TOKEN=${AQUAMAN_CLIENT_TOKEN:-}
       - OPENCLAW_NO_CREDENTIALS=true
       - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-aquaman-internal}
     volumes:
