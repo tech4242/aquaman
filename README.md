@@ -29,24 +29,24 @@ aquaman doctor                 # diagnose issues with actionable fixes
 aquaman help                   # list all commands
 ```
 
-### Standalone (without OpenClaw)
-
-Aquaman also works as a standalone proxy for any app that talks to
-LLM or channel APIs:
-
-```bash
-npm install -g aquaman-proxy
-aquaman setup --no-openclaw    # stores keys, skips plugin install
-aquaman start                  # start the proxy
-```
-
 ### Server (Docker)
+
+Two-container deployment: aquaman (proxy, internet access) + OpenClaw
+(gateway, internal network only — no direct internet access).
 
 ```bash
 git clone https://github.com/tech4242/aquaman.git && cd aquaman
 cp docker/.env.example docker/.env
 # Edit docker/.env — set backend and credentials
 docker compose -f docker/docker-compose.yml --profile with-openclaw up -d
+```
+
+For tool execution sandboxing (tools run in ephemeral containers with
+read-only filesystem, dropped capabilities, network restricted to
+proxy only):
+
+```bash
+docker compose -f docker/docker-compose.yml --profile with-openclaw-sandboxed up -d
 ```
 
 ## How It Works

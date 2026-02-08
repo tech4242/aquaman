@@ -74,7 +74,8 @@ const program = new Command();
 program
   .name('aquaman')
   .description('Credential isolation layer for OpenClaw - keeps API keys outside the agent process')
-  .version(VERSION);
+  .version(VERSION)
+  .addHelpText('before', `\n\u{1F531}\u{1F99E} Aquaman ${VERSION} \u2014 Credential isolation for OpenClaw\n`);
 
 // Start command - launches credential proxy + OpenClaw
 program
@@ -829,8 +830,8 @@ program
       console.log('  Next: start OpenClaw (proxy starts automatically via plugin)');
       console.log('    openclaw\n');
     } else {
-      console.log('  Next: start the proxy');
-      console.log('    aquaman start\n');
+      console.log('  Next: install the OpenClaw plugin');
+      console.log('    aquaman setup\n');
     }
     console.log('  Troubleshooting: aquaman doctor');
     console.log('');
@@ -848,7 +849,7 @@ program
     let issues = 0;
 
     console.log('');
-    console.log(`  Aquaman v${VERSION}`);
+    console.log(`  \u{1F531}\u{1F99E} Aquaman ${VERSION} \u2014 Welcome to the doctor\u2019s office.`);
     console.log('');
 
     // 1. Config file
@@ -897,7 +898,7 @@ program
     const pluginInstalled = fs.existsSync(path.join(openclawStateDir, 'extensions', 'aquaman-plugin'));
     const proxyFix = pluginInstalled
       ? 'Proxy starts automatically with OpenClaw. Run: openclaw'
-      : 'Run: aquaman start';
+      : 'Install plugin first: aquaman setup';
     try {
       const resp = await fetch(`http://127.0.0.1:${proxyPort}/_health`);
       if (resp.ok) {
@@ -1445,6 +1446,11 @@ function formatEntry(entry: any): string {
     default:
       return JSON.stringify(entry.data).slice(0, 80);
   }
+}
+
+// Show help when run without arguments (like openclaw does)
+if (process.argv.length <= 2) {
+  program.help();
 }
 
 program.parseAsync();

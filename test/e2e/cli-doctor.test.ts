@@ -104,7 +104,7 @@ describe('aquaman doctor E2E', () => {
       const { stdout, exitCode } = runDoctor(tempEnv);
 
       expect(stdout).toContain('Proxy not running');
-      expect(stdout).toContain('aquaman start');
+      expect(stdout).toContain('aquaman setup');
       expect(exitCode).toBe(1);
     }, TEST_TIMEOUT);
   });
