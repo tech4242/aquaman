@@ -334,4 +334,114 @@ export async function migrateFromOpenClaw(
   return result;
 }
 
+/**
+ * Known provider patterns for credential files in ~/.openclaw/credentials/
+ */
+const CREDENTIALS_DIR_PATTERNS: Array<{
+  filenamePattern: RegExp;
+  service: string;
+  key: string;
+  description: string;
+}> = [
+  { filenamePattern: /^anthropic\.json$/i, service: 'anthropic', key: 'api_key', description: 'Anthropic API key' },
+  { filenamePattern: /^openai\.json$/i, service: 'openai', key: 'api_key', description: 'OpenAI API key' },
+  { filenamePattern: /^github\.json$/i, service: 'github', key: 'token', description: 'GitHub token' },
+  { filenamePattern: /^xai\.json$/i, service: 'xai', key: 'api_key', description: 'xAI API key' },
+];
+
+/**
+ * Scan a credentials directory for plaintext credential files.
+ * Each file is matched against known provider patterns.
+ */
+export function scanCredentialsDir(credentialsDir: string): CredentialMapping[] {
+  const results: CredentialMapping[] = [];
+
+  if (!fs.existsSync(credentialsDir)) return results;
+
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(credentialsDir);
+  } catch {
+    return results;
+  }
+
+  for (const filename of entries) {
+    const filePath = path.join(credentialsDir, filename);
+
+    // Skip directories
+    try {
+      if (fs.statSync(filePath).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+
+    // Match against known patterns
+    const pattern = CREDENTIALS_DIR_PATTERNS.find(p => p.filenamePattern.test(filename));
+    if (!pattern) continue;
+
+    // Try to read and parse the file
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const parsed = JSON.parse(content);
+
+      // Look for a credential value in common field names
+      const value = parsed.api_key || parsed.apiKey || parsed.token || parsed.key || parsed.secret;
+      if (value && typeof value === 'string' && value.trim()) {
+        results.push({
+          jsonPath: ['credentials-dir', filename],
+          service: pattern.service,
+          key: pattern.key,
+          description: pattern.description,
+        });
+      }
+    } catch {
+      // Skip unparseable files
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Read a credential value from a credentials directory file.
+ */
+export function readCredentialFromFile(credentialsDir: string, filename: string): string | null {
+  const filePath = path.join(credentialsDir, filename);
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const parsed = JSON.parse(content);
+    return parsed.api_key || parsed.apiKey || parsed.token || parsed.key || parsed.secret || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Generate cleanup commands for migrated plaintext sources.
+ */
+export function getCleanupCommands(
+  configPath: string,
+  credentialsDir: string,
+  migrated: MigrationResult['migrated']
+): string[] {
+  const commands: string[] = [];
+
+  // Files from credentials dir can be rm'd
+  for (const m of migrated) {
+    if (m.source.startsWith('credentials-dir.')) {
+      const filename = m.source.split('.').slice(1).join('.');
+      commands.push(`rm ${path.join(credentialsDir, filename)}`);
+    }
+  }
+
+  // Channel tokens in openclaw.json — can't auto-remove without breaking config
+  const hasConfigMigrations = migrated.some(m => m.source.startsWith('channels.'));
+  if (hasConfigMigrations) {
+    commands.push(`# Channel tokens in ${configPath} — edit manually or run:`);
+    commands.push('# aquaman migrate openclaw --auto --cleanup (future)');
+  }
+
+  return commands;
+}
+
 export { PROVIDER_CREDENTIAL_FIELDS };

@@ -254,6 +254,19 @@ export class MemoryStore implements CredentialStore {
   }
 }
 
+/**
+ * Validate encryption password strength for encrypted-file backend.
+ */
+export function validatePasswordStrength(password: string): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  if (!password) {
+    errors.push('Password must not be empty');
+  } else if (password.length < 12) {
+    errors.push(`Password must be at least 12 characters (got ${password.length})`);
+  }
+  return { valid: errors.length === 0, errors };
+}
+
 export function createCredentialStore(options: CredentialStoreOptions): CredentialStore {
   switch (options.backend) {
     case 'keychain':
@@ -262,6 +275,12 @@ export function createCredentialStore(options: CredentialStoreOptions): Credenti
     case 'encrypted-file':
       if (!options.encryptionPassword) {
         throw new Error('encryptionPassword required for encrypted-file backend');
+      }
+      {
+        const strength = validatePasswordStrength(options.encryptionPassword);
+        if (!strength.valid) {
+          throw new Error(`Weak encryption password: ${strength.errors.join('; ')}`);
+        }
       }
       return new EncryptedFileStore(options.encryptionPassword);
 

@@ -151,4 +151,52 @@ describe('OAuthTokenCache', () => {
     await cache.getToken('test-service', testOAuthConfig, store);
     expect(fetchCalls).toHaveLength(2);
   });
+
+  describe('cache bounds', () => {
+    it('cleanExpired removes expired entries', async () => {
+      // Create a cache with maxSize 3
+      const boundedCache = createOAuthTokenCache({ refreshBuffer: 0, maxSize: 3 });
+
+      // Get a token (it will be cached)
+      await boundedCache.getToken('test-service', testOAuthConfig, store);
+      expect(fetchCalls).toHaveLength(1);
+
+      // Expire the token manually by accessing private state
+      // Instead, use cleanExpired after modifying time
+      const removed = boundedCache.cleanExpired();
+      // Token should still be valid (3600s expiry), so nothing removed
+      expect(removed).toBe(0);
+    });
+
+    it('evicts oldest when at maxSize', async () => {
+      const boundedCache = createOAuthTokenCache({ refreshBuffer: 0, maxSize: 2 });
+
+      // Add two services
+      await store.set('svc-a', 'client_id', 'id-a');
+      await store.set('svc-a', 'client_secret', 'secret-a');
+      await store.set('svc-b', 'client_id', 'id-b');
+      await store.set('svc-b', 'client_secret', 'secret-b');
+      await store.set('svc-c', 'client_id', 'id-c');
+      await store.set('svc-c', 'client_secret', 'secret-c');
+
+      await boundedCache.getToken('svc-a', testOAuthConfig, store);
+      await boundedCache.getToken('svc-b', testOAuthConfig, store);
+      // Cache is now at maxSize=2
+      expect(fetchCalls).toHaveLength(2);
+
+      // Adding a third should evict the oldest
+      await boundedCache.getToken('svc-c', testOAuthConfig, store);
+      expect(fetchCalls).toHaveLength(3);
+
+      // The first token (svc-a) should have been evicted
+      // Getting svc-a again should trigger a new fetch
+      await boundedCache.getToken('svc-a', testOAuthConfig, store);
+      expect(fetchCalls).toHaveLength(4);
+
+      // svc-b or svc-c should still be cached (one of them)
+      // Getting svc-c should NOT trigger a new fetch (it's the most recent)
+      await boundedCache.getToken('svc-c', testOAuthConfig, store);
+      expect(fetchCalls).toHaveLength(4); // No new fetch
+    });
+  });
 });

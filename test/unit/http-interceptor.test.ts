@@ -305,6 +305,48 @@ describe('HttpInterceptor', () => {
     });
   });
 
+  describe('redirect handling', () => {
+    it('uses redirect: manual to prevent auto-following redirects on intercepted requests', async () => {
+      interceptor = createHttpInterceptor({
+        proxyBaseUrl: 'http://127.0.0.1:8081',
+        hostMap,
+      });
+      interceptor.activate();
+
+      await globalThis.fetch('https://api.telegram.org/bot123/getUpdates');
+
+      expect(fetchCalls).toHaveLength(1);
+      expect(fetchCalls[0].init?.redirect).toBe('manual');
+    });
+
+    it('does not set redirect: manual on non-intercepted requests', async () => {
+      interceptor = createHttpInterceptor({
+        proxyBaseUrl: 'http://127.0.0.1:8081',
+        hostMap,
+      });
+      interceptor.activate();
+
+      await globalThis.fetch('https://api.example.com/data');
+
+      expect(fetchCalls).toHaveLength(1);
+      expect(fetchCalls[0].init?.redirect).toBeUndefined();
+    });
+
+    it('does not set redirect: manual on proxy pass-through requests', async () => {
+      interceptor = createHttpInterceptor({
+        proxyBaseUrl: 'http://127.0.0.1:8081',
+        hostMap,
+      });
+      interceptor.activate();
+
+      await globalThis.fetch('http://127.0.0.1:8081/anthropic/v1/messages');
+
+      expect(fetchCalls).toHaveLength(1);
+      // Proxy pass-through should not have redirect: manual
+      expect(fetchCalls[0].init?.redirect).toBeUndefined();
+    });
+  });
+
   describe('lifecycle', () => {
     it('activate and deactivate correctly', () => {
       interceptor = createHttpInterceptor({

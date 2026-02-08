@@ -9,7 +9,8 @@ export {
   KeychainStore,
   EncryptedFileStore,
   MemoryStore,
-  createCredentialStore
+  createCredentialStore,
+  validatePasswordStrength
 } from './store.js';
 
 export {

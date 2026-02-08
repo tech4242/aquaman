@@ -5,5 +5,6 @@
 export {
   type AuditLoggerOptions,
   AuditLogger,
-  createAuditLogger
+  createAuditLogger,
+  redactSensitiveParams
 } from './logger.js';

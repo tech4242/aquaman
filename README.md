@@ -19,8 +19,9 @@ With Aquaman API keys never enter the agent process. Aquaman stores them in a se
 
 ```bash
 npm install -g aquaman-proxy
-aquaman setup                  # stores keys, installs OpenClaw plugin
-openclaw                       # proxy starts automatically via plugin
+aquaman setup                             # stores keys, installs OpenClaw plugin
+aquaman migrate openclaw --auto           # existing users: migrate plaintext secrets
+openclaw                                  # proxy starts automatically via plugin
 ```
 
 The plugin starts the proxy for you — no extra steps. To check
@@ -91,6 +92,8 @@ The agent only knows a localhost URL. It never sees a key.
 | `encrypted-file` | Linux, WSL2, CI/CD | AES-256-GCM, password-protected |
 | `1password` | Team credential sharing | `brew install 1password-cli && op signin` |
 | `vault` | Enterprise secrets management | Set `VAULT_ADDR` + `VAULT_TOKEN` |
+
+**Important:** `encrypted-file` is a last-resort backend for headless Linux/CI environments without a native keyring. For better security, install `libsecret-1-dev` (for GNOME Keyring) or use 1Password/Vault.
 
 ## Why Aquaman
 

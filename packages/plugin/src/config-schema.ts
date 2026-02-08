@@ -60,9 +60,6 @@ export const ConfigSchema = Type.Object({
   vaultNamespace: Type.Optional(Type.String()),
   vaultMountPath: Type.Optional(Type.String({ default: 'secret' })),
 
-  // Encrypted file options
-  encryptionPassword: Type.Optional(Type.String()),
-
   // TLS options
   tlsEnabled: Type.Optional(Type.Boolean({ default: true })),
   tlsCertPath: Type.Optional(Type.String()),

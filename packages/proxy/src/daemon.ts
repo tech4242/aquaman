@@ -146,14 +146,14 @@ export class CredentialProxy {
 
     if (!service || !this.options.allowedServices.includes(service)) {
       res.statusCode = 404;
-      res.end(`Service not found or not allowed: ${service}`);
+      res.end('Not found');
       return;
     }
 
     const serviceDef = this.serviceRegistry.get(service);
     if (!serviceDef) {
       res.statusCode = 404;
-      res.end(`No configuration for service: ${service}`);
+      res.end('Not found');
       return;
     }
 

@@ -18,6 +18,29 @@ import type {
 
 const GENESIS_HASH = '0000000000000000000000000000000000000000000000000000000000000000';
 
+const SENSITIVE_KEY_PATTERNS = [
+  'key', 'token', 'secret', 'password', 'credential',
+  'authorization', 'api_key', 'apikey', 'access_token',
+  'refresh_token', 'client_secret',
+];
+
+/**
+ * Redact sensitive values from a params/result object.
+ * Shallow redaction only — replaces top-level keys matching sensitive patterns.
+ */
+export function redactSensitiveParams(obj: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    const lower = key.toLowerCase();
+    if (SENSITIVE_KEY_PATTERNS.some(p => lower.includes(p))) {
+      result[key] = '[REDACTED]';
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 export interface AuditLoggerOptions {
   logDir: string;
   enabled?: boolean;
@@ -131,7 +154,7 @@ export class AuditLogger {
       sessionId,
       agentId,
       tool,
-      params,
+      params: redactSensitiveParams(params),
       timestamp: new Date()
     };
 
@@ -147,10 +170,14 @@ export class AuditLogger {
   ): Promise<AuditEntry | null> {
     if (!this.enabled) return null;
 
+    const redactedResult = (result && typeof result === 'object' && !Array.isArray(result))
+      ? redactSensitiveParams(result as Record<string, unknown>)
+      : result;
+
     const toolResult: ToolResult = {
       id: generateId(),
       toolCallId,
-      result,
+      result: redactedResult,
       error,
       timestamp: new Date()
     };

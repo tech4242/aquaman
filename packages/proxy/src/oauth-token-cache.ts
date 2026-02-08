@@ -18,9 +18,27 @@ export class OAuthTokenCache {
   private tokens: Map<string, CachedToken> = new Map();
   /** Buffer in ms before expiry to trigger refresh (default 60s) */
   private refreshBuffer: number;
+  /** Maximum number of cached tokens (default 100) */
+  private maxSize: number;
 
-  constructor(options?: { refreshBuffer?: number }) {
+  constructor(options?: { refreshBuffer?: number; maxSize?: number }) {
     this.refreshBuffer = options?.refreshBuffer ?? 60_000;
+    this.maxSize = options?.maxSize ?? 100;
+  }
+
+  /**
+   * Remove expired entries from the cache.
+   */
+  cleanExpired(): number {
+    const now = Date.now();
+    let removed = 0;
+    for (const [key, entry] of this.tokens) {
+      if (entry.expiresAt < now) {
+        this.tokens.delete(key);
+        removed++;
+      }
+    }
+    return removed;
   }
 
   /**
@@ -102,6 +120,21 @@ export class OAuthTokenCache {
     }
 
     const expiresIn = data.expires_in || 3600;
+
+    // Evict expired entries, then oldest if still at capacity
+    this.cleanExpired();
+    if (this.tokens.size >= this.maxSize) {
+      let oldestKey: string | null = null;
+      let oldestExpiry = Infinity;
+      for (const [key, entry] of this.tokens) {
+        if (entry.expiresAt < oldestExpiry) {
+          oldestExpiry = entry.expiresAt;
+          oldestKey = key;
+        }
+      }
+      if (oldestKey) this.tokens.delete(oldestKey);
+    }
+
     this.tokens.set(service, {
       token: data.access_token,
       expiresAt: Date.now() + expiresIn * 1000,
@@ -125,6 +158,6 @@ export class OAuthTokenCache {
   }
 }
 
-export function createOAuthTokenCache(options?: { refreshBuffer?: number }): OAuthTokenCache {
+export function createOAuthTokenCache(options?: { refreshBuffer?: number; maxSize?: number }): OAuthTokenCache {
   return new OAuthTokenCache(options);
 }

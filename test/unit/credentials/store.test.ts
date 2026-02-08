@@ -9,7 +9,8 @@ import * as os from 'node:os';
 import {
   MemoryStore,
   EncryptedFileStore,
-  createCredentialStore
+  createCredentialStore,
+  validatePasswordStrength
 } from 'aquaman-core';
 
 describe('MemoryStore', () => {
@@ -206,11 +207,41 @@ describe('EncryptedFileStore', () => {
   });
 });
 
+describe('validatePasswordStrength', () => {
+  it('should accept passwords with 12+ characters', () => {
+    const result = validatePasswordStrength('test-password');
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should reject empty passwords', () => {
+    const result = validatePasswordStrength('');
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]).toContain('empty');
+  });
+
+  it('should reject short passwords', () => {
+    const result = validatePasswordStrength('short');
+    expect(result.valid).toBe(false);
+    expect(result.errors[0]).toContain('12 characters');
+  });
+
+  it('should accept exactly 12 characters', () => {
+    const result = validatePasswordStrength('123456789012');
+    expect(result.valid).toBe(true);
+  });
+
+  it('should reject 11 characters', () => {
+    const result = validatePasswordStrength('12345678901');
+    expect(result.valid).toBe(false);
+  });
+});
+
 describe('createCredentialStore', () => {
-  it('should create encrypted-file store', () => {
+  it('should create encrypted-file store with strong password', () => {
     const store = createCredentialStore({
       backend: 'encrypted-file',
-      encryptionPassword: 'test123'
+      encryptionPassword: 'test-password-123'
     });
 
     expect(store).toBeInstanceOf(EncryptedFileStore);
@@ -220,6 +251,12 @@ describe('createCredentialStore', () => {
     expect(() =>
       createCredentialStore({ backend: 'encrypted-file' })
     ).toThrow('encryptionPassword required');
+  });
+
+  it('should throw for encrypted-file with weak password', () => {
+    expect(() =>
+      createCredentialStore({ backend: 'encrypted-file', encryptionPassword: 'short' })
+    ).toThrow('Weak encryption password');
   });
 
   it('should throw for vault backend without address', () => {

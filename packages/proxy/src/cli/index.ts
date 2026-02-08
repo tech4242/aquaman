@@ -899,10 +899,10 @@ program
       if (creds.length > 0) {
         const names = creds.map(c => `${c.service}/${c.key}`).join(', ');
         console.log(`  \u2713 ${aqua('Backend:')} ${config.credentials.backend} (accessible)`);
-        console.log(`  \u2713 ${aqua('Credentials:')} ${names} (${creds.length} stored)`);
+        console.log(`  \u2713 ${aqua('Stored securely:')} ${names} (${creds.length} in ${config.credentials.backend})`);
       } else {
         console.log(`  \u2713 ${aqua('Backend:')} ${config.credentials.backend} (accessible)`);
-        console.log(`  \u2717 ${aqua('Credentials:')} none stored`);
+        console.log(`  \u2717 ${aqua('Stored securely:')} none`);
         console.log('    \u2192 Run: aquaman credentials add anthropic api_key');
         issues++;
       }
@@ -992,6 +992,49 @@ program
         console.log(`  \u2717 ${aqua('Auth profiles')} missing`);
         console.log('    \u2192 Run: aquaman setup');
         issues++;
+      }
+    }
+
+    // 9. Unmigrated plaintext credentials
+    if (openclawDetected) {
+      try {
+        const { extractCredentials, scanCredentialsDir } = await import('../migration/openclaw-migrator.js');
+        const openclawJsonPath = path.join(openclawStateDir, 'openclaw.json');
+        const credentialsDir = path.join(openclawStateDir, 'credentials');
+
+        let plaintext: { source: string; service: string; key: string }[] = [];
+
+        // Scan openclaw.json channels
+        if (fs.existsSync(openclawJsonPath)) {
+          try {
+            const openclawConfig = JSON.parse(fs.readFileSync(openclawJsonPath, 'utf-8'));
+            const channelCreds = extractCredentials(openclawConfig);
+            for (const c of channelCreds) {
+              plaintext.push({ source: 'openclaw.json', service: c.service, key: c.key });
+            }
+          } catch {
+            // Already reported in check 7
+          }
+        }
+
+        // Scan credentials directory
+        const fileCreds = scanCredentialsDir(credentialsDir);
+        for (const c of fileCreds) {
+          plaintext.push({ source: `credentials/${c.jsonPath[1]}`, service: c.service, key: c.key });
+        }
+
+        if (plaintext.length > 0) {
+          console.log(`  \u2717 ${aqua('Unmigrated:')} ${plaintext.length} plaintext credentials exposed in OpenClaw config`);
+          for (const c of plaintext) {
+            console.log(`    ${c.service}/${c.key} \u2190 ${c.source}`);
+          }
+          console.log('    \u2192 Run: aquaman migrate openclaw --auto');
+          issues++;
+        } else {
+          console.log(`  \u2713 ${aqua('Unmigrated:')} none (all credentials secured)`);
+        }
+      } catch {
+        // Migrator import failed — skip check
       }
     }
 
@@ -1354,10 +1397,203 @@ migrate
   .option('-c, --config <path>', 'Path to openclaw.json')
   .option('--dry-run', 'Show what would be migrated without writing')
   .option('--overwrite', 'Overwrite existing credentials in store')
-  .action(async (opts: { config?: string; dryRun?: boolean; overwrite?: boolean }) => {
-    const { findOpenClawConfig, migrateFromOpenClaw } = await import('../migration/openclaw-migrator.js');
+  .option('--auto', 'Auto-detect and migrate all credentials with guided preview')
+  .action(async (opts: { config?: string; dryRun?: boolean; overwrite?: boolean; auto?: boolean }) => {
+    const {
+      findOpenClawConfig,
+      migrateFromOpenClaw,
+      extractCredentials,
+      scanCredentialsDir,
+      readCredentialFromFile,
+      getCleanupCommands
+    } = await import('../migration/openclaw-migrator.js');
     const appConfig = loadConfig();
+    const os = await import('node:os');
 
+    if (opts.auto) {
+      // --- Auto mode: guided migration with preview ---
+      const configDir = getConfigDir();
+      const configPath = path.join(configDir, 'config.yaml');
+
+      // Check aquaman is configured
+      if (!fs.existsSync(configPath)) {
+        console.error('No aquaman config found. Run `aquaman setup` first.');
+        process.exit(1);
+      }
+
+      console.log(`\n  \u{1F531}\u{1F99E} Aquaman ${aqua(VERSION)} \u2014 Time to put your secrets somewhere safe.\n`);
+      console.log('  Scanning for plaintext credentials...\n');
+
+      const openclawStateDir = process.env['OPENCLAW_STATE_DIR'] || path.join(os.homedir(), '.openclaw');
+      const openclawConfigPath = findOpenClawConfig(opts.config || path.join(openclawStateDir, 'openclaw.json'));
+      const credentialsDir = path.join(openclawStateDir, 'credentials');
+
+      // Scan both sources
+      const fromConfig: Array<{ service: string; key: string; source: string; value: string | null }> = [];
+      const fromDir: Array<{ service: string; key: string; source: string; value: string | null }> = [];
+
+      // 1. Scan openclaw.json
+      if (fs.existsSync(openclawConfigPath)) {
+        try {
+          const content = fs.readFileSync(openclawConfigPath, 'utf-8');
+          const config = JSON.parse(content);
+          const mappings = extractCredentials(config);
+          for (const m of mappings) {
+            // Resolve value
+            let current: any = config;
+            for (const key of m.jsonPath) {
+              if (!current || typeof current !== 'object') { current = null; break; }
+              current = current[key];
+            }
+            const value = typeof current === 'string' ? current : null;
+            if (value && value !== 'aquaman-proxy-managed' && !value.startsWith('aquaman://')) {
+              fromConfig.push({
+                service: m.service,
+                key: m.key,
+                source: m.jsonPath.join('.'),
+                value
+              });
+            }
+          }
+        } catch { /* skip unparseable config */ }
+      }
+
+      // 2. Scan credentials directory
+      if (fs.existsSync(credentialsDir)) {
+        const dirMappings = scanCredentialsDir(credentialsDir);
+        for (const m of dirMappings) {
+          const value = readCredentialFromFile(credentialsDir, m.jsonPath[1]);
+          if (value) {
+            fromDir.push({
+              service: m.service,
+              key: m.key,
+              source: `credentials-dir.${m.jsonPath[1]}`,
+              value
+            });
+          }
+        }
+      }
+
+      // Merge & de-duplicate (prefer credentials dir over config)
+      const seen = new Set<string>();
+      const allCredentials: typeof fromDir = [];
+
+      for (const cred of fromDir) {
+        const id = `${cred.service}/${cred.key}`;
+        if (!seen.has(id)) {
+          seen.add(id);
+          allCredentials.push(cred);
+        }
+      }
+      for (const cred of fromConfig) {
+        const id = `${cred.service}/${cred.key}`;
+        if (!seen.has(id)) {
+          seen.add(id);
+          allCredentials.push(cred);
+        }
+      }
+
+      if (allCredentials.length === 0) {
+        console.log('  No plaintext credentials found. Nothing to migrate.');
+        return;
+      }
+
+      // Display preview
+      const dim = noColor ? (s: string) => s : (s: string) => `\x1b[2m${s}\x1b[0m`;
+      const green = noColor ? (s: string) => s : (s: string) => `\x1b[32m${s}\x1b[0m`;
+
+      console.log(`  Found ${allCredentials.length} credential${allCredentials.length > 1 ? 's' : ''}:\n`);
+
+      if (fromConfig.length > 0) {
+        console.log(`    From ${dim('openclaw.json')}:`);
+        for (const c of fromConfig) {
+          if (seen.has(`${c.service}/${c.key}`) || allCredentials.some(a => a.service === c.service && a.key === c.key && a.source === c.source)) {
+            console.log(`      ${aqua(`${c.service}/${c.key}`)}    \u2190 ${dim(c.source)}`);
+          }
+        }
+      }
+
+      if (fromDir.length > 0) {
+        console.log(`    From ${dim('~/.openclaw/credentials/')}:`);
+        for (const c of fromDir) {
+          console.log(`      ${aqua(`${c.service}/${c.key}`)}    \u2190 ${dim(c.source.replace('credentials-dir.', ''))}`);
+        }
+      }
+
+      const backendLabel = appConfig.credentials.backend === 'keychain' ? 'macOS Keychain' :
+        appConfig.credentials.backend === 'encrypted-file' ? 'Encrypted file' :
+        appConfig.credentials.backend === '1password' ? '1Password' :
+        appConfig.credentials.backend === 'vault' ? 'HashiCorp Vault' :
+        appConfig.credentials.backend;
+
+      console.log(`\n  Destination: ${aqua(backendLabel)} (${appConfig.credentials.backend})\n`);
+
+      // Dry run: show preview only
+      if (opts.dryRun) {
+        console.log('  (dry run \u2014 no credentials will be written)');
+        return;
+      }
+
+      // Confirmation prompt (skip for non-TTY)
+      const isTTY = process.stdin.isTTY && process.stdout.isTTY;
+      if (isTTY) {
+        const readline = await import('node:readline');
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        const answer = await new Promise<string>((resolve) => {
+          rl.question(`  Migrate these ${allCredentials.length} credentials? (y/N): `, resolve);
+        });
+        rl.close();
+        if (answer.toLowerCase() !== 'y') {
+          console.log('  Aborted.');
+          return;
+        }
+      }
+
+      // Migrate
+      let store;
+      try {
+        store = createCredentialStore({
+          backend: appConfig.credentials.backend,
+          encryptionPassword: appConfig.credentials.encryptionPassword,
+          vaultAddress: appConfig.credentials.vaultAddress,
+          vaultToken: appConfig.credentials.vaultToken,
+          onePasswordVault: appConfig.credentials.onePasswordVault,
+          onePasswordAccount: appConfig.credentials.onePasswordAccount
+        });
+      } catch (err) {
+        console.error(`  Failed to initialize credential store: ${err instanceof Error ? err.message : err}`);
+        process.exit(1);
+      }
+
+      let migrated = 0;
+      for (const cred of allCredentials) {
+        if (cred.value) {
+          await store.set(cred.service, cred.key, cred.value);
+          migrated++;
+        }
+      }
+
+      console.log(`\n  ${green('\u2713')} Migrated ${migrated} credential${migrated > 1 ? 's' : ''}\n`);
+
+      // Cleanup commands
+      const migratedResults = allCredentials.map(c => ({
+        service: c.service,
+        key: c.key,
+        source: c.source
+      }));
+      const cleanup = getCleanupCommands(openclawConfigPath, credentialsDir, migratedResults);
+      if (cleanup.length > 0) {
+        console.log('  Cleanup \u2014 remove plaintext sources:');
+        for (const cmd of cleanup) {
+          console.log(`    ${cmd}`);
+        }
+        console.log('');
+      }
+
+      return;
+    }
+
+    // --- Original (non-auto) mode ---
     const configPath = findOpenClawConfig(opts.config);
     console.log(`Reading: ${configPath}`);
 

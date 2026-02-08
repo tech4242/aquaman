@@ -5,7 +5,7 @@
  * with optional pre-populated config, plugin, and auth profiles.
  */
 
-import { mkdtempSync, mkdirSync, cpSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, cpSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 
@@ -21,6 +21,13 @@ export interface TempEnvOptions {
   withConfig?: boolean;
   withPlugin?: boolean;
   withAuthProfiles?: boolean;
+  /** Pre-populate openclaw.json with channel credentials and/or credentials/ dir with provider files */
+  withCredentials?: {
+    /** Channel credentials to embed in openclaw.json */
+    channels?: Record<string, any>;
+    /** Credential files to create in ~/.openclaw/credentials/ */
+    credentialFiles?: Record<string, any>;
+  };
 }
 
 const PLUGIN_SRC = path.resolve(__dirname, '../../packages/plugin');
@@ -99,6 +106,32 @@ export function createTempEnv(options: TempEnvOptions = {}): TempEnv {
       }),
       'utf-8'
     );
+  }
+
+  if (options.withCredentials) {
+    const { channels, credentialFiles } = options.withCredentials;
+
+    // Write openclaw.json with channel credentials
+    if (channels) {
+      const openclawJsonPath = path.join(openclawDir, 'openclaw.json');
+      let openclawConfig: any = {};
+      if (existsSync(openclawJsonPath)) {
+        try {
+          openclawConfig = JSON.parse(readFileSync(openclawJsonPath, 'utf-8'));
+        } catch { /* start fresh */ }
+      }
+      openclawConfig.channels = channels;
+      writeFileSync(openclawJsonPath, JSON.stringify(openclawConfig, null, 2), 'utf-8');
+    }
+
+    // Create credential files in credentials/ dir
+    if (credentialFiles) {
+      const credDir = path.join(openclawDir, 'credentials');
+      mkdirSync(credDir, { recursive: true });
+      for (const [filename, content] of Object.entries(credentialFiles)) {
+        writeFileSync(path.join(credDir, filename), JSON.stringify(content, null, 2), 'utf-8');
+      }
+    }
   }
 
   const env: Record<string, string> = {

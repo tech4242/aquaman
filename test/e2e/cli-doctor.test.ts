@@ -159,6 +159,62 @@ describe('aquaman doctor E2E', () => {
     }, TEST_TIMEOUT);
   });
 
+  describe('unmigrated credentials', () => {
+    it('reports plaintext channel credentials in openclaw.json', () => {
+      tempEnv = createTempEnv({
+        withConfig: true,
+        withPlugin: true,
+        withAuthProfiles: true,
+        withCredentials: {
+          channels: {
+            telegram: {
+              accounts: {
+                mybot: { botToken: '123456:FAKE-TOKEN' },
+              },
+            },
+          },
+        },
+      });
+      const { stdout } = runDoctor(tempEnv);
+
+      expect(stdout).toContain('Unmigrated:');
+      expect(stdout).toContain('plaintext credentials exposed');
+      expect(stdout).toContain('telegram/bot_token');
+      expect(stdout).toContain('openclaw.json');
+      expect(stdout).toContain('aquaman migrate openclaw --auto');
+    }, TEST_TIMEOUT);
+
+    it('reports plaintext credential files in credentials/ dir', () => {
+      tempEnv = createTempEnv({
+        withConfig: true,
+        withPlugin: true,
+        withAuthProfiles: true,
+        withCredentials: {
+          credentialFiles: {
+            'anthropic.json': { api_key: 'sk-ant-fake-key' },
+          },
+        },
+      });
+      const { stdout } = runDoctor(tempEnv);
+
+      expect(stdout).toContain('Unmigrated:');
+      expect(stdout).toContain('anthropic/api_key');
+      expect(stdout).toContain('credentials/anthropic.json');
+    }, TEST_TIMEOUT);
+
+    it('shows no unmigrated when openclaw config has no plaintext credentials', () => {
+      tempEnv = createTempEnv({
+        withConfig: true,
+        withPlugin: true,
+        withAuthProfiles: true,
+      });
+      const { stdout } = runDoctor(tempEnv);
+
+      expect(stdout).toContain('Unmigrated: none');
+      expect(stdout).toContain('all credentials secured');
+    }, TEST_TIMEOUT);
+  });
+
   describe('port conflict', () => {
     it('reports port in use by another process', async () => {
       tempEnv = createTempEnv({ withConfig: true });

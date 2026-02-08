@@ -101,7 +101,7 @@ export class HttpInterceptor {
         newInit = injectToken(newInit, token);
       }
 
-      return origFetch.call(globalThis, proxyUrl, newInit);
+      return origFetch.call(globalThis, proxyUrl, { ...newInit, redirect: 'manual' });
     };
 
     this.active = true;

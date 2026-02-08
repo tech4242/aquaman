@@ -45,7 +45,7 @@ export class EmbeddedMode {
       vaultMountPath: this.config.vaultMountPath,
       onePasswordVault: this.config.onePasswordVault,
       onePasswordAccount: this.config.onePasswordAccount,
-      encryptionPassword: this.config.encryptionPassword
+      encryptionPassword: process.env['AQUAMAN_ENCRYPTION_PASSWORD']
     });
 
     // Initialize audit logger

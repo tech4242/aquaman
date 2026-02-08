@@ -7,6 +7,8 @@ import { MemoryStore } from 'aquaman-core';
 import {
   extractCredentials,
   migrateFromOpenClaw,
+  scanCredentialsDir,
+  getCleanupCommands,
 } from '../../packages/proxy/src/migration/openclaw-migrator.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -276,6 +278,102 @@ describe('OpenClaw Migrator', () => {
 
       expect(result.skipped).toHaveLength(1);
       expect(result.skipped[0].reason).toContain('No channel credentials');
+    });
+  });
+
+  describe('scanCredentialsDir', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-creddir-'));
+    });
+
+    it('finds anthropic.json credential file', () => {
+      fs.writeFileSync(
+        path.join(tmpDir, 'anthropic.json'),
+        JSON.stringify({ api_key: 'sk-ant-test-123' })
+      );
+
+      const results = scanCredentialsDir(tmpDir);
+      expect(results).toHaveLength(1);
+      expect(results[0].service).toBe('anthropic');
+      expect(results[0].key).toBe('api_key');
+    });
+
+    it('finds openai.json credential file', () => {
+      fs.writeFileSync(
+        path.join(tmpDir, 'openai.json'),
+        JSON.stringify({ api_key: 'sk-openai-test-456' })
+      );
+
+      const results = scanCredentialsDir(tmpDir);
+      expect(results).toHaveLength(1);
+      expect(results[0].service).toBe('openai');
+      expect(results[0].key).toBe('api_key');
+    });
+
+    it('finds multiple credential files', () => {
+      fs.writeFileSync(path.join(tmpDir, 'anthropic.json'), JSON.stringify({ api_key: 'key1' }));
+      fs.writeFileSync(path.join(tmpDir, 'openai.json'), JSON.stringify({ api_key: 'key2' }));
+
+      const results = scanCredentialsDir(tmpDir);
+      expect(results).toHaveLength(2);
+    });
+
+    it('returns empty for non-existent directory', () => {
+      const results = scanCredentialsDir('/nonexistent/path');
+      expect(results).toHaveLength(0);
+    });
+
+    it('skips unknown file names', () => {
+      fs.writeFileSync(path.join(tmpDir, 'random.json'), JSON.stringify({ key: 'value' }));
+
+      const results = scanCredentialsDir(tmpDir);
+      expect(results).toHaveLength(0);
+    });
+
+    it('skips files with empty credentials', () => {
+      fs.writeFileSync(path.join(tmpDir, 'anthropic.json'), JSON.stringify({ note: 'no api_key here' }));
+
+      const results = scanCredentialsDir(tmpDir);
+      expect(results).toHaveLength(0);
+    });
+
+    it('skips unparseable files', () => {
+      fs.writeFileSync(path.join(tmpDir, 'anthropic.json'), 'not json');
+
+      const results = scanCredentialsDir(tmpDir);
+      expect(results).toHaveLength(0);
+    });
+  });
+
+  describe('getCleanupCommands', () => {
+    it('generates rm commands for credential dir files', () => {
+      const migrated = [
+        { service: 'anthropic', key: 'api_key', source: 'credentials-dir.anthropic.json' },
+        { service: 'openai', key: 'api_key', source: 'credentials-dir.openai.json' },
+      ];
+
+      const commands = getCleanupCommands('/path/to/openclaw.json', '/path/to/credentials', migrated);
+      expect(commands).toHaveLength(2);
+      expect(commands[0]).toContain('rm');
+      expect(commands[0]).toContain('anthropic.json');
+      expect(commands[1]).toContain('openai.json');
+    });
+
+    it('adds comment for channel config migrations', () => {
+      const migrated = [
+        { service: 'telegram', key: 'bot_token', source: 'channels.telegram.accounts.bot.botToken' },
+      ];
+
+      const commands = getCleanupCommands('/path/to/openclaw.json', '/path/to/credentials', migrated);
+      expect(commands.length).toBeGreaterThan(0);
+      expect(commands.some(c => c.includes('edit manually'))).toBe(true);
+    });
+
+    it('returns empty for no migrations', () => {
+      const commands = getCleanupCommands('/path', '/path', []);
+      expect(commands).toHaveLength(0);
     });
   });
 });

@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { AuditLogger, createAuditLogger } from 'aquaman-core';
+import { AuditLogger, createAuditLogger, redactSensitiveParams } from 'aquaman-core';
 
 describe('AuditLogger', () => {
   let testDir: string;
@@ -245,5 +245,94 @@ describe('AuditLogger', () => {
       const stats = logger.getStats();
       expect(stats.entryCount).toBe(0);
     });
+  });
+
+  describe('param redaction', () => {
+    it('should redact sensitive keys in logToolCall params', async () => {
+      const entry = await logger.logToolCall('s1', 'a1', 'test', {
+        api_key: 'sk-ant-secret',
+        token: 'bearer-token',
+        command: 'ls -la',
+        model: 'claude-3',
+      });
+
+      const data = entry!.data as any;
+      expect(data.params.api_key).toBe('[REDACTED]');
+      expect(data.params.token).toBe('[REDACTED]');
+      expect(data.params.command).toBe('ls -la');
+      expect(data.params.model).toBe('claude-3');
+    });
+
+    it('should redact sensitive keys in logToolResult', async () => {
+      const entry = await logger.logToolResult('s1', 'a1', 'call-1', {
+        access_token: 'oauth-token',
+        client_secret: 'secret-value',
+        status: 'ok',
+      });
+
+      const data = entry!.data as any;
+      expect(data.result.access_token).toBe('[REDACTED]');
+      expect(data.result.client_secret).toBe('[REDACTED]');
+      expect(data.result.status).toBe('ok');
+    });
+
+    it('should not redact non-object results', async () => {
+      const entry = await logger.logToolResult('s1', 'a1', 'call-1', 'string result');
+
+      const data = entry!.data as any;
+      expect(data.result).toBe('string result');
+    });
+  });
+});
+
+describe('redactSensitiveParams', () => {
+  it('redacts keys matching sensitive patterns', () => {
+    const result = redactSensitiveParams({
+      api_key: 'sk-ant-123',
+      apiKey: 'sk-another',
+      token: 'bearer-token',
+      secret: 'my-secret',
+      password: 'pass123',
+      credential: 'cred',
+      authorization: 'Bearer abc',
+      access_token: 'at-123',
+      refresh_token: 'rt-456',
+      client_secret: 'cs-789',
+    });
+
+    for (const value of Object.values(result)) {
+      expect(value).toBe('[REDACTED]');
+    }
+  });
+
+  it('preserves non-sensitive keys', () => {
+    const result = redactSensitiveParams({
+      command: 'ls -la',
+      model: 'claude-3',
+      count: 5,
+      enabled: true,
+    });
+
+    expect(result.command).toBe('ls -la');
+    expect(result.model).toBe('claude-3');
+    expect(result.count).toBe(5);
+    expect(result.enabled).toBe(true);
+  });
+
+  it('is case-insensitive', () => {
+    const result = redactSensitiveParams({
+      API_KEY: 'value',
+      Token: 'value',
+      PASSWORD: 'value',
+    });
+
+    expect(result.API_KEY).toBe('[REDACTED]');
+    expect(result.Token).toBe('[REDACTED]');
+    expect(result.PASSWORD).toBe('[REDACTED]');
+  });
+
+  it('handles empty object', () => {
+    const result = redactSensitiveParams({});
+    expect(Object.keys(result)).toHaveLength(0);
   });
 });

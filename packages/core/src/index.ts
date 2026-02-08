@@ -20,6 +20,7 @@ export {
   EncryptedFileStore,
   MemoryStore,
   createCredentialStore,
+  validatePasswordStrength,
   type OnePasswordStoreOptions,
   OnePasswordStore,
   createOnePasswordStore,
@@ -32,7 +33,8 @@ export {
 export {
   type AuditLoggerOptions,
   AuditLogger,
-  createAuditLogger
+  createAuditLogger,
+  redactSensitiveParams
 } from './audit/index.js';
 
 // Utils

@@ -151,6 +151,13 @@ function mergeConfig(
     autoGenerate: overrideTls?.autoGenerate ?? baseTls?.autoGenerate
   } : undefined;
 
+  // Deprecation: ignore encryptionPassword from YAML config (env-var only)
+  if (override.credentials && 'encryptionPassword' in override.credentials) {
+    console.warn('Warning: credentials.encryptionPassword in config.yaml is deprecated and ignored. Use AQUAMAN_ENCRYPTION_PASSWORD env var instead.');
+    const { encryptionPassword: _, ...restCreds } = override.credentials;
+    override = { ...override, credentials: restCreds };
+  }
+
   return {
     credentials: {
       ...base.credentials,
