@@ -71,7 +71,7 @@ describe('aquaman setup E2E', () => {
     }, TEST_TIMEOUT);
 
     it('stores anthropic credential from env var', async () => {
-      const { stdout, exitCode } = await runSetup([], {
+      const { stdout, exitCode } = await runSetup(['--backend', 'encrypted-file'], {
         ANTHROPIC_API_KEY: 'sk-ant-test-setup',
       }, tempEnv);
 
@@ -80,7 +80,7 @@ describe('aquaman setup E2E', () => {
     }, TEST_TIMEOUT);
 
     it('stores openai credential from env var', async () => {
-      const { stdout, exitCode } = await runSetup([], {
+      const { stdout, exitCode } = await runSetup(['--backend', 'encrypted-file'], {
         OPENAI_API_KEY: 'sk-openai-test-setup',
       }, tempEnv);
 
@@ -89,7 +89,7 @@ describe('aquaman setup E2E', () => {
     }, TEST_TIMEOUT);
 
     it('skips openai when env var not set', async () => {
-      const { stdout, exitCode } = await runSetup([], {
+      const { stdout, exitCode } = await runSetup(['--backend', 'encrypted-file'], {
         ANTHROPIC_API_KEY: 'sk-ant-test-setup',
       }, tempEnv);
 
@@ -245,7 +245,7 @@ describe('aquaman setup E2E', () => {
     }, TEST_TIMEOUT);
 
     it('prints success without plugin steps', async () => {
-      const { stdout, exitCode } = await runSetup(['--no-openclaw'], {
+      const { stdout, exitCode } = await runSetup(['--no-openclaw', '--backend', 'encrypted-file'], {
         ANTHROPIC_API_KEY: 'sk-ant-test',
       }, tempEnv);
 

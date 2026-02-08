@@ -104,6 +104,8 @@ export function createTempEnv(options: TempEnvOptions = {}): TempEnv {
   const env: Record<string, string> = {
     AQUAMAN_CONFIG_DIR: aquamanDir,
     OPENCLAW_STATE_DIR: openclawDir,
+    // Fallback for encrypted-file backend on Linux CI (no keyring daemon)
+    AQUAMAN_ENCRYPTION_PASSWORD: 'test-password',
   };
 
   return {
