@@ -189,8 +189,12 @@ export class CredentialProxy {
         requestInfo.error = 'Credential not found';
         requestInfo.statusCode = 401;
         this.emitRequest(requestInfo);
+        res.setHeader('Content-Type', 'application/json');
         res.statusCode = 401;
-        res.end(`No credential configured for ${service}`);
+        res.end(JSON.stringify({
+          error: `No credential found for ${service}/${config.credentialKey}`,
+          fix: `Run: aquaman credentials add ${service} ${config.credentialKey}`
+        }));
         return;
       }
 

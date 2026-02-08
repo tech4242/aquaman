@@ -18,6 +18,9 @@
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
 import { HttpInterceptor, createHttpInterceptor } from "./src/http-interceptor.js";
 
 let proxyProcess: ChildProcess | null = null;
@@ -267,10 +270,57 @@ function registerStatusTool(api: OpenClawPluginApi): void {
 }
 
 /**
+ * Auto-generate auth-profiles.json with placeholder keys for proxied services.
+ * OpenClaw checks its auth store before making API calls — without a placeholder
+ * key, requests are rejected before they ever reach the proxy.
+ */
+function ensureAuthProfiles(log: OpenClawPluginApi["logger"]): void {
+  const stateDir =
+    process.env.OPENCLAW_STATE_DIR ||
+    path.join(os.homedir(), ".openclaw");
+  const profilesPath = path.join(
+    stateDir,
+    "agents",
+    "main",
+    "agent",
+    "auth-profiles.json"
+  );
+
+  if (fs.existsSync(profilesPath)) return;
+
+  const profiles: Record<string, any> = {};
+  const order: Record<string, string[]> = {};
+
+  for (const service of services) {
+    if (service === "anthropic" || service === "openai") {
+      profiles[`${service}:default`] = {
+        type: "api_key",
+        provider: service,
+        key: "aquaman-proxy-managed",
+      };
+      order[service] = [`${service}:default`];
+    }
+  }
+
+  const dir = path.dirname(profilesPath);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    profilesPath,
+    JSON.stringify({ version: 1, profiles, order }, null, 2)
+  );
+  log.info(
+    `Generated auth-profiles.json with placeholder keys at ${profilesPath}`
+  );
+}
+
+/**
  * OpenClaw plugin register function
  */
 export default function register(api: OpenClawPluginApi): void {
   api.logger.info("Aquaman plugin loaded");
+
+  // Auto-generate auth-profiles.json if missing
+  ensureAuthProfiles(api.logger);
 
   const externalUrl = getExternalProxyUrl();
 
@@ -306,7 +356,7 @@ export default function register(api: OpenClawPluginApi): void {
       "aquaman CLI not found. Install with: npm install -g aquaman-proxy"
     );
     api.logger.warn(
-      "Configuring environment variables, but credential injection requires the proxy to be running"
+      "Then run: aquaman setup"
     );
     configureEnvironment(api.logger);
     return;
@@ -329,8 +379,25 @@ export default function register(api: OpenClawPluginApi): void {
           // Activate fetch interceptor to redirect channel HTTP traffic through proxy
           activateHttpInterceptor(api.logger);
         } else {
-          api.logger.error("Failed to start aquaman proxy");
-          api.logger.warn("Run 'aquaman daemon' manually to enable credential injection");
+          api.logger.error(
+            `Failed to start aquaman proxy on port ${proxyPort}`
+          );
+          // Check if another instance is already running on the port
+          try {
+            const resp = await fetch(
+              `http://127.0.0.1:${proxyPort}/_health`
+            );
+            if (resp.ok) {
+              api.logger.info(
+                `Another aquaman instance is already running on port ${proxyPort} — using it`
+              );
+              activateHttpInterceptor(api.logger);
+            }
+          } catch {
+            api.logger.error(
+              `Port ${proxyPort} may be in use. Check with: lsof -i :${proxyPort}`
+            );
+          }
         }
       },
 

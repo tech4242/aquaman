@@ -44,11 +44,12 @@ The plugin (`packages/plugin/`) integrates with the OpenClaw Gateway's plugin SD
 
 **How it works:**
 1. Plugin exports `register(api)` function (not a class)
-2. On load: sets `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` to route through proxy
-3. On `onGatewayStart`: spawns `aquaman plugin-mode --port 8081` as child process
-4. On `onGatewayStart`: activates `globalThis.fetch` interceptor to redirect channel API traffic through proxy
-5. On `onGatewayStop`: deactivates interceptor, kills proxy process (SIGTERM)
-6. Registers `/aquaman` CLI commands and `aquaman_status` tool
+2. On load: auto-generates `auth-profiles.json` with placeholder keys if missing
+3. On load: sets `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` to route through proxy
+4. On `onGatewayStart`: spawns `aquaman plugin-mode --port 8081` as child process
+5. On `onGatewayStart`: activates `globalThis.fetch` interceptor to redirect channel API traffic through proxy
+6. On `onGatewayStop`: deactivates interceptor, kills proxy process (SIGTERM)
+7. Registers `/aquaman` CLI commands and `aquaman_status` tool
 
 **Key files:**
 - `index.ts` - Plugin entry point with `export default function register(api)` — this is the actual running code OpenClaw loads
@@ -174,6 +175,55 @@ Builtin service definitions (anthropic, openai, telegram, etc.) cannot be overri
 - `frontend` network is `internal: true` (`name: aquaman-frontend`) — openclaw can only reach aquaman, not the internet
 - `OPENCLAW_GATEWAY_TOKEN` env var is required when binding to lan (defaults to `aquaman-internal` in compose)
 - **Sandbox profile** (`--profile with-openclaw-sandboxed`): mounts Docker socket, enables OpenClaw's built-in sandbox so tool execution runs in ephemeral containers with `network: aquaman-frontend`, `cap-drop: ALL`, read-only root fs
+
+## CLI: `aquaman setup`
+
+All-in-one guided onboarding wizard. Replaces 6 manual steps with one command:
+
+```bash
+aquaman setup                           # Interactive — prompts for API keys
+aquaman setup --non-interactive         # Uses env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY)
+aquaman setup --backend encrypted-file  # Override auto-detected backend
+aquaman setup --no-openclaw             # Skip plugin installation
+```
+
+**What it does:**
+1. Detects platform → picks default backend (macOS=keychain, Linux=encrypted-file)
+2. Runs `init` internally (creates `~/.aquaman/`, config.yaml, audit dir, TLS disabled by default)
+3. Prompts for Anthropic + OpenAI API keys (interactive) or reads from env vars (non-interactive)
+4. Detects OpenClaw (`~/.openclaw/` or `which openclaw`)
+5. If OpenClaw found: installs plugin, writes openclaw.json, generates auth-profiles.json
+6. Prints success message
+
+**Non-interactive env vars:** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AQUAMAN_ENCRYPTION_PASSWORD`, `VAULT_ADDR`, `VAULT_TOKEN`
+
+## CLI: `aquaman doctor`
+
+Diagnostic tool that checks configuration and prints fixes:
+
+```bash
+aquaman doctor    # Exit code 0 = all pass, 1 = issues found
+```
+
+**Checks:**
+1. `~/.aquaman/config.yaml` exists
+2. Backend accessible
+3. Credentials stored (count and names)
+4. Proxy running on configured port (`/_health`)
+5. OpenClaw detected
+6. Plugin installed in extensions dir
+7. `openclaw.json` has aquaman-plugin entry
+8. `auth-profiles.json` exists
+
+## Auto auth-profiles Generation
+
+The plugin (`packages/plugin/index.ts`) auto-generates `~/.openclaw/agents/main/agent/auth-profiles.json` on load if the file doesn't exist. This eliminates the most confusing manual step — users don't need to understand why OpenClaw needs a placeholder key.
+
+## Actionable Error Messages
+
+- **Proxy 401 (credential not found):** Returns JSON `{ "error": "...", "fix": "Run: aquaman credentials add <service> <key>" }`
+- **Plugin: proxy start failure:** Checks if another instance is running on the port, suggests `lsof -i :<port>`
+- **Plugin: CLI not found:** Suggests `npm install -g aquaman-proxy` then `aquaman setup`
 
 ## Development Commands
 
@@ -418,7 +468,7 @@ Promise.all([
 | `packages/core/src/credentials/backends/` | 1Password and Vault backend implementations |
 | `packages/core/src/audit/logger.ts` | Hash-chained logging |
 | `packages/proxy/src/daemon.ts` | HTTP/HTTPS proxy server (header, url-path, basic, oauth auth modes) |
-| `packages/proxy/src/cli/index.ts` | CLI (Commander.js, 16 commands incl. `migrate openclaw`) |
+| `packages/proxy/src/cli/index.ts` | CLI (Commander.js, 18 commands incl. `setup`, `doctor`, `migrate openclaw`) |
 | `packages/proxy/src/service-registry.ts` | Builtin service definitions (23 services) |
 | `packages/proxy/src/oauth-token-cache.ts` | OAuth client credentials token exchange + caching |
 | `packages/proxy/src/migration/openclaw-migrator.ts` | Migrates channel creds from openclaw.json to secure store |
@@ -436,6 +486,10 @@ Promise.all([
 | `test/e2e/keychain-proxy-flow.test.ts` | Real keychain backend E2E (macOS only) |
 | `test/e2e/proxy-client-auth.test.ts` | Client token auth E2E tests |
 | `test/e2e/cli-plugin-mode.test.ts` | CLI startup/output E2E tests |
+| `test/e2e/cli-setup.test.ts` | `aquaman setup` E2E tests |
+| `test/e2e/cli-doctor.test.ts` | `aquaman doctor` E2E tests |
+| `test/unit/daemon-errors.test.ts` | Actionable error message unit tests |
+| `test/helpers/temp-env.ts` | Reusable temp environment helper for CLI tests |
 | `docker/Dockerfile.aquaman` | Multi-stage Docker build (builder + runtime) |
 | `docker/Dockerfile.openclaw` | OpenClaw + aquaman plugin Docker image |
 | `docker/docker-compose.yml` | Compose file with aquaman + optional openclaw services |

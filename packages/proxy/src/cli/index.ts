@@ -28,10 +28,18 @@ import {
   type WrapperConfig
 } from 'aquaman-core';
 
+import { fileURLToPath } from 'node:url';
+
 import { createCredentialProxy, type CredentialProxy } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
 import { createOpenClawIntegration } from '../openclaw/integration.js';
 import { stringify as yamlStringify } from 'yaml';
+
+// Read version from package.json (single source of truth)
+const __cliFilename = fileURLToPath(import.meta.url);
+const __cliDirname = path.dirname(__cliFilename);
+const pkgJson = JSON.parse(fs.readFileSync(path.resolve(__cliDirname, '../../package.json'), 'utf-8'));
+const VERSION: string = pkgJson.version;
 
 // PID file management
 const getPidFile = () => path.join(getConfigDir(), 'daemon.pid');
@@ -66,7 +74,7 @@ const program = new Command();
 program
   .name('aquaman')
   .description('Credential isolation layer for OpenClaw - keeps API keys outside the agent process')
-  .version('0.1.0');
+  .version(VERSION);
 
 // Start command - launches credential proxy + OpenClaw
 program
@@ -502,6 +510,480 @@ program
     console.log('\nNext steps:');
     console.log('1. Add your API keys: aquaman credentials add anthropic api_key');
     console.log('2. Start the proxy:   aquaman start');
+  });
+
+// Setup command - all-in-one guided onboarding
+program
+  .command('setup')
+  .description('All-in-one setup wizard — creates config, stores credentials, installs plugin')
+  .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, 1password, vault)')
+  .option('--no-openclaw', 'Skip OpenClaw plugin installation')
+  .option('--non-interactive', 'Use environment variables instead of prompts (for CI)')
+  .action(async (options) => {
+    const os = await import('node:os');
+    const configDir = getConfigDir();
+    const configPath = path.join(configDir, 'config.yaml');
+    const isNonInteractive = options.nonInteractive || false;
+    const openclawStateDir = process.env['OPENCLAW_STATE_DIR'] || path.join(os.homedir(), '.openclaw');
+
+    console.log('\n  \u{1F531} Aquaman Setup\n');
+
+    // Check if already configured
+    if (fs.existsSync(configPath) && !isNonInteractive) {
+      const rl = (await import('node:readline')).createInterface({
+        input: process.stdin,
+        output: process.stdout
+      });
+      const answer = await new Promise<string>((resolve) => {
+        rl.question('  Aquaman is already configured. Re-run setup? (y/N): ', resolve);
+      });
+      rl.close();
+      if (answer.toLowerCase() !== 'y') {
+        console.log('  Already configured. Run `aquaman doctor` to check status.');
+        return;
+      }
+    }
+
+    // 1. Detect platform and pick default backend
+    const platform = os.platform();
+    let backend = options.backend;
+    if (!backend) {
+      if (platform === 'darwin') {
+        backend = 'keychain';
+      } else {
+        // Linux: check for libsecret
+        try {
+          const { execSync } = await import('node:child_process');
+          execSync('pkg-config --exists libsecret-1', { stdio: 'pipe' });
+          backend = 'keychain';
+        } catch {
+          backend = 'encrypted-file';
+        }
+      }
+    }
+
+    // Validate backend
+    const validBackends = ['keychain', 'encrypted-file', '1password', 'vault'];
+    if (!validBackends.includes(backend)) {
+      console.error(`  Invalid backend: ${backend}`);
+      console.error(`  Valid options: ${validBackends.join(', ')}`);
+      process.exit(1);
+    }
+
+    const platformLabel = platform === 'darwin' ? 'macOS' :
+                          platform === 'linux' ? 'Linux' : platform;
+    console.log(`  Platform: ${platformLabel}`);
+    console.log(`  Backend:  ${backend}\n`);
+
+    // Check backend prerequisites before prompting for keys
+    if (backend === '1password') {
+      try {
+        const { execSync } = await import('node:child_process');
+        execSync('which op', { stdio: 'pipe' });
+        try {
+          execSync('op whoami', { stdio: 'pipe' });
+        } catch {
+          console.error('  1Password CLI is installed but not signed in.');
+          console.error('  Run: eval $(op signin)');
+          process.exit(1);
+        }
+      } catch {
+        console.error('  1Password CLI not found.');
+        console.error('  Install: brew install 1password-cli');
+        console.error('  Then: eval $(op signin)');
+        process.exit(1);
+      }
+    } else if (backend === 'vault') {
+      const vaultAddr = process.env['VAULT_ADDR'];
+      const vaultToken = process.env['VAULT_TOKEN'];
+      if (!vaultAddr || !vaultToken) {
+        if (isNonInteractive) {
+          console.error('  Vault backend requires VAULT_ADDR and VAULT_TOKEN environment variables.');
+          process.exit(1);
+        }
+      }
+      if (vaultAddr) {
+        try {
+          const resp = await fetch(`${vaultAddr}/v1/sys/health`);
+          if (!resp.ok) {
+            console.error(`  Vault health check failed (HTTP ${resp.status}).`);
+            console.error(`  Check VAULT_ADDR (${vaultAddr}) and VAULT_TOKEN.`);
+            process.exit(1);
+          }
+        } catch (err) {
+          console.error(`  Cannot reach Vault at ${vaultAddr}.`);
+          process.exit(1);
+        }
+      }
+    }
+
+    // 2. Run init internally (create dirs, config, no TLS by default)
+    ensureConfigDir();
+    const config = getDefaultConfig();
+    config.credentials.backend = backend;
+    config.credentials.tls = { enabled: false };
+    fs.writeFileSync(configPath, yamlStringify(config), 'utf-8');
+
+    // Create audit directory
+    const auditDir = path.join(configDir, 'audit');
+    fs.mkdirSync(auditDir, { recursive: true });
+
+    // 3. Prompt for API keys (or read from env in non-interactive mode)
+    let store;
+    try {
+      store = createCredentialStore({
+        backend: config.credentials.backend,
+        encryptionPassword: config.credentials.encryptionPassword || process.env['AQUAMAN_ENCRYPTION_PASSWORD'],
+        vaultAddress: config.credentials.vaultAddress || process.env['VAULT_ADDR'],
+        vaultToken: config.credentials.vaultToken || process.env['VAULT_TOKEN'],
+        onePasswordVault: config.credentials.onePasswordVault,
+        onePasswordAccount: config.credentials.onePasswordAccount
+      });
+    } catch (err) {
+      console.error(`  Failed to initialize ${backend} credential store: ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+
+    const storedServices: string[] = [];
+
+    if (isNonInteractive) {
+      // Non-interactive: read from env vars
+      const anthropicKey = process.env['ANTHROPIC_API_KEY'];
+      if (anthropicKey) {
+        await store.set('anthropic', 'api_key', anthropicKey);
+        storedServices.push('anthropic');
+        console.log('  \u2713 Stored anthropic/api_key');
+      }
+
+      const openaiKey = process.env['OPENAI_API_KEY'];
+      if (openaiKey) {
+        await store.set('openai', 'api_key', openaiKey);
+        storedServices.push('openai');
+        console.log('  \u2713 Stored openai/api_key');
+      }
+    } else {
+      // Interactive: prompt with hidden input
+      const readline = await import('node:readline');
+
+      const promptSecret = (prompt: string): Promise<string> => {
+        return new Promise((resolve) => {
+          const rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout
+          });
+
+          // Attempt to hide input on TTY
+          if (process.stdin.isTTY) {
+            process.stdout.write(prompt);
+            const stdin = process.stdin;
+            stdin.setRawMode(true);
+            stdin.resume();
+            let input = '';
+            const onData = (data: Buffer) => {
+              const char = data.toString();
+              if (char === '\n' || char === '\r') {
+                stdin.setRawMode(false);
+                stdin.removeListener('data', onData);
+                stdin.pause();
+                rl.close();
+                process.stdout.write('\n');
+                resolve(input.trim());
+              } else if (char === '\x7f' || char === '\b') {
+                input = input.slice(0, -1);
+              } else if (char === '\x03') {
+                // Ctrl+C
+                stdin.setRawMode(false);
+                process.exit(0);
+              } else {
+                input += char;
+              }
+            };
+            stdin.on('data', onData);
+          } else {
+            rl.question(prompt, (answer) => {
+              rl.close();
+              resolve(answer.trim());
+            });
+          }
+        });
+      };
+
+      const anthropicKey = await promptSecret('  ? Enter your Anthropic API key: ');
+      if (anthropicKey) {
+        await store.set('anthropic', 'api_key', anthropicKey);
+        storedServices.push('anthropic');
+        console.log('    \u2713 Stored anthropic/api_key\n');
+      }
+
+      const openaiKey = await promptSecret('  ? Enter your OpenAI API key (or press Enter to skip): ');
+      if (openaiKey) {
+        await store.set('openai', 'api_key', openaiKey);
+        storedServices.push('openai');
+        console.log('    \u2713 Stored openai/api_key\n');
+      } else {
+        console.log('    Skipped\n');
+      }
+    }
+
+    // 4. Detect OpenClaw and install plugin
+    if (options.openclaw !== false) {
+      const openclawDetected = fs.existsSync(openclawStateDir);
+      let cliDetected = false;
+      try {
+        const { execSync } = await import('node:child_process');
+        execSync('which openclaw', { stdio: 'pipe' });
+        cliDetected = true;
+      } catch { /* not installed */ }
+
+      if (openclawDetected || cliDetected) {
+        let shouldInstall = true;
+
+        if (!isNonInteractive) {
+          const rl = (await import('node:readline')).createInterface({
+            input: process.stdin,
+            output: process.stdout
+          });
+          const answer = await new Promise<string>((resolve) => {
+            rl.question('  ? OpenClaw detected. Install plugin? (Y/n): ', resolve);
+          });
+          rl.close();
+          shouldInstall = answer.toLowerCase() !== 'n';
+        }
+
+        if (shouldInstall) {
+          // a. Copy plugin files
+          const currentDir = path.dirname(fileURLToPath(import.meta.url));
+          const pluginSrc = path.resolve(currentDir, '../../../plugin');
+          const pluginDest = path.join(openclawStateDir, 'extensions', 'aquaman-plugin');
+          fs.mkdirSync(path.join(openclawStateDir, 'extensions'), { recursive: true });
+
+          if (fs.existsSync(pluginSrc)) {
+            fs.cpSync(pluginSrc, pluginDest, { recursive: true });
+            console.log('  \u2713 Plugin installed to ' + pluginDest);
+          }
+
+          // b. Write/merge openclaw.json
+          const openclawJsonPath = path.join(openclawStateDir, 'openclaw.json');
+          let openclawConfig: any = {};
+          if (fs.existsSync(openclawJsonPath)) {
+            try {
+              openclawConfig = JSON.parse(fs.readFileSync(openclawJsonPath, 'utf-8'));
+            } catch { /* start fresh */ }
+          }
+
+          if (!openclawConfig.plugins) openclawConfig.plugins = {};
+          if (!openclawConfig.plugins.entries) openclawConfig.plugins.entries = {};
+
+          openclawConfig.plugins.entries['aquaman-plugin'] = {
+            enabled: true,
+            config: {
+              mode: 'proxy',
+              backend,
+              services: storedServices.length > 0 ? storedServices : ['anthropic', 'openai'],
+              proxyPort: 8081
+            }
+          };
+
+          fs.writeFileSync(openclawJsonPath, JSON.stringify(openclawConfig, null, 2), 'utf-8');
+          console.log('  \u2713 Plugin config written to ' + openclawJsonPath);
+
+          // c. Generate auth-profiles.json (only if missing)
+          const profilesPath = path.join(openclawStateDir, 'agents', 'main', 'agent', 'auth-profiles.json');
+          if (!fs.existsSync(profilesPath)) {
+            const profiles: Record<string, any> = {};
+            const order: Record<string, string[]> = {};
+
+            const profileServices = storedServices.length > 0 ? storedServices : ['anthropic', 'openai'];
+            for (const svc of profileServices) {
+              if (svc === 'anthropic' || svc === 'openai') {
+                profiles[`${svc}:default`] = {
+                  type: 'api_key',
+                  provider: svc,
+                  key: 'aquaman-proxy-managed'
+                };
+                order[svc] = [`${svc}:default`];
+              }
+            }
+
+            const profilesDir = path.dirname(profilesPath);
+            fs.mkdirSync(profilesDir, { recursive: true });
+            fs.writeFileSync(profilesPath, JSON.stringify({ version: 1, profiles, order }, null, 2));
+            console.log('  \u2713 Auth profiles generated at ' + profilesPath);
+          }
+        }
+      } else {
+        console.log('  OpenClaw not detected — skipping plugin install');
+      }
+    }
+
+    // 5. Success message
+    const openclawPluginInstalled = options.openclaw !== false &&
+      fs.existsSync(path.join(openclawStateDir, 'extensions', 'aquaman-plugin'));
+
+    console.log('\n  \u2713 Setup complete!\n');
+    if (storedServices.length === 0) {
+      console.log('  Next: add credentials');
+      console.log('    aquaman credentials add anthropic api_key\n');
+    }
+    if (openclawPluginInstalled) {
+      console.log('  Next: start OpenClaw (proxy starts automatically via plugin)');
+      console.log('    openclaw\n');
+    } else {
+      console.log('  Next: start the proxy');
+      console.log('    aquaman start\n');
+    }
+    console.log('  Troubleshooting: aquaman doctor');
+    console.log('');
+  });
+
+// Doctor command - diagnostic tool
+program
+  .command('doctor')
+  .description('Check aquaman configuration and diagnose issues')
+  .action(async () => {
+    const os = await import('node:os');
+    const configDir = getConfigDir();
+    const configPath = path.join(configDir, 'config.yaml');
+    const openclawStateDir = process.env['OPENCLAW_STATE_DIR'] || path.join(os.homedir(), '.openclaw');
+    let issues = 0;
+
+    console.log('');
+    console.log(`  Aquaman v${VERSION}`);
+    console.log('');
+
+    // 1. Config file
+    if (fs.existsSync(configPath)) {
+      console.log('  \u2713 Config exists (' + configPath + ')');
+    } else {
+      console.log('  \u2717 Config missing (' + configPath + ')');
+      console.log('    \u2192 Run: aquaman setup');
+      issues++;
+    }
+
+    // 2. Backend accessible
+    let config;
+    try {
+      config = loadConfig();
+      const store = createCredentialStore({
+        backend: config.credentials.backend,
+        encryptionPassword: config.credentials.encryptionPassword,
+        vaultAddress: config.credentials.vaultAddress,
+        vaultToken: config.credentials.vaultToken,
+        onePasswordVault: config.credentials.onePasswordVault,
+        onePasswordAccount: config.credentials.onePasswordAccount
+      });
+
+      // 3. Count credentials
+      const creds = await store.list();
+      if (creds.length > 0) {
+        const names = creds.map(c => `${c.service}/${c.key}`).join(', ');
+        console.log(`  \u2713 Backend: ${config.credentials.backend} (accessible)`);
+        console.log(`  \u2713 Credentials: ${names} (${creds.length} stored)`);
+      } else {
+        console.log(`  \u2713 Backend: ${config.credentials.backend} (accessible)`);
+        console.log('  \u2717 No credentials stored');
+        console.log('    \u2192 Run: aquaman credentials add anthropic api_key');
+        issues++;
+      }
+    } catch {
+      console.log('  \u2717 Backend not accessible');
+      console.log('    \u2192 Run: aquaman setup');
+      issues++;
+      config = loadConfig();
+    }
+
+    // 4. Proxy running
+    const proxyPort = config.credentials.proxyPort;
+    const pluginInstalled = fs.existsSync(path.join(openclawStateDir, 'extensions', 'aquaman-plugin'));
+    const proxyFix = pluginInstalled
+      ? 'Proxy starts automatically with OpenClaw. Run: openclaw'
+      : 'Run: aquaman start';
+    try {
+      const resp = await fetch(`http://127.0.0.1:${proxyPort}/_health`);
+      if (resp.ok) {
+        console.log(`  \u2713 Proxy running on port ${proxyPort}`);
+      } else {
+        console.log(`  \u2717 Proxy not running on port ${proxyPort}`);
+        console.log(`    \u2192 ${proxyFix}`);
+        issues++;
+      }
+    } catch {
+      console.log(`  \u2717 Proxy not running on port ${proxyPort}`);
+      console.log(`    \u2192 ${proxyFix}`);
+      issues++;
+    }
+
+    // 5. OpenClaw detection
+    let openclawDetected = false;
+    try {
+      const { execSync } = await import('node:child_process');
+      const versionOutput = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8' }).trim();
+      console.log(`  \u2713 OpenClaw detected (${versionOutput})`);
+      openclawDetected = true;
+    } catch {
+      if (fs.existsSync(openclawStateDir)) {
+        console.log('  \u2713 OpenClaw state dir exists');
+        openclawDetected = true;
+      } else {
+        console.log('  - OpenClaw not detected (skipping plugin checks)');
+      }
+    }
+
+    if (openclawDetected) {
+      // 6. Plugin installed
+      const pluginPath = path.join(openclawStateDir, 'extensions', 'aquaman-plugin');
+      if (fs.existsSync(pluginPath)) {
+        console.log(`  \u2713 Plugin installed (${pluginPath})`);
+      } else {
+        console.log('  \u2717 Plugin not installed');
+        console.log('    \u2192 Run: aquaman setup');
+        issues++;
+      }
+
+      // 7. openclaw.json has plugin entry
+      const openclawJsonPath = path.join(openclawStateDir, 'openclaw.json');
+      if (fs.existsSync(openclawJsonPath)) {
+        try {
+          const openclawConfig = JSON.parse(fs.readFileSync(openclawJsonPath, 'utf-8'));
+          if (openclawConfig.plugins?.entries?.['aquaman-plugin']) {
+            console.log('  \u2713 Plugin configured in openclaw.json');
+          } else {
+            console.log('  \u2717 Plugin not configured in openclaw.json');
+            console.log('    \u2192 Run: aquaman setup');
+            issues++;
+          }
+        } catch {
+          console.log('  \u2717 openclaw.json is invalid');
+          console.log('    \u2192 Run: aquaman setup');
+          issues++;
+        }
+      } else {
+        console.log('  \u2717 openclaw.json not found');
+        console.log('    \u2192 Run: aquaman setup');
+        issues++;
+      }
+
+      // 8. Auth profiles exist
+      const profilesPath = path.join(openclawStateDir, 'agents', 'main', 'agent', 'auth-profiles.json');
+      if (fs.existsSync(profilesPath)) {
+        console.log('  \u2713 Auth profiles exist');
+      } else {
+        console.log('  \u2717 Auth profiles missing');
+        console.log('    \u2192 Run: aquaman setup');
+        issues++;
+      }
+    }
+
+    // Summary
+    console.log('');
+    if (issues === 0) {
+      console.log('  All checks passed.');
+    } else {
+      console.log(`  ${issues} issue${issues > 1 ? 's' : ''} found. Fix the above and re-run \`aquaman doctor\`.`);
+    }
+    console.log('');
+
+    process.exitCode = issues > 0 ? 1 : 0;
   });
 
 // Audit commands
@@ -965,4 +1447,4 @@ function formatEntry(entry: any): string {
   }
 }
 
-program.parse();
+program.parseAsync();

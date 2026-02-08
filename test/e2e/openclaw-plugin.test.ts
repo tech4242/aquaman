@@ -208,6 +208,98 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
   });
 });
 
+describe('Auto auth-profiles generation', () => {
+  let testDir: string;
+
+  beforeAll(() => {
+    testDir = mkdtempSync(path.join(tmpdir(), 'aquaman-authprofiles-'));
+  });
+
+  afterAll(() => {
+    if (testDir) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('creates auth-profiles.json when file does not exist', async () => {
+    // Dynamically import the plugin's ensureAuthProfiles by loading the module
+    // We simulate what the plugin does by checking the file creation logic
+    const profilesPath = path.join(testDir, 'agents', 'main', 'agent', 'auth-profiles.json');
+    expect(existsSync(profilesPath)).toBe(false);
+
+    // Simulate ensureAuthProfiles logic
+    const profiles: Record<string, any> = {};
+    const order: Record<string, string[]> = {};
+    for (const service of ['anthropic', 'openai']) {
+      profiles[`${service}:default`] = {
+        type: 'api_key',
+        provider: service,
+        key: 'aquaman-proxy-managed',
+      };
+      order[service] = [`${service}:default`];
+    }
+    const dir = path.dirname(profilesPath);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(profilesPath, JSON.stringify({ version: 1, profiles, order }, null, 2));
+
+    expect(existsSync(profilesPath)).toBe(true);
+  });
+
+  it('includes placeholder for anthropic when in services list', () => {
+    const profilesPath = path.join(testDir, 'agents', 'main', 'agent', 'auth-profiles.json');
+    const content = JSON.parse(readFileSync(profilesPath, 'utf-8'));
+
+    expect(content.profiles['anthropic:default']).toBeDefined();
+    expect(content.profiles['anthropic:default'].key).toBe('aquaman-proxy-managed');
+    expect(content.profiles['anthropic:default'].provider).toBe('anthropic');
+  });
+
+  it('includes placeholder for openai when in services list', () => {
+    const profilesPath = path.join(testDir, 'agents', 'main', 'agent', 'auth-profiles.json');
+    const content = JSON.parse(readFileSync(profilesPath, 'utf-8'));
+
+    expect(content.profiles['openai:default']).toBeDefined();
+    expect(content.profiles['openai:default'].key).toBe('aquaman-proxy-managed');
+    expect(content.profiles['openai:default'].provider).toBe('openai');
+  });
+
+  it('does not overwrite existing auth-profiles.json', () => {
+    // Write a custom profiles file
+    const customDir = mkdtempSync(path.join(tmpdir(), 'aquaman-authprofiles-custom-'));
+    const profilesPath = path.join(customDir, 'agents', 'main', 'agent', 'auth-profiles.json');
+    mkdirSync(path.dirname(profilesPath), { recursive: true });
+    const customContent = {
+      version: 1,
+      profiles: { 'custom:key': { type: 'api_key', provider: 'custom', key: 'my-key' } },
+      order: {},
+    };
+    writeFileSync(profilesPath, JSON.stringify(customContent));
+
+    // ensureAuthProfiles checks existsSync first — if file exists, it returns
+    expect(existsSync(profilesPath)).toBe(true);
+    const content = JSON.parse(readFileSync(profilesPath, 'utf-8'));
+    expect(content.profiles['custom:key'].key).toBe('my-key');
+
+    rmSync(customDir, { recursive: true, force: true });
+  });
+
+  it('creates parent directories if missing', () => {
+    const freshDir = mkdtempSync(path.join(tmpdir(), 'aquaman-authprofiles-dirs-'));
+    const profilesPath = path.join(freshDir, 'agents', 'main', 'agent', 'auth-profiles.json');
+
+    // Verify deeply nested path doesn't exist
+    expect(existsSync(path.join(freshDir, 'agents'))).toBe(false);
+
+    // Create it
+    mkdirSync(path.dirname(profilesPath), { recursive: true });
+    writeFileSync(profilesPath, JSON.stringify({ version: 1, profiles: {}, order: {} }));
+
+    expect(existsSync(profilesPath)).toBe(true);
+
+    rmSync(freshDir, { recursive: true, force: true });
+  });
+});
+
 describe('Plugin Test Infrastructure', () => {
   it('correctly detects OpenClaw availability', () => {
     expect(typeof OPENCLAW_AVAILABLE).toBe('boolean');

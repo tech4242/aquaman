@@ -167,6 +167,34 @@ describe('Credential Injection E2E', () => {
       expect(upstream.getRequestCount()).toBe(0);
     });
 
+    it('401 body includes fix command when credential missing', async () => {
+      await store.delete('anthropic', 'api_key');
+
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'test', messages: [] }),
+      });
+
+      expect(response.status).toBe(401);
+      const body = await response.json();
+      expect(body.error).toContain('anthropic');
+      expect(body.fix).toBe('Run: aquaman credentials add anthropic api_key');
+    });
+
+    it('401 body includes service and key name', async () => {
+      await store.delete('openai', 'api_key');
+
+      const response = await fetch(`http://127.0.0.1:${proxyPort}/openai/v1/chat/completions`, {
+        method: 'POST',
+      });
+
+      expect(response.status).toBe(401);
+      const body = await response.json();
+      expect(body.error).toContain('openai');
+      expect(body.error).toContain('api_key');
+    });
+
     it('logs authentication failure in request log', async () => {
       await store.delete('anthropic', 'api_key');
 
