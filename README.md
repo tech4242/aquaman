@@ -1,4 +1,4 @@
-# 🔱🦞 aquaman
+# 🔱🦞 Aquaman
 
 [![CI](https://github.com/tech4242/aquaman/actions/workflows/ci.yml/badge.svg)](https://github.com/tech4242/aquaman/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/tech4242/aquaman/branch/main/graph/badge.svg)](https://codecov.io/gh/tech4242/aquaman)
@@ -7,9 +7,11 @@
 
 Credential isolation for OpenClaw — secrets stay submerged, agents stay dry.
 
-API keys never enter the agent process. Aquaman stores them in a secure vault
-and injects auth headers via a separate proxy. Even a fully compromised agent
-can't exfiltrate your keys.
+You have bought yourself a brand new Mac Mini (or credits at your favorite cloud provider) and now you are still scared about your API credentials because you read all the articles. 
+
+We get it.
+
+With Aquaman API keys never enter the agent process. Aquaman stores them in a secure vault of your choosing and injects auth headers via a separate proxy. Even a fully compromised agent should not be able to exfiltrate your keys.
 
 ## Quick Start
 
