@@ -41,6 +41,12 @@ const __cliDirname = path.dirname(__cliFilename);
 const pkgJson = JSON.parse(fs.readFileSync(path.resolve(__cliDirname, '../../package.json'), 'utf-8'));
 const VERSION: string = pkgJson.version;
 
+// ANSI color helpers — aquamarine theme
+// Respects NO_COLOR (https://no-color.org/) and disables in piped/redirected output
+const noColor = process.env['NO_COLOR'] !== undefined ||
+                (!process.stdout.isTTY && process.env['FORCE_COLOR'] === undefined);
+const aqua = (s: string) => noColor ? s : `\x1b[38;2;127;255;212m${s}\x1b[0m`;
+
 // PID file management
 const getPidFile = () => path.join(getConfigDir(), 'daemon.pid');
 
@@ -75,7 +81,18 @@ program
   .name('aquaman')
   .description('Credential isolation layer for OpenClaw - keeps API keys outside the agent process')
   .version(VERSION)
-  .addHelpText('before', `\n\u{1F531}\u{1F99E} Aquaman ${VERSION} \u2014 Credential isolation for OpenClaw\n`);
+  .addHelpText('before', `\n\u{1F531}\u{1F99E} Aquaman ${aqua(VERSION)} \u2014 Credential isolation for OpenClaw\n`)
+  .configureHelp({
+    subcommandTerm(cmd) {
+      const args = cmd.registeredArguments
+        .map((arg: any) => {
+          const n = arg.name() + (arg.variadic ? '...' : '');
+          return arg.required ? `<${n}>` : `[${n}]`;
+        })
+        .join(' ');
+      return aqua(cmd.name()) + (cmd.options.length ? ' [options]' : '') + (args ? ' ' + args : '');
+    }
+  });
 
 // Start command - launches credential proxy + OpenClaw
 program
@@ -854,9 +871,9 @@ program
 
     // 1. Config file
     if (fs.existsSync(configPath)) {
-      console.log('  \u2713 Config exists (' + configPath + ')');
+      console.log(`  \u2713 ${aqua('Config')} exists (${configPath})`);
     } else {
-      console.log('  \u2717 Config missing (' + configPath + ')');
+      console.log(`  \u2717 ${aqua('Config')} missing (${configPath})`);
       console.log('    \u2192 Run: aquaman setup');
       issues++;
     }
@@ -878,16 +895,16 @@ program
       const creds = await store.list();
       if (creds.length > 0) {
         const names = creds.map(c => `${c.service}/${c.key}`).join(', ');
-        console.log(`  \u2713 Backend: ${config.credentials.backend} (accessible)`);
-        console.log(`  \u2713 Credentials: ${names} (${creds.length} stored)`);
+        console.log(`  \u2713 ${aqua('Backend:')} ${config.credentials.backend} (accessible)`);
+        console.log(`  \u2713 ${aqua('Credentials:')} ${names} (${creds.length} stored)`);
       } else {
-        console.log(`  \u2713 Backend: ${config.credentials.backend} (accessible)`);
-        console.log('  \u2717 No credentials stored');
+        console.log(`  \u2713 ${aqua('Backend:')} ${config.credentials.backend} (accessible)`);
+        console.log(`  \u2717 ${aqua('Credentials:')} none stored`);
         console.log('    \u2192 Run: aquaman credentials add anthropic api_key');
         issues++;
       }
     } catch {
-      console.log('  \u2717 Backend not accessible');
+      console.log(`  \u2717 ${aqua('Backend')} not accessible`);
       console.log('    \u2192 Run: aquaman setup');
       issues++;
       config = loadConfig();
@@ -902,14 +919,14 @@ program
     try {
       const resp = await fetch(`http://127.0.0.1:${proxyPort}/_health`);
       if (resp.ok) {
-        console.log(`  \u2713 Proxy running on port ${proxyPort}`);
+        console.log(`  \u2713 ${aqua('Proxy')} running on port ${proxyPort}`);
       } else {
-        console.log(`  \u2717 Proxy not running on port ${proxyPort}`);
+        console.log(`  \u2717 ${aqua('Proxy')} not running on port ${proxyPort}`);
         console.log(`    \u2192 ${proxyFix}`);
         issues++;
       }
     } catch {
-      console.log(`  \u2717 Proxy not running on port ${proxyPort}`);
+      console.log(`  \u2717 ${aqua('Proxy')} not running on port ${proxyPort}`);
       console.log(`    \u2192 ${proxyFix}`);
       issues++;
     }
@@ -919,14 +936,14 @@ program
     try {
       const { execSync } = await import('node:child_process');
       const versionOutput = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8' }).trim();
-      console.log(`  \u2713 OpenClaw detected (${versionOutput})`);
+      console.log(`  \u2713 ${aqua('OpenClaw')} detected (${versionOutput})`);
       openclawDetected = true;
     } catch {
       if (fs.existsSync(openclawStateDir)) {
-        console.log('  \u2713 OpenClaw state dir exists');
+        console.log(`  \u2713 ${aqua('OpenClaw')} state dir exists`);
         openclawDetected = true;
       } else {
-        console.log('  - OpenClaw not detected (skipping plugin checks)');
+        console.log(`  - ${aqua('OpenClaw')} not detected (skipping plugin checks)`);
       }
     }
 
@@ -934,9 +951,9 @@ program
       // 6. Plugin installed
       const pluginPath = path.join(openclawStateDir, 'extensions', 'aquaman-plugin');
       if (fs.existsSync(pluginPath)) {
-        console.log(`  \u2713 Plugin installed (${pluginPath})`);
+        console.log(`  \u2713 ${aqua('Plugin')} installed (${pluginPath})`);
       } else {
-        console.log('  \u2717 Plugin not installed');
+        console.log(`  \u2717 ${aqua('Plugin')} not installed`);
         console.log('    \u2192 Run: aquaman setup');
         issues++;
       }
@@ -947,19 +964,19 @@ program
         try {
           const openclawConfig = JSON.parse(fs.readFileSync(openclawJsonPath, 'utf-8'));
           if (openclawConfig.plugins?.entries?.['aquaman-plugin']) {
-            console.log('  \u2713 Plugin configured in openclaw.json');
+            console.log(`  \u2713 ${aqua('Plugin')} configured in openclaw.json`);
           } else {
-            console.log('  \u2717 Plugin not configured in openclaw.json');
+            console.log(`  \u2717 ${aqua('Plugin')} not configured in openclaw.json`);
             console.log('    \u2192 Run: aquaman setup');
             issues++;
           }
         } catch {
-          console.log('  \u2717 openclaw.json is invalid');
+          console.log(`  \u2717 ${aqua('openclaw.json')} is invalid`);
           console.log('    \u2192 Run: aquaman setup');
           issues++;
         }
       } else {
-        console.log('  \u2717 openclaw.json not found');
+        console.log(`  \u2717 ${aqua('openclaw.json')} not found`);
         console.log('    \u2192 Run: aquaman setup');
         issues++;
       }
@@ -967,9 +984,9 @@ program
       // 8. Auth profiles exist
       const profilesPath = path.join(openclawStateDir, 'agents', 'main', 'agent', 'auth-profiles.json');
       if (fs.existsSync(profilesPath)) {
-        console.log('  \u2713 Auth profiles exist');
+        console.log(`  \u2713 ${aqua('Auth profiles')} exist`);
       } else {
-        console.log('  \u2717 Auth profiles missing');
+        console.log(`  \u2717 ${aqua('Auth profiles')} missing`);
         console.log('    \u2192 Run: aquaman setup');
         issues++;
       }
