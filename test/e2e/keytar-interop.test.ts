@@ -59,8 +59,8 @@ describe('Keytar ESM/CJS Interop', () => {
       return;
     }
 
-    const service = 'aquaman-test-interop';
-    const account = 'test:api_key';
+    const service = 'aquaman-test-interop/testprovider';
+    const account = 'api_key';
     const secret = 'sk-test-interop-' + Date.now();
 
     try {

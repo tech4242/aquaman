@@ -883,9 +883,10 @@ program
 
     // 2. Backend accessible
     let config;
+    let store: import('aquaman-core').CredentialStore | null = null;
     try {
       config = loadConfig();
-      const store = createCredentialStore({
+      store = createCredentialStore({
         backend: config.credentials.backend,
         encryptionPassword: config.credentials.encryptionPassword,
         vaultAddress: config.credentials.vaultAddress,
@@ -1023,14 +1024,43 @@ program
           plaintext.push({ source: `credentials/${c.jsonPath[1]}`, service: c.service, key: c.key });
         }
 
-        if (plaintext.length > 0) {
-          console.log(`  \u2717 ${aqua('Unmigrated:')} ${plaintext.length} plaintext credentials exposed in OpenClaw config`);
+        // Partition into unmigrated vs migrated-but-not-cleaned-up
+        const unmigrated: typeof plaintext = [];
+        const needsCleanup: typeof plaintext = [];
+
+        if (store) {
           for (const c of plaintext) {
+            const inStore = await store.exists(c.service, c.key);
+            if (inStore) {
+              needsCleanup.push(c);
+            } else {
+              unmigrated.push(c);
+            }
+          }
+        } else {
+          // Can't check store — treat all as unmigrated
+          unmigrated.push(...plaintext);
+        }
+
+        if (unmigrated.length > 0) {
+          console.log(`  \u2717 ${aqua('Unmigrated:')} ${unmigrated.length} plaintext credentials exposed in OpenClaw config`);
+          for (const c of unmigrated) {
             console.log(`    ${c.service}/${c.key} \u2190 ${c.source}`);
           }
           console.log('    \u2192 Run: aquaman migrate openclaw --auto');
           issues++;
-        } else {
+        }
+
+        if (needsCleanup.length > 0) {
+          console.log(`  \u2717 ${aqua('Cleanup needed:')} ${needsCleanup.length} plaintext sources remain after migration`);
+          for (const c of needsCleanup) {
+            console.log(`    ${c.service}/${c.key} \u2190 ${c.source}`);
+          }
+          console.log('    \u2192 Remove plaintext sources listed above (credentials are already in secure store)');
+          issues++;
+        }
+
+        if (unmigrated.length === 0 && needsCleanup.length === 0) {
           console.log(`  \u2713 ${aqua('Unmigrated:')} none (all credentials secured)`);
         }
       } catch {
@@ -1398,14 +1428,17 @@ migrate
   .option('--dry-run', 'Show what would be migrated without writing')
   .option('--overwrite', 'Overwrite existing credentials in store')
   .option('--auto', 'Auto-detect and migrate all credentials with guided preview')
-  .action(async (opts: { config?: string; dryRun?: boolean; overwrite?: boolean; auto?: boolean }) => {
+  .option('--cleanup', 'Auto-remove plaintext originals after migration (no prompt)')
+  .option('--no-cleanup', 'Skip plaintext removal after migration')
+  .action(async (opts: { config?: string; dryRun?: boolean; overwrite?: boolean; auto?: boolean; cleanup?: boolean }) => {
     const {
       findOpenClawConfig,
       migrateFromOpenClaw,
       extractCredentials,
       scanCredentialsDir,
       readCredentialFromFile,
-      getCleanupCommands
+      getCleanupCommands,
+      cleanupSources
     } = await import('../migration/openclaw-migrator.js');
     const appConfig = loadConfig();
     const os = await import('node:os');
@@ -1575,19 +1608,52 @@ migrate
 
       console.log(`\n  ${green('\u2713')} Migrated ${migrated} credential${migrated > 1 ? 's' : ''}\n`);
 
-      // Cleanup commands
+      // Cleanup: remove plaintext originals
       const migratedResults = allCredentials.map(c => ({
         service: c.service,
         key: c.key,
         source: c.source
       }));
-      const cleanup = getCleanupCommands(openclawConfigPath, credentialsDir, migratedResults);
-      if (cleanup.length > 0) {
-        console.log('  Cleanup \u2014 remove plaintext sources:');
-        for (const cmd of cleanup) {
-          console.log(`    ${cmd}`);
+
+      // Determine whether to clean up
+      let shouldCleanup = false;
+      if (opts.cleanup === true) {
+        shouldCleanup = true;
+      } else if (opts.cleanup === false) {
+        // --no-cleanup: skip
+        shouldCleanup = false;
+      } else if (isTTY) {
+        // Interactive: prompt
+        const readline = await import('node:readline');
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        const answer = await new Promise<string>((resolve) => {
+          rl.question('  Remove plaintext originals? (y/N): ', resolve);
+        });
+        rl.close();
+        shouldCleanup = answer.toLowerCase() === 'y';
+      }
+
+      if (shouldCleanup) {
+        const cleanupResult = cleanupSources(openclawConfigPath, credentialsDir, migratedResults);
+        for (const d of cleanupResult.deleted) {
+          console.log(`  ${green('\u2713')} ${d.description}`);
         }
-        console.log('');
+        for (const e of cleanupResult.errors) {
+          console.log(`  \u2717 ${e.source}: ${e.error}`);
+        }
+        if (cleanupResult.deleted.length > 0) {
+          console.log('');
+        }
+      } else if (opts.cleanup !== true) {
+        // Show manual cleanup commands if not auto-cleaning
+        const cleanup = getCleanupCommands(openclawConfigPath, credentialsDir, migratedResults);
+        if (cleanup.length > 0) {
+          console.log('  Cleanup \u2014 remove plaintext sources:');
+          for (const cmd of cleanup) {
+            console.log(`    ${cmd}`);
+          }
+          console.log('');
+        }
       }
 
       return;

@@ -7,6 +7,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { encryptWithPassword, decryptWithPassword } from '../utils/hash.js';
+import { getConfigDir } from '../utils/config.js';
 import type { CredentialBackend } from '../types.js';
 
 export interface Credential {
@@ -45,7 +46,9 @@ export interface CredentialStoreOptions {
  */
 export class KeychainStore implements CredentialStore {
   private keytar: any = null;
-  private serviceName = 'aquaman';
+  private servicePrefix = 'aquaman';
+  private indexService = 'aquaman/_index';
+  private indexAccount = 'services';
 
   private async getKeytar(): Promise<typeof import('keytar')> {
     if (!this.keytar) {
@@ -59,31 +62,67 @@ export class KeychainStore implements CredentialStore {
     return this.keytar;
   }
 
+  private getServiceName(service: string): string {
+    return `${this.servicePrefix}/${service}`;
+  }
+
+  private async getIndex(): Promise<string[]> {
+    const keytar = await this.getKeytar();
+    const raw = await keytar.getPassword(this.indexService, this.indexAccount);
+    if (!raw) return [];
+    try { return JSON.parse(raw); } catch { return []; }
+  }
+
+  private async updateIndex(services: string[]): Promise<void> {
+    const keytar = await this.getKeytar();
+    await keytar.setPassword(this.indexService, this.indexAccount, JSON.stringify(services));
+  }
+
   async get(service: string, key: string): Promise<string | null> {
     const keytar = await this.getKeytar();
-    const account = `${service}:${key}`;
-    return keytar.getPassword(this.serviceName, account);
+    return keytar.getPassword(this.getServiceName(service), key);
   }
 
   async set(service: string, key: string, value: string): Promise<void> {
     const keytar = await this.getKeytar();
-    const account = `${service}:${key}`;
-    await keytar.setPassword(this.serviceName, account, value);
+    await keytar.setPassword(this.getServiceName(service), key, value);
+
+    const index = await this.getIndex();
+    if (!index.includes(service)) {
+      index.push(service);
+      await this.updateIndex(index);
+    }
   }
 
   async delete(service: string, key: string): Promise<boolean> {
     const keytar = await this.getKeytar();
-    const account = `${service}:${key}`;
-    return keytar.deletePassword(this.serviceName, account);
+    const deleted = await keytar.deletePassword(this.getServiceName(service), key);
+
+    if (deleted) {
+      const remaining = await keytar.findCredentials(this.getServiceName(service));
+      if (remaining.length === 0) {
+        const index = await this.getIndex();
+        const updated = index.filter((s: string) => s !== service);
+        await this.updateIndex(updated);
+      }
+    }
+
+    return deleted;
   }
 
   async list(): Promise<Array<{ service: string; key: string }>> {
     const keytar = await this.getKeytar();
-    const credentials = await keytar.findCredentials(this.serviceName);
-    return credentials.map(cred => {
-      const [service, key] = cred.account.split(':');
-      return { service: service || cred.account, key: key || '' };
-    });
+    const index = await this.getIndex();
+    const results: Array<{ service: string; key: string }> = [];
+
+    for (const service of index) {
+      const creds = await keytar.findCredentials(this.getServiceName(service));
+      for (const cred of creds) {
+        results.push({ service, key: cred.account });
+      }
+    }
+
+    return results;
   }
 
   async exists(service: string, key: string): Promise<boolean> {
@@ -282,7 +321,10 @@ export function createCredentialStore(options: CredentialStoreOptions): Credenti
           throw new Error(`Weak encryption password: ${strength.errors.join('; ')}`);
         }
       }
-      return new EncryptedFileStore(options.encryptionPassword);
+      return new EncryptedFileStore(
+        options.encryptionPassword,
+        path.join(getConfigDir(), 'credentials.enc')
+      );
 
     case '1password': {
       // Dynamically import to avoid loading if not used

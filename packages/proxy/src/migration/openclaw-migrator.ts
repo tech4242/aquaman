@@ -175,7 +175,8 @@ export function extractCredentials(config: any): CredentialMapping[] {
 
         for (const fieldDef of providerDef.fields) {
           const value = acc[fieldDef.field];
-          if (value && typeof value === 'string' && value.trim()) {
+          if (value && typeof value === 'string' && value.trim()
+              && value !== 'aquaman-proxy-managed' && !value.startsWith('aquaman://')) {
             results.push({
               jsonPath: ['channels', providerDef.provider, 'accounts', accountId, fieldDef.field],
               service: fieldDef.service,
@@ -190,7 +191,8 @@ export function extractCredentials(config: any): CredentialMapping[] {
     // Also check top-level provider fields (legacy flat config)
     for (const fieldDef of providerDef.fields) {
       const value = providerConfig[fieldDef.field];
-      if (value && typeof value === 'string' && value.trim()) {
+      if (value && typeof value === 'string' && value.trim()
+          && value !== 'aquaman-proxy-managed' && !value.startsWith('aquaman://')) {
         // Avoid duplicating if already found in accounts
         const alreadyFound = results.some(
           r => r.service === fieldDef.service && r.key === fieldDef.key
@@ -442,6 +444,94 @@ export function getCleanupCommands(
   }
 
   return commands;
+}
+
+/**
+ * Result of cleaning up plaintext sources after migration.
+ */
+export interface CleanupResult {
+  deleted: Array<{ source: string; description: string }>;
+  errors: Array<{ source: string; error: string }>;
+}
+
+/**
+ * Set a nested value on an object given a path of keys.
+ */
+function setNestedValue(obj: any, jsonPath: string[], value: any): boolean {
+  let current = obj;
+  for (let i = 0; i < jsonPath.length - 1; i++) {
+    if (!current || typeof current !== 'object') return false;
+    current = current[jsonPath[i]];
+  }
+  if (!current || typeof current !== 'object') return false;
+  const lastKey = jsonPath[jsonPath.length - 1];
+  if (!(lastKey in current)) return false;
+  current[lastKey] = value;
+  return true;
+}
+
+/**
+ * Remove plaintext credential sources after successful migration.
+ *
+ * - Credential files (from ~/.openclaw/credentials/): deleted entirely
+ * - Config tokens (from openclaw.json): replaced with "aquaman-proxy-managed" placeholder
+ */
+export function cleanupSources(
+  configPath: string,
+  credentialsDir: string,
+  migrated: MigrationResult['migrated']
+): CleanupResult {
+  const result: CleanupResult = { deleted: [], errors: [] };
+
+  // 1. Delete credential files
+  for (const m of migrated) {
+    if (m.source.startsWith('credentials-dir.')) {
+      const filename = m.source.split('.').slice(1).join('.');
+      const filePath = path.join(credentialsDir, filename);
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          result.deleted.push({
+            source: `credentials/${filename}`,
+            description: `Deleted ${filePath}`,
+          });
+        }
+      } catch (err) {
+        result.errors.push({
+          source: `credentials/${filename}`,
+          error: `Failed to delete: ${err}`,
+        });
+      }
+    }
+  }
+
+  // 2. Replace config tokens with placeholder
+  const configMigrations = migrated.filter(m => m.source.startsWith('channels.'));
+  if (configMigrations.length > 0 && fs.existsSync(configPath)) {
+    try {
+      const content = fs.readFileSync(configPath, 'utf-8');
+      const config = JSON.parse(content);
+
+      for (const m of configMigrations) {
+        const jsonPath = m.source.split('.');
+        if (setNestedValue(config, jsonPath, 'aquaman-proxy-managed')) {
+          result.deleted.push({
+            source: `openclaw.json → ${m.source}`,
+            description: `Replaced ${m.service}/${m.key} with placeholder`,
+          });
+        }
+      }
+
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+    } catch (err) {
+      result.errors.push({
+        source: 'openclaw.json',
+        error: `Failed to update config: ${err}`,
+      });
+    }
+  }
+
+  return result;
 }
 
 export { PROVIDER_CREDENTIAL_FIELDS };

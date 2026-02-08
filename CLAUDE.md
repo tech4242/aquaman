@@ -272,7 +272,7 @@ npm run build:core
 node -e "
 const kt = require('./node_modules/keytar');
 const k = kt.default || kt;
-k.setPassword('aquaman', 'anthropic:api_key', 'sk-ant-test-key').then(() => console.log('stored'));
+k.setPassword('aquaman/anthropic', 'api_key', 'sk-ant-test-key').then(() => console.log('stored'));
 "
 
 # 5. Create auth-profiles.json placeholder
@@ -366,14 +366,14 @@ const kt = require('./node_modules/keytar');
 const k = kt.default || kt;
 Promise.all([
   // Header auth
-  k.setPassword('aquaman', 'anthropic:api_key', 'sk-ant-manual-test'),
-  k.setPassword('aquaman', 'slack:bot_token', 'xoxb-manual-test-token'),
-  k.setPassword('aquaman', 'discord:bot_token', 'discord-manual-test-token'),
+  k.setPassword('aquaman/anthropic', 'api_key', 'sk-ant-manual-test'),
+  k.setPassword('aquaman/slack', 'bot_token', 'xoxb-manual-test-token'),
+  k.setPassword('aquaman/discord', 'bot_token', 'discord-manual-test-token'),
   // URL-path auth
-  k.setPassword('aquaman', 'telegram:bot_token', '123456:MANUAL-TEST-TOKEN'),
+  k.setPassword('aquaman/telegram', 'bot_token', '123456:MANUAL-TEST-TOKEN'),
   // Basic auth
-  k.setPassword('aquaman', 'twilio:account_sid', 'AC-manual-test-sid'),
-  k.setPassword('aquaman', 'twilio:auth_token', 'manual-test-auth-token'),
+  k.setPassword('aquaman/twilio', 'account_sid', 'AC-manual-test-sid'),
+  k.setPassword('aquaman/twilio', 'auth_token', 'manual-test-auth-token'),
 ]).then(() => console.log('All test credentials stored'));
 "
 ```
@@ -443,12 +443,12 @@ node -e "
 const kt = require('./node_modules/keytar');
 const k = kt.default || kt;
 Promise.all([
-  k.deletePassword('aquaman', 'anthropic:api_key'),
-  k.deletePassword('aquaman', 'slack:bot_token'),
-  k.deletePassword('aquaman', 'discord:bot_token'),
-  k.deletePassword('aquaman', 'telegram:bot_token'),
-  k.deletePassword('aquaman', 'twilio:account_sid'),
-  k.deletePassword('aquaman', 'twilio:auth_token'),
+  k.deletePassword('aquaman/anthropic', 'api_key'),
+  k.deletePassword('aquaman/slack', 'bot_token'),
+  k.deletePassword('aquaman/discord', 'bot_token'),
+  k.deletePassword('aquaman/telegram', 'bot_token'),
+  k.deletePassword('aquaman/twilio', 'account_sid'),
+  k.deletePassword('aquaman/twilio', 'auth_token'),
 ]).then(() => console.log('All test credentials removed'));
 "
 ```

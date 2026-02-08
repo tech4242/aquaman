@@ -36,30 +36,69 @@ if (process.platform === 'darwin') {
  */
 class TestKeychainStore implements CredentialStore {
   private kt: any;
-  private readonly serviceName = 'aquaman-test-e2e';
+  private readonly servicePrefix = 'aquaman-test-e2e';
+  private readonly indexService = 'aquaman-test-e2e/_index';
+  private readonly indexAccount = 'services';
 
   constructor(keytarModule: any) {
     this.kt = keytarModule;
   }
 
+  private getServiceName(service: string): string {
+    return `${this.servicePrefix}/${service}`;
+  }
+
+  private async getIndex(): Promise<string[]> {
+    const raw = await this.kt.getPassword(this.indexService, this.indexAccount);
+    if (!raw) return [];
+    try { return JSON.parse(raw); } catch { return []; }
+  }
+
+  private async updateIndex(services: string[]): Promise<void> {
+    await this.kt.setPassword(this.indexService, this.indexAccount, JSON.stringify(services));
+  }
+
   async get(service: string, key: string): Promise<string | null> {
-    return this.kt.getPassword(this.serviceName, `${service}:${key}`);
+    return this.kt.getPassword(this.getServiceName(service), key);
   }
 
   async set(service: string, key: string, value: string): Promise<void> {
-    await this.kt.setPassword(this.serviceName, `${service}:${key}`, value);
+    await this.kt.setPassword(this.getServiceName(service), key, value);
+
+    const index = await this.getIndex();
+    if (!index.includes(service)) {
+      index.push(service);
+      await this.updateIndex(index);
+    }
   }
 
   async delete(service: string, key: string): Promise<boolean> {
-    return this.kt.deletePassword(this.serviceName, `${service}:${key}`);
+    const deleted = await this.kt.deletePassword(this.getServiceName(service), key);
+
+    if (deleted) {
+      const remaining = await this.kt.findCredentials(this.getServiceName(service));
+      if (remaining.length === 0) {
+        const index = await this.getIndex();
+        const updated = index.filter((s: string) => s !== service);
+        await this.updateIndex(updated);
+      }
+    }
+
+    return deleted;
   }
 
   async list(): Promise<Array<{ service: string; key: string }>> {
-    const creds = await this.kt.findCredentials(this.serviceName);
-    return creds.map((c: { account: string }) => {
-      const [svc, k] = c.account.split(':');
-      return { service: svc || c.account, key: k || '' };
-    });
+    const index = await this.getIndex();
+    const results: Array<{ service: string; key: string }> = [];
+
+    for (const service of index) {
+      const creds = await this.kt.findCredentials(this.getServiceName(service));
+      for (const cred of creds) {
+        results.push({ service, key: cred.account });
+      }
+    }
+
+    return results;
   }
 
   async exists(service: string, key: string): Promise<boolean> {
@@ -69,10 +108,15 @@ class TestKeychainStore implements CredentialStore {
 
   /** Clean up all test entries from the keychain */
   async cleanup(): Promise<void> {
-    const creds = await this.kt.findCredentials(this.serviceName);
-    for (const c of creds) {
-      await this.kt.deletePassword(this.serviceName, c.account).catch(() => {});
+    const index = await this.getIndex();
+    for (const service of index) {
+      const creds = await this.kt.findCredentials(this.getServiceName(service));
+      for (const c of creds) {
+        await this.kt.deletePassword(this.getServiceName(service), c.account).catch(() => {});
+      }
     }
+    // Clean up the index entry itself
+    await this.kt.deletePassword(this.indexService, this.indexAccount).catch(() => {});
   }
 }
 

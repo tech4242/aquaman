@@ -9,6 +9,7 @@ import {
   migrateFromOpenClaw,
   scanCredentialsDir,
   getCleanupCommands,
+  cleanupSources,
 } from '../../packages/proxy/src/migration/openclaw-migrator.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -148,6 +149,20 @@ describe('OpenClaw Migrator', () => {
       expect(creds).toHaveLength(0);
     });
 
+    it('skips aquaman placeholder values', () => {
+      const config = {
+        channels: {
+          telegram: { accounts: { bot: { botToken: 'aquaman-proxy-managed' } } },
+          slack: { accounts: { ws: { botToken: 'aquaman://managed', appToken: 'xapp-real-token' } } },
+        }
+      };
+
+      const creds = extractCredentials(config);
+      expect(creds).toHaveLength(1);
+      expect(creds[0].service).toBe('slack');
+      expect(creds[0].key).toBe('app_token');
+    });
+
     it('handles multiple providers simultaneously', () => {
       const config = {
         channels: {
@@ -207,7 +222,7 @@ describe('OpenClaw Migrator', () => {
       expect(await store.get('telegram', 'bot_token')).toBeNull();
     });
 
-    it('skips already-managed credentials', async () => {
+    it('skips already-managed credentials (placeholders filtered by extractCredentials)', async () => {
       const config = {
         channels: {
           telegram: { accounts: { bot: { botToken: 'aquaman-proxy-managed' } } },
@@ -219,7 +234,7 @@ describe('OpenClaw Migrator', () => {
 
       expect(result.migrated).toHaveLength(0);
       expect(result.skipped).toHaveLength(1);
-      expect(result.skipped[0].reason).toContain('Already managed');
+      expect(result.skipped[0].reason).toContain('No channel credentials');
     });
 
     it('does not overwrite existing credentials by default', async () => {
@@ -374,6 +389,99 @@ describe('OpenClaw Migrator', () => {
     it('returns empty for no migrations', () => {
       const commands = getCleanupCommands('/path', '/path', []);
       expect(commands).toHaveLength(0);
+    });
+  });
+
+  describe('cleanupSources', () => {
+    let tempDir: string;
+    let configPath: string;
+    let credDir: string;
+
+    beforeEach(() => {
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-cleanup-test-'));
+      configPath = path.join(tempDir, 'openclaw.json');
+      credDir = path.join(tempDir, 'credentials');
+      fs.mkdirSync(credDir, { recursive: true });
+    });
+
+    it('deletes credential files from credentials dir', () => {
+      fs.writeFileSync(path.join(credDir, 'anthropic.json'), '{"api_key":"sk-test"}');
+      fs.writeFileSync(path.join(credDir, 'xai.json'), '{"api_key":"xai-test"}');
+
+      const result = cleanupSources(configPath, credDir, [
+        { service: 'anthropic', key: 'api_key', source: 'credentials-dir.anthropic.json' },
+        { service: 'xai', key: 'api_key', source: 'credentials-dir.xai.json' },
+      ]);
+
+      expect(result.deleted).toHaveLength(2);
+      expect(result.errors).toHaveLength(0);
+      expect(fs.existsSync(path.join(credDir, 'anthropic.json'))).toBe(false);
+      expect(fs.existsSync(path.join(credDir, 'xai.json'))).toBe(false);
+    });
+
+    it('replaces config tokens with placeholder in openclaw.json', () => {
+      const config = {
+        plugins: { entries: { 'aquaman-plugin': { enabled: true } } },
+        channels: {
+          telegram: { accounts: { mybot: { botToken: '123456:REAL-TOKEN' } } },
+          slack: { accounts: { ws1: { botToken: 'xoxb-real', appToken: 'xapp-real' } } },
+        },
+      };
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+      const result = cleanupSources(configPath, credDir, [
+        { service: 'telegram', key: 'bot_token', source: 'channels.telegram.accounts.mybot.botToken' },
+        { service: 'slack', key: 'bot_token', source: 'channels.slack.accounts.ws1.botToken' },
+        { service: 'slack', key: 'app_token', source: 'channels.slack.accounts.ws1.appToken' },
+      ]);
+
+      expect(result.deleted).toHaveLength(3);
+      expect(result.errors).toHaveLength(0);
+
+      const updated = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      expect(updated.channels.telegram.accounts.mybot.botToken).toBe('aquaman-proxy-managed');
+      expect(updated.channels.slack.accounts.ws1.botToken).toBe('aquaman-proxy-managed');
+      expect(updated.channels.slack.accounts.ws1.appToken).toBe('aquaman-proxy-managed');
+      // Non-credential config preserved
+      expect(updated.plugins.entries['aquaman-plugin'].enabled).toBe(true);
+    });
+
+    it('handles mixed credential files and config tokens', () => {
+      fs.writeFileSync(path.join(credDir, 'xai.json'), '{"api_key":"xai-test"}');
+      const config = {
+        channels: {
+          telegram: { accounts: { bot: { botToken: 'tok' } } },
+        },
+      };
+      fs.writeFileSync(configPath, JSON.stringify(config));
+
+      const result = cleanupSources(configPath, credDir, [
+        { service: 'xai', key: 'api_key', source: 'credentials-dir.xai.json' },
+        { service: 'telegram', key: 'bot_token', source: 'channels.telegram.accounts.bot.botToken' },
+      ]);
+
+      expect(result.deleted).toHaveLength(2);
+      expect(result.errors).toHaveLength(0);
+      expect(fs.existsSync(path.join(credDir, 'xai.json'))).toBe(false);
+      const updated = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      expect(updated.channels.telegram.accounts.bot.botToken).toBe('aquaman-proxy-managed');
+    });
+
+    it('returns empty result for no migrations', () => {
+      const result = cleanupSources(configPath, credDir, []);
+      expect(result.deleted).toHaveLength(0);
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('reports error when file deletion fails (already deleted)', () => {
+      // File doesn't exist — cleanup should handle gracefully
+      const result = cleanupSources(configPath, credDir, [
+        { service: 'anthropic', key: 'api_key', source: 'credentials-dir.anthropic.json' },
+      ]);
+
+      // Non-existent file is not an error (nothing to delete)
+      expect(result.deleted).toHaveLength(0);
+      expect(result.errors).toHaveLength(0);
     });
   });
 });

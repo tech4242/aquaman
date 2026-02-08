@@ -9,6 +9,7 @@ import { execSync, spawn as spawnProc } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import * as path from 'node:path';
 import * as http from 'node:http';
+import { EncryptedFileStore } from 'aquaman-core';
 import { createTempEnv, type TempEnv } from '../helpers/temp-env.js';
 
 const CLI_PATH = path.resolve('packages/proxy/src/cli/index.ts');
@@ -161,6 +162,7 @@ describe('aquaman doctor E2E', () => {
 
   describe('unmigrated credentials', () => {
     it('reports plaintext channel credentials in openclaw.json', () => {
+      const password = 'test-password-123';
       tempEnv = createTempEnv({
         withConfig: true,
         withPlugin: true,
@@ -175,7 +177,29 @@ describe('aquaman doctor E2E', () => {
           },
         },
       });
-      const { stdout } = runDoctor(tempEnv);
+
+      // Use encrypted-file backend (empty store) so test is isolated from real keychain
+      writeFileSync(
+        path.join(tempEnv.aquamanDir, 'config.yaml'),
+        [
+          'credentials:',
+          '  backend: encrypted-file',
+          '  proxyPort: 8081',
+          '  proxiedServices:',
+          '    - anthropic',
+          '    - openai',
+          '  tls:',
+          '    enabled: false',
+          'audit:',
+          '  enabled: true',
+          `  logDir: ${path.join(tempEnv.aquamanDir, 'audit')}`,
+        ].join('\n'),
+        'utf-8'
+      );
+
+      const { stdout } = runDoctor(tempEnv, {
+        AQUAMAN_ENCRYPTION_PASSWORD: password,
+      });
 
       expect(stdout).toContain('Unmigrated:');
       expect(stdout).toContain('plaintext credentials exposed');
@@ -185,6 +209,7 @@ describe('aquaman doctor E2E', () => {
     }, TEST_TIMEOUT);
 
     it('reports plaintext credential files in credentials/ dir', () => {
+      const password = 'test-password-123';
       tempEnv = createTempEnv({
         withConfig: true,
         withPlugin: true,
@@ -195,7 +220,29 @@ describe('aquaman doctor E2E', () => {
           },
         },
       });
-      const { stdout } = runDoctor(tempEnv);
+
+      // Use encrypted-file backend (empty store) so test is isolated from real keychain
+      writeFileSync(
+        path.join(tempEnv.aquamanDir, 'config.yaml'),
+        [
+          'credentials:',
+          '  backend: encrypted-file',
+          '  proxyPort: 8081',
+          '  proxiedServices:',
+          '    - anthropic',
+          '    - openai',
+          '  tls:',
+          '    enabled: false',
+          'audit:',
+          '  enabled: true',
+          `  logDir: ${path.join(tempEnv.aquamanDir, 'audit')}`,
+        ].join('\n'),
+        'utf-8'
+      );
+
+      const { stdout } = runDoctor(tempEnv, {
+        AQUAMAN_ENCRYPTION_PASSWORD: password,
+      });
 
       expect(stdout).toContain('Unmigrated:');
       expect(stdout).toContain('anthropic/api_key');
@@ -212,6 +259,58 @@ describe('aquaman doctor E2E', () => {
 
       expect(stdout).toContain('Unmigrated: none');
       expect(stdout).toContain('all credentials secured');
+    }, TEST_TIMEOUT);
+
+    it('reports cleanup needed when credentials are migrated but plaintext sources remain', async () => {
+      const password = 'test-password-123';
+      tempEnv = createTempEnv({
+        withConfig: true,
+        withPlugin: true,
+        withAuthProfiles: true,
+        withCredentials: {
+          channels: {
+            telegram: {
+              accounts: {
+                mybot: { botToken: '123456:FAKE-TOKEN' },
+              },
+            },
+          },
+        },
+      });
+
+      // Override config to use encrypted-file backend
+      writeFileSync(
+        path.join(tempEnv.aquamanDir, 'config.yaml'),
+        [
+          'credentials:',
+          '  backend: encrypted-file',
+          '  proxyPort: 8081',
+          '  proxiedServices:',
+          '    - anthropic',
+          '    - openai',
+          '  tls:',
+          '    enabled: false',
+          'audit:',
+          '  enabled: true',
+          `  logDir: ${path.join(tempEnv.aquamanDir, 'audit')}`,
+        ].join('\n'),
+        'utf-8'
+      );
+
+      // Pre-populate the encrypted store with the "migrated" credential
+      const credFile = path.join(tempEnv.aquamanDir, 'credentials.enc');
+      const store = new EncryptedFileStore(password, credFile);
+      await store.set('telegram', 'bot_token', '123456:FAKE-TOKEN');
+
+      const { stdout } = runDoctor(tempEnv, {
+        AQUAMAN_ENCRYPTION_PASSWORD: password,
+      });
+
+      expect(stdout).toContain('Cleanup needed:');
+      expect(stdout).toContain('plaintext sources remain');
+      expect(stdout).toContain('telegram/bot_token');
+      expect(stdout).not.toContain('aquaman migrate openclaw --auto');
+      expect(stdout).toContain('Remove plaintext sources');
     }, TEST_TIMEOUT);
   });
 

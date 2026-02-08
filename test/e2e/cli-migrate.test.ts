@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawn } from 'node:child_process';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { createTempEnv, type TempEnv } from '../helpers/temp-env.js';
 
@@ -120,5 +120,96 @@ describe('aquaman migrate openclaw --auto E2E', () => {
     expect(exitCode).toBe(0);
     expect(stdout).toContain('Migrated');
     expect(stdout).toContain('anthropic/api_key');
+  }, TEST_TIMEOUT);
+
+  it('--cleanup deletes credential files after migration', async () => {
+    tempEnv = createTempEnv({
+      withConfig: true,
+      withOpenClaw: true,
+      withCredentials: {
+        credentialFiles: {
+          'xai.json': { api_key: 'xai-cleanup-test' }
+        }
+      }
+    });
+
+    const credFile = path.join(tempEnv.openclawDir, 'credentials', 'xai.json');
+    expect(existsSync(credFile)).toBe(true);
+
+    const { stdout, exitCode } = await runMigrate(['--cleanup'], {}, tempEnv);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('Migrated');
+    expect(stdout).toContain('Deleted');
+    expect(existsSync(credFile)).toBe(false);
+  }, TEST_TIMEOUT);
+
+  it('--cleanup replaces config tokens with placeholder', async () => {
+    tempEnv = createTempEnv({
+      withConfig: true,
+      withOpenClaw: true,
+      withCredentials: {
+        channels: {
+          telegram: {
+            accounts: {
+              mybot: { botToken: '123456:CLEANUP-TEST' }
+            }
+          }
+        }
+      }
+    });
+
+    const { stdout, exitCode } = await runMigrate(['--cleanup'], {}, tempEnv);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('Migrated');
+    expect(stdout).toContain('Replaced');
+    expect(stdout).toContain('placeholder');
+
+    // Verify the config was updated
+    const configPath = path.join(tempEnv.openclawDir, 'openclaw.json');
+    const updated = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(updated.channels.telegram.accounts.mybot.botToken).toBe('aquaman-proxy-managed');
+  }, TEST_TIMEOUT);
+
+  it('--no-cleanup skips plaintext removal', async () => {
+    tempEnv = createTempEnv({
+      withConfig: true,
+      withOpenClaw: true,
+      withCredentials: {
+        credentialFiles: {
+          'anthropic.json': { api_key: 'sk-ant-no-cleanup-test' }
+        }
+      }
+    });
+
+    const credFile = path.join(tempEnv.openclawDir, 'credentials', 'anthropic.json');
+
+    const { stdout, exitCode } = await runMigrate(['--no-cleanup'], {}, tempEnv);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('Migrated');
+    expect(stdout).not.toContain('Deleted');
+    // File should still exist
+    expect(existsSync(credFile)).toBe(true);
+  }, TEST_TIMEOUT);
+
+  it('non-TTY without --cleanup shows manual cleanup commands', async () => {
+    tempEnv = createTempEnv({
+      withConfig: true,
+      withOpenClaw: true,
+      withCredentials: {
+        credentialFiles: {
+          'anthropic.json': { api_key: 'sk-ant-manual-cleanup' }
+        }
+      }
+    });
+
+    const { stdout, exitCode } = await runMigrate([], {}, tempEnv);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('Cleanup');
+    expect(stdout).toContain('rm');
+    expect(stdout).toContain('anthropic.json');
   }, TEST_TIMEOUT);
 });
