@@ -334,9 +334,9 @@ openclaw agent --local --message "hello" --session-id test --json 2>&1 | head -8
 ### Automated tests:
 
 ```bash
-npm run test:e2e                # All e2e tests (11 files)
-npm run test:unit               # All unit tests (13 files)
-npm test                        # Everything (~295 tests, 24 files)
+npm run test:e2e                # All e2e tests (15 files)
+npm run test:unit               # All unit tests (14 files)
+npm test                        # Everything (~422 tests, 29 files)
 ```
 
 ### Quick proxy-only smoke test:

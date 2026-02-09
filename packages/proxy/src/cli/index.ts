@@ -939,7 +939,7 @@ program
     let openclawDetected = false;
     try {
       const { execSync } = await import('node:child_process');
-      const versionOutput = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8' }).trim();
+      const versionOutput = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8', timeout: 5000 }).trim();
       console.log(`  \u2713 ${aqua('OpenClaw')} detected (${versionOutput})`);
       openclawDetected = true;
     } catch {

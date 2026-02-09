@@ -41,7 +41,7 @@ export function createTempEnv(options: TempEnvOptions = {}): TempEnv {
       path.join(aquamanDir, 'config.yaml'),
       [
         'credentials:',
-        '  backend: keychain',
+        '  backend: encrypted-file',
         '  proxyPort: 8081',
         '  proxiedServices:',
         '    - anthropic',
