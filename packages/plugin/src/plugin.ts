@@ -162,7 +162,7 @@ export class AquamanPlugin {
   }
 
   /**
-   * Activate HTTP fetch interceptor for channel credential isolation.
+   * Activate HTTP interceptor for channel credential isolation.
    */
   private activateHttpInterceptor(proxyBaseUrl: string): void {
     // Build host map from the service registry's host patterns
@@ -391,7 +391,7 @@ export class AquamanPlugin {
    * Check if proxy is healthy
    */
   async isProxyHealthy(): Promise<boolean> {
-    return this.proxyManager?.healthCheck() || false;
+    return this.proxyManager?.isRunning() || false;
   }
 }
 

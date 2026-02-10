@@ -122,7 +122,7 @@ export class CredentialProxy {
     const requestId = generateId();
     const url = req.url || '/';
 
-    // Health check endpoint
+    // Health check endpoint — unauthenticated (Docker healthcheck)
     if (url === '/_health' || url === '/_health/') {
       res.setHeader('Content-Type', 'application/json');
       res.statusCode = 200;
@@ -130,7 +130,7 @@ export class CredentialProxy {
       return;
     }
 
-    // Validate client token if configured
+    // Validate client token if configured (/_health exempt above)
     if (this.options.clientToken) {
       const provided = this.extractClientToken(req);
       if (!provided || !this.verifyToken(provided, this.options.clientToken)) {
@@ -138,6 +138,19 @@ export class CredentialProxy {
         res.end('Forbidden');
         return;
       }
+    }
+
+    // Host map endpoint — returns hostname→service mapping for fetch interceptors
+    if (url === '/_hostmap' || url === '/_hostmap/') {
+      res.setHeader('Content-Type', 'application/json');
+      res.statusCode = 200;
+      const hostMap = this.serviceRegistry.buildHostMap();
+      const obj: Record<string, string> = {};
+      for (const [pattern, serviceName] of hostMap) {
+        obj[pattern] = serviceName;
+      }
+      res.end(JSON.stringify(obj));
+      return;
     }
 
     // Parse service from path: /anthropic/v1/messages -> anthropic

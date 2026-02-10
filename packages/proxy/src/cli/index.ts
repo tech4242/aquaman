@@ -24,6 +24,7 @@ import {
   createAuditLogger,
   createCredentialStore,
   generateSelfSignedCert,
+  saveConfig,
   type WrapperConfig
 } from 'aquaman-core';
 
@@ -32,7 +33,7 @@ import { fileURLToPath } from 'node:url';
 import { createCredentialProxy, type CredentialProxy } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
 import { createOpenClawIntegration } from '../openclaw/integration.js';
-import { stringify as yamlStringify } from 'yaml';
+import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 
 // Read version from package.json (single source of truth)
 const __cliFilename = fileURLToPath(import.meta.url);
@@ -422,6 +423,13 @@ program
 
     const protocol = credentialProxy.isTlsEnabled() ? 'https' : 'http';
 
+    // Build host map from service registry for the plugin's fetch interceptor
+    const hostMap = serviceRegistry.buildHostMap();
+    const hostMapObj: Record<string, string> = {};
+    for (const [pattern, serviceName] of hostMap) {
+      hostMapObj[pattern] = serviceName;
+    }
+
     // Output connection info as JSON for plugin to parse
     const connectionInfo = {
       ready: true,
@@ -430,7 +438,8 @@ program
       baseUrl: `${protocol}://127.0.0.1:${credentialProxy.getPort()}`,
       services: config.credentials.proxiedServices,
       backend: config.credentials.backend,
-      token: clientToken
+      token: clientToken,
+      hostMap: hostMapObj
     };
 
     console.log(JSON.stringify(connectionInfo));
@@ -999,18 +1008,22 @@ program
     // 9. Unmigrated plaintext credentials
     if (openclawDetected) {
       try {
-        const { extractCredentials, scanCredentialsDir } = await import('../migration/openclaw-migrator.js');
+        const { extractCredentials, extractPluginCredentials, scanCredentialsDir } = await import('../migration/openclaw-migrator.js');
         const openclawJsonPath = path.join(openclawStateDir, 'openclaw.json');
         const credentialsDir = path.join(openclawStateDir, 'credentials');
 
         let plaintext: { source: string; service: string; key: string }[] = [];
 
-        // Scan openclaw.json channels
+        // Scan openclaw.json channels + plugin configs
         if (fs.existsSync(openclawJsonPath)) {
           try {
             const openclawConfig = JSON.parse(fs.readFileSync(openclawJsonPath, 'utf-8'));
             const channelCreds = extractCredentials(openclawConfig);
             for (const c of channelCreds) {
+              plaintext.push({ source: 'openclaw.json', service: c.service, key: c.key });
+            }
+            const pluginCreds = extractPluginCredentials(openclawConfig);
+            for (const c of pluginCreds) {
               plaintext.push({ source: 'openclaw.json', service: c.service, key: c.key });
             }
           } catch {
@@ -1435,6 +1448,8 @@ migrate
       findOpenClawConfig,
       migrateFromOpenClaw,
       extractCredentials,
+      extractPluginCredentials,
+      extractPluginUpstreamUrls,
       scanCredentialsDir,
       readCredentialFromFile,
       getCleanupCommands,
@@ -1461,18 +1476,21 @@ migrate
       const openclawConfigPath = findOpenClawConfig(opts.config || path.join(openclawStateDir, 'openclaw.json'));
       const credentialsDir = path.join(openclawStateDir, 'credentials');
 
-      // Scan both sources
+      // Scan all sources
       const fromConfig: Array<{ service: string; key: string; source: string; value: string | null }> = [];
+      const fromPlugins: Array<{ service: string; key: string; source: string; value: string | null }> = [];
       const fromDir: Array<{ service: string; key: string; source: string; value: string | null }> = [];
+      let upstreamMap = new Map<string, { upstream: string; hostname: string; sourceField: string }>();
 
-      // 1. Scan openclaw.json
+      // 1. Scan openclaw.json (channels + plugin configs)
       if (fs.existsSync(openclawConfigPath)) {
         try {
           const content = fs.readFileSync(openclawConfigPath, 'utf-8');
           const config = JSON.parse(content);
+
+          // Channel credentials
           const mappings = extractCredentials(config);
           for (const m of mappings) {
-            // Resolve value
             let current: any = config;
             for (const key of m.jsonPath) {
               if (!current || typeof current !== 'object') { current = null; break; }
@@ -1488,6 +1506,30 @@ migrate
               });
             }
           }
+
+          // Plugin credentials
+          const pluginMappings = extractPluginCredentials(config);
+          for (const m of pluginMappings) {
+            let current: any = config;
+            for (const key of m.jsonPath) {
+              if (!current || typeof current !== 'object') { current = null; break; }
+              current = current[key];
+            }
+            const value = typeof current === 'string' ? current : null;
+            if (value && value !== 'aquaman-proxy-managed' && !value.startsWith('aquaman://')) {
+              fromPlugins.push({
+                service: m.service,
+                key: m.key,
+                source: m.jsonPath.join('.'),
+                value
+              });
+            }
+          }
+
+          // Extract upstream URLs from plugin configs
+          upstreamMap = new Map(
+            extractPluginUpstreamUrls(config).map(u => [u.pluginId, { upstream: u.upstream, hostname: u.hostname, sourceField: u.sourceField }])
+          );
         } catch { /* skip unparseable config */ }
       }
 
@@ -1507,7 +1549,7 @@ migrate
         }
       }
 
-      // Merge & de-duplicate (prefer credentials dir over config)
+      // Merge & de-duplicate (prefer credentials dir over config over plugins)
       const seen = new Set<string>();
       const allCredentials: typeof fromDir = [];
 
@@ -1519,6 +1561,13 @@ migrate
         }
       }
       for (const cred of fromConfig) {
+        const id = `${cred.service}/${cred.key}`;
+        if (!seen.has(id)) {
+          seen.add(id);
+          allCredentials.push(cred);
+        }
+      }
+      for (const cred of fromPlugins) {
         const id = `${cred.service}/${cred.key}`;
         if (!seen.has(id)) {
           seen.add(id);
@@ -1538,9 +1587,18 @@ migrate
       console.log(`  Found ${allCredentials.length} credential${allCredentials.length > 1 ? 's' : ''}:\n`);
 
       if (fromConfig.length > 0) {
-        console.log(`    From ${dim('openclaw.json')}:`);
+        console.log(`    From ${dim('openclaw.json channels')}:`);
         for (const c of fromConfig) {
-          if (seen.has(`${c.service}/${c.key}`) || allCredentials.some(a => a.service === c.service && a.key === c.key && a.source === c.source)) {
+          if (allCredentials.some(a => a.service === c.service && a.key === c.key && a.source === c.source)) {
+            console.log(`      ${aqua(`${c.service}/${c.key}`)}    \u2190 ${dim(c.source)}`);
+          }
+        }
+      }
+
+      if (fromPlugins.length > 0) {
+        console.log(`    From ${dim('openclaw.json plugins')}:`);
+        for (const c of fromPlugins) {
+          if (allCredentials.some(a => a.service === c.service && a.key === c.key && a.source === c.source)) {
             console.log(`      ${aqua(`${c.service}/${c.key}`)}    \u2190 ${dim(c.source)}`);
           }
         }
@@ -1563,6 +1621,21 @@ migrate
 
       // Dry run: show preview only
       if (opts.dryRun) {
+        // Show which services would be registered
+        if (fromPlugins.length > 0) {
+          const registry = createServiceRegistry({ configPath: appConfig.services.configPath });
+          const newServices = [...new Set(fromPlugins.map(c => c.service))].filter(s => !registry.has(s));
+          if (newServices.length > 0) {
+            console.log(`  Would add to services.yaml: ${newServices.join(', ')}`);
+            for (const svc of newServices) {
+              const info = upstreamMap.get(svc);
+              if (info) {
+                console.log(`    ${aqua(svc)}: upstream ${dim(info.upstream)} (from ${info.sourceField})`);
+              }
+            }
+            console.log(`  Would add to proxiedServices: ${newServices.join(', ')}`);
+          }
+        }
         console.log('  (dry run \u2014 no credentials will be written)');
         return;
       }
@@ -1607,6 +1680,91 @@ migrate
       }
 
       console.log(`\n  ${green('\u2713')} Migrated ${migrated} credential${migrated > 1 ? 's' : ''}\n`);
+
+      // Auto-register unknown plugin services in services.yaml + proxiedServices
+      if (!opts.dryRun && fromPlugins.length > 0) {
+        const registry = createServiceRegistry({ configPath: appConfig.services.configPath });
+        const unknownServices = new Map<string, string[]>(); // service name → credential keys
+
+        for (const cred of fromPlugins) {
+          if (!registry.has(cred.service) && !unknownServices.has(cred.service)) {
+            unknownServices.set(cred.service, []);
+          }
+          if (unknownServices.has(cred.service)) {
+            unknownServices.get(cred.service)!.push(cred.key);
+          }
+        }
+
+        if (unknownServices.size > 0) {
+          // Read or create services.yaml
+          const servicesYamlPath = appConfig.services.configPath;
+          let servicesConfig: { services: any[] } = { services: [] };
+
+          if (fs.existsSync(servicesYamlPath)) {
+            try {
+              const content = fs.readFileSync(servicesYamlPath, 'utf-8');
+              const parsed = yamlParse(content);
+              if (parsed?.services && Array.isArray(parsed.services)) {
+                servicesConfig = parsed;
+              }
+            } catch { /* start fresh */ }
+          }
+
+          const existingNames = new Set(servicesConfig.services.map((s: any) => s.name));
+
+          const todoServices: string[] = [];
+
+          for (const [serviceName, credKeys] of unknownServices) {
+            if (existingNames.has(serviceName)) continue;
+
+            const info = upstreamMap.get(serviceName);
+            const upstream = info?.upstream || 'https://TODO-SET-UPSTREAM-URL';
+            const hostPatterns = info?.hostname ? [info.hostname] : [];
+
+            servicesConfig.services.push({
+              name: serviceName,
+              upstream,
+              authHeader: 'Authorization',
+              authPrefix: 'Bearer ',
+              credentialKey: credKeys[0],
+              description: `Auto-generated from ${serviceName} plugin migration`,
+              authMode: 'header',
+              hostPatterns,
+            });
+
+            if (info) {
+              console.log(`  ${green('\u2713')} Added ${aqua(serviceName)} to services.yaml (upstream: ${info.upstream})`);
+            } else {
+              console.log(`  ${green('\u2713')} Added ${aqua(serviceName)} to services.yaml`);
+              todoServices.push(serviceName);
+            }
+          }
+
+          fs.mkdirSync(path.dirname(servicesYamlPath), { recursive: true });
+          fs.writeFileSync(servicesYamlPath, yamlStringify(servicesConfig), 'utf-8');
+
+          // Add to proxiedServices in config.yaml
+          const updatedConfig = loadConfig();
+          let addedToProxied = false;
+          for (const serviceName of unknownServices.keys()) {
+            if (!updatedConfig.credentials.proxiedServices.includes(serviceName)) {
+              updatedConfig.credentials.proxiedServices.push(serviceName);
+              addedToProxied = true;
+            }
+          }
+          if (addedToProxied) {
+            saveConfig(updatedConfig);
+            console.log(`  ${green('\u2713')} Updated proxiedServices in config.yaml`);
+          }
+
+          if (todoServices.length > 0) {
+            console.log('');
+            console.log(`  ${dim('Note: Set the upstream URL for new services in:')}`);
+            console.log(`  ${dim(servicesYamlPath)}`);
+            console.log('');
+          }
+        }
+      }
 
       // Cleanup: remove plaintext originals
       const migratedResults = allCredentials.map(c => ({

@@ -2,6 +2,12 @@
   "id": "aquaman-plugin",
   "name": "Aquaman Vault",
   "description": "Credential isolation - API keys never touch the agent process",
+  "permissions": {
+    "env:write": ["*_BASE_URL", "GITHUB_API_URL"],
+    "process:spawn": ["aquaman"],
+    "global:override": ["fetch"],
+    "fs:write": ["~/.openclaw/agents/*/agent/auth-profiles.json"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
