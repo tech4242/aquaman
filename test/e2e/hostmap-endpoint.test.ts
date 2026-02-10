@@ -76,7 +76,7 @@ describe('/_hostmap endpoint', () => {
     expect(hostMap['api.anthropic.com']).toBe('anthropic');
   });
 
-  it('does not require client token (like /_health)', async () => {
+  it('requires client token when configured (unlike /_health)', async () => {
     // Create a proxy with client token
     const tokenProxy = createCredentialProxy({
       port: 0,
@@ -88,9 +88,21 @@ describe('/_hostmap endpoint', () => {
     const tokenPort = tokenProxy.getPort();
 
     try {
-      // /_hostmap should be accessible without token
-      const res = await fetch(`http://127.0.0.1:${tokenPort}/_hostmap`);
-      expect(res.status).toBe(200);
+      // /_hostmap should be rejected without token
+      const noTokenRes = await fetch(`http://127.0.0.1:${tokenPort}/_hostmap`);
+      expect(noTokenRes.status).toBe(403);
+
+      // /_hostmap should succeed with valid token
+      const withTokenRes = await fetch(`http://127.0.0.1:${tokenPort}/_hostmap`, {
+        headers: { 'X-Aquaman-Token': 'test-secret-token' },
+      });
+      expect(withTokenRes.status).toBe(200);
+      const hostMap = await withTokenRes.json() as Record<string, string>;
+      expect(hostMap['api.anthropic.com']).toBe('anthropic');
+
+      // /_health should still be accessible without token
+      const healthRes = await fetch(`http://127.0.0.1:${tokenPort}/_health`);
+      expect(healthRes.status).toBe(200);
     } finally {
       await tokenProxy.stop();
     }

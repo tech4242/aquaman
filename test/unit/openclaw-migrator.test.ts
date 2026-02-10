@@ -7,6 +7,8 @@ import { MemoryStore } from 'aquaman-core';
 import {
   extractCredentials,
   extractPluginCredentials,
+  extractPluginUpstreamUrls,
+  findUpstreamUrl,
   migrateFromOpenClaw,
   scanCredentialsDir,
   getCleanupCommands,
@@ -674,6 +676,248 @@ describe('OpenClaw Migrator', () => {
       // Non-existent file is not an error (nothing to delete)
       expect(result.deleted).toHaveLength(0);
       expect(result.errors).toHaveLength(0);
+    });
+  });
+
+  describe('findUpstreamUrl', () => {
+    it('finds endpoint field', () => {
+      const result = findUpstreamUrl({ endpoint: 'https://api.notion.com/v1' });
+      expect(result).toEqual({ field: 'endpoint', url: 'https://api.notion.com' });
+    });
+
+    it('finds baseUrl field', () => {
+      const result = findUpstreamUrl({ baseUrl: 'https://api.example.com' });
+      expect(result).toEqual({ field: 'baseUrl', url: 'https://api.example.com' });
+    });
+
+    it('finds apiUrl field', () => {
+      const result = findUpstreamUrl({ apiUrl: 'https://api.jira.com/rest' });
+      expect(result).toEqual({ field: 'apiUrl', url: 'https://api.jira.com' });
+    });
+
+    it('prioritizes explicit field names over generic URL values', () => {
+      const result = findUpstreamUrl({
+        customEndpointUrl: 'https://fallback.example.com',
+        endpoint: 'https://priority.example.com/v1',
+      });
+      expect(result!.field).toBe('endpoint');
+      expect(result!.url).toBe('https://priority.example.com');
+    });
+
+    it('falls back to any URL value for non-standard field names', () => {
+      const result = findUpstreamUrl({
+        serviceAddress: 'https://custom-api.example.com/path',
+        retries: 3,
+      });
+      expect(result).toEqual({ field: 'serviceAddress', url: 'https://custom-api.example.com' });
+    });
+
+    it('skips excluded URL fields (webhookUrl, callbackUrl, redirectUrl)', () => {
+      const result = findUpstreamUrl({
+        webhookUrl: 'https://hooks.example.com/hook',
+        callbackUrl: 'https://auth.example.com/callback',
+        redirectUrl: 'https://app.example.com/redirect',
+      });
+      expect(result).toBeNull();
+    });
+
+    it('skips credential-like fields during fallback', () => {
+      const result = findUpstreamUrl({
+        apiToken: 'https://not-a-url-but-matches',
+        secretKey: 'https://also-not-a-url',
+      });
+      expect(result).toBeNull();
+    });
+
+    it('strips path from URL', () => {
+      const result = findUpstreamUrl({ endpoint: 'https://api.notion.com/v1/databases' });
+      expect(result!.url).toBe('https://api.notion.com');
+    });
+
+    it('returns null for no URL fields', () => {
+      const result = findUpstreamUrl({ timeout: 5000, retries: 3, name: 'test' });
+      expect(result).toBeNull();
+    });
+
+    it('skips invalid URLs', () => {
+      const result = findUpstreamUrl({ endpoint: 'not-a-valid-url' });
+      expect(result).toBeNull();
+    });
+
+    it('skips non-HTTP URLs', () => {
+      const result = findUpstreamUrl({ endpoint: 'ftp://files.example.com' });
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('extractPluginUpstreamUrls', () => {
+    it('extracts upstream URL from endpoint field', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'notion-skill': {
+              config: {
+                apiToken: 'ntn_123',
+                endpoint: 'https://api.notion.com/v1',
+              }
+            }
+          }
+        }
+      };
+
+      const results = extractPluginUpstreamUrls(config);
+      expect(results).toHaveLength(1);
+      expect(results[0].pluginId).toBe('notion-skill');
+      expect(results[0].upstream).toBe('https://api.notion.com');
+      expect(results[0].hostname).toBe('api.notion.com');
+      expect(results[0].sourceField).toBe('endpoint');
+    });
+
+    it('extracts from baseUrl field', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'jira-plugin': {
+              config: {
+                apiKey: 'jira-key',
+                baseUrl: 'https://mycompany.atlassian.net',
+              }
+            }
+          }
+        }
+      };
+
+      const results = extractPluginUpstreamUrls(config);
+      expect(results).toHaveLength(1);
+      expect(results[0].upstream).toBe('https://mycompany.atlassian.net');
+      expect(results[0].hostname).toBe('mycompany.atlassian.net');
+    });
+
+    it('strips path from URL', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'custom-api': {
+              config: {
+                apiUrl: 'https://api.example.com/v2/resources',
+              }
+            }
+          }
+        }
+      };
+
+      const results = extractPluginUpstreamUrls(config);
+      expect(results).toHaveLength(1);
+      expect(results[0].upstream).toBe('https://api.example.com');
+    });
+
+    it('returns at most one URL per plugin', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'multi-url': {
+              config: {
+                endpoint: 'https://primary.example.com',
+                baseUrl: 'https://secondary.example.com',
+              }
+            }
+          }
+        }
+      };
+
+      const results = extractPluginUpstreamUrls(config);
+      expect(results).toHaveLength(1);
+      expect(results[0].upstream).toBe('https://primary.example.com');
+    });
+
+    it('skips aquaman-plugin', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'aquaman-plugin': {
+              config: {
+                endpoint: 'https://should-not-match.com',
+              }
+            }
+          }
+        }
+      };
+
+      const results = extractPluginUpstreamUrls(config);
+      expect(results).toHaveLength(0);
+    });
+
+    it('skips plugins with no config or null config', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'no-config': { enabled: true },
+            'null-config': { config: null },
+          }
+        }
+      };
+
+      const results = extractPluginUpstreamUrls(config);
+      expect(results).toHaveLength(0);
+    });
+
+    it('skips non-HTTP URLs', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'ftp-plugin': {
+              config: {
+                endpoint: 'ftp://files.example.com',
+              }
+            }
+          }
+        }
+      };
+
+      const results = extractPluginUpstreamUrls(config);
+      expect(results).toHaveLength(0);
+    });
+
+    it('returns empty for missing plugins section', () => {
+      expect(extractPluginUpstreamUrls({})).toHaveLength(0);
+      expect(extractPluginUpstreamUrls({ plugins: {} })).toHaveLength(0);
+      expect(extractPluginUpstreamUrls({ plugins: { entries: {} } })).toHaveLength(0);
+    });
+
+    it('handles multiple plugins with URLs', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'notion-skill': { config: { endpoint: 'https://api.notion.com' } },
+            'jira-plugin': { config: { baseUrl: 'https://jira.example.com' } },
+          }
+        }
+      };
+
+      const results = extractPluginUpstreamUrls(config);
+      expect(results).toHaveLength(2);
+      const pluginIds = results.map(r => r.pluginId).sort();
+      expect(pluginIds).toEqual(['jira-plugin', 'notion-skill']);
+    });
+
+    it('falls back to generic URL value when no explicit field matches', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'custom-plugin': {
+              config: {
+                serviceAddress: 'https://custom-api.example.com/path',
+                retries: 3,
+              }
+            }
+          }
+        }
+      };
+
+      const results = extractPluginUpstreamUrls(config);
+      expect(results).toHaveLength(1);
+      expect(results[0].upstream).toBe('https://custom-api.example.com');
+      expect(results[0].sourceField).toBe('serviceAddress');
     });
   });
 });

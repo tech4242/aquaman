@@ -253,6 +253,128 @@ describe('aquaman migrate openclaw --auto E2E', () => {
     expect(stdout).toContain('Found 2');
   }, TEST_TIMEOUT);
 
+  it('auto-creates services.yaml entry with detected upstream URL', async () => {
+    tempEnv = createTempEnv({
+      withConfig: true,
+      withOpenClaw: true,
+      withCredentials: {
+        plugins: {
+          'notion-skill': {
+            enabled: true,
+            config: {
+              apiToken: 'ntn_test_secret_token_svc',
+              endpoint: 'https://api.notion.com/v1',
+            }
+          }
+        }
+      }
+    });
+
+    const { stdout, exitCode } = await runMigrate([], {}, tempEnv);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('Migrated');
+    expect(stdout).toContain('Added notion-skill to services.yaml');
+    expect(stdout).toContain('upstream: https://api.notion.com');
+    expect(stdout).toContain('Updated proxiedServices');
+
+    // Verify services.yaml has real upstream (not TODO)
+    const servicesYaml = path.join(tempEnv.aquamanDir, 'services.yaml');
+    expect(existsSync(servicesYaml)).toBe(true);
+    const content = readFileSync(servicesYaml, 'utf-8');
+    expect(content).toContain('notion-skill');
+    expect(content).toContain('https://api.notion.com');
+    expect(content).not.toContain('TODO-SET-UPSTREAM-URL');
+    expect(content).toContain('api.notion.com');
+
+    // Verify proxiedServices was updated in config.yaml
+    const configYaml = readFileSync(path.join(tempEnv.aquamanDir, 'config.yaml'), 'utf-8');
+    expect(configYaml).toContain('notion-skill');
+  }, TEST_TIMEOUT);
+
+  it('falls back to TODO upstream when no URL field in plugin config', async () => {
+    tempEnv = createTempEnv({
+      withConfig: true,
+      withOpenClaw: true,
+      withCredentials: {
+        plugins: {
+          'custom-tool': {
+            enabled: true,
+            config: {
+              apiKey: 'custom-key-no-url',
+            }
+          }
+        }
+      }
+    });
+
+    const { stdout, exitCode } = await runMigrate([], {}, tempEnv);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('Migrated');
+    expect(stdout).toContain('Added custom-tool to services.yaml');
+
+    // Verify services.yaml has TODO upstream
+    const servicesYaml = path.join(tempEnv.aquamanDir, 'services.yaml');
+    const content = readFileSync(servicesYaml, 'utf-8');
+    expect(content).toContain('TODO-SET-UPSTREAM-URL');
+  }, TEST_TIMEOUT);
+
+  it('dry-run shows detected upstream URLs per service', async () => {
+    tempEnv = createTempEnv({
+      withConfig: true,
+      withOpenClaw: true,
+      withCredentials: {
+        plugins: {
+          'jira-plugin': {
+            config: {
+              apiKey: 'jira-dryrun-key',
+              baseUrl: 'https://mycompany.atlassian.net',
+            }
+          }
+        }
+      }
+    });
+
+    const { stdout, exitCode } = await runMigrate(['--dry-run'], {}, tempEnv);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('Would add to services.yaml: jira-plugin');
+    expect(stdout).toContain('https://mycompany.atlassian.net');
+    expect(stdout).toContain('Would add to proxiedServices: jira-plugin');
+    expect(stdout).toContain('dry run');
+
+    // Verify services.yaml was NOT created
+    const servicesYaml = path.join(tempEnv.aquamanDir, 'services.yaml');
+    expect(existsSync(servicesYaml)).toBe(false);
+  }, TEST_TIMEOUT);
+
+  it('does not add builtin services to services.yaml', async () => {
+    tempEnv = createTempEnv({
+      withConfig: true,
+      withOpenClaw: true,
+      withCredentials: {
+        channels: {
+          telegram: {
+            accounts: {
+              mybot: { botToken: '123456:BUILTIN-TEST' }
+            }
+          }
+        }
+      }
+    });
+
+    const { stdout, exitCode } = await runMigrate([], {}, tempEnv);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('Migrated');
+    expect(stdout).not.toContain('Added telegram to services.yaml');
+
+    // services.yaml should not be created for builtin services
+    const servicesYaml = path.join(tempEnv.aquamanDir, 'services.yaml');
+    expect(existsSync(servicesYaml)).toBe(false);
+  }, TEST_TIMEOUT);
+
   it('non-TTY without --cleanup shows manual cleanup commands', async () => {
     tempEnv = createTempEnv({
       withConfig: true,

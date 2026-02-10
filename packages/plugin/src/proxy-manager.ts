@@ -213,25 +213,6 @@ export class ProxyManager {
   }
 
   /**
-   * Health check
-   */
-  async healthCheck(): Promise<boolean> {
-    if (!this.connectionInfo) {
-      return false;
-    }
-
-    try {
-      const response = await fetch(`${this.connectionInfo.baseUrl}/health`, {
-        method: 'GET',
-        signal: AbortSignal.timeout(5000)
-      });
-      return response.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
    * Find the aquaman binary
    */
   private findAquamanBinary(): string | null {

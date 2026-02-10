@@ -612,4 +612,108 @@ export function cleanupSources(
   return result;
 }
 
+export interface PluginUpstreamInfo {
+  /** Plugin ID from openclaw.json */
+  pluginId: string;
+  /** Base upstream URL (protocol + host, no path) */
+  upstream: string;
+  /** Hostname extracted from URL for hostPatterns */
+  hostname: string;
+  /** Field name where the URL was found */
+  sourceField: string;
+}
+
+/**
+ * Explicit URL field names checked in priority order.
+ */
+const UPSTREAM_URL_FIELDS = [
+  'endpoint', 'baseUrl', 'apiUrl', 'apiEndpoint', 'serverUrl', 'url', 'host',
+];
+
+/**
+ * URL fields that should NOT be treated as upstream URLs.
+ */
+const EXCLUDED_URL_FIELDS = new Set([
+  'webhookUrl', 'callbackUrl', 'redirectUrl', 'webhookurl', 'callbackurl', 'redirecturl',
+]);
+
+/**
+ * Find an upstream URL from a plugin config object.
+ *
+ * Two-pass scan:
+ * 1. Check explicit field names in priority order
+ * 2. Fallback: any string value matching http(s):// (skipping credential and excluded fields)
+ *
+ * Returns `{ field, url }` or null.
+ */
+export function findUpstreamUrl(obj: Record<string, any>): { field: string; url: string } | null {
+  // Pass 1: explicit field names in priority order
+  for (const field of UPSTREAM_URL_FIELDS) {
+    const value = obj[field];
+    if (typeof value === 'string' && /^https?:\/\//i.test(value)) {
+      try {
+        const parsed = new URL(value);
+        return { field, url: `${parsed.protocol}//${parsed.host}` };
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  // Pass 2: fallback — scan all string values for URLs
+  for (const [field, value] of Object.entries(obj)) {
+    if (typeof value !== 'string') continue;
+    if (CREDENTIAL_FIELD_PATTERN.test(field)) continue;
+    if (EXCLUDED_URL_FIELDS.has(field)) continue;
+    if (!/^https?:\/\//i.test(value)) continue;
+
+    try {
+      const parsed = new URL(value);
+      return { field, url: `${parsed.protocol}//${parsed.host}` };
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extract upstream URLs from plugin config entries in openclaw.json.
+ *
+ * Scans `plugins.entries.<pluginId>.config.*` for URL-like fields.
+ * Returns at most one URL per plugin, using field name priority.
+ */
+export function extractPluginUpstreamUrls(config: any): PluginUpstreamInfo[] {
+  const results: PluginUpstreamInfo[] = [];
+
+  const entries = config?.plugins?.entries;
+  if (!entries || typeof entries !== 'object') return results;
+
+  for (const [pluginId, pluginEntry] of Object.entries(entries)) {
+    if (pluginId === 'aquaman-plugin') continue;
+
+    const entry = pluginEntry as Record<string, any>;
+    const pluginConfig = entry?.config;
+    if (!pluginConfig || typeof pluginConfig !== 'object') continue;
+
+    const found = findUpstreamUrl(pluginConfig);
+    if (found) {
+      try {
+        const parsed = new URL(found.url);
+        results.push({
+          pluginId,
+          upstream: found.url,
+          hostname: parsed.hostname,
+          sourceField: found.field,
+        });
+      } catch {
+        // skip invalid
+      }
+    }
+  }
+
+  return results;
+}
+
 export { PROVIDER_CREDENTIAL_FIELDS, CREDENTIAL_FIELD_PATTERN };

@@ -17,11 +17,12 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { spawn, execSync, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { HttpInterceptor, createHttpInterceptor } from "./src/http-interceptor.js";
+import { createProxyManager, type ProxyManager } from "./src/proxy-manager.js";
+import { fetchHostMap, isProxyRunning } from "./src/proxy-health.js";
 
 /**
  * Find an executable in PATH using filesystem checks (no shell execution).
@@ -42,7 +43,7 @@ function findInPath(name: string): string | null {
   return null;
 }
 
-let proxyProcess: ChildProcess | null = null;
+let proxyManager: ProxyManager | null = null;
 let httpInterceptor: HttpInterceptor | null = null;
 let clientToken: string | null = null;
 let dynamicHostMap: Map<string, string> | null = null;
@@ -79,23 +80,6 @@ const FALLBACK_HOST_MAP = new Map<string, string>([
 ]);
 
 /**
- * Fetch host map from external proxy's /_hostmap endpoint.
- * Falls back to builtin map if endpoint is unavailable.
- */
-async function fetchExternalHostMap(baseUrl: string): Promise<Map<string, string>> {
-  try {
-    const resp = await fetch(`${baseUrl}/_hostmap`, { signal: AbortSignal.timeout(3000) });
-    if (resp.ok) {
-      const obj = await resp.json() as Record<string, string>;
-      return new Map(Object.entries(obj));
-    }
-  } catch {
-    // Proxy may be older version without /_hostmap — use fallback
-  }
-  return FALLBACK_HOST_MAP;
-}
-
-/**
  * Get external proxy URL from environment (for Docker two-container mode).
  * When set, the plugin skips spawning a local proxy and routes traffic to the external URL.
  */
@@ -118,83 +102,31 @@ function isAquamanInstalled(): boolean {
 }
 
 /**
- * Start the aquaman proxy daemon
+ * Start the aquaman proxy daemon using ProxyManager
  */
 async function startProxy(port: number, log: OpenClawPluginApi["logger"]): Promise<boolean> {
-  return new Promise((resolve) => {
-    try {
-      proxyProcess = spawn("aquaman", ["plugin-mode", "--port", String(port)], {
-        stdio: "pipe",
-        detached: false,
-      });
-    } catch (err) {
-      log.error(`Failed to spawn aquaman: ${err}`);
-      resolve(false);
-      return;
-    }
-
-    let started = false;
-    let stdoutBuffer = "";
-
-    proxyProcess.stdout?.on("data", (data: Buffer) => {
-      stdoutBuffer += data.toString();
-      log.debug(`[aquaman] ${data.toString().trim()}`);
-      if (started) return;
-
-      // Try to parse JSON connection info from stdout
-      const lines = stdoutBuffer.split("\n");
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("{")) continue;
-        try {
-          const info = JSON.parse(trimmed);
-          if (info.ready === true) {
-            started = true;
-            clientToken = info.token || null;
-            // Parse dynamic host map from proxy (includes custom services from services.yaml)
-            if (info.hostMap && typeof info.hostMap === "object") {
-              dynamicHostMap = new Map(Object.entries(info.hostMap));
-            }
-            resolve(true);
-            return;
-          }
-        } catch {
-          // Not valid JSON yet, keep buffering
+  try {
+    const mgr = createProxyManager({
+      config: { proxyPort: port },
+      onReady: (info) => {
+        clientToken = info.token || null;
+        if (info.hostMap && typeof info.hostMap === "object") {
+          dynamicHostMap = new Map(Object.entries(info.hostMap));
         }
-      }
-
-      // Fall back to string matching for backward compat
-      if (stdoutBuffer.includes("listening") || stdoutBuffer.includes("started")) {
-        started = true;
-        resolve(true);
-      }
+      },
+      onError: (err) => log.error(`Proxy error: ${err.message}`),
+      onExit: (code) => {
+        proxyManager = null;
+        log.warn(`Proxy exited with code ${code}`);
+      },
     });
-
-    proxyProcess.stderr?.on("data", (data: Buffer) => {
-      log.warn(`[aquaman] ${data.toString().trim()}`);
-    });
-
-    proxyProcess.on("error", (err) => {
-      log.error(`Failed to start proxy: ${err.message}`);
-      resolve(false);
-    });
-
-    proxyProcess.on("exit", (code) => {
-      if (!started) {
-        log.warn(`Proxy exited with code ${code} before starting`);
-        resolve(false);
-      }
-      proxyProcess = null;
-    });
-
-    // Timeout after 5 seconds
-    setTimeout(() => {
-      if (!started) {
-        log.warn("Proxy start timed out");
-        resolve(false);
-      }
-    }, 5000);
-  });
+    await mgr.start();
+    proxyManager = mgr;
+    return true;
+  } catch (err) {
+    log.error(`Failed to start proxy: ${err}`);
+    return false;
+  }
 }
 
 /**
@@ -205,15 +137,15 @@ function stopProxy(): void {
     httpInterceptor.deactivate();
     httpInterceptor = null;
   }
-  if (proxyProcess) {
-    proxyProcess.kill("SIGTERM");
-    proxyProcess = null;
+  if (proxyManager) {
+    proxyManager.stop();
+    proxyManager = null;
   }
   clientToken = null;
 }
 
 /**
- * Activate the HTTP fetch interceptor to redirect channel API traffic through the proxy.
+ * Activate the HTTP interceptor to redirect channel API traffic through the proxy.
  * This is what provides credential isolation for channels that don't support base URL overrides.
  */
 function activateHttpInterceptor(log: OpenClawPluginApi["logger"]): void {
@@ -284,7 +216,7 @@ function registerStatusTool(api: OpenClawPluginApi): void {
           return {
             externalProxy: externalUrl !== null,
             proxyUrl: externalUrl || `http://127.0.0.1:${proxyPort}`,
-            proxyRunning: externalUrl !== null || proxyProcess !== null,
+            proxyRunning: externalUrl !== null || proxyManager !== null,
             proxyPort,
             services,
             httpInterceptorActive: httpInterceptor?.isActive() ?? false,
@@ -372,7 +304,8 @@ export default function register(api: OpenClawPluginApi): void {
       api.registerLifecycle({
         async onGatewayStart() {
           // Fetch dynamic host map from external proxy (includes custom services)
-          dynamicHostMap = await fetchExternalHostMap(externalUrl);
+          const map = await fetchHostMap(externalUrl, clientToken);
+          dynamicHostMap = map.size > 0 ? map : FALLBACK_HOST_MAP;
           activateHttpInterceptor(api.logger);
           api.logger.info("HTTP interceptor active (external proxy mode)");
         },
@@ -416,24 +349,20 @@ export default function register(api: OpenClawPluginApi): void {
         const started = await startProxy(proxyPort, api.logger);
         if (started) {
           api.logger.info("Aquaman proxy started successfully");
-          // Activate fetch interceptor to redirect channel HTTP traffic through proxy
+          // Activate HTTP interceptor to redirect channel traffic through proxy
           activateHttpInterceptor(api.logger);
         } else {
           api.logger.error(
             `Failed to start aquaman proxy on port ${proxyPort}`
           );
           // Check if another instance is already running on the port
-          try {
-            const resp = await fetch(
-              `http://127.0.0.1:${proxyPort}/_health`
+          const alreadyRunning = await isProxyRunning(proxyPort);
+          if (alreadyRunning) {
+            api.logger.info(
+              `Another aquaman instance is already running on port ${proxyPort} — using it`
             );
-            if (resp.ok) {
-              api.logger.info(
-                `Another aquaman instance is already running on port ${proxyPort} — using it`
-              );
-              activateHttpInterceptor(api.logger);
-            }
-          } catch {
+            activateHttpInterceptor(api.logger);
+          } else {
             api.logger.error(
               `Port ${proxyPort} may be in use. Check with: lsof -i :${proxyPort}`
             );
@@ -461,7 +390,7 @@ export default function register(api: OpenClawPluginApi): void {
           .description("Show aquaman proxy status")
           .action(() => {
             console.log("\nAquaman Status:");
-            console.log(`  Proxy running: ${proxyProcess !== null}`);
+            console.log(`  Proxy running: ${proxyManager !== null}`);
             console.log(`  Proxy port: ${proxyPort}`);
             console.log(`  Services: ${services.join(", ")}`);
             console.log("\nEnvironment Variables:");
@@ -480,28 +409,14 @@ export default function register(api: OpenClawPluginApi): void {
           .command("add <service> [key]")
           .description("Add a credential (opens secure prompt)")
           .action((service: string, key: string = "api_key") => {
-            try {
-              execSync(`aquaman credentials add ${service} ${key}`, {
-                stdio: "inherit",
-              });
-            } catch {
-              console.error(
-                "Failed to add credential. Is aquaman installed? npm install -g aquaman-proxy"
-              );
-            }
+            console.log(`\n  Run in your terminal:\n    aquaman credentials add ${service} ${key}\n`);
           });
 
         aquamanCmd
           .command("list")
           .description("List stored credentials")
           .action(() => {
-            try {
-              execSync("aquaman credentials list", { stdio: "inherit" });
-            } catch {
-              console.error(
-                "Failed to list credentials. Is aquaman installed?"
-              );
-            }
+            console.log(`\n  Run in your terminal:\n    aquaman credentials list\n`);
           });
       },
       { commands: ["aquaman"] }
