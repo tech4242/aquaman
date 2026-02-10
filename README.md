@@ -20,9 +20,14 @@ With Aquaman API keys never enter the agent process. Aquaman stores them in a se
 ```bash
 npm install -g aquaman-proxy
 aquaman setup                             # stores keys, installs OpenClaw plugin
-aquaman migrate openclaw --auto           # existing users: migrate plaintext secrets
+aquaman migrate openclaw --auto           # migrate plaintext secrets (channels + plugins)
 openclaw                                  # proxy starts automatically via plugin
 ```
+
+The migration detects credentials from channels (Telegram, Slack, etc.)
+**and** third-party plugins/skills (any `*token*`, `*key*`, `*secret*`,
+`*password*` fields in `openclaw.json` plugin configs). Upstream URLs are
+auto-detected from plugin config fields like `endpoint` or `baseUrl`.
 
 The plugin starts the proxy for you — no extra steps. To check
 everything is wired up correctly:
