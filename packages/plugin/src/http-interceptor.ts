@@ -62,7 +62,7 @@ export class HttpInterceptor {
     const injectToken = this.injectTokenHeader.bind(this);
     const logFn = this.log;
 
-    globalThis.fetch = (
+    (globalThis as any).fetch = (
       input: RequestInfo | URL,
       init?: RequestInit
     ): Promise<Response> => {
