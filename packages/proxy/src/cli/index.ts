@@ -422,6 +422,13 @@ program
 
     const protocol = credentialProxy.isTlsEnabled() ? 'https' : 'http';
 
+    // Build host map from service registry for the plugin's fetch interceptor
+    const hostMap = serviceRegistry.buildHostMap();
+    const hostMapObj: Record<string, string> = {};
+    for (const [pattern, serviceName] of hostMap) {
+      hostMapObj[pattern] = serviceName;
+    }
+
     // Output connection info as JSON for plugin to parse
     const connectionInfo = {
       ready: true,
@@ -430,7 +437,8 @@ program
       baseUrl: `${protocol}://127.0.0.1:${credentialProxy.getPort()}`,
       services: config.credentials.proxiedServices,
       backend: config.credentials.backend,
-      token: clientToken
+      token: clientToken,
+      hostMap: hostMapObj
     };
 
     console.log(JSON.stringify(connectionInfo));
@@ -999,18 +1007,22 @@ program
     // 9. Unmigrated plaintext credentials
     if (openclawDetected) {
       try {
-        const { extractCredentials, scanCredentialsDir } = await import('../migration/openclaw-migrator.js');
+        const { extractCredentials, extractPluginCredentials, scanCredentialsDir } = await import('../migration/openclaw-migrator.js');
         const openclawJsonPath = path.join(openclawStateDir, 'openclaw.json');
         const credentialsDir = path.join(openclawStateDir, 'credentials');
 
         let plaintext: { source: string; service: string; key: string }[] = [];
 
-        // Scan openclaw.json channels
+        // Scan openclaw.json channels + plugin configs
         if (fs.existsSync(openclawJsonPath)) {
           try {
             const openclawConfig = JSON.parse(fs.readFileSync(openclawJsonPath, 'utf-8'));
             const channelCreds = extractCredentials(openclawConfig);
             for (const c of channelCreds) {
+              plaintext.push({ source: 'openclaw.json', service: c.service, key: c.key });
+            }
+            const pluginCreds = extractPluginCredentials(openclawConfig);
+            for (const c of pluginCreds) {
               plaintext.push({ source: 'openclaw.json', service: c.service, key: c.key });
             }
           } catch {
@@ -1435,6 +1447,7 @@ migrate
       findOpenClawConfig,
       migrateFromOpenClaw,
       extractCredentials,
+      extractPluginCredentials,
       scanCredentialsDir,
       readCredentialFromFile,
       getCleanupCommands,
@@ -1461,18 +1474,20 @@ migrate
       const openclawConfigPath = findOpenClawConfig(opts.config || path.join(openclawStateDir, 'openclaw.json'));
       const credentialsDir = path.join(openclawStateDir, 'credentials');
 
-      // Scan both sources
+      // Scan all sources
       const fromConfig: Array<{ service: string; key: string; source: string; value: string | null }> = [];
+      const fromPlugins: Array<{ service: string; key: string; source: string; value: string | null }> = [];
       const fromDir: Array<{ service: string; key: string; source: string; value: string | null }> = [];
 
-      // 1. Scan openclaw.json
+      // 1. Scan openclaw.json (channels + plugin configs)
       if (fs.existsSync(openclawConfigPath)) {
         try {
           const content = fs.readFileSync(openclawConfigPath, 'utf-8');
           const config = JSON.parse(content);
+
+          // Channel credentials
           const mappings = extractCredentials(config);
           for (const m of mappings) {
-            // Resolve value
             let current: any = config;
             for (const key of m.jsonPath) {
               if (!current || typeof current !== 'object') { current = null; break; }
@@ -1481,6 +1496,25 @@ migrate
             const value = typeof current === 'string' ? current : null;
             if (value && value !== 'aquaman-proxy-managed' && !value.startsWith('aquaman://')) {
               fromConfig.push({
+                service: m.service,
+                key: m.key,
+                source: m.jsonPath.join('.'),
+                value
+              });
+            }
+          }
+
+          // Plugin credentials
+          const pluginMappings = extractPluginCredentials(config);
+          for (const m of pluginMappings) {
+            let current: any = config;
+            for (const key of m.jsonPath) {
+              if (!current || typeof current !== 'object') { current = null; break; }
+              current = current[key];
+            }
+            const value = typeof current === 'string' ? current : null;
+            if (value && value !== 'aquaman-proxy-managed' && !value.startsWith('aquaman://')) {
+              fromPlugins.push({
                 service: m.service,
                 key: m.key,
                 source: m.jsonPath.join('.'),
@@ -1507,7 +1541,7 @@ migrate
         }
       }
 
-      // Merge & de-duplicate (prefer credentials dir over config)
+      // Merge & de-duplicate (prefer credentials dir over config over plugins)
       const seen = new Set<string>();
       const allCredentials: typeof fromDir = [];
 
@@ -1519,6 +1553,13 @@ migrate
         }
       }
       for (const cred of fromConfig) {
+        const id = `${cred.service}/${cred.key}`;
+        if (!seen.has(id)) {
+          seen.add(id);
+          allCredentials.push(cred);
+        }
+      }
+      for (const cred of fromPlugins) {
         const id = `${cred.service}/${cred.key}`;
         if (!seen.has(id)) {
           seen.add(id);
@@ -1538,9 +1579,18 @@ migrate
       console.log(`  Found ${allCredentials.length} credential${allCredentials.length > 1 ? 's' : ''}:\n`);
 
       if (fromConfig.length > 0) {
-        console.log(`    From ${dim('openclaw.json')}:`);
+        console.log(`    From ${dim('openclaw.json channels')}:`);
         for (const c of fromConfig) {
-          if (seen.has(`${c.service}/${c.key}`) || allCredentials.some(a => a.service === c.service && a.key === c.key && a.source === c.source)) {
+          if (allCredentials.some(a => a.service === c.service && a.key === c.key && a.source === c.source)) {
+            console.log(`      ${aqua(`${c.service}/${c.key}`)}    \u2190 ${dim(c.source)}`);
+          }
+        }
+      }
+
+      if (fromPlugins.length > 0) {
+        console.log(`    From ${dim('openclaw.json plugins')}:`);
+        for (const c of fromPlugins) {
+          if (allCredentials.some(a => a.service === c.service && a.key === c.key && a.source === c.source)) {
             console.log(`      ${aqua(`${c.service}/${c.key}`)}    \u2190 ${dim(c.source)}`);
           }
         }

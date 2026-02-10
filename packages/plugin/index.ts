@@ -23,11 +23,77 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { HttpInterceptor, createHttpInterceptor } from "./src/http-interceptor.js";
 
+/**
+ * Find an executable in PATH using filesystem checks (no shell execution).
+ * Avoids execSync("which ...") which triggers dangerous-exec security audit flags.
+ */
+function findInPath(name: string): string | null {
+  const pathEnv = process.env.PATH || "";
+  const dirs = pathEnv.split(path.delimiter);
+  for (const dir of dirs) {
+    const candidate = path.join(dir, name);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // Not found or not executable in this dir
+    }
+  }
+  return null;
+}
+
 let proxyProcess: ChildProcess | null = null;
 let httpInterceptor: HttpInterceptor | null = null;
 let clientToken: string | null = null;
+let dynamicHostMap: Map<string, string> | null = null;
 const proxyPort = 8081;
 const services = ["anthropic", "openai"];
+
+/** Fallback host map used when proxy doesn't provide one (backward compat) */
+const FALLBACK_HOST_MAP = new Map<string, string>([
+  ['api.anthropic.com', 'anthropic'],
+  ['api.openai.com', 'openai'],
+  ['api.github.com', 'github'],
+  ['api.x.ai', 'xai'],
+  ['gateway.ai.cloudflare.com', 'cloudflare-ai'],
+  ['slack.com', 'slack'],
+  ['*.slack.com', 'slack'],
+  ['discord.com', 'discord'],
+  ['*.discord.com', 'discord'],
+  ['api.telegram.org', 'telegram'],
+  ['matrix.org', 'matrix'],
+  ['*.matrix.org', 'matrix'],
+  ['api.line.me', 'line'],
+  ['api-data.line.me', 'line'],
+  ['api.twitch.tv', 'twitch'],
+  ['id.twitch.tv', 'twitch'],
+  ['api.twilio.com', 'twilio'],
+  ['*.twilio.com', 'twilio'],
+  ['api.telnyx.com', 'telnyx'],
+  ['api.elevenlabs.io', 'elevenlabs'],
+  ['openapi.zalo.me', 'zalo'],
+  ['graph.microsoft.com', 'ms-teams'],
+  ['open.feishu.cn', 'feishu'],
+  ['open.larksuite.com', 'feishu'],
+  ['chat.googleapis.com', 'google-chat'],
+]);
+
+/**
+ * Fetch host map from external proxy's /_hostmap endpoint.
+ * Falls back to builtin map if endpoint is unavailable.
+ */
+async function fetchExternalHostMap(baseUrl: string): Promise<Map<string, string>> {
+  try {
+    const resp = await fetch(`${baseUrl}/_hostmap`, { signal: AbortSignal.timeout(3000) });
+    if (resp.ok) {
+      const obj = await resp.json() as Record<string, string>;
+      return new Map(Object.entries(obj));
+    }
+  } catch {
+    // Proxy may be older version without /_hostmap — use fallback
+  }
+  return FALLBACK_HOST_MAP;
+}
 
 /**
  * Get external proxy URL from environment (for Docker two-container mode).
@@ -45,15 +111,10 @@ function getExternalClientToken(): string | null {
 }
 
 /**
- * Check if aquaman CLI is installed
+ * Check if aquaman CLI is installed (fs-based, no shell execution)
  */
 function isAquamanInstalled(): boolean {
-  try {
-    execSync("which aquaman", { stdio: "pipe" });
-    return true;
-  } catch {
-    return false;
-  }
+  return findInPath("aquaman") !== null;
 }
 
 /**
@@ -90,6 +151,10 @@ async function startProxy(port: number, log: OpenClawPluginApi["logger"]): Promi
           if (info.ready === true) {
             started = true;
             clientToken = info.token || null;
+            // Parse dynamic host map from proxy (includes custom services from services.yaml)
+            if (info.hostMap && typeof info.hostMap === "object") {
+              dynamicHostMap = new Map(Object.entries(info.hostMap));
+            }
             resolve(true);
             return;
           }
@@ -152,36 +217,9 @@ function stopProxy(): void {
  * This is what provides credential isolation for channels that don't support base URL overrides.
  */
 function activateHttpInterceptor(log: OpenClawPluginApi["logger"]): void {
-  // Build host-to-service map for all known channel APIs
-  const hostMap = new Map<string, string>([
-    // LLM providers (also have env var overrides, but interceptor provides defense-in-depth)
-    ['api.anthropic.com', 'anthropic'],
-    ['api.openai.com', 'openai'],
-    ['api.github.com', 'github'],
-    ['api.x.ai', 'xai'],
-    ['gateway.ai.cloudflare.com', 'cloudflare-ai'],
-    // Channel APIs
-    ['slack.com', 'slack'],
-    ['*.slack.com', 'slack'],
-    ['discord.com', 'discord'],
-    ['*.discord.com', 'discord'],
-    ['api.telegram.org', 'telegram'],
-    ['matrix.org', 'matrix'],
-    ['*.matrix.org', 'matrix'],
-    ['api.line.me', 'line'],
-    ['api-data.line.me', 'line'],
-    ['api.twitch.tv', 'twitch'],
-    ['id.twitch.tv', 'twitch'],
-    ['api.twilio.com', 'twilio'],
-    ['*.twilio.com', 'twilio'],
-    ['api.telnyx.com', 'telnyx'],
-    ['api.elevenlabs.io', 'elevenlabs'],
-    ['openapi.zalo.me', 'zalo'],
-    ['graph.microsoft.com', 'ms-teams'],
-    ['open.feishu.cn', 'feishu'],
-    ['open.larksuite.com', 'feishu'],
-    ['chat.googleapis.com', 'google-chat'],
-  ]);
+  // Use dynamic host map from proxy (includes custom services from services.yaml)
+  // Falls back to builtin map for backward compatibility
+  const hostMap = dynamicHostMap || FALLBACK_HOST_MAP;
 
   const baseUrl = getExternalProxyUrl() || `http://127.0.0.1:${proxyPort}`;
 
@@ -333,6 +371,8 @@ export default function register(api: OpenClawPluginApi): void {
     if (api.registerLifecycle) {
       api.registerLifecycle({
         async onGatewayStart() {
+          // Fetch dynamic host map from external proxy (includes custom services)
+          dynamicHostMap = await fetchExternalHostMap(externalUrl);
           activateHttpInterceptor(api.logger);
           api.logger.info("HTTP interceptor active (external proxy mode)");
         },

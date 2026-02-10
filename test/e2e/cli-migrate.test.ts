@@ -194,6 +194,65 @@ describe('aquaman migrate openclaw --auto E2E', () => {
     expect(existsSync(credFile)).toBe(true);
   }, TEST_TIMEOUT);
 
+  it('detects and migrates plugin credentials from openclaw.json', async () => {
+    tempEnv = createTempEnv({
+      withConfig: true,
+      withOpenClaw: true,
+      withCredentials: {
+        plugins: {
+          'notion-skill': {
+            enabled: true,
+            config: {
+              apiToken: 'ntn_test_secret_token_123',
+            }
+          }
+        }
+      }
+    });
+
+    const { stdout, exitCode } = await runMigrate(['--cleanup'], {}, tempEnv);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('notion-skill/api_token');
+    expect(stdout).toContain('Migrated');
+    expect(stdout).toContain('Replaced');
+
+    // Verify the config was updated with placeholder
+    const configPath = path.join(tempEnv.openclawDir, 'openclaw.json');
+    const updated = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(updated.plugins.entries['notion-skill'].config.apiToken).toBe('aquaman-proxy-managed');
+  }, TEST_TIMEOUT);
+
+  it('migrates both channel and plugin credentials together', async () => {
+    tempEnv = createTempEnv({
+      withConfig: true,
+      withOpenClaw: true,
+      withCredentials: {
+        channels: {
+          telegram: {
+            accounts: {
+              mybot: { botToken: '123456:MIXED-TEST' }
+            }
+          }
+        },
+        plugins: {
+          'jira-plugin': {
+            config: {
+              apiKey: 'jira-secret-key-456',
+            }
+          }
+        }
+      }
+    });
+
+    const { stdout, exitCode } = await runMigrate(['--dry-run'], {}, tempEnv);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('telegram/bot_token');
+    expect(stdout).toContain('jira-plugin/api_key');
+    expect(stdout).toContain('Found 2');
+  }, TEST_TIMEOUT);
+
   it('non-TTY without --cleanup shows manual cleanup commands', async () => {
     tempEnv = createTempEnv({
       withConfig: true,

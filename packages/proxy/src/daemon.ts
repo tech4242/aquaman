@@ -130,6 +130,19 @@ export class CredentialProxy {
       return;
     }
 
+    // Host map endpoint — returns hostname→service mapping for fetch interceptors
+    if (url === '/_hostmap' || url === '/_hostmap/') {
+      res.setHeader('Content-Type', 'application/json');
+      res.statusCode = 200;
+      const hostMap = this.serviceRegistry.buildHostMap();
+      const obj: Record<string, string> = {};
+      for (const [pattern, serviceName] of hostMap) {
+        obj[pattern] = serviceName;
+      }
+      res.end(JSON.stringify(obj));
+      return;
+    }
+
     // Validate client token if configured
     if (this.options.clientToken) {
       const provided = this.extractClientToken(req);

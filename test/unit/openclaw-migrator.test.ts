@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { MemoryStore } from 'aquaman-core';
 import {
   extractCredentials,
+  extractPluginCredentials,
   migrateFromOpenClaw,
   scanCredentialsDir,
   getCleanupCommands,
@@ -177,6 +178,171 @@ describe('OpenClaw Migrator', () => {
       expect(creds).toHaveLength(4);
       const services = creds.map(c => c.service).sort();
       expect(services).toEqual(['discord', 'matrix', 'slack', 'telegram']);
+    });
+  });
+
+  describe('extractPluginCredentials', () => {
+    it('extracts credential-like fields from plugin config', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'notion-skill': {
+              enabled: true,
+              config: {
+                apiToken: 'ntn_abc123secret',
+              }
+            }
+          }
+        }
+      };
+
+      const creds = extractPluginCredentials(config);
+      expect(creds).toHaveLength(1);
+      expect(creds[0].service).toBe('notion-skill');
+      expect(creds[0].key).toBe('api_token');
+      expect(creds[0].jsonPath).toEqual(['plugins', 'entries', 'notion-skill', 'config', 'apiToken']);
+    });
+
+    it('extracts multiple credential fields from one plugin', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'my-saas': {
+              config: {
+                apiKey: 'key-123',
+                apiSecret: 'secret-456',
+                webhookUrl: 'https://example.com/hook',
+              }
+            }
+          }
+        }
+      };
+
+      const creds = extractPluginCredentials(config);
+      expect(creds).toHaveLength(2);
+      expect(creds.map(c => c.key).sort()).toEqual(['api_key', 'api_secret']);
+    });
+
+    it('extracts credentials from multiple plugins', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'notion-skill': { config: { apiToken: 'ntn_123' } },
+            'jira-plugin': { config: { apiKey: 'jira-key-456' } },
+          }
+        }
+      };
+
+      const creds = extractPluginCredentials(config);
+      expect(creds).toHaveLength(2);
+      const services = creds.map(c => c.service).sort();
+      expect(services).toEqual(['jira-plugin', 'notion-skill']);
+    });
+
+    it('skips aquaman-plugin config', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'aquaman-plugin': {
+              config: {
+                mode: 'proxy',
+                backend: 'keychain',
+                proxyPort: 8081,
+              }
+            }
+          }
+        }
+      };
+
+      const creds = extractPluginCredentials(config);
+      expect(creds).toHaveLength(0);
+    });
+
+    it('skips placeholder values', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'notion-skill': {
+              config: {
+                apiToken: 'aquaman-proxy-managed',
+                apiKey: 'aquaman://managed',
+              }
+            }
+          }
+        }
+      };
+
+      const creds = extractPluginCredentials(config);
+      expect(creds).toHaveLength(0);
+    });
+
+    it('skips non-credential fields', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'some-plugin': {
+              config: {
+                endpoint: 'https://api.example.com',
+                timeout: 5000,
+                retries: 3,
+                enabled: true,
+                name: 'my-instance',
+              }
+            }
+          }
+        }
+      };
+
+      const creds = extractPluginCredentials(config);
+      expect(creds).toHaveLength(0);
+    });
+
+    it('scans nested config objects', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'complex-plugin': {
+              config: {
+                database: {
+                  password: 'db-secret-123',
+                },
+                api: {
+                  accessToken: 'tok-456',
+                },
+              }
+            }
+          }
+        }
+      };
+
+      const creds = extractPluginCredentials(config);
+      expect(creds).toHaveLength(2);
+      expect(creds.find(c => c.key === 'password')?.jsonPath).toEqual(
+        ['plugins', 'entries', 'complex-plugin', 'config', 'database', 'password']
+      );
+      expect(creds.find(c => c.key === 'access_token')?.jsonPath).toEqual(
+        ['plugins', 'entries', 'complex-plugin', 'config', 'api', 'accessToken']
+      );
+    });
+
+    it('returns empty for missing plugins section', () => {
+      expect(extractPluginCredentials({})).toHaveLength(0);
+      expect(extractPluginCredentials({ plugins: {} })).toHaveLength(0);
+      expect(extractPluginCredentials({ plugins: { entries: {} } })).toHaveLength(0);
+    });
+
+    it('skips plugins with no config object', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'no-config': { enabled: true },
+            'null-config': { config: null },
+          }
+        }
+      };
+
+      const creds = extractPluginCredentials(config);
+      expect(creds).toHaveLength(0);
     });
   });
 
@@ -465,6 +631,32 @@ describe('OpenClaw Migrator', () => {
       expect(fs.existsSync(path.join(credDir, 'xai.json'))).toBe(false);
       const updated = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
       expect(updated.channels.telegram.accounts.bot.botToken).toBe('aquaman-proxy-managed');
+    });
+
+    it('replaces plugin config tokens with placeholder in openclaw.json', () => {
+      const config = {
+        plugins: {
+          entries: {
+            'aquaman-plugin': { enabled: true },
+            'notion-skill': {
+              config: { apiToken: 'ntn_real_secret' },
+            },
+          },
+        },
+      };
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+      const result = cleanupSources(configPath, credDir, [
+        { service: 'notion-skill', key: 'api_token', source: 'plugins.entries.notion-skill.config.apiToken' },
+      ]);
+
+      expect(result.deleted).toHaveLength(1);
+      expect(result.errors).toHaveLength(0);
+
+      const updated = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      expect(updated.plugins.entries['notion-skill'].config.apiToken).toBe('aquaman-proxy-managed');
+      // Other plugin configs preserved
+      expect(updated.plugins.entries['aquaman-plugin'].enabled).toBe(true);
     });
 
     it('returns empty result for no migrations', () => {

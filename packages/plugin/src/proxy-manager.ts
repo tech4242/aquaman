@@ -18,6 +18,7 @@ export interface ProxyConnectionInfo {
   services: string[];
   backend: string;
   token?: string;
+  hostMap?: Record<string, string>;
 }
 
 export interface ProxyManagerOptions {
@@ -249,14 +250,19 @@ export class ProxyManager {
 
     for (const loc of locations) {
       if (loc === 'aquaman') {
-        // Check if in PATH
-        try {
-          const { execSync } = require('child_process');
-          execSync('which aquaman', { stdio: 'ignore' });
-          return 'aquaman';
-        } catch {
-          continue;
+        // Check if in PATH using filesystem checks (no shell execution)
+        const pathEnv = process.env.PATH || '';
+        const dirs = pathEnv.split(path.delimiter);
+        for (const dir of dirs) {
+          const candidate = path.join(dir, 'aquaman');
+          try {
+            fs.accessSync(candidate, fs.constants.X_OK);
+            return 'aquaman';
+          } catch {
+            // Not found in this dir
+          }
         }
+        continue;
       }
 
       if (fs.existsSync(loc)) {

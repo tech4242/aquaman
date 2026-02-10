@@ -25,6 +25,8 @@ export interface TempEnvOptions {
   withCredentials?: {
     /** Channel credentials to embed in openclaw.json */
     channels?: Record<string, any>;
+    /** Plugin entries to embed in openclaw.json plugins.entries */
+    plugins?: Record<string, any>;
     /** Credential files to create in ~/.openclaw/credentials/ */
     credentialFiles?: Record<string, any>;
   };
@@ -109,10 +111,10 @@ export function createTempEnv(options: TempEnvOptions = {}): TempEnv {
   }
 
   if (options.withCredentials) {
-    const { channels, credentialFiles } = options.withCredentials;
+    const { channels, plugins, credentialFiles } = options.withCredentials;
 
-    // Write openclaw.json with channel credentials
-    if (channels) {
+    // Write openclaw.json with channel and/or plugin credentials
+    if (channels || plugins) {
       const openclawJsonPath = path.join(openclawDir, 'openclaw.json');
       let openclawConfig: any = {};
       if (existsSync(openclawJsonPath)) {
@@ -120,7 +122,14 @@ export function createTempEnv(options: TempEnvOptions = {}): TempEnv {
           openclawConfig = JSON.parse(readFileSync(openclawJsonPath, 'utf-8'));
         } catch { /* start fresh */ }
       }
-      openclawConfig.channels = channels;
+      if (channels) {
+        openclawConfig.channels = channels;
+      }
+      if (plugins) {
+        if (!openclawConfig.plugins) openclawConfig.plugins = {};
+        if (!openclawConfig.plugins.entries) openclawConfig.plugins.entries = {};
+        Object.assign(openclawConfig.plugins.entries, plugins);
+      }
       writeFileSync(openclawJsonPath, JSON.stringify(openclawConfig, null, 2), 'utf-8');
     }
 

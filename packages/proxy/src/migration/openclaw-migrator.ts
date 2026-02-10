@@ -1,9 +1,9 @@
 /**
- * Migrates channel credentials from openclaw.json into aquaman's secure credential store.
+ * Migrates credentials from openclaw.json into aquaman's secure credential store.
  *
- * OpenClaw stores channel tokens as plaintext in its config file. This migrator
- * extracts them and stores them in the aquaman credential store (keychain,
- * encrypted-file, 1password, or vault), removing the plaintext exposure.
+ * OpenClaw stores channel tokens and plugin credentials as plaintext in its config
+ * file. This migrator extracts them and stores them in the aquaman credential store
+ * (keychain, encrypted-file, 1password, or vault), removing the plaintext exposure.
  */
 
 import * as fs from 'node:fs';
@@ -210,6 +210,84 @@ export function extractCredentials(config: any): CredentialMapping[] {
   }
 
   return results;
+}
+
+/**
+ * Pattern matching credential-like field names in plugin configs.
+ * Matches: *token*, *key*, *secret*, *password*, *credential*
+ * Case-insensitive. Only matches string values (not arrays/objects).
+ */
+const CREDENTIAL_FIELD_PATTERN = /token|key|secret|password|credential/i;
+
+/**
+ * Fields that are clearly not credentials despite matching the pattern.
+ * These are configuration values, not secrets.
+ */
+const CREDENTIAL_FIELD_EXCLUDES = new Set([
+  'publicKey', 'publickey',
+  'proxyPort', 'proxyport',
+  'mode', 'backend', 'services',
+  'enabled', 'secretNamespace',
+]);
+
+/**
+ * Extract credentials from plugin config entries in openclaw.json.
+ *
+ * Scans `plugins.entries.<pluginId>.config.*` for fields matching credential
+ * patterns (token, key, secret, password). Skips aquaman-plugin's own config.
+ */
+export function extractPluginCredentials(config: any): CredentialMapping[] {
+  const results: CredentialMapping[] = [];
+
+  const entries = config?.plugins?.entries;
+  if (!entries || typeof entries !== 'object') return results;
+
+  for (const [pluginId, pluginEntry] of Object.entries(entries)) {
+    // Skip our own plugin — its config has non-credential fields like mode, backend
+    if (pluginId === 'aquaman-plugin') continue;
+
+    const entry = pluginEntry as Record<string, any>;
+    const pluginConfig = entry?.config;
+    if (!pluginConfig || typeof pluginConfig !== 'object') continue;
+
+    scanObjectForCredentials(pluginConfig, ['plugins', 'entries', pluginId, 'config'], pluginId, results);
+  }
+
+  return results;
+}
+
+/**
+ * Recursively scan an object for credential-like fields.
+ */
+function scanObjectForCredentials(
+  obj: Record<string, any>,
+  pathPrefix: string[],
+  pluginId: string,
+  results: CredentialMapping[]
+): void {
+  for (const [field, value] of Object.entries(obj)) {
+    if (CREDENTIAL_FIELD_EXCLUDES.has(field)) continue;
+
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      // Recurse into nested config objects
+      scanObjectForCredentials(value, [...pathPrefix, field], pluginId, results);
+      continue;
+    }
+
+    if (typeof value !== 'string' || !value.trim()) continue;
+    if (value === 'aquaman-proxy-managed' || value.startsWith('aquaman://')) continue;
+    if (!CREDENTIAL_FIELD_PATTERN.test(field)) continue;
+
+    // Convert camelCase field to snake_case key
+    const snakeKey = field.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '');
+
+    results.push({
+      jsonPath: [...pathPrefix, field],
+      service: pluginId,
+      key: snakeKey,
+      description: `${pluginId} plugin: ${field}`,
+    });
+  }
 }
 
 /**
@@ -436,11 +514,11 @@ export function getCleanupCommands(
     }
   }
 
-  // Channel tokens in openclaw.json — can't auto-remove without breaking config
-  const hasConfigMigrations = migrated.some(m => m.source.startsWith('channels.'));
+  // Tokens in openclaw.json (channels + plugins) — can't auto-remove without breaking config
+  const hasConfigMigrations = migrated.some(m => m.source.startsWith('channels.') || m.source.startsWith('plugins.'));
   if (hasConfigMigrations) {
-    commands.push(`# Channel tokens in ${configPath} — edit manually or run:`);
-    commands.push('# aquaman migrate openclaw --auto --cleanup (future)');
+    commands.push(`# Tokens in ${configPath} — edit manually or run:`);
+    commands.push('# aquaman migrate openclaw --auto --cleanup');
   }
 
   return commands;
@@ -505,8 +583,8 @@ export function cleanupSources(
     }
   }
 
-  // 2. Replace config tokens with placeholder
-  const configMigrations = migrated.filter(m => m.source.startsWith('channels.'));
+  // 2. Replace config tokens with placeholder (channels + plugin configs)
+  const configMigrations = migrated.filter(m => m.source.startsWith('channels.') || m.source.startsWith('plugins.'));
   if (configMigrations.length > 0 && fs.existsSync(configPath)) {
     try {
       const content = fs.readFileSync(configPath, 'utf-8');
@@ -534,4 +612,4 @@ export function cleanupSources(
   return result;
 }
 
-export { PROVIDER_CREDENTIAL_FIELDS };
+export { PROVIDER_CREDENTIAL_FIELDS, CREDENTIAL_FIELD_PATTERN };
