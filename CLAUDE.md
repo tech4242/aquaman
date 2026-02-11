@@ -256,6 +256,19 @@ npm start                   # Start daemon
 npm run dev                 # Dev mode with watch
 ```
 
+## Version Bumps
+
+All 3 packages are pinned to exact versions of each other and must be bumped together:
+
+| File | Fields to update |
+|------|-----------------|
+| `package.json` (root) | `version` |
+| `packages/core/package.json` | `version` |
+| `packages/proxy/package.json` | `version`, `dependencies.aquaman-core` (exact pin) |
+| `packages/plugin/package.json` | `version`, `peerDependencies.aquaman-proxy` (exact pin) |
+
+All four `version` fields and both cross-package dependency pins must match the new version.
+
 ## Credential Backends
 
 Since the Gateway runs on Unix-like systems, backend choice depends on deployment:
