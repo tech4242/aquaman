@@ -790,6 +790,15 @@ program
           if (fs.existsSync(pluginSrc)) {
             fs.cpSync(pluginSrc, pluginDest, { recursive: true });
             console.log('  \u2713 Plugin installed to ' + pluginDest);
+          } else if (cliDetected) {
+            // npm install — plugin source not bundled, use openclaw's plugin installer
+            try {
+              const { execSync: execSyncFallback } = await import('node:child_process');
+              execSyncFallback('openclaw plugins install aquaman-plugin', { stdio: 'pipe' });
+              console.log('  \u2713 Plugin installed via openclaw');
+            } catch {
+              console.log('  \u2717 Could not install plugin. Run: openclaw plugins install aquaman-plugin');
+            }
           }
 
           // b. Write/merge openclaw.json
