@@ -1,6 +1,6 @@
 {
   "name": "aquaman-plugin",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Credential isolation plugin for OpenClaw",
   "type": "module",
   "scripts": {

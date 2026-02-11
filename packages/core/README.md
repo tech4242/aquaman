@@ -12,6 +12,8 @@ Core credential storage, audit logging, and crypto utilities for [aquaman](https
 
 ## Installation
 
+Installed automatically as a dependency of [`aquaman-proxy`](https://www.npmjs.com/package/aquaman-proxy). For direct use:
+
 ```bash
 npm install aquaman-core
 ```
