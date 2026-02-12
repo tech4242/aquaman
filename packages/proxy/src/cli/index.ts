@@ -397,6 +397,13 @@ program
       process.exit(1);
     }
 
+    // Initialize audit logger
+    const auditLogger = createAuditLogger({
+      logDir: config.audit.logDir,
+      enabled: config.audit.enabled
+    });
+    await auditLogger.initialize();
+
     // Initialize service registry
     const serviceRegistry = createServiceRegistry({ configPath: config.services.configPath });
 
@@ -405,7 +412,15 @@ program
       socketPath,
       store: credentialStore,
       allowedServices: config.credentials.proxiedServices,
-      serviceRegistry
+      serviceRegistry,
+      onRequest: (info) => {
+        auditLogger.logCredentialAccess('system', 'system', {
+          service: info.service,
+          operation: 'use',
+          success: !info.error,
+          error: info.error
+        });
+      }
     });
     await credentialProxy.start();
 

@@ -75,7 +75,7 @@ Agent / OpenClaw Gateway              Aquaman Proxy
 │  No credentials.     │  ~/.aquaman/ │                      │
 │  No open ports.      │  proxy.sock  │                      │
 │  Nothing to steal.   │  (chmod 600) │                      │
-└──────────────────────┘              └───┬──────────┬───────┘
+└──────────────────────┘              └──┬──────────┬────────┘
                                          │          │
                                          │          ▼
                                          │  ~/.aquaman/audit/
