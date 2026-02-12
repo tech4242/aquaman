@@ -26,7 +26,10 @@ export {
   createOnePasswordStore,
   type VaultStoreOptions,
   VaultStore,
-  createVaultStore
+  createVaultStore,
+  type KeePassXCStoreOptions,
+  KeePassXCStore,
+  createKeePassXCStore
 } from './credentials/index.js';
 
 // Audit

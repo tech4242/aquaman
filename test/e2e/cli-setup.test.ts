@@ -216,6 +216,17 @@ describe('aquaman setup E2E', () => {
       expect(content).toContain('encrypted-file');
     }, TEST_TIMEOUT);
 
+    it('uses keepassxc backend with password env var', async () => {
+      const { exitCode } = await runSetup(['--backend', 'keepassxc'], {
+        AQUAMAN_KEEPASS_PASSWORD: 'test-keepass-password-123',
+      }, tempEnv);
+
+      expect(exitCode).toBe(0);
+      const configPath = path.join(tempEnv.aquamanDir, 'config.yaml');
+      const content = readFileSync(configPath, 'utf-8');
+      expect(content).toContain('keepassxc');
+    }, TEST_TIMEOUT);
+
     it('rejects invalid backend name', async () => {
       const { exitCode } = await runSetup(['--backend', 'invalid-backend'], {}, tempEnv);
 

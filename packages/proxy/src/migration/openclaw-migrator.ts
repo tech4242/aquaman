@@ -717,3 +717,118 @@ export function extractPluginUpstreamUrls(config: any): PluginUpstreamInfo[] {
 }
 
 export { PROVIDER_CREDENTIAL_FIELDS, CREDENTIAL_FIELD_PATTERN };
+
+/**
+ * Options for the auto-migrate function used by both `migrate openclaw --auto`
+ * and `aquaman setup`.
+ */
+export interface AutoMigrateOptions {
+  configPath?: string;
+  store: CredentialStore;
+  servicesConfigPath?: string;
+  isInteractive: boolean;
+  isNonInteractive?: boolean;
+  skipCleanup?: boolean;
+  noColor?: boolean;
+}
+
+export interface AutoMigrateResult {
+  found: number;
+  migrated: number;
+  skipped: boolean;
+}
+
+/**
+ * Simplified auto-migrate for use during setup.
+ *
+ * Scans openclaw.json channels + plugins + credentials dir,
+ * silently migrates without prompting (setup already confirmed by user).
+ * Returns count of migrated credentials.
+ */
+export async function autoMigrateOpenClaw(options: AutoMigrateOptions): Promise<AutoMigrateResult> {
+  const openclawStateDir = process.env['OPENCLAW_STATE_DIR'] || path.join(os.homedir(), '.openclaw');
+  const openclawConfigPath = options.configPath || path.join(openclawStateDir, 'openclaw.json');
+  const credentialsDir = path.join(openclawStateDir, 'credentials');
+
+  const allCredentials: Array<{ service: string; key: string; value: string; source: string }> = [];
+  const seen = new Set<string>();
+
+  // 1. Scan openclaw.json
+  if (fs.existsSync(openclawConfigPath)) {
+    try {
+      const content = fs.readFileSync(openclawConfigPath, 'utf-8');
+      const config = JSON.parse(content);
+
+      const channelMappings = extractCredentials(config);
+      for (const m of channelMappings) {
+        let current: any = config;
+        for (const key of m.jsonPath) {
+          if (!current || typeof current !== 'object') { current = null; break; }
+          current = current[key];
+        }
+        const value = typeof current === 'string' ? current : null;
+        if (value && value !== 'aquaman-proxy-managed' && !value.startsWith('aquaman://')) {
+          const id = `${m.service}/${m.key}`;
+          if (!seen.has(id)) {
+            seen.add(id);
+            allCredentials.push({ service: m.service, key: m.key, value, source: m.jsonPath.join('.') });
+          }
+        }
+      }
+
+      const pluginMappings = extractPluginCredentials(config);
+      for (const m of pluginMappings) {
+        let current: any = config;
+        for (const key of m.jsonPath) {
+          if (!current || typeof current !== 'object') { current = null; break; }
+          current = current[key];
+        }
+        const value = typeof current === 'string' ? current : null;
+        if (value && value !== 'aquaman-proxy-managed' && !value.startsWith('aquaman://')) {
+          const id = `${m.service}/${m.key}`;
+          if (!seen.has(id)) {
+            seen.add(id);
+            allCredentials.push({ service: m.service, key: m.key, value, source: m.jsonPath.join('.') });
+          }
+        }
+      }
+    } catch {
+      // Skip unparseable config
+    }
+  }
+
+  // 2. Scan credentials directory
+  if (fs.existsSync(credentialsDir)) {
+    const dirMappings = scanCredentialsDir(credentialsDir);
+    for (const m of dirMappings) {
+      const value = readCredentialFromFile(credentialsDir, m.jsonPath[1]);
+      if (value) {
+        const id = `${m.service}/${m.key}`;
+        if (!seen.has(id)) {
+          seen.add(id);
+          allCredentials.push({ service: m.service, key: m.key, value, source: `credentials-dir.${m.jsonPath[1]}` });
+        }
+      }
+    }
+  }
+
+  if (allCredentials.length === 0) {
+    return { found: 0, migrated: 0, skipped: false };
+  }
+
+  // Migrate silently (setup already has user consent)
+  let migrated = 0;
+  for (const cred of allCredentials) {
+    try {
+      const existing = await options.store.get(cred.service, cred.key);
+      if (!existing) {
+        await options.store.set(cred.service, cred.key, cred.value);
+        migrated++;
+      }
+    } catch {
+      // Skip individual failures
+    }
+  }
+
+  return { found: allCredentials.length, migrated, skipped: false };
+}

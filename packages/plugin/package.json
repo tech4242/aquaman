@@ -1,6 +1,6 @@
 {
   "name": "aquaman-plugin",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Credential isolation plugin for OpenClaw",
   "type": "module",
   "scripts": {
@@ -24,7 +24,7 @@
   "dependencies": {},
   "peerDependencies": {
     "openclaw": ">=2026.1.0",
-    "aquaman-proxy": "0.5.1"
+    "aquaman-proxy": "0.6.0"
   },
   "peerDependenciesMeta": {
     "aquaman-proxy": {

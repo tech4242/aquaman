@@ -94,7 +94,7 @@ export function applyEnvOverrides(config: WrapperConfig): WrapperConfig {
 
   if (env['AQUAMAN_BACKEND']) {
     const b = env['AQUAMAN_BACKEND'] as WrapperConfig['credentials']['backend'];
-    if (['keychain', '1password', 'vault', 'encrypted-file'].includes(b)) {
+    if (['keychain', '1password', 'vault', 'encrypted-file', 'keepassxc'].includes(b)) {
       config.credentials.backend = b;
     }
   }

@@ -139,7 +139,16 @@ export class ProxyManager {
         this.options.onExit?.(code);
 
         if (!this.connectionInfo) {
-          const error = new Error(`Proxy exited with code ${code}: ${stderr || stdout}`);
+          const stderrText = stderr || stdout;
+          let error: Error;
+          if (stderrText.includes('EADDRINUSE') || stderrText.includes('already in use')) {
+            const port = config.proxyPort || 8081;
+            error = new Error(
+              `Proxy port ${port} is in use. Stop the existing instance: aquaman stop`
+            );
+          } else {
+            error = new Error(`Proxy exited with code ${code}: ${stderrText}`);
+          }
           reject(error);
         }
       });

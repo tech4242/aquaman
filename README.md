@@ -2,6 +2,9 @@
 
 [![CI](https://github.com/tech4242/aquaman/actions/workflows/ci.yml/badge.svg)](https://github.com/tech4242/aquaman/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/tech4242/aquaman/branch/main/graph/badge.svg)](https://codecov.io/gh/tech4242/aquaman)
+[![npm version](https://img.shields.io/npm/v/aquaman-proxy?label=aquaman-proxy)](https://www.npmjs.com/package/aquaman-proxy)
+[![npm downloads](https://img.shields.io/npm/dm/aquaman-proxy)](https://www.npmjs.com/package/aquaman-proxy)
+[![Security: process isolation](https://img.shields.io/badge/security-process%20isolation-critical)](https://github.com/tech4242/aquaman#how-it-works)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -18,16 +21,22 @@ With Aquaman API keys never enter the agent process. Aquaman stores them in a se
 ### Local (macOS / Linux)
 
 ```bash
-npm install -g aquaman-proxy
+npm install -g aquaman-proxy              # install the proxy CLI
 aquaman setup                             # stores keys, installs OpenClaw plugin
-aquaman migrate openclaw --auto           # migrate plaintext secrets (channels + plugins)
 openclaw                                  # proxy starts automatically via plugin
 ```
 
+> `aquaman setup` auto-detects your credential backend. macOS defaults to Keychain,
+> Linux defaults to encrypted file. Override with `--backend`:
+> `aquaman setup --backend keepassxc`
+> Options: `keychain`, `encrypted-file`, `keepassxc`, `1password`, `vault`
+
+Existing plaintext credentials are migrated automatically during setup.
 The migration detects credentials from channels (Telegram, Slack, etc.)
 **and** third-party plugins/skills (any `*token*`, `*key*`, `*secret*`,
 `*password*` fields in `openclaw.json` plugin configs). Upstream URLs are
 auto-detected from plugin config fields like `endpoint` or `baseUrl`.
+Run again anytime to migrate new credentials: `aquaman migrate openclaw --auto`
 
 The plugin starts the proxy for you — no extra steps. To check
 everything is wired up correctly:
@@ -95,10 +104,15 @@ The agent only knows a localhost URL. It never sees a key.
 |---------|----------|-------|
 | `keychain` | Local dev on macOS (default) | Works out of the box |
 | `encrypted-file` | Linux, WSL2, CI/CD | AES-256-GCM, password-protected |
+| `keepassxc` | Existing KeePass users | Set `AQUAMAN_KEEPASS_PASSWORD` or key file |
 | `1password` | Team credential sharing | `brew install 1password-cli && op signin` |
 | `vault` | Enterprise secrets management | Set `VAULT_ADDR` + `VAULT_TOKEN` |
 
 **Important:** `encrypted-file` is a last-resort backend for headless Linux/CI environments without a native keyring. For better security, install `libsecret-1-dev` (for GNOME Keyring) or use 1Password/Vault.
+
+## Security Audit
+
+`openclaw security audit --deep` will report one `dangerous-exec` finding for the plugin. This is expected — spawning the proxy as a separate process is how aquaman keeps credentials out of the agent. `aquaman setup` adds the plugin to `plugins.allow` automatically so OpenClaw knows you trust it.
 
 ## Why Aquaman
 

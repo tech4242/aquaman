@@ -7,10 +7,18 @@ import * as http from 'node:http';
 import * as https from 'node:https';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { fileURLToPath } from 'node:url';
 import { type CredentialStore, generateId } from 'aquaman-core';
 import { ServiceRegistry, createServiceRegistry, type ServiceDefinition, type AuthMode } from './service-registry.js';
 import { OAuthTokenCache, createOAuthTokenCache } from './oauth-token-cache.js';
+
+// Read version from package.json
+const __daemonFilename = fileURLToPath(import.meta.url);
+const __daemonDirname = path.dirname(__daemonFilename);
+const daemonPkgJson = JSON.parse(fs.readFileSync(path.resolve(__daemonDirname, '../package.json'), 'utf-8'));
+const DAEMON_VERSION: string = daemonPkgJson.version;
 
 export interface TlsOptions {
   enabled: boolean;
@@ -114,7 +122,16 @@ export class CredentialProxy {
         resolve();
       });
 
-      this.server!.on('error', reject);
+      this.server!.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE') {
+          reject(new Error(
+            `Port ${this.options.port} is already in use. ` +
+            `Run: lsof -i :${this.options.port} | grep LISTEN`
+          ));
+        } else {
+          reject(err);
+        }
+      });
     });
   }
 
@@ -126,7 +143,7 @@ export class CredentialProxy {
     if (url === '/_health' || url === '/_health/') {
       res.setHeader('Content-Type', 'application/json');
       res.statusCode = 200;
-      res.end(JSON.stringify({ status: 'ok', uptime: process.uptime(), services: this.options.allowedServices }));
+      res.end(JSON.stringify({ status: 'ok', version: DAEMON_VERSION, uptime: process.uptime(), services: this.options.allowedServices }));
       return;
     }
 

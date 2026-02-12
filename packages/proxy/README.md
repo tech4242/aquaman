@@ -35,11 +35,18 @@ This package is the right side. A reverse proxy that intercepts API requests and
 With OpenClaw:
 
 ```bash
-npm install -g aquaman-proxy              # 1. Install
-aquaman setup                             # 2. Store keys, install plugin, configure OpenClaw
-aquaman migrate openclaw --auto           # 3. Move existing channel creds to secure store
-openclaw                                  # 4. Proxy starts automatically via plugin
+npm install -g aquaman-proxy              # install the proxy CLI
+aquaman setup                             # stores keys, installs plugin, configures OpenClaw
+openclaw                                  # proxy starts automatically via plugin
 ```
+
+> `aquaman setup` auto-detects your credential backend. macOS defaults to Keychain,
+> Linux defaults to encrypted file. Override with `--backend`:
+> `aquaman setup --backend keepassxc`
+> Options: `keychain`, `encrypted-file`, `keepassxc`, `1password`, `vault`
+
+Existing plaintext credentials are migrated automatically during setup.
+Run again anytime to migrate new credentials: `aquaman migrate openclaw --auto`
 
 Standalone:
 

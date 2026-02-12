@@ -9,6 +9,7 @@ import * as os from 'node:os';
 import { encryptWithPassword, decryptWithPassword } from '../utils/hash.js';
 import { getConfigDir } from '../utils/config.js';
 import type { CredentialBackend } from '../types.js';
+import { KeePassXCStore } from './backends/keepassxc.js';
 
 export interface Credential {
   service: string;
@@ -39,6 +40,9 @@ export interface CredentialStoreOptions {
   // 1Password options
   onePasswordVault?: string;
   onePasswordAccount?: string;
+  // KeePassXC options
+  keepassxcDatabasePath?: string;
+  keepassxcKeyFilePath?: string;
 }
 
 /**
@@ -353,6 +357,18 @@ export function createCredentialStore(options: CredentialStoreOptions): Credenti
         namespace: options.vaultNamespace,
         mountPath: options.vaultMountPath
       });
+    }
+
+    case 'keepassxc': {
+      const dbPath = options.keepassxcDatabasePath
+        || path.join(getConfigDir(), 'credentials.kdbx');
+      const password = options.encryptionPassword
+        || process.env['AQUAMAN_KEEPASS_PASSWORD'];
+      const keyFile = options.keepassxcKeyFilePath;
+      if (!password && !keyFile) {
+        throw new Error('KeePassXC backend requires a master password (AQUAMAN_KEEPASS_PASSWORD) or key file (keepassxcKeyFilePath)');
+      }
+      return new KeePassXCStore({ dbPath, password, keyFilePath: keyFile });
     }
 
     default:

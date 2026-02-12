@@ -53,7 +53,7 @@ export interface ServiceConfig {
 }
 
 export interface CredentialsConfig {
-  backend: 'keychain' | '1password' | 'vault' | 'encrypted-file';
+  backend: 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc';
   proxyPort: number;
   proxiedServices: string[];
   bindAddress?: string;
@@ -72,6 +72,9 @@ export interface CredentialsConfig {
   vaultToken?: string;
   vaultNamespace?: string;
   vaultMountPath?: string;
+  // KeePassXC options
+  keepassxcDatabasePath?: string;
+  keepassxcKeyFilePath?: string;
 }
 
 export interface AuditConfig {
@@ -96,4 +99,4 @@ export interface WrapperConfig {
   openclaw: OpenClawConfig;
 }
 
-export type CredentialBackend = 'keychain' | '1password' | 'vault' | 'encrypted-file';
+export type CredentialBackend = 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc';

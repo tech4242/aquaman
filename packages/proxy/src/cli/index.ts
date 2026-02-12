@@ -145,7 +145,9 @@ program
         vaultNamespace: config.credentials.vaultNamespace,
         vaultMountPath: config.credentials.vaultMountPath,
         onePasswordVault: config.credentials.onePasswordVault,
-        onePasswordAccount: config.credentials.onePasswordAccount
+        onePasswordAccount: config.credentials.onePasswordAccount,
+        keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
       });
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
@@ -316,7 +318,9 @@ program
         vaultNamespace: config.credentials.vaultNamespace,
         vaultMountPath: config.credentials.vaultMountPath,
         onePasswordVault: config.credentials.onePasswordVault,
-        onePasswordAccount: config.credentials.onePasswordAccount
+        onePasswordAccount: config.credentials.onePasswordAccount,
+        keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
       });
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
@@ -398,7 +402,9 @@ program
         vaultNamespace: config.credentials.vaultNamespace,
         vaultMountPath: config.credentials.vaultMountPath,
         onePasswordVault: config.credentials.onePasswordVault,
-        onePasswordAccount: config.credentials.onePasswordAccount
+        onePasswordAccount: config.credentials.onePasswordAccount,
+        keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
       });
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
@@ -546,7 +552,7 @@ program
 program
   .command('setup')
   .description('All-in-one setup wizard — creates config, stores credentials, installs plugin')
-  .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, 1password, vault)')
+  .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, keepassxc, 1password, vault)')
   .option('--no-openclaw', 'Skip OpenClaw plugin installation')
   .option('--non-interactive', 'Use environment variables instead of prompts (for CI)')
   .action(async (options) => {
@@ -593,7 +599,7 @@ program
     }
 
     // Validate backend
-    const validBackends = ['keychain', 'encrypted-file', '1password', 'vault'];
+    const validBackends = ['keychain', 'encrypted-file', 'keepassxc', '1password', 'vault'];
     if (!validBackends.includes(backend)) {
       console.error(`  Invalid backend: ${backend}`);
       console.error(`  Valid options: ${validBackends.join(', ')}`);
@@ -645,6 +651,26 @@ program
           process.exit(1);
         }
       }
+    } else if (backend === 'keepassxc') {
+      const keepassPassword = process.env['AQUAMAN_KEEPASS_PASSWORD'];
+      if (!keepassPassword) {
+        if (isNonInteractive) {
+          console.error('  KeePassXC backend requires AQUAMAN_KEEPASS_PASSWORD environment variable.');
+          process.exit(1);
+        } else {
+          const readline = await import('node:readline');
+          const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+          const password = await new Promise<string>((resolve) => {
+            rl.question('  ? KeePassXC master password: ', resolve);
+          });
+          rl.close();
+          if (!password.trim()) {
+            console.error('  KeePassXC backend requires a master password.');
+            process.exit(1);
+          }
+          process.env['AQUAMAN_KEEPASS_PASSWORD'] = password.trim();
+        }
+      }
     }
 
     // 2. Run init internally (create dirs, config, no TLS by default)
@@ -663,11 +689,13 @@ program
     try {
       store = createCredentialStore({
         backend: config.credentials.backend,
-        encryptionPassword: config.credentials.encryptionPassword || process.env['AQUAMAN_ENCRYPTION_PASSWORD'],
+        encryptionPassword: config.credentials.encryptionPassword || process.env['AQUAMAN_ENCRYPTION_PASSWORD'] || process.env['AQUAMAN_KEEPASS_PASSWORD'],
         vaultAddress: config.credentials.vaultAddress || process.env['VAULT_ADDR'],
         vaultToken: config.credentials.vaultToken || process.env['VAULT_TOKEN'],
         onePasswordVault: config.credentials.onePasswordVault,
-        onePasswordAccount: config.credentials.onePasswordAccount
+        onePasswordAccount: config.credentials.onePasswordAccount,
+        keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
       });
     } catch (err) {
       console.error(`  Failed to initialize ${backend} credential store: ${err instanceof Error ? err.message : err}`);
@@ -813,6 +841,12 @@ program
           if (!openclawConfig.plugins) openclawConfig.plugins = {};
           if (!openclawConfig.plugins.entries) openclawConfig.plugins.entries = {};
 
+          // Set plugins.allow so OpenClaw trusts the plugin (avoids extensions_no_allowlist audit warning)
+          if (!openclawConfig.plugins.allow) openclawConfig.plugins.allow = [];
+          if (!openclawConfig.plugins.allow.includes('aquaman-plugin')) {
+            openclawConfig.plugins.allow.push('aquaman-plugin');
+          }
+
           openclawConfig.plugins.entries['aquaman-plugin'] = {
             enabled: true,
             config: {
@@ -852,6 +886,33 @@ program
         }
       } else {
         console.log('  OpenClaw not detected — skipping plugin install');
+      }
+    }
+
+    // 4.5. Auto-migrate plaintext credentials
+    if (options.openclaw !== false) {
+      const openclawDetected = fs.existsSync(openclawStateDir);
+      let cliDetected = false;
+      try {
+        const { execSync } = await import('node:child_process');
+        execSync('which openclaw', { stdio: 'pipe' });
+        cliDetected = true;
+      } catch { /* not installed */ }
+
+      if (openclawDetected || cliDetected) {
+        try {
+          const { autoMigrateOpenClaw } = await import('../migration/openclaw-migrator.js');
+          const result = await autoMigrateOpenClaw({
+            store,
+            isInteractive: !isNonInteractive,
+            skipCleanup: true,
+          });
+          if (result.migrated > 0) {
+            console.log(`  \u2713 Migrated ${result.migrated} plaintext credentials`);
+          }
+        } catch {
+          // Migration is best-effort during setup
+        }
       }
     }
 
@@ -910,7 +971,9 @@ program
         vaultAddress: config.credentials.vaultAddress,
         vaultToken: config.credentials.vaultToken,
         onePasswordVault: config.credentials.onePasswordVault,
-        onePasswordAccount: config.credentials.onePasswordAccount
+        onePasswordAccount: config.credentials.onePasswordAccount,
+        keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
       });
 
       // 3. Count credentials
@@ -941,7 +1004,14 @@ program
     try {
       const resp = await fetch(`http://127.0.0.1:${proxyPort}/_health`);
       if (resp.ok) {
-        console.log(`  \u2713 ${aqua('Proxy')} running on port ${proxyPort}`);
+        const health = await resp.json() as { version?: string };
+        const proxyVer = health.version || 'unknown';
+        console.log(`  \u2713 ${aqua('Proxy')} running on port ${proxyPort} (v${proxyVer})`);
+        if (health.version && health.version !== VERSION) {
+          console.log(`  \u2717 ${aqua('Version mismatch:')} CLI v${VERSION} \u2260 proxy v${health.version}`);
+          console.log('    \u2192 Update: npm install -g aquaman-proxy');
+          issues++;
+        }
       } else {
         console.log(`  \u2717 ${aqua('Proxy')} not running on port ${proxyPort}`);
         console.log(`    \u2192 ${proxyFix}`);
@@ -955,25 +1025,45 @@ program
 
     // 5. OpenClaw detection
     let openclawDetected = false;
+    let cliFound = false;
     try {
       const { execSync } = await import('node:child_process');
-      const versionOutput = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8', timeout: 5000 }).trim();
-      console.log(`  \u2713 ${aqua('OpenClaw')} detected (${versionOutput})`);
-      openclawDetected = true;
-    } catch {
-      if (fs.existsSync(openclawStateDir)) {
-        console.log(`  \u2713 ${aqua('OpenClaw')} state dir exists`);
-        openclawDetected = true;
-      } else {
-        console.log(`  - ${aqua('OpenClaw')} not detected (skipping plugin checks)`);
+      execSync('which openclaw', { stdio: 'pipe' });
+      cliFound = true;
+    } catch { /* not in PATH */ }
+
+    if (cliFound) {
+      try {
+        const { execSync } = await import('node:child_process');
+        const ver = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8', timeout: 5000 }).trim();
+        console.log(`  \u2713 ${aqua('OpenClaw')} installed (${ver})`);
+      } catch {
+        console.log(`  \u2713 ${aqua('OpenClaw')} installed`);
       }
+      openclawDetected = true;
+    } else if (fs.existsSync(openclawStateDir)) {
+      console.log(`  \u2713 ${aqua('OpenClaw')} detected (state dir found)`);
+      openclawDetected = true;
+    } else {
+      console.log(`  - ${aqua('OpenClaw')} not detected (skipping plugin checks)`);
     }
 
     if (openclawDetected) {
-      // 6. Plugin installed
+      // 6. Plugin installed + version check
       const pluginPath = path.join(openclawStateDir, 'extensions', 'aquaman-plugin');
       if (fs.existsSync(pluginPath)) {
-        console.log(`  \u2713 ${aqua('Plugin')} installed (${pluginPath})`);
+        const pluginPkgPath = path.join(pluginPath, 'package.json');
+        let pluginVer: string | null = null;
+        try {
+          pluginVer = JSON.parse(fs.readFileSync(pluginPkgPath, 'utf-8')).version;
+        } catch { /* ok */ }
+        const verLabel = pluginVer ? ` v${pluginVer}` : '';
+        console.log(`  \u2713 ${aqua('Plugin')} installed${verLabel} (${pluginPath})`);
+        if (pluginVer && pluginVer !== VERSION) {
+          console.log(`  \u2717 ${aqua('Version mismatch:')} CLI v${VERSION} \u2260 plugin v${pluginVer}`);
+          console.log('    \u2192 Update: openclaw plugins install aquaman-plugin');
+          issues++;
+        }
       } else {
         console.log(`  \u2717 ${aqua('Plugin')} not installed`);
         console.log('    \u2192 Run: aquaman setup');
@@ -1003,7 +1093,26 @@ program
         issues++;
       }
 
-      // 8. Auth profiles exist
+      // 8. plugins.allow includes aquaman-plugin
+      if (fs.existsSync(openclawJsonPath)) {
+        try {
+          const openclawConfig = JSON.parse(fs.readFileSync(openclawJsonPath, 'utf-8'));
+          const allowList: string[] = openclawConfig.plugins?.allow || [];
+          if (allowList.includes('aquaman-plugin')) {
+            console.log(`  \u2713 ${aqua('Plugin')} in plugins.allow trust list`);
+          } else {
+            console.log(`  \u2717 ${aqua('Plugin')} not in plugins.allow trust list`);
+            console.log('    \u2192 Run: aquaman setup (or add "aquaman-plugin" to plugins.allow in openclaw.json)');
+            console.log('    Note: "openclaw security audit" will show a dangerous-exec finding for proxy-manager.ts.');
+            console.log('    This is expected \u2014 the plugin spawns the proxy as a separate process for credential isolation.');
+            issues++;
+          }
+        } catch {
+          // openclaw.json invalid — already reported above
+        }
+      }
+
+      // 9. Auth profiles exist
       const profilesPath = path.join(openclawStateDir, 'agents', 'main', 'agent', 'auth-profiles.json');
       if (fs.existsSync(profilesPath)) {
         console.log(`  \u2713 ${aqua('Auth profiles')} exist`);
@@ -1014,7 +1123,7 @@ program
       }
     }
 
-    // 9. Unmigrated plaintext credentials
+    // 10. Unmigrated plaintext credentials
     if (openclawDetected) {
       try {
         const { extractCredentials, extractPluginCredentials, scanCredentialsDir } = await import('../migration/openclaw-migrator.js');
@@ -1199,7 +1308,9 @@ credentials
         vaultNamespace: config.credentials.vaultNamespace,
         vaultMountPath: config.credentials.vaultMountPath,
         onePasswordVault: config.credentials.onePasswordVault,
-        onePasswordAccount: config.credentials.onePasswordAccount
+        onePasswordAccount: config.credentials.onePasswordAccount,
+        keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
       });
     } catch (error) {
       console.error('Credential store not available:', error instanceof Error ? error.message : error);
@@ -1254,7 +1365,9 @@ credentials
         vaultAddress: config.credentials.vaultAddress,
         vaultToken: config.credentials.vaultToken,
         onePasswordVault: config.credentials.onePasswordVault,
-        onePasswordAccount: config.credentials.onePasswordAccount
+        onePasswordAccount: config.credentials.onePasswordAccount,
+        keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
       });
     } catch {
       console.error('Credential store not available.');
@@ -1287,7 +1400,9 @@ credentials
         vaultAddress: config.credentials.vaultAddress,
         vaultToken: config.credentials.vaultToken,
         onePasswordVault: config.credentials.onePasswordVault,
-        onePasswordAccount: config.credentials.onePasswordAccount
+        onePasswordAccount: config.credentials.onePasswordAccount,
+        keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
       });
     } catch {
       console.error('Credential store not available.');
@@ -1622,6 +1737,7 @@ migrate
 
       const backendLabel = appConfig.credentials.backend === 'keychain' ? 'macOS Keychain' :
         appConfig.credentials.backend === 'encrypted-file' ? 'Encrypted file' :
+        appConfig.credentials.backend === 'keepassxc' ? 'KeePassXC (.kdbx)' :
         appConfig.credentials.backend === '1password' ? '1Password' :
         appConfig.credentials.backend === 'vault' ? 'HashiCorp Vault' :
         appConfig.credentials.backend;
@@ -1673,7 +1789,9 @@ migrate
           vaultAddress: appConfig.credentials.vaultAddress,
           vaultToken: appConfig.credentials.vaultToken,
           onePasswordVault: appConfig.credentials.onePasswordVault,
-          onePasswordAccount: appConfig.credentials.onePasswordAccount
+          onePasswordAccount: appConfig.credentials.onePasswordAccount,
+          keepassxcDatabasePath: appConfig.credentials.keepassxcDatabasePath,
+          keepassxcKeyFilePath: appConfig.credentials.keepassxcKeyFilePath
         });
       } catch (err) {
         console.error(`  Failed to initialize credential store: ${err instanceof Error ? err.message : err}`);
@@ -1840,7 +1958,9 @@ migrate
       vaultAddress: appConfig.credentials.vaultAddress,
       vaultToken: appConfig.credentials.vaultToken,
       onePasswordVault: appConfig.credentials.onePasswordVault,
-      onePasswordAccount: appConfig.credentials.onePasswordAccount
+      onePasswordAccount: appConfig.credentials.onePasswordAccount,
+      keepassxcDatabasePath: appConfig.credentials.keepassxcDatabasePath,
+      keepassxcKeyFilePath: appConfig.credentials.keepassxcKeyFilePath
     });
 
     const result = await migrateFromOpenClaw(configPath, store, {
@@ -1905,7 +2025,9 @@ program
         vaultAddress: config.credentials.vaultAddress,
         vaultToken: config.credentials.vaultToken,
         onePasswordVault: config.credentials.onePasswordVault,
-        onePasswordAccount: config.credentials.onePasswordAccount
+        onePasswordAccount: config.credentials.onePasswordAccount,
+        keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
       });
       const creds = await store.list();
       console.log(`\nStored credentials: ${creds.length}`);
