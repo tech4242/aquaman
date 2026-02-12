@@ -992,7 +992,39 @@ program
       issues++;
     }
 
-    // 5. OpenClaw detection
+    // 5. Audit logger
+    if (config) {
+      const auditDir = config.audit.logDir;
+      const auditLog = path.join(auditDir, 'current.jsonl');
+
+      if (!config.audit.enabled) {
+        console.log(`  - ${aqua('Audit')} disabled in config`);
+      } else if (!fs.existsSync(auditDir)) {
+        console.log(`  \u2717 ${aqua('Audit')} directory missing (${auditDir})`);
+        console.log('    \u2192 Run: aquaman init');
+        issues++;
+      } else {
+        // Check log file exists and is writable
+        try {
+          if (fs.existsSync(auditLog)) {
+            fs.accessSync(auditLog, fs.constants.W_OK);
+            const content = fs.readFileSync(auditLog, 'utf-8').trim();
+            const entryCount = content ? content.split('\n').length : 0;
+            console.log(`  \u2713 ${aqua('Audit')} log writable (${entryCount} entries)`);
+          } else {
+            // Dir exists but no log yet — that's fine, first request will create it
+            fs.accessSync(auditDir, fs.constants.W_OK);
+            console.log(`  \u2713 ${aqua('Audit')} directory writable (no entries yet)`);
+          }
+        } catch {
+          console.log(`  \u2717 ${aqua('Audit')} log not writable (${auditLog})`);
+          console.log('    \u2192 Check file permissions on ~/.aquaman/audit/');
+          issues++;
+        }
+      }
+    }
+
+    // 6. OpenClaw detection
     let openclawDetected = false;
     let cliFound = false;
     try {
