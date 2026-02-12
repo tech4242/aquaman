@@ -2,14 +2,11 @@
  * OpenClaw Plugin Entry Point
  *
  * This is the main plugin that implements the OpenClaw plugin interface.
- * It provides credential isolation through two modes:
- *
- * 1. Embedded Mode (default): Direct vault access, simpler setup
- * 2. Proxy Mode: Separate process, stronger credential isolation
+ * It provides credential isolation through proxy mode:
+ * credentials are held in a separate process and never enter the Gateway.
  */
 
 import { type PluginConfig, mergeConfig, defaultConfig } from './config-schema.js';
-import { createEmbeddedMode, type EmbeddedMode } from './embedded.js';
 import { createProxyManager, type ProxyManager, type ProxyConnectionInfo } from './proxy-manager.js';
 import { executeCommand, type CommandContext, type CommandResult, getAvailableCommands, type PluginCommand } from './commands.js';
 import { HttpInterceptor, createHttpInterceptor } from './http-interceptor.js';
@@ -30,7 +27,6 @@ export class AquamanPlugin {
   readonly name = 'aquaman-plugin';
 
   private config: PluginConfig;
-  private embeddedMode: EmbeddedMode | null = null;
   private proxyManager: ProxyManager | null = null;
   private httpInterceptor: HttpInterceptor | null = null;
   private initialized = false;
@@ -61,16 +57,10 @@ export class AquamanPlugin {
 
     console.log('[aquaman] Initializing plugin...');
 
-    if (this.config.mode === 'proxy') {
-      // Proxy mode: Start separate process
-      await this.initProxyMode();
-    } else {
-      // Embedded mode: Direct vault access
-      await this.initEmbeddedMode();
-    }
+    await this.initProxyMode();
 
     this.initialized = true;
-    console.log(`[aquaman] Plugin initialized in ${this.config.mode || 'embedded'} mode`);
+    console.log('[aquaman] Plugin initialized in proxy mode');
   }
 
   /**
@@ -100,40 +90,20 @@ export class AquamanPlugin {
       this.proxyManager = null;
     }
 
-    this.embeddedMode = null;
     this.initialized = false;
 
     console.log('[aquaman] Plugin unloaded');
   }
 
   /**
-   * Initialize embedded mode
-   */
-  private async initEmbeddedMode(): Promise<void> {
-    this.embeddedMode = createEmbeddedMode({
-      config: this.config
-    });
-
-    await this.embeddedMode.initialize();
-
-    // Set environment variables for OpenClaw
-    this.configureEnvironment();
-  }
-
-  /**
    * Initialize proxy mode
    */
   private async initProxyMode(): Promise<void> {
-    if (!this.config.proxyAutoStart) {
-      console.log('[aquaman] Proxy auto-start disabled');
-      return;
-    }
-
     this.proxyManager = createProxyManager({
       config: this.config,
       onReady: (info) => {
-        console.log(`[aquaman] Proxy ready at ${info.baseUrl}`);
-        this.configureEnvironmentForProxy(info);
+        console.log(`[aquaman] Proxy ready on ${info.socketPath}`);
+        this.configureEnvironmentForProxy();
       },
       onError: (error) => {
         console.error('[aquaman] Proxy error:', error);
@@ -143,28 +113,20 @@ export class AquamanPlugin {
       }
     });
 
-    // Also initialize embedded mode for credential management
-    this.embeddedMode = createEmbeddedMode({
-      config: this.config
-    });
-    await this.embeddedMode.initialize();
-
     // Start proxy
     try {
       const info = await this.proxyManager.start();
-      this.configureEnvironmentForProxy(info);
-      this.activateHttpInterceptor(info.baseUrl);
+      this.configureEnvironmentForProxy();
+      this.activateHttpInterceptor(info.socketPath);
     } catch (error) {
       console.error('[aquaman] Failed to start proxy:', error);
-      console.log('[aquaman] Falling back to embedded mode');
-      this.configureEnvironment();
     }
   }
 
   /**
    * Activate HTTP interceptor for channel credential isolation.
    */
-  private activateHttpInterceptor(proxyBaseUrl: string): void {
+  private activateHttpInterceptor(proxySocketPath: string): void {
     // Build host map from the service registry's host patterns
     const hostMap = new Map<string, string>([
       ['api.anthropic.com', 'anthropic'],
@@ -193,7 +155,7 @@ export class AquamanPlugin {
     ]);
 
     this.httpInterceptor = createHttpInterceptor({
-      proxyBaseUrl,
+      socketPath: proxySocketPath,
       hostMap,
       log: (msg) => console.log(msg),
     });
@@ -202,68 +164,27 @@ export class AquamanPlugin {
   }
 
   /**
-   * Configure environment variables for embedded mode
-   * In embedded mode, we still set base URLs pointing to a local proxy
-   * so credential injection works consistently.
+   * Configure environment variables using sentinel hostname
    */
-  private configureEnvironment(): void {
+  private configureEnvironmentForProxy(): void {
     const services = this.config.services || defaultConfig.services;
-    const port = this.config.proxyPort || 8081;
-    const baseUrl = `http://127.0.0.1:${port}`;
-
-    this.setServiceEnvironmentVariables(services!, baseUrl);
-    console.log('[aquaman] Embedded mode active - credentials available via plugin');
-  }
-
-  /**
-   * Configure environment variables to route through proxy
-   */
-  private configureEnvironmentForProxy(info: ProxyConnectionInfo): void {
-    const services = this.config.services || defaultConfig.services;
-    this.setServiceEnvironmentVariables(services!, info.baseUrl);
-
-    // Handle TLS
-    if (info.protocol === 'https') {
-      if (this.config.tlsCertPath) {
-        this.setEnvVar('NODE_EXTRA_CA_CERTS', this.config.tlsCertPath);
-      } else {
-        // Development: disable TLS verification for self-signed certs
-        this.setEnvVar('NODE_TLS_REJECT_UNAUTHORIZED', '0');
-      }
-    }
-  }
-
-  /**
-   * Set environment variables for configured services
-   */
-  private setServiceEnvironmentVariables(services: string[], baseUrl: string): void {
-    for (const service of services) {
-      const serviceUrl = `${baseUrl}/${service}`;
+    for (const service of services!) {
+      const serviceUrl = `http://aquaman.local/${service}`;
 
       switch (service) {
         case 'anthropic':
           this.setEnvVar('ANTHROPIC_BASE_URL', serviceUrl);
-          this.setEnvVar('ANTHROPIC_API_KEY', 'aquaman-proxy-managed');
           break;
         case 'openai':
           this.setEnvVar('OPENAI_BASE_URL', serviceUrl);
-          this.setEnvVar('OPENAI_API_KEY', 'aquaman-proxy-managed');
           break;
         case 'github':
           this.setEnvVar('GITHUB_API_URL', serviceUrl);
-          this.setEnvVar('GITHUB_TOKEN', 'aquaman-proxy-managed');
           break;
-        case 'slack':
-          this.setEnvVar('SLACK_API_URL', serviceUrl);
-          this.setEnvVar('SLACK_BOT_TOKEN', 'aquaman-proxy-managed');
-          break;
-        case 'discord':
-          this.setEnvVar('DISCORD_API_URL', serviceUrl);
-          this.setEnvVar('DISCORD_BOT_TOKEN', 'aquaman-proxy-managed');
-          break;
-        default:
+        default: {
           const envKey = `${service.toUpperCase().replace(/-/g, '_')}_BASE_URL`;
           this.setEnvVar(envKey, serviceUrl);
+        }
       }
     }
   }
@@ -283,7 +204,6 @@ export class AquamanPlugin {
   async executeCommand(command: string, args: string[] = []): Promise<CommandResult> {
     const ctx: CommandContext = {
       config: this.config,
-      embeddedMode: this.embeddedMode || undefined,
       proxyManager: this.proxyManager || undefined
     };
 
@@ -291,59 +211,20 @@ export class AquamanPlugin {
   }
 
   /**
-   * Get credential (for embedded mode)
-   */
-  async getCredential(service: string, key: string): Promise<string | null> {
-    if (!this.embeddedMode) {
-      throw new Error('Plugin not initialized');
-    }
-    return this.embeddedMode.getCredential(service, key);
-  }
-
-  /**
-   * Set credential (for embedded mode)
-   */
-  async setCredential(service: string, key: string, value: string): Promise<void> {
-    if (!this.embeddedMode) {
-      throw new Error('Plugin not initialized');
-    }
-    return this.embeddedMode.setCredential(service, key, value);
-  }
-
-  /**
-   * List credentials
-   */
-  async listCredentials(service?: string): Promise<Array<{ service: string; key: string }>> {
-    if (!this.embeddedMode) {
-      throw new Error('Plugin not initialized');
-    }
-    return this.embeddedMode.listCredentials(service);
-  }
-
-  /**
    * Get plugin status
    */
   getStatus(): {
     initialized: boolean;
-    mode: string;
     backend: string;
     proxyRunning: boolean;
     services: string[];
   } {
     return {
       initialized: this.initialized,
-      mode: this.config.mode || 'embedded',
       backend: this.config.backend || 'keychain',
       proxyRunning: this.proxyManager?.isRunning() || false,
       services: this.config.services || []
     };
-  }
-
-  /**
-   * Get current operating mode
-   */
-  getMode(): 'embedded' | 'proxy' {
-    return (this.config.mode as 'embedded' | 'proxy') || 'embedded';
   }
 
   /**
@@ -373,18 +254,10 @@ export class AquamanPlugin {
   getCommands(): PluginCommand[] {
     const ctx: CommandContext = {
       config: this.config,
-      embeddedMode: this.embeddedMode || undefined,
       proxyManager: this.proxyManager || undefined
     };
 
     return getAvailableCommands(ctx);
-  }
-
-  /**
-   * Get proxy URL for a service (proxy mode only)
-   */
-  getProxyUrl(service: string): string | null {
-    return this.proxyManager?.getServiceUrl(service) || null;
   }
 
   /**

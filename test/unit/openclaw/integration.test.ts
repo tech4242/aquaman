@@ -11,12 +11,7 @@ describe('OpenClawIntegration', () => {
   const defaultConfig: WrapperConfig = {
     credentials: {
       backend: 'keychain',
-      proxyPort: 8081,
       proxiedServices: ['anthropic', 'openai'],
-      tls: {
-        enabled: true,
-        autoGenerate: true
-      }
     },
     audit: {
       enabled: true,
@@ -82,22 +77,13 @@ describe('OpenClawIntegration', () => {
   });
 
   describe('configureOpenClaw', () => {
-    it('should generate environment variables for proxy integration', async () => {
+    it('should generate environment variables with sentinel hostname', async () => {
       const integration = new OpenClawIntegration(defaultConfig, defaultServices);
 
-      const env = await integration.configureOpenClaw(8081, false);
+      const env = await integration.configureOpenClaw();
 
-      expect(env['ANTHROPIC_BASE_URL']).toBe('http://127.0.0.1:8081/anthropic');
-      expect(env['OPENAI_BASE_URL']).toBe('http://127.0.0.1:8081/openai');
-    });
-
-    it('should use HTTPS when TLS is enabled', async () => {
-      const integration = new OpenClawIntegration(defaultConfig, defaultServices);
-
-      const env = await integration.configureOpenClaw(8081, true);
-
-      expect(env['ANTHROPIC_BASE_URL']).toBe('https://127.0.0.1:8081/anthropic');
-      expect(env['OPENAI_BASE_URL']).toBe('https://127.0.0.1:8081/openai');
+      expect(env['ANTHROPIC_BASE_URL']).toBe('http://aquaman.local/anthropic');
+      expect(env['OPENAI_BASE_URL']).toBe('http://aquaman.local/openai');
     });
   });
 

@@ -1,6 +1,6 @@
 {
   "name": "aquaman",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "Credential isolation proxy for OpenClaw — secrets stay submerged, agents stay dry. 🔱🦞",
   "type": "module",
@@ -8,8 +8,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build:core && npm run build -w aquaman-proxy -w aquaman-plugin",
-    "build:core": "npm run build -w aquaman-core",
+    "build": "npm run build -w aquaman-proxy -w aquaman-plugin",
     "build:proxy": "npm run build -w aquaman-proxy",
     "build:plugin": "npm run build -w aquaman-plugin",
     "clean": "npm run clean --workspaces && rm -rf dist packages/*/tsconfig.tsbuildinfo",
@@ -20,12 +19,11 @@
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "lint": "oxlint src test packages --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage",
     "lint:fix": "oxlint src test packages --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage --fix",
-    "typecheck": "tsc -b packages/core packages/proxy packages/plugin",
+    "typecheck": "tsc -b packages/proxy packages/plugin",
     "start": "node packages/proxy/dist/cli/index.js",
     "dev": "tsx watch packages/proxy/src/cli/index.ts",
-    "docker:build": "docker compose -f docker/docker-compose.yml build",
-    "docker:up": "docker compose -f docker/docker-compose.yml up",
-    "docker:down": "docker compose -f docker/docker-compose.yml down"
+    "docker:build": "docker build -t aquaman -f docker/Dockerfile docker/",
+    "docker:run": "docker run --rm -it aquaman"
   },
   "keywords": [
     "openclaw",

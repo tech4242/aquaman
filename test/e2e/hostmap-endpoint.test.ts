@@ -2,7 +2,7 @@
  * E2E tests for the /_hostmap endpoint and host map propagation in plugin-mode.
  *
  * Tests:
- * 1. /_hostmap endpoint returns builtin host→service mappings
+ * 1. /_hostmap endpoint returns builtin host->service mappings
  * 2. /_hostmap includes custom services from services.yaml
  * 3. plugin-mode startup JSON includes hostMap field
  * 4. Custom service defined in services.yaml is routable through proxy
@@ -16,6 +16,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as http from 'node:http';
+import { tmpSocketPath, cleanupSocket, udsFetch } from '../helpers/uds-proxy.js';
 
 const CLI_PATH = path.resolve('packages/proxy/src/cli/index.ts');
 const TEST_TIMEOUT = 30_000;
@@ -23,31 +24,33 @@ const TEST_TIMEOUT = 30_000;
 describe('/_hostmap endpoint', () => {
   let proxy: CredentialProxy;
   let store: MemoryStore;
-  let proxyPort: number;
+  let socketPath: string;
 
   beforeEach(async () => {
     store = new MemoryStore();
     await store.set('anthropic', 'api_key', 'sk-test');
 
+    socketPath = tmpSocketPath();
+
     proxy = createCredentialProxy({
-      port: 0,
+      socketPath,
       store,
       allowedServices: ['anthropic', 'openai'],
     });
     await proxy.start();
-    proxyPort = proxy.getPort();
   });
 
   afterEach(async () => {
     await proxy.stop();
+    cleanupSocket(socketPath);
   });
 
   it('returns JSON with builtin host patterns', async () => {
-    const res = await fetch(`http://127.0.0.1:${proxyPort}/_hostmap`);
+    const res = await udsFetch(socketPath, '/_hostmap');
     expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toBe('application/json');
+    expect(res.headers['content-type']).toBe('application/json');
 
-    const hostMap = await res.json() as Record<string, string>;
+    const hostMap = JSON.parse(res.body) as Record<string, string>;
     // Builtin services should be present
     expect(hostMap['api.anthropic.com']).toBe('anthropic');
     expect(hostMap['api.openai.com']).toBe('openai');
@@ -56,8 +59,8 @@ describe('/_hostmap endpoint', () => {
   });
 
   it('returns all 23+ builtin service host patterns', async () => {
-    const res = await fetch(`http://127.0.0.1:${proxyPort}/_hostmap`);
-    const hostMap = await res.json() as Record<string, string>;
+    const res = await udsFetch(socketPath, '/_hostmap');
+    const hostMap = JSON.parse(res.body) as Record<string, string>;
 
     // Should have entries for at least the major services
     const serviceNames = new Set(Object.values(hostMap));
@@ -70,42 +73,10 @@ describe('/_hostmap endpoint', () => {
   });
 
   it('accepts trailing slash', async () => {
-    const res = await fetch(`http://127.0.0.1:${proxyPort}/_hostmap/`);
+    const res = await udsFetch(socketPath, '/_hostmap/');
     expect(res.status).toBe(200);
-    const hostMap = await res.json() as Record<string, string>;
+    const hostMap = JSON.parse(res.body) as Record<string, string>;
     expect(hostMap['api.anthropic.com']).toBe('anthropic');
-  });
-
-  it('requires client token when configured (unlike /_health)', async () => {
-    // Create a proxy with client token
-    const tokenProxy = createCredentialProxy({
-      port: 0,
-      store,
-      allowedServices: ['anthropic'],
-      clientToken: 'test-secret-token',
-    });
-    await tokenProxy.start();
-    const tokenPort = tokenProxy.getPort();
-
-    try {
-      // /_hostmap should be rejected without token
-      const noTokenRes = await fetch(`http://127.0.0.1:${tokenPort}/_hostmap`);
-      expect(noTokenRes.status).toBe(403);
-
-      // /_hostmap should succeed with valid token
-      const withTokenRes = await fetch(`http://127.0.0.1:${tokenPort}/_hostmap`, {
-        headers: { 'X-Aquaman-Token': 'test-secret-token' },
-      });
-      expect(withTokenRes.status).toBe(200);
-      const hostMap = await withTokenRes.json() as Record<string, string>;
-      expect(hostMap['api.anthropic.com']).toBe('anthropic');
-
-      // /_health should still be accessible without token
-      const healthRes = await fetch(`http://127.0.0.1:${tokenPort}/_health`);
-      expect(healthRes.status).toBe(200);
-    } finally {
-      await tokenProxy.stop();
-    }
   });
 });
 
@@ -113,7 +84,7 @@ describe('/_hostmap with custom services', () => {
   let tmpDir: string;
   let proxy: CredentialProxy;
   let store: MemoryStore;
-  let proxyPort: number;
+  let socketPath: string;
 
   beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hostmap-custom-'));
@@ -141,28 +112,30 @@ describe('/_hostmap with custom services', () => {
     await store.set('anthropic', 'api_key', 'sk-test');
     await store.set('my-weather-api', 'api_key', 'weather-key-123');
 
+    socketPath = tmpSocketPath();
+
     const registry = createServiceRegistry({
       configPath: path.join(tmpDir, 'services.yaml'),
     });
 
     proxy = createCredentialProxy({
-      port: 0,
+      socketPath,
       store,
       allowedServices: ['anthropic', 'my-weather-api', 'my-custom-llm'],
       serviceRegistry: registry,
     });
     await proxy.start();
-    proxyPort = proxy.getPort();
   });
 
   afterEach(async () => {
     await proxy.stop();
     fs.rmSync(tmpDir, { recursive: true, force: true });
+    cleanupSocket(socketPath);
   });
 
   it('includes custom service host patterns in /_hostmap', async () => {
-    const res = await fetch(`http://127.0.0.1:${proxyPort}/_hostmap`);
-    const hostMap = await res.json() as Record<string, string>;
+    const res = await udsFetch(socketPath, '/_hostmap');
+    const hostMap = JSON.parse(res.body) as Record<string, string>;
 
     // Custom services should appear
     expect(hostMap['api.weather.example.com']).toBe('my-weather-api');
@@ -194,7 +167,7 @@ describe('/_hostmap with custom services', () => {
     });
 
     try {
-      const res = await fetch(`http://127.0.0.1:${proxyPort}/my-weather-api/forecast`, {
+      const res = await udsFetch(socketPath, '/my-weather-api/forecast', {
         method: 'GET',
       });
       expect(res.status).toBe(200);
@@ -229,7 +202,7 @@ describe('plugin-mode hostMap in startup JSON', () => {
 
   it('startup JSON includes hostMap with builtin patterns', async () => {
     const connectionInfo = await new Promise<any>((resolve, reject) => {
-      const proc = spawn('npx', ['tsx', CLI_PATH, 'plugin-mode', '--port', '0'], {
+      const proc = spawn('npx', ['tsx', CLI_PATH, 'plugin-mode'], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env },
       });

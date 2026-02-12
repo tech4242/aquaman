@@ -1,47 +1,44 @@
 /**
- * HTTP fetch interceptor for channel credential isolation.
+ * HTTP interceptor for channel credential isolation.
  *
  * Overrides globalThis.fetch to redirect requests targeting known channel API
- * hosts through the aquaman credential proxy. The proxy injects the real
- * credentials, so the Gateway process never sees them.
+ * hosts through the aquaman credential proxy via Unix domain socket.
+ * The proxy injects the real credentials, so the Gateway process never sees them.
  *
  * OpenClaw channels use globalThis.fetch (backed by undici) for all HTTP calls.
  * Many channel monitor functions also accept a `proxyFetch` parameter that
  * falls back to globalThis.fetch, so overriding it covers both paths.
+ *
+ * Uses sentinel hostname `aquaman.local` — SDK base URLs are set to
+ * `http://aquaman.local/<service>` and the interceptor routes them through UDS.
  */
 
+import { Agent } from 'undici';
+
+/** Sentinel hostname used in SDK base URLs to route through UDS */
+const PROXY_HOST = 'aquaman.local';
+
 export interface HttpInterceptorOptions {
-  /** Base URL of the aquaman proxy, e.g. "http://127.0.0.1:8081" */
-  proxyBaseUrl: string;
+  /** Unix domain socket path for the proxy */
+  socketPath: string;
   /** Map of hostname (or *.domain wildcard) → service name */
   hostMap: Map<string, string>;
-  /** Client authentication token for the proxy */
-  clientToken?: string;
   /** Optional logger */
   log?: (msg: string) => void;
 }
 
 export class HttpInterceptor {
-  private proxyBaseUrl: string;
-  private proxyHost: string;
+  private socketPath: string;
   private hostMap: Map<string, string>;
-  private clientToken: string | null;
   private originalFetch: typeof globalThis.fetch | null = null;
   private active = false;
   private log: (msg: string) => void;
+  private socketAgent: Agent | null = null;
 
   constructor(options: HttpInterceptorOptions) {
-    this.proxyBaseUrl = options.proxyBaseUrl.replace(/\/$/, '');
+    this.socketPath = options.socketPath;
     this.hostMap = options.hostMap;
-    this.clientToken = options.clientToken || null;
     this.log = options.log || (() => {});
-
-    // Extract proxy hostname to avoid intercepting requests to the proxy itself
-    try {
-      this.proxyHost = new URL(this.proxyBaseUrl).hostname;
-    } catch {
-      this.proxyHost = '127.0.0.1';
-    }
   }
 
   /**
@@ -51,15 +48,13 @@ export class HttpInterceptor {
     if (this.active) return;
 
     this.originalFetch = globalThis.fetch;
+    this.socketAgent = new Agent({ connect: { socketPath: this.socketPath } });
 
     const origFetch = this.originalFetch;
-    const proxyBase = this.proxyBaseUrl;
-    const proxyHostname = this.proxyHost;
-    const token = this.clientToken;
+    const socketAgent = this.socketAgent;
     const matchHost = this.matchHost.bind(this);
     const extractUrl = this.extractUrl.bind(this);
     const stripAuthHeaders = this.stripAuthHeaders.bind(this);
-    const injectToken = this.injectTokenHeader.bind(this);
     const logFn = this.log;
 
     (globalThis as any).fetch = (
@@ -71,22 +66,19 @@ export class HttpInterceptor {
         return origFetch.call(globalThis, input, init);
       }
 
-      // Requests to the proxy itself (SDK traffic via env vars) — inject token, pass through
-      if (url.hostname === proxyHostname || url.hostname === 'localhost') {
-        if (token) {
-          const tokenInit = injectToken(init, token);
-          return origFetch.call(globalThis, input, tokenInit);
-        }
-        return origFetch.call(globalThis, input, init);
+      // SDK traffic via env vars (hostname = aquaman.local) — route through UDS
+      if (url.hostname === PROXY_HOST) {
+        return origFetch.call(globalThis, input, { ...init, dispatcher: socketAgent } as any);
       }
 
+      // Channel traffic — match against host map
       const service = matchHost(url.hostname);
       if (!service) {
         return origFetch.call(globalThis, input, init);
       }
 
       // Rewrite the URL to go through the proxy
-      const proxyUrl = `${proxyBase}/${service}${url.pathname}${url.search}`;
+      const proxyUrl = `http://${PROXY_HOST}/${service}${url.pathname}${url.search}`;
       logFn(`[aquaman] Intercepted ${url.hostname}${url.pathname} → ${service}`);
 
       // Strip any existing authorization headers — the proxy will inject the real ones
@@ -96,12 +88,7 @@ export class HttpInterceptor {
         newInit = { ...init, headers: stripped };
       }
 
-      // Inject client token for proxy authentication
-      if (token) {
-        newInit = injectToken(newInit, token);
-      }
-
-      return origFetch.call(globalThis, proxyUrl, { ...newInit, redirect: 'manual' });
+      return origFetch.call(globalThis, proxyUrl, { ...newInit, redirect: 'manual', dispatcher: socketAgent } as any);
     };
 
     this.active = true;
@@ -117,6 +104,12 @@ export class HttpInterceptor {
     globalThis.fetch = this.originalFetch;
     this.originalFetch = null;
     this.active = false;
+
+    if (this.socketAgent) {
+      this.socketAgent.close();
+      this.socketAgent = null;
+    }
+
     this.log('[aquaman] HTTP interceptor deactivated');
   }
 
@@ -151,28 +144,6 @@ export class HttpInterceptor {
       // Not a valid URL — pass through
     }
     return null;
-  }
-
-  private injectTokenHeader(init: RequestInit | undefined, token: string): RequestInit {
-    const base = init || {};
-    const headers = base.headers;
-
-    if (!headers) {
-      return { ...base, headers: { 'x-aquaman-token': token } };
-    }
-
-    if (headers instanceof Headers) {
-      const h = new Headers(headers);
-      h.set('x-aquaman-token', token);
-      return { ...base, headers: h };
-    }
-
-    if (Array.isArray(headers)) {
-      return { ...base, headers: [...headers, ['x-aquaman-token', token]] };
-    }
-
-    // Plain object
-    return { ...base, headers: { ...headers, 'x-aquaman-token': token } };
   }
 
   private stripAuthHeaders(headers: HeadersInit): HeadersInit {

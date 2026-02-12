@@ -2,32 +2,31 @@
  * Environment configuration generator for OpenClaw integration
  *
  * Generates environment variables to configure OpenClaw to use
- * the aquaman credential proxy instead of direct API access.
+ * the aquaman credential proxy via sentinel hostname (aquaman.local).
+ * The plugin's HTTP interceptor catches requests to aquaman.local
+ * and routes them through the UDS proxy.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import type { ServiceConfig } from 'aquaman-core';
+import type { ServiceConfig } from '../core/index.js';
 
 export interface EnvConfig {
-  proxyHost: string;
-  proxyPort: number;
-  tlsEnabled: boolean;
   services: ServiceConfig[];
-  nodeExtraCaCerts?: string;
 }
 
 /**
- * Generate environment variables for OpenClaw to use the credential proxy
+ * Generate environment variables for OpenClaw to use the credential proxy.
+ * Uses sentinel hostname `aquaman.local` — the plugin's HTTP interceptor
+ * catches these and routes through UDS.
  */
 export function generateOpenClawEnv(config: EnvConfig): Record<string, string> {
   const env: Record<string, string> = {};
-  const protocol = config.tlsEnabled ? 'https' : 'http';
 
-  // For each service, set the base URL to point to our proxy
+  // For each service, set the base URL to point to our sentinel hostname
   for (const service of config.services) {
-    const baseUrl = `${protocol}://${config.proxyHost}:${config.proxyPort}/${service.name}`;
+    const baseUrl = `http://aquaman.local/${service.name}`;
 
     // Map service names to OpenClaw environment variables
     switch (service.name) {
@@ -51,16 +50,6 @@ export function generateOpenClawEnv(config: EnvConfig): Record<string, string> {
         const envKey = `${service.name.toUpperCase().replace(/-/g, '_')}_BASE_URL`;
         env[envKey] = baseUrl;
     }
-  }
-
-  // If TLS is enabled with self-signed certs, set NODE_EXTRA_CA_CERTS
-  if (config.tlsEnabled && config.nodeExtraCaCerts) {
-    env['NODE_EXTRA_CA_CERTS'] = config.nodeExtraCaCerts;
-  }
-
-  // Disable SSL verification for self-signed certs (development only)
-  if (config.tlsEnabled && !config.nodeExtraCaCerts) {
-    env['NODE_TLS_REJECT_UNAUTHORIZED'] = '0';
   }
 
   return env;

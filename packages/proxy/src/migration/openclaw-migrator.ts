@@ -9,7 +9,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import type { CredentialStore } from 'aquaman-core';
+import type { CredentialStore } from '../core/index.js';
 
 export interface CredentialMapping {
   /** JSON path segments within openclaw.json to find the credential */

@@ -10,7 +10,6 @@
 
 // Daemon
 export {
-  type TlsOptions,
   type CredentialProxyOptions,
   type RequestInfo,
   CredentialProxy,
@@ -48,3 +47,6 @@ export {
   OpenClawIntegration,
   createOpenClawIntegration
 } from './openclaw/integration.js';
+
+// Core (merged from aquaman-core)
+export * from './core/index.js';

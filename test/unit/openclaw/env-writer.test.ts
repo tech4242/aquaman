@@ -38,76 +38,10 @@ describe('env-writer', () => {
         }
       ];
 
-      const env = generateOpenClawEnv({
-        proxyHost: '127.0.0.1',
-        proxyPort: 8081,
-        tlsEnabled: false,
-        services
-      });
+      const env = generateOpenClawEnv({ services });
 
-      expect(env['ANTHROPIC_BASE_URL']).toBe('http://127.0.0.1:8081/anthropic');
-      expect(env['OPENAI_BASE_URL']).toBe('http://127.0.0.1:8081/openai');
-    });
-
-    it('should use HTTPS when TLS is enabled', () => {
-      const services: ServiceConfig[] = [
-        {
-          name: 'anthropic',
-          upstream: 'https://api.anthropic.com',
-          authHeader: 'x-api-key',
-          credentialKey: 'api_key'
-        }
-      ];
-
-      const env = generateOpenClawEnv({
-        proxyHost: '127.0.0.1',
-        proxyPort: 8081,
-        tlsEnabled: true,
-        services
-      });
-
-      expect(env['ANTHROPIC_BASE_URL']).toBe('https://127.0.0.1:8081/anthropic');
-    });
-
-    it('should set NODE_EXTRA_CA_CERTS when provided', () => {
-      const services: ServiceConfig[] = [
-        {
-          name: 'anthropic',
-          upstream: 'https://api.anthropic.com',
-          authHeader: 'x-api-key',
-          credentialKey: 'api_key'
-        }
-      ];
-
-      const env = generateOpenClawEnv({
-        proxyHost: '127.0.0.1',
-        proxyPort: 8081,
-        tlsEnabled: true,
-        services,
-        nodeExtraCaCerts: '/path/to/cert.pem'
-      });
-
-      expect(env['NODE_EXTRA_CA_CERTS']).toBe('/path/to/cert.pem');
-    });
-
-    it('should set NODE_TLS_REJECT_UNAUTHORIZED when TLS enabled without CA certs', () => {
-      const services: ServiceConfig[] = [
-        {
-          name: 'anthropic',
-          upstream: 'https://api.anthropic.com',
-          authHeader: 'x-api-key',
-          credentialKey: 'api_key'
-        }
-      ];
-
-      const env = generateOpenClawEnv({
-        proxyHost: '127.0.0.1',
-        proxyPort: 8081,
-        tlsEnabled: true,
-        services
-      });
-
-      expect(env['NODE_TLS_REJECT_UNAUTHORIZED']).toBe('0');
+      expect(env['ANTHROPIC_BASE_URL']).toBe('http://aquaman.local/anthropic');
+      expect(env['OPENAI_BASE_URL']).toBe('http://aquaman.local/openai');
     });
 
     it('should handle custom services with uppercase naming', () => {
@@ -120,14 +54,9 @@ describe('env-writer', () => {
         }
       ];
 
-      const env = generateOpenClawEnv({
-        proxyHost: '127.0.0.1',
-        proxyPort: 8081,
-        tlsEnabled: false,
-        services
-      });
+      const env = generateOpenClawEnv({ services });
 
-      expect(env['MY_CUSTOM_API_BASE_URL']).toBe('http://127.0.0.1:8081/my-custom-api');
+      expect(env['MY_CUSTOM_API_BASE_URL']).toBe('http://aquaman.local/my-custom-api');
     });
 
     it('should handle GitHub service', () => {
@@ -141,30 +70,25 @@ describe('env-writer', () => {
         }
       ];
 
-      const env = generateOpenClawEnv({
-        proxyHost: '127.0.0.1',
-        proxyPort: 8081,
-        tlsEnabled: false,
-        services
-      });
+      const env = generateOpenClawEnv({ services });
 
-      expect(env['GITHUB_API_URL']).toBe('http://127.0.0.1:8081/github');
+      expect(env['GITHUB_API_URL']).toBe('http://aquaman.local/github');
     });
   });
 
   describe('writeEnvFile', () => {
     it('should write environment variables to file', () => {
       const env = {
-        'ANTHROPIC_BASE_URL': 'http://127.0.0.1:8081/anthropic',
-        'OPENAI_BASE_URL': 'http://127.0.0.1:8081/openai'
+        'ANTHROPIC_BASE_URL': 'http://aquaman.local/anthropic',
+        'OPENAI_BASE_URL': 'http://aquaman.local/openai'
       };
 
       const envPath = path.join(tempDir, '.env.test');
       writeEnvFile(env, envPath);
 
       const content = fs.readFileSync(envPath, 'utf-8');
-      expect(content).toContain('ANTHROPIC_BASE_URL="http://127.0.0.1:8081/anthropic"');
-      expect(content).toContain('OPENAI_BASE_URL="http://127.0.0.1:8081/openai"');
+      expect(content).toContain('ANTHROPIC_BASE_URL="http://aquaman.local/anthropic"');
+      expect(content).toContain('OPENAI_BASE_URL="http://aquaman.local/openai"');
     });
 
     it('should create parent directories if needed', () => {
@@ -191,14 +115,14 @@ describe('env-writer', () => {
   describe('formatEnvForDisplay', () => {
     it('should format environment variables for display', () => {
       const env = {
-        'ANTHROPIC_BASE_URL': 'http://127.0.0.1:8081/anthropic',
-        'OPENAI_BASE_URL': 'http://127.0.0.1:8081/openai'
+        'ANTHROPIC_BASE_URL': 'http://aquaman.local/anthropic',
+        'OPENAI_BASE_URL': 'http://aquaman.local/openai'
       };
 
       const output = formatEnvForDisplay(env);
 
-      expect(output).toContain('ANTHROPIC_BASE_URL=http://127.0.0.1:8081/anthropic');
-      expect(output).toContain('OPENAI_BASE_URL=http://127.0.0.1:8081/openai');
+      expect(output).toContain('ANTHROPIC_BASE_URL=http://aquaman.local/anthropic');
+      expect(output).toContain('OPENAI_BASE_URL=http://aquaman.local/openai');
     });
 
     it('should indent each line', () => {

@@ -6,7 +6,7 @@ Credential isolation for **OpenClaw Gateway**. API keys and channel tokens never
 
 **Target platform:** OpenClaw Gateway on Unix-like systems (Linux, macOS, WSL2). The Gateway is OpenClaw's core server component—a Node.js/TypeScript service that runs as a systemd user service (Linux/WSL2) or LaunchAgent (macOS).
 
-**Published on npm** as `aquaman-plugin`, `aquaman-proxy`, and `aquaman-core`. Install via `openclaw plugins install aquaman-plugin`.
+**Published on npm** as `aquaman-plugin` and `aquaman-proxy`. Install via `openclaw plugins install aquaman-plugin`.
 
 ## Architecture Decision: Isolation vs Detection
 
@@ -22,8 +22,8 @@ The proxy architecture means a compromised agent literally cannot access credent
 ```
 Agent Process                    Proxy Process (aquaman)
 ┌────────────────────┐           ┌────────────────────┐
-│ ANTHROPIC_BASE_URL │──HTTP───>│ Keychain/Vault/1P  │
-│ = localhost:8081   │           │ Injects auth header│
+│ ANTHROPIC_BASE_URL │──UDS────>│ Keychain/Vault/1P  │
+│ = aquaman.local    │  (.sock) │ Injects auth header│
 │                    │<─────────│ Forwards to API    │
 │ NO credentials     │           │ Writes audit log   │
 └────────────────────┘           └────────────────────┘
@@ -33,9 +33,8 @@ Agent Process                    Proxy Process (aquaman)
 
 ```
 packages/
-├── core/       # aquaman-core - credential stores, audit logger, crypto
-├── proxy/      # aquaman-proxy - HTTP proxy daemon, CLI
-└── plugin/    # aquaman-plugin - OpenClaw plugin
+├── proxy/      # aquaman-proxy - HTTP proxy daemon, CLI (includes core at src/core/)
+└── plugin/     # aquaman-plugin - OpenClaw plugin
 ```
 
 ## OpenClaw Gateway Integration
@@ -45,8 +44,8 @@ The plugin (`packages/plugin/`) integrates with the OpenClaw Gateway's plugin SD
 **How it works:**
 1. Plugin exports `register(api)` function (not a class)
 2. On load: auto-generates `auth-profiles.json` with placeholder keys if missing
-3. On load: sets `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` to route through proxy
-4. On `onGatewayStart`: spawns `aquaman plugin-mode --port 8081` via `ProxyManager` (from `src/proxy-manager.ts`)
+3. On load: sets `ANTHROPIC_BASE_URL=http://aquaman.local/anthropic`, `OPENAI_BASE_URL=http://aquaman.local/openai` (sentinel hostname routed to UDS)
+4. On `onGatewayStart`: spawns `aquaman plugin-mode` via `ProxyManager` (from `src/proxy-manager.ts`) — proxy listens on UDS (`~/.aquaman/proxy.sock`)
 5. On `onGatewayStart`: activates `globalThis.fetch` interceptor to redirect channel API traffic through proxy
 6. On `onGatewayStop`: deactivates interceptor, stops proxy via `ProxyManager`
 7. Registers `/aquaman` CLI commands and `aquaman_status` tool
@@ -67,12 +66,10 @@ The `openclaw.plugin.json` manifest defines `additionalProperties: false` with o
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `mode` | `"embedded"` \| `"proxy"` | `"embedded"` | Isolation mode |
 | `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` \| `"keepassxc"` | `"keychain"` | Credential store |
 | `services` | `string[]` | `["anthropic", "openai"]` | Services to proxy |
-| `proxyPort` | `number` | `8081` | Proxy listen port |
 
-**Do NOT add extra keys** (like `proxyAutoStart`, `tlsEnabled`, `auditEnabled`) to `openclaw.json` — OpenClaw validates against the manifest schema and will reject them. Use `~/.aquaman/config.yaml` for advanced settings.
+**Do NOT add extra keys** (like `proxyAutoStart`, `auditEnabled`) to `openclaw.json` — OpenClaw validates against the manifest schema and will reject them. Use `~/.aquaman/config.yaml` for advanced settings.
 
 ### OpenClaw Auth Profiles
 
@@ -114,7 +111,7 @@ OpenClaw 2026.2.6+ includes a code safety scanner that checks plugin files for d
 
 There is no suppression mechanism (no inline annotations, no `.auditignore`). The only fix is to ensure trigger patterns don't co-exist in the same file.
 
-**Current state (v0.6.0):** 1 expected finding: `dangerous-exec` on `proxy-manager.ts` (true positive — it spawns the proxy process). 0 env-harvesting findings. The scanner in 2026.2.9 recursively scans `src/` and `dist/` subdirectories (older versions only scanned top-level files).
+**Current state (v0.7.0):** 1 expected finding: `dangerous-exec` on `proxy-manager.ts` (true positive — it spawns the proxy process). 0 env-harvesting findings. The scanner in 2026.2.9 recursively scans `src/` and `dist/` subdirectories (older versions only scanned top-level files).
 
 **Mitigations:**
 - `aquaman setup` auto-sets `plugins.allow: ["aquaman-plugin"]` in `openclaw.json` (resolves the `extensions_no_allowlist` audit finding)
@@ -136,12 +133,12 @@ const mod: any = await import('keytar');
 this.keytar = mod.default || mod;
 ```
 
-**Location:** `packages/core/src/credentials/store.ts` — `KeychainStore.getKeytar()`
+**Location:** `packages/proxy/src/core/credentials/store.ts` — `KeychainStore.getKeytar()`
 
 ### Proxy Request Flow
 
 **Standard (header auth):**
-1. Agent sends request to `http://127.0.0.1:8081/anthropic/v1/messages`
+1. Agent sends request to `http://aquaman.local/anthropic/v1/messages` (routed to UDS via undici dispatcher)
 2. Proxy parses service name from path (`anthropic`)
 3. Looks up credential from vault: `anthropic/api_key`
 4. Strips any existing auth header from the request
@@ -153,7 +150,7 @@ this.keytar = mod.default || mod;
 **Channel traffic (via fetch interceptor):**
 1. Channel code calls `fetch('https://api.telegram.org/bot.../sendMessage')`
 2. `globalThis.fetch` interceptor matches hostname → service name
-3. Rewrites URL to `http://127.0.0.1:8081/telegram/sendMessage`
+3. Rewrites URL to `http://aquaman.local/telegram/sendMessage` (dispatched over UDS)
 4. Proxy handles auth based on `authMode`:
    - `header`: injects auth header (Anthropic, OpenAI, GitHub, xAI, Cloudflare AI Gateway, Slack, Discord, Matrix, Mattermost, LINE, Twitch, ElevenLabs, Telnyx, Zalo)
    - `url-path`: rewrites path to `/bot<TOKEN>/method` (Telegram)
@@ -162,18 +159,9 @@ this.keytar = mod.default || mod;
    - `none`: at-rest storage only, proxy rejects traffic (Nostr, Tlon)
 5. Forwards to upstream, response piped back
 
-### Proxy Client Authentication
+### Proxy Access Control
 
-Shared-secret bearer token prevents unauthorized local processes from using the proxy.
-
-- **Generation:** `crypto.randomBytes(32)` → 256-bit CSPRNG token (BSI TR-02102 aligned)
-- **Local mode:** Proxy outputs token in JSON on stdout. Plugin reads it and injects `X-Aquaman-Token` header via fetch interceptor on ALL proxy-bound requests (SDK + channel traffic)
-- **Docker mode:** Shared via `AQUAMAN_CLIENT_TOKEN` env var between containers. Daemon reads from env or `--token` flag
-- **Comparison:** `crypto.timingSafeEqual()` prevents timing side-channel attacks
-- **Lifetime:** Per-session only, regenerated on every proxy startup, not persisted to disk
-- **Cleanup:** Token reference nulled on proxy shutdown
-- **Backward compat:** No `clientToken` configured = no enforcement (standalone mode)
-- **Exempt:** `/_health` endpoint always accessible without token
+UDS socket file permissions (`chmod 0o600`) restrict proxy access to the owning user. No shared-secret token needed — only processes running as the same user can connect to the socket.
 
 ### Builtin Service Protection
 
@@ -185,16 +173,12 @@ Builtin service definitions (anthropic, openai, telegram, etc.) cannot be overri
 - `override()` still works — only used programmatically in tests (requires code-level access)
 - `ServiceRegistry.isBuiltinService(name)` checks whether a name is protected
 
-### Docker Two-Container Architecture
+### Docker Single-Container Architecture
 
-- **Base image:** `alpine/openclaw:latest` (community-maintained, runs as `node` uid 1000, config at `/home/node/.openclaw/`)
-- `aquaman` container: proxy daemon on `backend` (internet) + `frontend` (internal) networks
-- `openclaw` container (`openclaw-gateway`): Gateway + plugin on `frontend` only (sandboxed, no internet)
-- Plugin reads `AQUAMAN_PROXY_URL` env var → skips local proxy spawn, points env vars + fetch interceptor at external proxy
-- `AQUAMAN_CLIENT_TOKEN` env var: shared between containers for proxy client auth (generate with `openssl rand -hex 32`)
-- `frontend` network is `internal: true` (`name: aquaman-frontend`) — openclaw can only reach aquaman, not the internet
-- `OPENCLAW_GATEWAY_TOKEN` env var is required when binding to lan (defaults to `aquaman-internal` in compose)
-- **Sandbox profile** (`--profile with-openclaw-sandboxed`): mounts Docker socket, enables OpenClaw's built-in sandbox so tool execution runs in ephemeral containers with `network: aquaman-frontend`, `cap-drop: ALL`, read-only root fs
+- Single `docker/Dockerfile` — multi-stage build (builder + runtime)
+- Proxy listens on UDS inside the container (`~/.aquaman/proxy.sock`)
+- No multi-container networking required — proxy and Gateway run in the same container
+- Socket file permissions (`chmod 0o600`) provide access control
 
 ## CLI: `aquaman setup`
 
@@ -209,7 +193,7 @@ aquaman setup --no-openclaw             # Skip plugin installation
 
 **What it does:**
 1. Detects platform → picks default backend (macOS=keychain, Linux=encrypted-file)
-2. Runs `init` internally (creates `~/.aquaman/`, config.yaml, audit dir, TLS disabled by default)
+2. Runs `init` internally (creates `~/.aquaman/`, config.yaml, audit dir)
 3. Prompts for Anthropic + OpenAI API keys (interactive) or reads from env vars (non-interactive)
 4. Detects OpenClaw (`~/.openclaw/` or `which openclaw`)
 5. If OpenClaw found: installs plugin, writes openclaw.json, generates auth-profiles.json
@@ -229,7 +213,7 @@ aquaman doctor    # Exit code 0 = all pass, 1 = issues found
 1. `~/.aquaman/config.yaml` exists
 2. Backend accessible
 3. Credentials stored (count and names)
-4. Proxy running on configured port (`/_health`)
+4. Proxy running on socket (`/_health` via UDS)
 5. OpenClaw detected
 6. Plugin installed in extensions dir
 7. `openclaw.json` has aquaman-plugin entry
@@ -243,7 +227,7 @@ The plugin (`packages/plugin/index.ts`) auto-generates `~/.openclaw/agents/main/
 ## Actionable Error Messages
 
 - **Proxy 401 (credential not found):** Returns JSON `{ "error": "...", "fix": "Run: aquaman credentials add <service> <key>" }`
-- **Plugin: proxy start failure:** Checks if another instance is running on the port, suggests `lsof -i :<port>`
+- **Plugin: proxy start failure:** Checks for stale socket file at `~/.aquaman/proxy.sock`
 - **Plugin: CLI not found:** Suggests `npm install -g aquaman-proxy` then `aquaman setup`
 
 ## Development Commands
@@ -252,7 +236,6 @@ The plugin (`packages/plugin/index.ts`) auto-generates `~/.openclaw/agents/main/
 npm test                    # All tests
 npm run test:e2e            # E2E tests (including OpenClaw plugin)
 npm run build               # Build all packages
-npm run build:core          # Build core only (needed after editing store.ts)
 npm run typecheck           # TypeScript validation
 npm run lint                # oxlint
 
@@ -263,16 +246,15 @@ npm run dev                 # Dev mode with watch
 
 ## Version Bumps
 
-All 3 packages are pinned to exact versions of each other and must be bumped together:
+Both packages are pinned to exact versions of each other and must be bumped together:
 
 | File | Fields to update |
 |------|-----------------|
 | `package.json` (root) | `version` |
-| `packages/core/package.json` | `version` |
-| `packages/proxy/package.json` | `version`, `dependencies.aquaman-core` (exact pin) |
+| `packages/proxy/package.json` | `version` |
 | `packages/plugin/package.json` | `version`, `peerDependencies.aquaman-proxy` (exact pin) |
 
-All four `version` fields and both cross-package dependency pins must match the new version.
+All three `version` fields and the cross-package dependency pin must match the new version.
 
 ## Credential Backends
 
@@ -300,17 +282,14 @@ cp packages/plugin/package.json ~/.openclaw/extensions/aquaman-plugin/package.js
 cp packages/plugin/index.ts ~/.openclaw/extensions/aquaman-plugin/index.ts
 cp -r packages/plugin/src/ ~/.openclaw/extensions/aquaman-plugin/src/
 
-# 3. Rebuild core if store.ts changed
-npm run build:core
-
-# 4. Add test credential (dummy key for testing)
+# 3. Add test credential (dummy key for testing)
 node -e "
 const kt = require('./node_modules/keytar');
 const k = kt.default || kt;
 k.setPassword('aquaman/anthropic', 'api_key', 'sk-ant-test-key').then(() => console.log('stored'));
 "
 
-# 5. Create auth-profiles.json placeholder
+# 4. Create auth-profiles.json placeholder
 mkdir -p ~/.openclaw/agents/main/agent
 cat > ~/.openclaw/agents/main/agent/auth-profiles.json << 'EOF'
 {
@@ -326,7 +305,7 @@ cat > ~/.openclaw/agents/main/agent/auth-profiles.json << 'EOF'
 }
 EOF
 
-# 6. Ensure openclaw.json has plugin config
+# 5. Ensure openclaw.json has plugin config
 cat > ~/.openclaw/openclaw.json << 'EOF'
 {
   "plugins": {
@@ -334,10 +313,8 @@ cat > ~/.openclaw/openclaw.json << 'EOF'
       "aquaman-plugin": {
         "enabled": true,
         "config": {
-          "mode": "proxy",
           "backend": "keychain",
-          "services": ["anthropic", "openai"],
-          "proxyPort": 8081
+          "services": ["anthropic", "openai"]
         }
       }
     }
@@ -345,7 +322,7 @@ cat > ~/.openclaw/openclaw.json << 'EOF'
 }
 EOF
 
-# 7. Test via OpenClaw agent
+# 6. Test via OpenClaw agent
 openclaw agent --local --message "hello" --session-id test --json 2>&1 | head -8
 ```
 
@@ -354,14 +331,14 @@ openclaw agent --local --message "hello" --session-id test --json 2>&1 | head -8
 ```
 [plugins] Aquaman plugin loaded
 [plugins] aquaman CLI found, will start proxy on gateway start
-[plugins] Set ANTHROPIC_BASE_URL=http://127.0.0.1:8081/anthropic
-[plugins] Set OPENAI_BASE_URL=http://127.0.0.1:8081/openai
+[plugins] Set ANTHROPIC_BASE_URL=http://aquaman.local/anthropic
+[plugins] Set OPENAI_BASE_URL=http://aquaman.local/openai
 [plugins] Aquaman plugin registered successfully
 { "payloads": [{ "text": "HTTP 401 authentication_error: invalid x-api-key ..." }] }
 ```
 
 - **No mismatch warnings** — package name `aquaman-plugin` matches manifest id `"aquaman-plugin"`
-- **Plugin loads and sets env vars** — `ANTHROPIC_BASE_URL` pointed to localhost proxy
+- **Plugin loads and sets env vars** — `ANTHROPIC_BASE_URL` pointed to `aquaman.local` (UDS-backed)
 - **401 from Anthropic** — confirms the proxy injected the dummy key (real key would get a response)
 - **No credentials in agent process** — only the proxy URL was visible to the agent
 
@@ -379,8 +356,8 @@ npm test                        # Everything (~422 tests, 29 files)
 # Start proxy
 npx tsx packages/proxy/src/cli/index.ts daemon &
 
-# Curl through it (expect 401 with dummy key = proxy injected it)
-curl -sk https://localhost:8081/anthropic/v1/messages \
+# Curl through it via UDS (expect 401 with dummy key = proxy injected it)
+curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/anthropic/v1/messages \
   -H "Content-Type: application/json" \
   -d '{"model":"claude-sonnet-4-20250514","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}'
 
@@ -416,15 +393,15 @@ Promise.all([
 ### 2. Start the proxy
 
 ```bash
-npx tsx packages/proxy/src/cli/index.ts plugin-mode --port 18081
-# Should output JSON with ready:true
+npx tsx packages/proxy/src/cli/index.ts plugin-mode
+# Should output JSON with ready:true, proxy listening on ~/.aquaman/proxy.sock
 ```
 
 ### 3. Test each auth mode
 
 **Header auth (Anthropic):**
 ```bash
-curl -s http://127.0.0.1:18081/anthropic/v1/messages \
+curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/anthropic/v1/messages \
   -H "Content-Type: application/json" \
   -d '{"model":"claude-sonnet-4-20250514","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}'
 # Expect: 401 from Anthropic (confirms proxy injected the test key)
@@ -432,25 +409,25 @@ curl -s http://127.0.0.1:18081/anthropic/v1/messages \
 
 **Header auth (Slack):**
 ```bash
-curl -s http://127.0.0.1:18081/slack/auth.test
+curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/slack/auth.test
 # Expect: {"ok":false,"error":"invalid_auth"} (confirms Bearer token injected)
 ```
 
 **Header auth (Discord):**
 ```bash
-curl -s http://127.0.0.1:18081/discord/api/v10/users/@me
+curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/discord/api/v10/users/@me
 # Expect: 401 from Discord (confirms Bot token injected)
 ```
 
 **URL-path auth (Telegram):**
 ```bash
-curl -s http://127.0.0.1:18081/telegram/getMe
+curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/telegram/getMe
 # Expect: {"ok":false,"error_code":401} (token injected into URL path)
 ```
 
 **Basic auth (Twilio):**
 ```bash
-curl -s http://127.0.0.1:18081/twilio/2010-04-01/Accounts.json
+curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/twilio/2010-04-01/Accounts.json
 # Expect: 401 from Twilio (Basic auth header injected)
 ```
 
@@ -499,10 +476,10 @@ Promise.all([
 
 | File | Purpose |
 |------|---------|
-| `packages/core/src/credentials/store.ts` | Backend abstraction (keychain, encrypted-file, memory) |
-| `packages/core/src/credentials/backends/` | 1Password and Vault backend implementations |
-| `packages/core/src/audit/logger.ts` | Hash-chained logging |
-| `packages/proxy/src/daemon.ts` | HTTP/HTTPS proxy server (header, url-path, basic, oauth auth modes) |
+| `packages/proxy/src/core/credentials/store.ts` | Backend abstraction (keychain, encrypted-file, memory) |
+| `packages/proxy/src/core/credentials/backends/` | 1Password and Vault backend implementations |
+| `packages/proxy/src/core/audit/logger.ts` | Hash-chained logging |
+| `packages/proxy/src/daemon.ts` | HTTP proxy server on UDS (header, url-path, basic, oauth auth modes) |
 | `packages/proxy/src/cli/index.ts` | CLI (Commander.js, 18 commands incl. `setup`, `doctor`, `migrate openclaw`) |
 | `packages/proxy/src/service-registry.ts` | Builtin service definitions (23 services) |
 | `packages/proxy/src/oauth-token-cache.ts` | OAuth client credentials token exchange + caching |
@@ -514,23 +491,19 @@ Promise.all([
 | `packages/plugin/src/plugin.ts` | Class-based plugin (standalone/test use) |
 | `packages/plugin/src/proxy-manager.ts` | Spawns/manages proxy child process |
 | `packages/plugin/src/proxy-health.ts` | Proxy health check + host map fetching (isolated `fetch` calls) |
-| `packages/plugin/src/http-interceptor.ts` | `globalThis.fetch` override for channel traffic interception |
+| `packages/plugin/src/http-interceptor.ts` | `globalThis.fetch` override for channel traffic interception (uses `undici.Agent` with UDS dispatcher) |
 | `test/e2e/openclaw-plugin.test.ts` | Plugin integration tests |
 | `test/e2e/credential-proxy.test.ts` | Proxy E2E tests |
 | `test/e2e/channel-credential-injection.test.ts` | Channel auth mode E2E tests (Telegram, Twilio, Twitch, etc.) |
 | `test/e2e/oauth-credential-injection.test.ts` | OAuth flow E2E tests (mock token server) |
 | `test/e2e/keychain-proxy-flow.test.ts` | Real keychain backend E2E (macOS only) |
-| `test/e2e/proxy-client-auth.test.ts` | Client token auth E2E tests |
 | `test/e2e/cli-plugin-mode.test.ts` | CLI startup/output E2E tests |
 | `test/e2e/cli-setup.test.ts` | `aquaman setup` E2E tests |
 | `test/e2e/cli-doctor.test.ts` | `aquaman doctor` E2E tests |
 | `test/unit/daemon-errors.test.ts` | Actionable error message unit tests |
 | `test/helpers/temp-env.ts` | Reusable temp environment helper for CLI tests |
-| `docker/Dockerfile.aquaman` | Multi-stage Docker build (builder + runtime) |
-| `docker/Dockerfile.openclaw` | OpenClaw + aquaman plugin Docker image |
-| `docker/docker-compose.yml` | Compose file with aquaman + optional openclaw services |
+| `docker/Dockerfile` | Single-container Docker build (builder + runtime) |
 | `docker/openclaw-config.json` | Plugin config for Docker OpenClaw container |
-| `docker/openclaw-config-sandboxed.json` | Plugin + sandbox config for Docker (sandboxed profile) |
 | `docker/auth-profiles.json` | Placeholder auth profiles for Docker |
 | `docker/.env.example` | Template for Docker env var configuration |
 

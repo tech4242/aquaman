@@ -1,8 +1,8 @@
 /**
- * Unit tests for the HTTP fetch interceptor.
+ * Unit tests for the HTTP interceptor.
  *
  * Tests that globalThis.fetch is correctly overridden to redirect
- * channel API traffic through the aquaman credential proxy.
+ * channel API traffic through the aquaman credential proxy via UDS.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -21,6 +21,8 @@ describe('HttpInterceptor', () => {
     ['discord.com', 'discord'],
     ['*.discord.com', 'discord'],
   ]);
+
+  const testSocketPath = '/tmp/aquaman-test/proxy.sock';
 
   beforeEach(() => {
     fetchCalls = [];
@@ -44,7 +46,7 @@ describe('HttpInterceptor', () => {
   describe('host matching', () => {
     it('matches exact hostnames', () => {
       interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
+        socketPath: testSocketPath,
         hostMap,
       });
 
@@ -55,7 +57,7 @@ describe('HttpInterceptor', () => {
 
     it('matches wildcard patterns', () => {
       interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
+        socketPath: testSocketPath,
         hostMap,
       });
 
@@ -66,7 +68,7 @@ describe('HttpInterceptor', () => {
 
     it('returns null for unknown hosts', () => {
       interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
+        socketPath: testSocketPath,
         hostMap,
       });
 
@@ -76,9 +78,9 @@ describe('HttpInterceptor', () => {
   });
 
   describe('fetch interception', () => {
-    it('redirects matching requests through the proxy', async () => {
+    it('redirects matching requests through the proxy via sentinel hostname', async () => {
       interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
+        socketPath: testSocketPath,
         hostMap,
       });
       interceptor.activate();
@@ -86,12 +88,12 @@ describe('HttpInterceptor', () => {
       await globalThis.fetch('https://api.telegram.org/bot123/getUpdates');
 
       expect(fetchCalls).toHaveLength(1);
-      expect(fetchCalls[0].url).toBe('http://127.0.0.1:8081/telegram/bot123/getUpdates');
+      expect(fetchCalls[0].url).toBe('http://aquaman.local/telegram/bot123/getUpdates');
     });
 
     it('passes through non-matching requests unchanged', async () => {
       interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
+        socketPath: testSocketPath,
         hostMap,
       });
       interceptor.activate();
@@ -102,23 +104,25 @@ describe('HttpInterceptor', () => {
       expect(fetchCalls[0].url).toBe('https://api.example.com/data');
     });
 
-    it('does not intercept requests to the proxy itself', async () => {
+    it('routes SDK traffic (aquaman.local) through UDS dispatcher', async () => {
       interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
+        socketPath: testSocketPath,
         hostMap,
       });
       interceptor.activate();
 
-      await globalThis.fetch('http://127.0.0.1:8081/anthropic/v1/messages');
+      await globalThis.fetch('http://aquaman.local/anthropic/v1/messages');
 
       expect(fetchCalls).toHaveLength(1);
-      // Should NOT be rewritten — proxy requests pass through as-is
-      expect(fetchCalls[0].url).toBe('http://127.0.0.1:8081/anthropic/v1/messages');
+      // Should pass through as-is (URL unchanged), dispatcher handles UDS routing
+      expect(fetchCalls[0].url).toBe('http://aquaman.local/anthropic/v1/messages');
+      // Should have dispatcher in init
+      expect(fetchCalls[0].init).toHaveProperty('dispatcher');
     });
 
     it('preserves query parameters', async () => {
       interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
+        socketPath: testSocketPath,
         hostMap,
       });
       interceptor.activate();
@@ -126,13 +130,13 @@ describe('HttpInterceptor', () => {
       await globalThis.fetch('https://api.telegram.org/bot123/getUpdates?offset=5&limit=10');
 
       expect(fetchCalls[0].url).toBe(
-        'http://127.0.0.1:8081/telegram/bot123/getUpdates?offset=5&limit=10'
+        'http://aquaman.local/telegram/bot123/getUpdates?offset=5&limit=10'
       );
     });
 
     it('handles wildcard host matching', async () => {
       interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
+        socketPath: testSocketPath,
         hostMap,
       });
       interceptor.activate();
@@ -140,13 +144,13 @@ describe('HttpInterceptor', () => {
       await globalThis.fetch('https://files.slack.com/files-pri/T12345/file.png');
 
       expect(fetchCalls[0].url).toBe(
-        'http://127.0.0.1:8081/slack/files-pri/T12345/file.png'
+        'http://aquaman.local/slack/files-pri/T12345/file.png'
       );
     });
 
     it('strips authorization headers from intercepted requests', async () => {
       interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
+        socketPath: testSocketPath,
         hostMap,
       });
       interceptor.activate();
@@ -166,149 +170,21 @@ describe('HttpInterceptor', () => {
 
     it('handles URL input types', async () => {
       interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
+        socketPath: testSocketPath,
         hostMap,
       });
       interceptor.activate();
 
       // URL object
       await globalThis.fetch(new URL('https://api.telegram.org/bot123/test'));
-      expect(fetchCalls[0].url).toBe('http://127.0.0.1:8081/telegram/bot123/test');
-    });
-  });
-
-  describe('client token injection', () => {
-    it('injects token on requests to proxy host:port (SDK traffic)', async () => {
-      interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
-        hostMap,
-        clientToken: 'test-token-123',
-      });
-      interceptor.activate();
-
-      await globalThis.fetch('http://127.0.0.1:8081/anthropic/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      expect(fetchCalls).toHaveLength(1);
-      const passedHeaders = fetchCalls[0].init?.headers as Record<string, string>;
-      expect(passedHeaders['x-aquaman-token']).toBe('test-token-123');
-      expect(passedHeaders['Content-Type']).toBe('application/json');
-    });
-
-    it('injects token on intercepted channel requests', async () => {
-      interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
-        hostMap,
-        clientToken: 'test-token-456',
-      });
-      interceptor.activate();
-
-      await globalThis.fetch('https://api.telegram.org/bot123/getUpdates');
-
-      expect(fetchCalls).toHaveLength(1);
-      expect(fetchCalls[0].url).toBe('http://127.0.0.1:8081/telegram/bot123/getUpdates');
-      const passedHeaders = fetchCalls[0].init?.headers as Record<string, string>;
-      expect(passedHeaders['x-aquaman-token']).toBe('test-token-456');
-    });
-
-    it('preserves existing headers alongside token', async () => {
-      interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
-        hostMap,
-        clientToken: 'test-token-789',
-      });
-      interceptor.activate();
-
-      await globalThis.fetch('https://api.telegram.org/bot123/getUpdates', {
-        headers: { 'Content-Type': 'application/json', 'X-Custom': 'value' },
-      });
-
-      const passedHeaders = fetchCalls[0].init?.headers as Record<string, string>;
-      expect(passedHeaders['x-aquaman-token']).toBe('test-token-789');
-      expect(passedHeaders['Content-Type']).toBe('application/json');
-      expect(passedHeaders['X-Custom']).toBe('value');
-    });
-
-    it('no token injection when clientToken not configured', async () => {
-      interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
-        hostMap,
-      });
-      interceptor.activate();
-
-      // SDK traffic to proxy
-      await globalThis.fetch('http://127.0.0.1:8081/anthropic/v1/messages');
-      expect(fetchCalls[0].init?.headers).toBeUndefined();
-
-      // Channel traffic
-      await globalThis.fetch('https://api.telegram.org/bot123/getUpdates');
-      // Should have init from stripping, but no token
-      const headers = fetchCalls[1].init?.headers;
-      if (headers && typeof headers === 'object' && !(headers instanceof Headers) && !Array.isArray(headers)) {
-        expect((headers as Record<string, string>)['x-aquaman-token']).toBeUndefined();
-      }
-    });
-
-    it('token injection works with Headers object', async () => {
-      interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
-        hostMap,
-        clientToken: 'headers-obj-token',
-      });
-      interceptor.activate();
-
-      const headers = new Headers();
-      headers.set('Content-Type', 'application/json');
-
-      await globalThis.fetch('http://127.0.0.1:8081/anthropic/v1/messages', {
-        method: 'POST',
-        headers,
-      });
-
-      const passedHeaders = fetchCalls[0].init?.headers;
-      expect(passedHeaders).toBeInstanceOf(Headers);
-      expect((passedHeaders as Headers).get('x-aquaman-token')).toBe('headers-obj-token');
-      expect((passedHeaders as Headers).get('Content-Type')).toBe('application/json');
-    });
-
-    it('token injection works with array headers', async () => {
-      interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
-        hostMap,
-        clientToken: 'array-token',
-      });
-      interceptor.activate();
-
-      await globalThis.fetch('http://127.0.0.1:8081/anthropic/v1/messages', {
-        headers: [['Content-Type', 'application/json']],
-      });
-
-      const passedHeaders = fetchCalls[0].init?.headers as [string, string][];
-      expect(Array.isArray(passedHeaders)).toBe(true);
-      expect(passedHeaders.some(([k, v]) => k === 'x-aquaman-token' && v === 'array-token')).toBe(true);
-    });
-
-    it('token injection works with undefined headers (no init)', async () => {
-      interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
-        hostMap,
-        clientToken: 'no-init-token',
-      });
-      interceptor.activate();
-
-      await globalThis.fetch('http://127.0.0.1:8081/anthropic/v1/messages');
-
-      const passedHeaders = fetchCalls[0].init?.headers as Record<string, string>;
-      expect(passedHeaders['x-aquaman-token']).toBe('no-init-token');
+      expect(fetchCalls[0].url).toBe('http://aquaman.local/telegram/bot123/test');
     });
   });
 
   describe('redirect handling', () => {
     it('uses redirect: manual to prevent auto-following redirects on intercepted requests', async () => {
       interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
+        socketPath: testSocketPath,
         hostMap,
       });
       interceptor.activate();
@@ -321,7 +197,7 @@ describe('HttpInterceptor', () => {
 
     it('does not set redirect: manual on non-intercepted requests', async () => {
       interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
+        socketPath: testSocketPath,
         hostMap,
       });
       interceptor.activate();
@@ -331,26 +207,12 @@ describe('HttpInterceptor', () => {
       expect(fetchCalls).toHaveLength(1);
       expect(fetchCalls[0].init?.redirect).toBeUndefined();
     });
-
-    it('does not set redirect: manual on proxy pass-through requests', async () => {
-      interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
-        hostMap,
-      });
-      interceptor.activate();
-
-      await globalThis.fetch('http://127.0.0.1:8081/anthropic/v1/messages');
-
-      expect(fetchCalls).toHaveLength(1);
-      // Proxy pass-through should not have redirect: manual
-      expect(fetchCalls[0].init?.redirect).toBeUndefined();
-    });
   });
 
   describe('lifecycle', () => {
     it('activate and deactivate correctly', () => {
       interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
+        socketPath: testSocketPath,
         hostMap,
       });
 
@@ -367,7 +229,7 @@ describe('HttpInterceptor', () => {
       const mockFetchBefore = globalThis.fetch;
 
       interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
+        socketPath: testSocketPath,
         hostMap,
       });
 
@@ -380,7 +242,7 @@ describe('HttpInterceptor', () => {
 
     it('is idempotent for activate/deactivate', () => {
       interceptor = createHttpInterceptor({
-        proxyBaseUrl: 'http://127.0.0.1:8081',
+        socketPath: testSocketPath,
         hostMap,
       });
 

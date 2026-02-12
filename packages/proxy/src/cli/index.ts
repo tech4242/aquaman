@@ -11,9 +11,9 @@
  */
 
 import { Command } from 'commander';
-import * as crypto from 'node:crypto';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as http from 'node:http';
 
 import {
   loadConfig,
@@ -23,10 +23,9 @@ import {
   expandPath,
   createAuditLogger,
   createCredentialStore,
-  generateSelfSignedCert,
   saveConfig,
   type WrapperConfig
-} from 'aquaman-core';
+} from '../core/index.js';
 
 import { fileURLToPath } from 'node:url';
 
@@ -107,8 +106,7 @@ program
     if (options.dryRun) {
       console.log('Dry run - would start with this configuration:\n');
       console.log('Credential proxy:');
-      console.log(`  Port: ${config.credentials.proxyPort}`);
-      console.log(`  TLS: ${config.credentials.tls?.enabled ? 'enabled' : 'disabled'}`);
+      console.log(`  Socket: ${path.join(getConfigDir(), 'proxy.sock')}`);
       console.log(`  Backend: ${config.credentials.backend}`);
       console.log(`  Services: ${config.credentials.proxiedServices.join(', ')}`);
       console.log('');
@@ -159,14 +157,12 @@ program
     const serviceRegistry = createServiceRegistry({ configPath: config.services.configPath });
 
     // Start credential proxy
-    const bindAddr = config.credentials.bindAddress || '127.0.0.1';
+    const socketPath = path.join(getConfigDir(), 'proxy.sock');
     const credentialProxy = createCredentialProxy({
-      port: config.credentials.proxyPort,
-      bindAddress: bindAddr,
+      socketPath,
       store: credentialStore,
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
-      tls: config.credentials.tls,
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
@@ -178,8 +174,7 @@ program
     });
     await credentialProxy.start();
 
-    const protocol = credentialProxy.isTlsEnabled() ? 'https' : 'http';
-    console.log(`Credential proxy started on ${protocol}://${bindAddr}:${config.credentials.proxyPort}`);
+    console.log(`Credential proxy started on ${socketPath}`);
 
     if (options.launch !== false && config.openclaw.autoLaunch) {
       // Get services for OpenClaw integration
@@ -277,6 +272,8 @@ program
       }
 
       removePidFile();
+      const sockPath = path.join(getConfigDir(), 'proxy.sock');
+      try { fs.unlinkSync(sockPath); } catch { /* already removed */ }
       console.log('Daemon stopped.');
     } catch (err) {
       console.error('Failed to stop daemon:', err);
@@ -287,8 +284,7 @@ program
 program
   .command('daemon')
   .description('Run the credential proxy daemon (for advanced users)')
-  .option('--token <token>', 'Client authentication token (reads AQUAMAN_CLIENT_TOKEN env if not set)')
-  .action(async (options) => {
+  .action(async () => {
     // Check if daemon is already running
     const existingPid = readPidFile();
     if (existingPid && isProcessRunning(existingPid)) {
@@ -297,6 +293,7 @@ program
     }
 
     const config = loadConfig();
+    const socketPath = path.join(getConfigDir(), 'proxy.sock');
 
     console.log('Starting aquaman credential proxy daemon...\n');
 
@@ -331,19 +328,12 @@ program
     // Initialize service registry
     const serviceRegistry = createServiceRegistry({ configPath: config.services.configPath });
 
-    // Client token: CLI flag → env var → none
-    const daemonClientToken: string | undefined = options.token || process.env.AQUAMAN_CLIENT_TOKEN || undefined;
-
     // Start credential proxy
-    const bindAddr = config.credentials.bindAddress || '127.0.0.1';
     const credentialProxy = createCredentialProxy({
-      port: config.credentials.proxyPort,
-      bindAddress: bindAddr,
+      socketPath,
       store: credentialStore,
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
-      tls: config.credentials.tls,
-      clientToken: daemonClientToken,
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
@@ -358,9 +348,7 @@ program
     // Write PID file
     writePidFile();
 
-    const protocol = credentialProxy.isTlsEnabled() ? 'https' : 'http';
-    console.log(`Credential proxy: ${protocol}://${bindAddr}:${config.credentials.proxyPort}`);
-    console.log(`Client auth: ${daemonClientToken ? 'enabled' : 'disabled'}`);
+    console.log(`Credential proxy: ${socketPath}`);
     console.log(`Audit logging: ${config.audit.enabled ? 'enabled' : 'disabled'}`);
     console.log(`Credential backend: ${config.credentials.backend}`);
     console.log(`PID file: ${getPidFile()}`);
@@ -372,6 +360,7 @@ program
       console.log('\nShutting down daemon...');
       await credentialProxy.stop();
       removePidFile();
+      try { fs.unlinkSync(socketPath); } catch { /* already removed */ }
       process.exit(0);
     };
 
@@ -383,13 +372,9 @@ program
 program
   .command('plugin-mode')
   .description('Run in plugin mode (managed by OpenClaw plugin)')
-  .option('--port <port>', 'Port to listen on', '8081')
-  .option('--token <token>', 'Client authentication token (generated if not provided)')
-  .option('--ipc', 'Use IPC instead of HTTP for communication')
-  .action(async (options) => {
+  .action(async () => {
     const config = loadConfig();
-    const port = parseInt(options.port, 10);
-    const clientToken: string = options.token || crypto.randomBytes(32).toString('hex');
+    const socketPath = path.join(getConfigDir(), 'proxy.sock');
 
     // Initialize credential store
     let credentialStore;
@@ -412,24 +397,34 @@ program
       process.exit(1);
     }
 
+    // Initialize audit logger
+    const auditLogger = createAuditLogger({
+      logDir: config.audit.logDir,
+      enabled: config.audit.enabled
+    });
+    await auditLogger.initialize();
+
     // Initialize service registry
     const serviceRegistry = createServiceRegistry({ configPath: config.services.configPath });
 
     // Start credential proxy
     const credentialProxy = createCredentialProxy({
-      port,
-      bindAddress: config.credentials.bindAddress || '127.0.0.1',
+      socketPath,
       store: credentialStore,
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
-      tls: config.credentials.tls,
-      clientToken
+      onRequest: (info) => {
+        auditLogger.logCredentialAccess('system', 'system', {
+          service: info.service,
+          operation: 'use',
+          success: !info.error,
+          error: info.error
+        });
+      }
     });
     await credentialProxy.start();
 
-    const protocol = credentialProxy.isTlsEnabled() ? 'https' : 'http';
-
-    // Build host map from service registry for the plugin's fetch interceptor
+    // Build host map from service registry for the plugin's interceptor
     const hostMap = serviceRegistry.buildHostMap();
     const hostMapObj: Record<string, string> = {};
     for (const [pattern, serviceName] of hostMap) {
@@ -439,12 +434,9 @@ program
     // Output connection info as JSON for plugin to parse
     const connectionInfo = {
       ready: true,
-      port: credentialProxy.getPort(),
-      protocol,
-      baseUrl: `${protocol}://127.0.0.1:${credentialProxy.getPort()}`,
+      socketPath,
       services: config.credentials.proxiedServices,
       backend: config.credentials.backend,
-      token: clientToken,
       hostMap: hostMapObj
     };
 
@@ -453,6 +445,7 @@ program
     // Handle shutdown
     const shutdown = async () => {
       await credentialProxy.stop();
+      try { fs.unlinkSync(socketPath); } catch { /* already removed */ }
       process.exit(0);
     };
 
@@ -476,10 +469,7 @@ program
     );
 
     const integration = createOpenClawIntegration(config, services);
-    const env = await integration.configureOpenClaw(
-      config.credentials.proxyPort,
-      config.credentials.tls?.enabled ?? false
-    );
+    const env = await integration.configureOpenClaw();
 
     if (options.dryRun || options.method === 'env') {
       console.log('Environment variables for OpenClaw:\n');
@@ -498,7 +488,6 @@ program
   .command('init')
   .description('Initialize aquaman configuration')
   .option('--force', 'Overwrite existing configuration')
-  .option('--no-tls', 'Skip TLS certificate generation')
   .action(async (options) => {
     ensureConfigDir();
     const configPath = path.join(getConfigDir(), 'config.yaml');
@@ -517,31 +506,6 @@ program
     const auditDir = path.join(getConfigDir(), 'audit');
     fs.mkdirSync(auditDir, { recursive: true });
     console.log(`Created ${auditDir}`);
-
-    // Generate TLS certificates if enabled
-    if (options.tls !== false && config.credentials.tls?.autoGenerate) {
-      const certsDir = path.join(getConfigDir(), 'certs');
-      fs.mkdirSync(certsDir, { recursive: true });
-
-      const certPath = config.credentials.tls.certPath || path.join(certsDir, 'proxy.crt');
-      const keyPath = config.credentials.tls.keyPath || path.join(certsDir, 'proxy.key');
-
-      if (!fs.existsSync(certPath) || options.force) {
-        console.log('Generating TLS certificates...');
-        try {
-          const { cert, key } = generateSelfSignedCert('aquaman-proxy', 365);
-          fs.writeFileSync(certPath, cert, { mode: 0o644 });
-          fs.writeFileSync(keyPath, key, { mode: 0o600 });
-          console.log(`Created ${certPath}`);
-          console.log(`Created ${keyPath}`);
-        } catch (error) {
-          console.error('Warning: Failed to generate TLS certificates:', error);
-          console.log('TLS will be disabled. Run "aquaman init --force" to retry.');
-        }
-      } else {
-        console.log('TLS certificates already exist (use --force to regenerate)');
-      }
-    }
 
     console.log('\nNext steps:');
     console.log('1. Add your API keys: aquaman credentials add anthropic api_key');
@@ -673,11 +637,10 @@ program
       }
     }
 
-    // 2. Run init internally (create dirs, config, no TLS by default)
+    // 2. Run init internally (create dirs, config)
     ensureConfigDir();
     const config = getDefaultConfig();
     config.credentials.backend = backend;
-    config.credentials.tls = { enabled: false };
     fs.writeFileSync(configPath, yamlStringify(config), 'utf-8');
 
     // Create audit directory
@@ -850,10 +813,8 @@ program
           openclawConfig.plugins.entries['aquaman-plugin'] = {
             enabled: true,
             config: {
-              mode: 'proxy',
               backend,
               services: storedServices.length > 0 ? storedServices : ['anthropic', 'openai'],
-              proxyPort: 8081
             }
           };
 
@@ -962,7 +923,7 @@ program
 
     // 2. Backend accessible
     let config;
-    let store: import('aquaman-core').CredentialStore | null = null;
+    let store: import('../core/index.js').CredentialStore | null = null;
     try {
       config = loadConfig();
       store = createCredentialStore({
@@ -996,34 +957,74 @@ program
     }
 
     // 4. Proxy running
-    const proxyPort = config.credentials.proxyPort;
+    const sockPath = path.join(getConfigDir(), 'proxy.sock');
     const pluginInstalled = fs.existsSync(path.join(openclawStateDir, 'extensions', 'aquaman-plugin'));
     const proxyFix = pluginInstalled
       ? 'Proxy starts automatically with OpenClaw. Run: openclaw'
       : 'Install plugin first: aquaman setup';
     try {
-      const resp = await fetch(`http://127.0.0.1:${proxyPort}/_health`);
-      if (resp.ok) {
-        const health = await resp.json() as { version?: string };
-        const proxyVer = health.version || 'unknown';
-        console.log(`  \u2713 ${aqua('Proxy')} running on port ${proxyPort} (v${proxyVer})`);
-        if (health.version && health.version !== VERSION) {
-          console.log(`  \u2717 ${aqua('Version mismatch:')} CLI v${VERSION} \u2260 proxy v${health.version}`);
-          console.log('    \u2192 Update: npm install -g aquaman-proxy');
-          issues++;
-        }
-      } else {
-        console.log(`  \u2717 ${aqua('Proxy')} not running on port ${proxyPort}`);
-        console.log(`    \u2192 ${proxyFix}`);
+      const healthData = await new Promise<string>((resolve, reject) => {
+        const req = http.request({ socketPath: sockPath, path: '/_health', method: 'GET' }, (res) => {
+          let body = '';
+          res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+          res.on('end', () => {
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+              resolve(body);
+            } else {
+              reject(new Error(`HTTP ${res.statusCode}`));
+            }
+          });
+        });
+        req.on('error', reject);
+        req.end();
+      });
+      const health = JSON.parse(healthData) as { version?: string };
+      const proxyVer = health.version || 'unknown';
+      console.log(`  \u2713 ${aqua('Proxy')} running on socket (v${proxyVer})`);
+      if (health.version && health.version !== VERSION) {
+        console.log(`  \u2717 ${aqua('Version mismatch:')} CLI v${VERSION} \u2260 proxy v${health.version}`);
+        console.log('    \u2192 Update: npm install -g aquaman-proxy');
         issues++;
       }
     } catch {
-      console.log(`  \u2717 ${aqua('Proxy')} not running on port ${proxyPort}`);
+      console.log(`  \u2717 ${aqua('Proxy')} not running on socket`);
       console.log(`    \u2192 ${proxyFix}`);
       issues++;
     }
 
-    // 5. OpenClaw detection
+    // 5. Audit logger
+    if (config) {
+      const auditDir = config.audit.logDir;
+      const auditLog = path.join(auditDir, 'current.jsonl');
+
+      if (!config.audit.enabled) {
+        console.log(`  - ${aqua('Audit')} disabled in config`);
+      } else if (!fs.existsSync(auditDir)) {
+        console.log(`  \u2717 ${aqua('Audit')} directory missing (${auditDir})`);
+        console.log('    \u2192 Run: aquaman init');
+        issues++;
+      } else {
+        // Check log file exists and is writable
+        try {
+          if (fs.existsSync(auditLog)) {
+            fs.accessSync(auditLog, fs.constants.W_OK);
+            const content = fs.readFileSync(auditLog, 'utf-8').trim();
+            const entryCount = content ? content.split('\n').length : 0;
+            console.log(`  \u2713 ${aqua('Audit')} log writable (${entryCount} entries)`);
+          } else {
+            // Dir exists but no log yet — that's fine, first request will create it
+            fs.accessSync(auditDir, fs.constants.W_OK);
+            console.log(`  \u2713 ${aqua('Audit')} directory writable (no entries yet)`);
+          }
+        } catch {
+          console.log(`  \u2717 ${aqua('Audit')} log not writable (${auditLog})`);
+          console.log('    \u2192 Check file permissions on ~/.aquaman/audit/');
+          issues++;
+        }
+      }
+    }
+
+    // 6. OpenClaw detection
     let openclawDetected = false;
     let cliFound = false;
     try {
@@ -2008,8 +2009,7 @@ program
     console.log('Configuration:');
     console.log(`  Config dir: ${getConfigDir()}`);
     console.log(`  Credential backend: ${config.credentials.backend}`);
-    console.log(`  Proxy port: ${config.credentials.proxyPort}`);
-    console.log(`  TLS: ${config.credentials.tls?.enabled ? 'enabled' : 'disabled'}`);
+    console.log(`  Socket path: ${path.join(getConfigDir(), 'proxy.sock')}`);
     console.log(`  Audit logging: ${config.audit.enabled ? 'enabled' : 'disabled'}`);
 
     console.log('\nProxied services:');

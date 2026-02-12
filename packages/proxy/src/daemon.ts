@@ -1,16 +1,15 @@
 /**
  * Credential proxy daemon - holds secrets and proxies authenticated API calls
- * OpenClaw connects to this proxy instead of directly to external APIs
+ * OpenClaw connects to this proxy via Unix domain socket instead of directly to external APIs
  */
 
 import * as http from 'node:http';
 import * as https from 'node:https';
-import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { type CredentialStore, generateId } from 'aquaman-core';
+import { type CredentialStore, generateId } from './core/index.js';
 import { ServiceRegistry, createServiceRegistry, type ServiceDefinition, type AuthMode } from './service-registry.js';
 import { OAuthTokenCache, createOAuthTokenCache } from './oauth-token-cache.js';
 
@@ -20,21 +19,12 @@ const __daemonDirname = path.dirname(__daemonFilename);
 const daemonPkgJson = JSON.parse(fs.readFileSync(path.resolve(__daemonDirname, '../package.json'), 'utf-8'));
 const DAEMON_VERSION: string = daemonPkgJson.version;
 
-export interface TlsOptions {
-  enabled: boolean;
-  certPath?: string;
-  keyPath?: string;
-}
-
 export interface CredentialProxyOptions {
-  port: number;
-  bindAddress?: string; // defaults to '0.0.0.0' for container access
+  socketPath: string;
   store: CredentialStore;
   allowedServices: string[];
   onRequest?: (info: RequestInfo) => void;
-  tls?: TlsOptions;
   serviceRegistry?: ServiceRegistry;
-  clientToken?: string; // Shared-secret bearer token for client authentication
   requestTimeout?: number; // Upstream request timeout in ms, defaults to 30000 (30s)
 }
 
@@ -57,13 +47,11 @@ interface ServiceConfig {
 }
 
 export class CredentialProxy {
-  private server: http.Server | https.Server | null = null;
+  private server: http.Server | null = null;
   private options: CredentialProxyOptions;
   private running = false;
-  private tlsEnabled = false;
   private serviceRegistry: ServiceRegistry;
   private oauthCache: OAuthTokenCache;
-  private actualPort: number = 0;
 
   constructor(options: CredentialProxyOptions) {
     this.options = options;
@@ -84,53 +72,29 @@ export class CredentialProxy {
       });
     };
 
-    // Determine if TLS should be used
-    const tls = this.options.tls;
-    if (tls?.enabled && tls.certPath && tls.keyPath) {
-      if (!fs.existsSync(tls.certPath) || !fs.existsSync(tls.keyPath)) {
-        console.warn('TLS cert/key not found, falling back to HTTP');
-        this.server = http.createServer(requestHandler);
-        this.tlsEnabled = false;
-      } else {
-        const tlsOptions = {
-          cert: fs.readFileSync(tls.certPath, 'utf-8'),
-          key: fs.readFileSync(tls.keyPath, 'utf-8')
-        };
-        this.server = https.createServer(tlsOptions, requestHandler);
-        this.tlsEnabled = true;
-      }
-    } else {
-      this.server = http.createServer(requestHandler);
-      this.tlsEnabled = false;
+    this.server = http.createServer(requestHandler);
+
+    // Clean up stale socket
+    if (fs.existsSync(this.options.socketPath)) {
+      fs.unlinkSync(this.options.socketPath);
     }
 
-    const bindAddress = this.options.bindAddress || '0.0.0.0';
-    const protocol = this.tlsEnabled ? 'https' : 'http';
+    // Ensure socket directory exists
+    const socketDir = path.dirname(this.options.socketPath);
+    if (!fs.existsSync(socketDir)) {
+      fs.mkdirSync(socketDir, { recursive: true });
+    }
 
     return new Promise((resolve, reject) => {
-      this.server!.listen(this.options.port, bindAddress, () => {
-        // Get actual port (important when port 0 is used for dynamic allocation)
-        const address = this.server!.address();
-        if (address && typeof address === 'object') {
-          this.actualPort = address.port;
-        } else {
-          this.actualPort = this.options.port;
-        }
-
+      this.server!.listen(this.options.socketPath, () => {
+        fs.chmodSync(this.options.socketPath, 0o600); // owner-only
         this.running = true;
-        console.log(`Credential proxy listening on ${protocol}://${bindAddress}:${this.actualPort}`);
+        console.log(`Credential proxy listening on ${this.options.socketPath}`);
         resolve();
       });
 
       this.server!.on('error', (err: NodeJS.ErrnoException) => {
-        if (err.code === 'EADDRINUSE') {
-          reject(new Error(
-            `Port ${this.options.port} is already in use. ` +
-            `Run: lsof -i :${this.options.port} | grep LISTEN`
-          ));
-        } else {
-          reject(err);
-        }
+        reject(err);
       });
     });
   }
@@ -139,7 +103,7 @@ export class CredentialProxy {
     const requestId = generateId();
     const url = req.url || '/';
 
-    // Health check endpoint — unauthenticated (Docker healthcheck)
+    // Health check endpoint
     if (url === '/_health' || url === '/_health/') {
       res.setHeader('Content-Type', 'application/json');
       res.statusCode = 200;
@@ -147,17 +111,7 @@ export class CredentialProxy {
       return;
     }
 
-    // Validate client token if configured (/_health exempt above)
-    if (this.options.clientToken) {
-      const provided = this.extractClientToken(req);
-      if (!provided || !this.verifyToken(provided, this.options.clientToken)) {
-        res.statusCode = 403;
-        res.end('Forbidden');
-        return;
-      }
-    }
-
-    // Host map endpoint — returns hostname→service mapping for fetch interceptors
+    // Host map endpoint — returns hostname→service mapping for interceptors
     if (url === '/_hostmap' || url === '/_hostmap/') {
       res.setHeader('Content-Type', 'application/json');
       res.statusCode = 200;
@@ -277,8 +231,6 @@ export class CredentialProxy {
         // Strip existing auth header if we're injecting one
         if (serviceDef.authHeader && key.toLowerCase() === serviceDef.authHeader.toLowerCase()) continue;
         if (key.toLowerCase() === 'authorization') continue;
-        // Strip client token — must not leak upstream
-        if (key.toLowerCase() === 'x-aquaman-token') continue;
         if (value) {
           headers[key] = Array.isArray(value) ? value[0] : value;
         }
@@ -388,37 +340,6 @@ export class CredentialProxy {
     });
   }
 
-  private extractClientToken(req: IncomingMessage): string | null {
-    // Check X-Aquaman-Token header first
-    const tokenHeader = req.headers['x-aquaman-token'];
-    if (tokenHeader) {
-      return Array.isArray(tokenHeader) ? tokenHeader[0] : tokenHeader;
-    }
-    // Fall back to Authorization: Bearer <token>
-    const authHeader = req.headers['authorization'];
-    if (authHeader) {
-      const val = Array.isArray(authHeader) ? authHeader[0] : authHeader;
-      if (val.startsWith('Bearer ')) {
-        return val.slice(7);
-      }
-    }
-    return null;
-  }
-
-  private verifyToken(provided: string, expected: string): boolean {
-    const a = Buffer.from(provided);
-    const b = Buffer.from(expected);
-    if (a.length !== b.length) {
-      // Pad provided buffer to expected length so timingSafeEqual doesn't throw,
-      // then compare — constant time regardless of length mismatch
-      const aPadded = Buffer.alloc(b.length);
-      a.copy(aPadded);
-      crypto.timingSafeEqual(aPadded, b);
-      return false;
-    }
-    return crypto.timingSafeEqual(a, b);
-  }
-
   private emitRequest(info: RequestInfo): void {
     if (this.options.onRequest) {
       this.options.onRequest(info);
@@ -430,6 +351,8 @@ export class CredentialProxy {
       return;
     }
 
+    const socketPath = this.options.socketPath;
+
     return new Promise((resolve, reject) => {
       this.server!.close((error) => {
         if (error) {
@@ -437,8 +360,8 @@ export class CredentialProxy {
         } else {
           this.running = false;
           this.server = null;
-          // Clear token reference on shutdown
-          this.options = { ...this.options, clientToken: undefined };
+          // Clean up socket file
+          try { fs.unlinkSync(socketPath); } catch { /* already removed */ }
           resolve();
         }
       });
@@ -449,12 +372,8 @@ export class CredentialProxy {
     return this.running;
   }
 
-  isTlsEnabled(): boolean {
-    return this.tlsEnabled;
-  }
-
-  getPort(): number {
-    return this.actualPort;
+  getSocketPath(): string {
+    return this.options.socketPath;
   }
 
   getServiceRegistry(): ServiceRegistry {
@@ -463,16 +382,6 @@ export class CredentialProxy {
 
   getServiceConfigs(): Record<string, ServiceConfig> {
     return this.serviceRegistry.toConfigMap();
-  }
-
-  getBaseUrl(service: string): string {
-    const protocol = this.tlsEnabled ? 'https' : 'http';
-    return `${protocol}://127.0.0.1:${this.actualPort}/${service}`;
-  }
-
-  static getBaseUrl(service: string, proxyPort: number, useTls = false): string {
-    const protocol = useTls ? 'https' : 'http';
-    return `${protocol}://127.0.0.1:${proxyPort}/${service}`;
   }
 }
 

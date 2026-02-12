@@ -12,12 +12,6 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "mode": {
-        "type": "string",
-        "enum": ["embedded", "proxy"],
-        "default": "embedded",
-        "description": "embedded: credentials in gateway memory, proxy: separate process"
-      },
       "backend": {
         "type": "string",
         "enum": ["keychain", "1password", "vault", "encrypted-file", "keepassxc"],
@@ -29,11 +23,6 @@
         "items": { "type": "string" },
         "default": ["anthropic", "openai"],
         "description": "Services to proxy credentials for"
-      },
-      "proxyPort": {
-        "type": "number",
-        "default": 8081,
-        "description": "Port for credential proxy (proxy mode only)"
       }
     }
   }

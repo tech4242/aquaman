@@ -3,60 +3,65 @@
  *
  * Separated from index.ts to avoid co-locating network calls with env reads
  * (triggers OpenClaw code safety scanner env-harvesting false positive).
+ *
+ * Uses http.request with socketPath for UDS communication.
  */
 
+import * as http from 'node:http';
+
 /**
- * Request host map from proxy's /_hostmap endpoint.
+ * Make an HTTP request over a Unix domain socket.
+ */
+function udsRequest(socketPath: string, urlPath: string, timeoutMs: number = 3000): Promise<{ ok: boolean; data: any }> {
+  return new Promise((resolve) => {
+    const req = http.request(
+      { socketPath, path: urlPath, method: 'GET' },
+      (res) => {
+        let body = '';
+        res.on('data', (chunk) => { body += chunk; });
+        res.on('end', () => {
+          try {
+            resolve({ ok: res.statusCode === 200, data: JSON.parse(body) });
+          } catch {
+            resolve({ ok: false, data: null });
+          }
+        });
+      }
+    );
+    req.on('error', () => resolve({ ok: false, data: null }));
+    req.setTimeout(timeoutMs, () => { req.destroy(); resolve({ ok: false, data: null }); });
+    req.end();
+  });
+}
+
+/**
+ * Request host map from proxy's /_hostmap endpoint via UDS.
  * Returns an empty map if the endpoint is unavailable (caller handles fallback).
  */
-export async function loadHostMap(
-  baseUrl: string,
-  token: string | null,
-): Promise<Map<string, string>> {
-  try {
-    const headers: Record<string, string> = {};
-    if (token) headers['X-Aquaman-Token'] = token;
-    const resp = await fetch(`${baseUrl}/_hostmap`, {
-      headers,
-      signal: AbortSignal.timeout(3000),
-    });
-    if (resp.ok) {
-      const obj = (await resp.json()) as Record<string, string>;
-      return new Map(Object.entries(obj));
-    }
-  } catch {
-    // Proxy may be older version without /_hostmap — caller uses fallback
+export async function loadHostMap(socketPath: string): Promise<Map<string, string>> {
+  const result = await udsRequest(socketPath, '/_hostmap');
+  if (result.ok && result.data) {
+    return new Map(Object.entries(result.data as Record<string, string>));
   }
   return new Map();
 }
 
 /**
- * Check if a proxy is already running on the given port.
+ * Check if a proxy is running on the given socket path.
  */
-export async function isProxyRunning(port: number): Promise<boolean> {
-  try {
-    const resp = await fetch(`http://127.0.0.1:${port}/_health`);
-    return resp.ok;
-  } catch {
-    return false;
-  }
+export async function isProxyRunning(socketPath: string): Promise<boolean> {
+  const result = await udsRequest(socketPath, '/_health');
+  return result.ok;
 }
 
 /**
- * Get the version of a running proxy from its /_health endpoint.
+ * Get the version of a running proxy from its /_health endpoint via UDS.
  * Returns null if the proxy is not running or doesn't report version.
  */
-export async function getProxyVersion(proxyUrl: string): Promise<string | null> {
-  try {
-    const resp = await fetch(`${proxyUrl}/_health`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    if (resp.ok) {
-      const data = (await resp.json()) as { version?: string };
-      return data.version || null;
-    }
-  } catch {
-    // Proxy not reachable
+export async function getProxyVersion(socketPath: string): Promise<string | null> {
+  const result = await udsRequest(socketPath, '/_health');
+  if (result.ok && result.data?.version) {
+    return result.data.version;
   }
   return null;
 }
