@@ -89,6 +89,13 @@ describe('Plugin Config Schema', () => {
     expect(invalid).toBe(false);
   });
 
+  it('should accept keepassxc backend', () => {
+    const valid = validate({
+      backend: 'keepassxc'
+    });
+    expect(valid).toBe(true);
+  });
+
   it('should have correct enum values for mode', () => {
     const modeSchema = manifest.configSchema.properties.mode;
     expect(modeSchema.enum).toEqual(['embedded', 'proxy']);
@@ -97,7 +104,7 @@ describe('Plugin Config Schema', () => {
 
   it('should have correct enum values for backend', () => {
     const backendSchema = manifest.configSchema.properties.backend;
-    expect(backendSchema.enum).toEqual(['keychain', '1password', 'vault', 'encrypted-file']);
+    expect(backendSchema.enum).toEqual(['keychain', '1password', 'vault', 'encrypted-file', 'keepassxc']);
     expect(backendSchema.default).toBe('keychain');
   });
 

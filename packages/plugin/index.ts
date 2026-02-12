@@ -22,7 +22,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { HttpInterceptor, createHttpInterceptor } from "./src/http-interceptor.js";
 import { createProxyManager, type ProxyManager } from "./src/proxy-manager.js";
-import { fetchHostMap, isProxyRunning } from "./src/proxy-health.js";
+import { fetchHostMap, isProxyRunning, getProxyVersion } from "./src/proxy-health.js";
 
 /**
  * Find an executable in PATH using filesystem checks (no shell execution).
@@ -42,6 +42,11 @@ function findInPath(name: string): string | null {
   }
   return null;
 }
+
+// Read plugin version from package.json
+const pluginPkgPath = path.join(path.dirname(new URL(import.meta.url).pathname), 'package.json');
+let PLUGIN_VERSION = 'unknown';
+try { PLUGIN_VERSION = JSON.parse(fs.readFileSync(pluginPkgPath, 'utf-8')).version; } catch { /* ok */ }
 
 let proxyManager: ProxyManager | null = null;
 let httpInterceptor: HttpInterceptor | null = null;
@@ -349,6 +354,17 @@ export default function register(api: OpenClawPluginApi): void {
         const started = await startProxy(proxyPort, api.logger);
         if (started) {
           api.logger.info("Aquaman proxy started successfully");
+
+          // Check for version mismatch between plugin and proxy
+          const proxyBaseUrl = `http://127.0.0.1:${proxyPort}`;
+          const proxyVersion = await getProxyVersion(proxyBaseUrl);
+          if (proxyVersion && proxyVersion !== PLUGIN_VERSION) {
+            api.logger.warn(
+              `Warning: plugin version ${PLUGIN_VERSION} \u2260 proxy version ${proxyVersion}. ` +
+              `Update both: npm install -g aquaman-proxy && openclaw plugins install aquaman-plugin`
+            );
+          }
+
           // Activate HTTP interceptor to redirect channel traffic through proxy
           activateHttpInterceptor(api.logger);
         } else {

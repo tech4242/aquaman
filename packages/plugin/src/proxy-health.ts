@@ -41,3 +41,22 @@ export async function isProxyRunning(port: number): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Get the version of a running proxy from its /_health endpoint.
+ * Returns null if the proxy is not running or doesn't report version.
+ */
+export async function getProxyVersion(proxyUrl: string): Promise<string | null> {
+  try {
+    const resp = await fetch(`${proxyUrl}/_health`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (resp.ok) {
+      const data = (await resp.json()) as { version?: string };
+      return data.version || null;
+    }
+  } catch {
+    // Proxy not reachable
+  }
+  return null;
+}

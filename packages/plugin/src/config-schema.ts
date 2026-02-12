@@ -23,7 +23,8 @@ export const CredentialBackend = Type.Union([
   Type.Literal('keychain'),
   Type.Literal('1password'),
   Type.Literal('vault'),
-  Type.Literal('encrypted-file')
+  Type.Literal('encrypted-file'),
+  Type.Literal('keepassxc')
 ], { default: 'keychain' });
 
 /**

@@ -9,6 +9,7 @@ import * as os from 'node:os';
 import {
   MemoryStore,
   EncryptedFileStore,
+  KeePassXCStore,
   createCredentialStore,
   validatePasswordStrength
 } from 'aquaman-core';
@@ -273,5 +274,31 @@ describe('createCredentialStore', () => {
         process.env['VAULT_ADDR'] = originalAddr;
       }
     }
+  });
+
+  it('should throw for keepassxc backend without password or key file', () => {
+    const originalPassword = process.env['AQUAMAN_KEEPASS_PASSWORD'];
+    delete process.env['AQUAMAN_KEEPASS_PASSWORD'];
+
+    try {
+      expect(() =>
+        createCredentialStore({ backend: 'keepassxc' })
+      ).toThrow('KeePassXC backend requires a master password');
+    } finally {
+      if (originalPassword) {
+        process.env['AQUAMAN_KEEPASS_PASSWORD'] = originalPassword;
+      }
+    }
+  });
+
+  it('should create keepassxc store with password', () => {
+    const store = createCredentialStore({
+      backend: 'keepassxc',
+      encryptionPassword: 'test-keepass-password'
+    });
+
+    expect(store).toBeInstanceOf(KeePassXCStore);
+    // Clean up — close the store to stop file watcher
+    if ('close' in store) (store as any).close();
   });
 });

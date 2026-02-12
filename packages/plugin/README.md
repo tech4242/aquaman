@@ -33,11 +33,18 @@ This plugin makes the left side work. It routes all LLM and channel API traffic 
 ## Quick Start
 
 ```bash
-npm install -g aquaman-proxy              # 1. Install the proxy CLI
-aquaman setup                             # 2. Store keys, install plugin, configure OpenClaw
-aquaman migrate openclaw --auto           # 3. Move existing channel creds to secure store
-openclaw                                  # 4. Proxy starts automatically
+npm install -g aquaman-proxy              # install the proxy CLI
+aquaman setup                             # stores keys, installs plugin, configures OpenClaw
+openclaw                                  # proxy starts automatically
 ```
+
+> `aquaman setup` auto-detects your credential backend. macOS defaults to Keychain,
+> Linux defaults to encrypted file. Override with `--backend`:
+> `aquaman setup --backend keepassxc`
+> Options: `keychain`, `encrypted-file`, `keepassxc`, `1password`, `vault`
+
+Existing plaintext credentials are migrated automatically during setup.
+Run again anytime to migrate new credentials: `aquaman migrate openclaw --auto`
 
 Troubleshooting: `aquaman doctor`
 
@@ -48,7 +55,7 @@ Troubleshooting: `aquaman doctor`
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `mode` | `"embedded"` \| `"proxy"` | `"embedded"` | Isolation mode |
-| `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` | `"keychain"` | Credential store |
+| `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` \| `"keepassxc"` | `"keychain"` | Credential store |
 | `services` | `string[]` | `["anthropic", "openai"]` | Services to proxy |
 | `proxyPort` | `number` | `8081` | Proxy listen port |
 

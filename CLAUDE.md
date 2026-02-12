@@ -68,7 +68,7 @@ The `openclaw.plugin.json` manifest defines `additionalProperties: false` with o
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `mode` | `"embedded"` \| `"proxy"` | `"embedded"` | Isolation mode |
-| `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` | `"keychain"` | Credential store |
+| `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` \| `"keepassxc"` | `"keychain"` | Credential store |
 | `services` | `string[]` | `["anthropic", "openai"]` | Services to proxy |
 | `proxyPort` | `number` | `8081` | Proxy listen port |
 
@@ -210,7 +210,7 @@ aquaman setup --no-openclaw             # Skip plugin installation
 5. If OpenClaw found: installs plugin, writes openclaw.json, generates auth-profiles.json
 6. Prints success message
 
-**Non-interactive env vars:** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AQUAMAN_ENCRYPTION_PASSWORD`, `VAULT_ADDR`, `VAULT_TOKEN`
+**Non-interactive env vars:** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AQUAMAN_ENCRYPTION_PASSWORD`, `AQUAMAN_KEEPASS_PASSWORD`, `VAULT_ADDR`, `VAULT_TOKEN`
 
 ## CLI: `aquaman doctor`
 
@@ -277,6 +277,7 @@ Since the Gateway runs on Unix-like systems, backend choice depends on deploymen
 |---------|----------|----------|
 | `keychain` | macOS (LaunchAgent) | Local dev, personal machines |
 | `encrypted-file` | Linux, WSL2, CI/CD | Servers without native keyring |
+| `keepassxc` | Any (with .kdbx file) | Users with existing KeePass databases |
 | `1password` | Any (via `op` CLI) | Team credential sharing |
 | `vault` | Any (via HTTP API) | Enterprise secrets management |
 

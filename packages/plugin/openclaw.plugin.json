@@ -20,7 +20,7 @@
       },
       "backend": {
         "type": "string",
-        "enum": ["keychain", "1password", "vault", "encrypted-file"],
+        "enum": ["keychain", "1password", "vault", "encrypted-file", "keepassxc"],
         "default": "keychain",
         "description": "Credential storage backend"
       },

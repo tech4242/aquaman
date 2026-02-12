@@ -24,6 +24,7 @@ npm install aquaman-core
 |---------|----------|----------|
 | `keychain` | macOS | Local dev, personal machines |
 | `encrypted-file` | Linux, WSL2, CI/CD | Servers without native keyring |
+| `keepassxc` | Any (with .kdbx file) | Users with existing KeePass databases |
 | `1password` | Any (via `op` CLI) | Team credential sharing |
 | `vault` | Any (via HTTP API) | Enterprise secrets management |
 

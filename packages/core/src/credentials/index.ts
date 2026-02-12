@@ -24,3 +24,9 @@ export {
   VaultStore,
   createVaultStore
 } from './backends/vault.js';
+
+export {
+  type KeePassXCStoreOptions,
+  KeePassXCStore,
+  createKeePassXCStore
+} from './backends/keepassxc.js';
