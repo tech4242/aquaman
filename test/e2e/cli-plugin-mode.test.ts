@@ -226,6 +226,84 @@ describe('CLI plugin-mode E2E', () => {
     expect(stderr).toContain('aquaman doctor');
   }, TEST_TIMEOUT);
 
+  it('writes audit log entries when handling requests', async () => {
+    // Use a temp config dir so we can check the audit log without polluting real state
+    const os = await import('node:os');
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-audit-pm-'));
+    const auditDir = path.join(tmpDir, 'audit');
+    fs.mkdirSync(auditDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'config.yaml'),
+      [
+        'credentials:',
+        '  backend: encrypted-file',
+        '  proxiedServices:',
+        '    - anthropic',
+        'audit:',
+        '  enabled: true',
+        `  logDir: ${auditDir}`,
+        '',
+      ].join('\n'),
+      'utf-8'
+    );
+
+    const proc = spawn('npx', ['tsx', CLI_PATH, 'plugin-mode'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        AQUAMAN_CONFIG_DIR: tmpDir,
+        AQUAMAN_ENCRYPTION_PASSWORD: 'test-password-12345',
+      },
+    });
+    child = proc;
+
+    // Wait for ready
+    const connectionInfo = await new Promise<any>((resolve, reject) => {
+      let stdout = '';
+      const timeout = setTimeout(() => reject(new Error(`Timed out. stdout: ${stdout}`)), 20_000);
+      proc.stdout!.on('data', (data: Buffer) => {
+        stdout += data.toString();
+        for (const line of stdout.split('\n')) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('{') && trimmed.includes('"ready"')) {
+            try {
+              const parsed = JSON.parse(trimmed);
+              if (parsed.ready) { clearTimeout(timeout); resolve(parsed); return; }
+            } catch { /* keep collecting */ }
+          }
+        }
+      });
+      proc.on('exit', (code) => { clearTimeout(timeout); reject(new Error(`Exited with ${code}. stdout: ${stdout}`)); });
+    });
+
+    const sockPath = connectionInfo.socketPath;
+
+    // Make a request — credential won't be found, but the proxy should still log it
+    await udsFetch(sockPath, '/anthropic/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'test', messages: [] })
+    });
+
+    // Give audit logger a moment to flush
+    await new Promise(r => setTimeout(r, 200));
+
+    // Check audit log was written
+    const logPath = path.join(auditDir, 'current.jsonl');
+    expect(fs.existsSync(logPath)).toBe(true);
+
+    const content = fs.readFileSync(logPath, 'utf-8').trim();
+    expect(content.length).toBeGreaterThan(0);
+
+    const entries = content.split('\n').map(l => JSON.parse(l));
+    expect(entries.length).toBeGreaterThanOrEqual(1);
+    expect(entries[0].type).toBe('credential_access');
+    expect(entries[0].data.service).toBe('anthropic');
+
+    // Cleanup
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }, TEST_TIMEOUT);
+
   it('exits cleanly on SIGTERM', async () => {
     const { connectionInfo, child: proc } = await spawnPluginMode();
 

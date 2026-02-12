@@ -168,4 +168,26 @@ describe('aquaman doctor E2E', () => {
       expect(exitCode).toBe(1);
     }, TEST_TIMEOUT);
   });
+
+  describe('audit logger', () => {
+    it('reports audit log writable when audit dir exists', () => {
+      tempEnv = createTempEnv({ withConfig: true });
+      const { stdout } = runDoctor(tempEnv);
+
+      // Temp env creates audit dir + config with audit.enabled: true
+      expect(stdout).toMatch(/Audit.*directory writable|Audit.*log writable/);
+    }, TEST_TIMEOUT);
+
+    it('reports audit directory missing when removed', () => {
+      tempEnv = createTempEnv({ withConfig: true });
+      // Remove the audit dir that createTempEnv created
+      const { rmSync } = require('node:fs');
+      rmSync(path.join(tempEnv.aquamanDir, 'audit'), { recursive: true, force: true });
+
+      const { stdout, exitCode } = runDoctor(tempEnv);
+
+      expect(stdout).toContain('Audit directory missing');
+      expect(exitCode).toBe(1);
+    }, TEST_TIMEOUT);
+  });
 });
