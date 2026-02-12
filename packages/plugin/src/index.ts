@@ -3,9 +3,7 @@
  *
  * This package provides an OpenClaw plugin that enables:
  * - Secure credential storage using enterprise backends (Keychain, 1Password, Vault)
- * - Two operation modes:
- *   - Embedded: Direct vault access (simpler, credentials in Gateway memory)
- *   - Proxy: Separate process (stronger isolation, credentials never in Gateway)
+ * - Proxy mode: Separate process, credentials never in Gateway memory
  * - Hash-chained tamper-evident audit logs
  * - Slash commands for credential management
  *
@@ -16,7 +14,6 @@
  *   {
  *     "plugins": {
  *       "aquaman-plugin": {
- *         "mode": "embedded",
  *         "backend": "keychain",
  *         "services": ["anthropic", "openai"]
  *       }
@@ -34,20 +31,12 @@ export {
 // Config Schema
 export {
   ConfigSchema,
-  PluginMode,
   CredentialBackend,
   ProxiedServices,
   type PluginConfig,
   defaultConfig,
   mergeConfig
 } from './config-schema.js';
-
-// Embedded Mode
-export {
-  type EmbeddedModeOptions,
-  EmbeddedMode,
-  createEmbeddedMode
-} from './embedded.js';
 
 // Proxy Manager
 export {
@@ -66,7 +55,6 @@ export {
   listCommand,
   logsCommand,
   verifyCommand,
-  modeCommand,
   executeCommand
 } from './commands.js';
 

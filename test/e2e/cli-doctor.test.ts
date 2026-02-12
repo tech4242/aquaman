@@ -5,10 +5,8 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { execSync, spawn as spawnProc } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import * as path from 'node:path';
-import * as http from 'node:http';
 import { createTempEnv, type TempEnv } from '../helpers/temp-env.js';
 
 const CLI_PATH = path.resolve('packages/proxy/src/cli/index.ts');
@@ -36,39 +34,6 @@ function runDoctor(
       exitCode: err.status ?? 1,
     };
   }
-}
-
-/** Async version of runDoctor using spawn (doesn't block event loop). */
-function runDoctorAsync(
-  tempEnv: TempEnv,
-  extraEnv: Record<string, string> = {}
-): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
-  return new Promise((resolve) => {
-    const proc = spawnProc('npx', ['tsx', CLI_PATH, 'doctor'], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        ...tempEnv.env,
-        ...extraEnv,
-      },
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    proc.stdout!.on('data', (d: Buffer) => { stdout += d.toString(); });
-    proc.stderr!.on('data', (d: Buffer) => { stderr += d.toString(); });
-
-    const timeout = setTimeout(() => {
-      proc.kill('SIGKILL');
-      resolve({ stdout, stderr, exitCode: -1 });
-    }, 25_000);
-
-    proc.on('exit', (code) => {
-      clearTimeout(timeout);
-      resolve({ stdout, stderr, exitCode: code });
-    });
-  });
 }
 
 describe('aquaman doctor E2E', () => {
@@ -99,7 +64,7 @@ describe('aquaman doctor E2E', () => {
   });
 
   describe('proxy not running', () => {
-    it('reports proxy not reachable on configured port', () => {
+    it('reports proxy not reachable on UDS socket', () => {
       tempEnv = createTempEnv({ withConfig: true });
       const { stdout, exitCode } = runDoctor(tempEnv);
 
@@ -193,52 +158,14 @@ describe('aquaman doctor E2E', () => {
     // }, TEST_TIMEOUT);
   });
 
-  describe('port conflict', () => {
-    it('reports port in use by another process', async () => {
+  describe('proxy socket', () => {
+    it('reports proxy not running when socket file does not exist', () => {
       tempEnv = createTempEnv({ withConfig: true });
+      const { stdout, exitCode } = runDoctor(tempEnv);
 
-      // Start a dummy server on a dynamic port to simulate a running proxy
-      const server = http.createServer((_req, res) => {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', uptime: 1, services: [] }));
-      });
-
-      const port = await new Promise<number>((resolve) => {
-        server.listen(0, '127.0.0.1', () => {
-          const addr = server.address();
-          resolve(typeof addr === 'object' ? addr!.port : 8081);
-        });
-      });
-
-      try {
-        // Override the port in the config to match our dummy server
-        const { writeFileSync } = await import('node:fs');
-        writeFileSync(
-          path.join(tempEnv.aquamanDir, 'config.yaml'),
-          [
-            'credentials:',
-            '  backend: keychain',
-            `  proxyPort: ${port}`,
-            '  proxiedServices:',
-            '    - anthropic',
-            '    - openai',
-            '  tls:',
-            '    enabled: false',
-            'audit:',
-            '  enabled: true',
-            `  logDir: ${path.join(tempEnv.aquamanDir, 'audit')}`,
-          ].join('\n'),
-          'utf-8'
-        );
-
-        const { stdout, stderr } = await runDoctorAsync(tempEnv);
-        // Should detect that something is running on the port (proxy check passes)
-        expect(stdout + stderr).toContain(`Proxy running on port ${port}`);
-      } finally {
-        await new Promise<void>((resolve, reject) => {
-          server.close((err) => err ? reject(err) : resolve());
-        });
-      }
+      // No proxy.sock file in the config dir → proxy not running
+      expect(stdout).toContain('Proxy not running');
+      expect(exitCode).toBe(1);
     }, TEST_TIMEOUT);
   });
 });

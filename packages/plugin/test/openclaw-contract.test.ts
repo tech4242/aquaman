@@ -11,6 +11,28 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+// Mock the proxy manager
+vi.mock('../src/proxy-manager.js', () => ({
+  createProxyManager: vi.fn().mockImplementation(() => ({
+    start: vi.fn().mockResolvedValue({
+      ready: true,
+      socketPath: '/tmp/aquaman-test/proxy.sock',
+      services: ['anthropic', 'openai'],
+      backend: 'keychain',
+    }),
+    stop: vi.fn().mockResolvedValue(undefined),
+    isRunning: vi.fn().mockReturnValue(true),
+    getSocketPath: vi.fn().mockReturnValue('/tmp/aquaman-test/proxy.sock'),
+    getConnectionInfo: vi.fn().mockReturnValue({
+      ready: true,
+      socketPath: '/tmp/aquaman-test/proxy.sock',
+      services: ['anthropic', 'openai'],
+      backend: 'keychain',
+    }),
+  })),
+  ProxyManager: vi.fn(),
+}));
+
 describe('OpenClaw Plugin Contract', () => {
   describe('package.json manifest', () => {
     let packageJson: Record<string, unknown>;
@@ -150,21 +172,10 @@ describe('OpenClaw Plugin Contract', () => {
       const plugin = new PluginClass();
 
       // Step 4: Call onLoad with config
-      // OpenClaw passes the config from openclaw.json
       const mockConfig = {
-        mode: 'embedded',
         backend: 'keychain',
         services: ['anthropic']
       };
-
-      // Mock dependencies to avoid real operations
-      vi.mock('../src/embedded.js', () => ({
-        EmbeddedCredentialClient: vi.fn().mockImplementation(() => ({
-          initialize: vi.fn().mockResolvedValue(undefined),
-          shutdown: vi.fn().mockResolvedValue(undefined),
-          getConfiguredServices: vi.fn().mockReturnValue(['anthropic'])
-        }))
-      }));
 
       await expect(plugin.onLoad(mockConfig)).resolves.not.toThrow();
 
@@ -186,19 +197,21 @@ describe('Environment Variable Contract', () => {
    * specific environment variables that SDK clients recognize.
    */
 
+  let originalEnv: NodeJS.ProcessEnv;
+
+  beforeEach(() => {
+    originalEnv = { ...process.env };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
   it('sets ANTHROPIC_BASE_URL for Anthropic service', async () => {
     const { AquamanPlugin } = await import('../src/index.js');
 
-    vi.mock('../src/embedded.js', () => ({
-      EmbeddedCredentialClient: vi.fn().mockImplementation(() => ({
-        initialize: vi.fn().mockResolvedValue(undefined),
-        shutdown: vi.fn().mockResolvedValue(undefined),
-        getConfiguredServices: vi.fn().mockReturnValue(['anthropic'])
-      }))
-    }));
-
     const plugin = new AquamanPlugin();
-    await plugin.onLoad({ mode: 'embedded', services: ['anthropic'] });
+    await plugin.onLoad({ services: ['anthropic'] });
 
     const envVars = plugin.getEnvironmentVariables();
     expect(envVars).toHaveProperty('ANTHROPIC_BASE_URL');
@@ -208,16 +221,8 @@ describe('Environment Variable Contract', () => {
   it('sets OPENAI_BASE_URL for OpenAI service', async () => {
     const { AquamanPlugin } = await import('../src/index.js');
 
-    vi.mock('../src/embedded.js', () => ({
-      EmbeddedCredentialClient: vi.fn().mockImplementation(() => ({
-        initialize: vi.fn().mockResolvedValue(undefined),
-        shutdown: vi.fn().mockResolvedValue(undefined),
-        getConfiguredServices: vi.fn().mockReturnValue(['openai'])
-      }))
-    }));
-
     const plugin = new AquamanPlugin();
-    await plugin.onLoad({ mode: 'embedded', services: ['openai'] });
+    await plugin.onLoad({ services: ['openai'] });
 
     const envVars = plugin.getEnvironmentVariables();
     expect(envVars).toHaveProperty('OPENAI_BASE_URL');
@@ -227,16 +232,8 @@ describe('Environment Variable Contract', () => {
   it('sets GITHUB_API_URL for GitHub service', async () => {
     const { AquamanPlugin } = await import('../src/index.js');
 
-    vi.mock('../src/embedded.js', () => ({
-      EmbeddedCredentialClient: vi.fn().mockImplementation(() => ({
-        initialize: vi.fn().mockResolvedValue(undefined),
-        shutdown: vi.fn().mockResolvedValue(undefined),
-        getConfiguredServices: vi.fn().mockReturnValue(['github'])
-      }))
-    }));
-
     const plugin = new AquamanPlugin();
-    await plugin.onLoad({ mode: 'embedded', services: ['github'] });
+    await plugin.onLoad({ services: ['github'] });
 
     const envVars = plugin.getEnvironmentVariables();
     expect(envVars).toHaveProperty('GITHUB_API_URL');
@@ -254,16 +251,8 @@ describe('Slash Command Contract', () => {
   it('commands have required structure', async () => {
     const { AquamanPlugin } = await import('../src/index.js');
 
-    vi.mock('../src/embedded.js', () => ({
-      EmbeddedCredentialClient: vi.fn().mockImplementation(() => ({
-        initialize: vi.fn().mockResolvedValue(undefined),
-        shutdown: vi.fn().mockResolvedValue(undefined),
-        getConfiguredServices: vi.fn().mockReturnValue([])
-      }))
-    }));
-
     const plugin = new AquamanPlugin();
-    await plugin.onLoad({ mode: 'embedded' });
+    await plugin.onLoad({});
 
     const commands = plugin.getCommands();
 
@@ -282,17 +271,8 @@ describe('Slash Command Contract', () => {
   it('command execute returns string or object', async () => {
     const { AquamanPlugin } = await import('../src/index.js');
 
-    vi.mock('../src/embedded.js', () => ({
-      EmbeddedCredentialClient: vi.fn().mockImplementation(() => ({
-        initialize: vi.fn().mockResolvedValue(undefined),
-        shutdown: vi.fn().mockResolvedValue(undefined),
-        listCredentials: vi.fn().mockResolvedValue([]),
-        getConfiguredServices: vi.fn().mockReturnValue([])
-      }))
-    }));
-
     const plugin = new AquamanPlugin();
-    await plugin.onLoad({ mode: 'embedded' });
+    await plugin.onLoad({});
 
     const commands = plugin.getCommands();
     const statusCmd = commands.find(c => c.name === 'status');

@@ -4,13 +4,11 @@
  * Provides /aquaman commands for users to interact with the plugin.
  */
 
-import type { EmbeddedMode } from './embedded.js';
 import type { ProxyManager } from './proxy-manager.js';
 import type { PluginConfig } from './config-schema.js';
 
 export interface CommandContext {
   config: PluginConfig;
-  embeddedMode?: EmbeddedMode;
   proxyManager?: ProxyManager;
 }
 
@@ -37,43 +35,17 @@ export async function statusCommand(ctx: CommandContext): Promise<CommandResult>
 
   lines.push('aquaman plugin status');
   lines.push('');
-  lines.push(`Mode: ${ctx.config.mode || 'embedded'}`);
   lines.push(`Backend: ${ctx.config.backend || 'keychain'}`);
   lines.push(`Services: ${(ctx.config.services || []).join(', ')}`);
 
-  if (ctx.config.mode === 'proxy') {
-    if (ctx.proxyManager?.isRunning()) {
-      const info = ctx.proxyManager.getConnectionInfo();
-      lines.push('');
-      lines.push('Proxy Status: Running');
-      lines.push(`  URL: ${info?.baseUrl}`);
-      lines.push(`  Port: ${info?.port}`);
-      lines.push(`  Protocol: ${info?.protocol}`);
-    } else {
-      lines.push('');
-      lines.push('Proxy Status: Not running');
-    }
-  } else if (ctx.embeddedMode) {
-    const status = ctx.embeddedMode.getStatus();
+  if (ctx.proxyManager?.isRunning()) {
+    const info = ctx.proxyManager.getConnectionInfo();
     lines.push('');
-    lines.push('Embedded Mode Status:');
-    lines.push(`  Initialized: ${status.initialized}`);
-    lines.push(`  Audit Enabled: ${status.auditEnabled}`);
-  }
-
-  // List credentials (without values)
-  if (ctx.embeddedMode) {
-    try {
-      const creds = await ctx.embeddedMode.listCredentials();
-      lines.push('');
-      lines.push(`Stored Credentials: ${creds.length}`);
-      for (const cred of creds) {
-        lines.push(`  - ${cred.service}/${cred.key}`);
-      }
-    } catch (error) {
-      lines.push('');
-      lines.push('Credentials: (unavailable)');
-    }
+    lines.push('Proxy Status: Running');
+    lines.push(`  Socket: ${info?.socketPath}`);
+  } else {
+    lines.push('');
+    lines.push('Proxy Status: Not running');
   }
 
   return {
@@ -86,19 +58,10 @@ export async function statusCommand(ctx: CommandContext): Promise<CommandResult>
  * /aquaman add <service> - Add a credential (prompts for value)
  */
 export async function addCommand(
-  ctx: CommandContext,
+  _ctx: CommandContext,
   service: string,
   key: string = 'api_key'
 ): Promise<CommandResult> {
-  if (!ctx.embeddedMode) {
-    return {
-      success: false,
-      message: 'Embedded mode not available. Use proxy mode for credential management.'
-    };
-  }
-
-  // Note: In a real OpenClaw plugin, this would trigger a secure input prompt
-  // For now, we return instructions
   return {
     success: true,
     message: `To add a credential for ${service}/${key}:\n\n` +
@@ -111,143 +74,30 @@ export async function addCommand(
 /**
  * /aquaman list - List stored credentials
  */
-export async function listCommand(ctx: CommandContext): Promise<CommandResult> {
-  if (!ctx.embeddedMode) {
-    return {
-      success: false,
-      message: 'Embedded mode not available.'
-    };
-  }
-
-  try {
-    const creds = await ctx.embeddedMode.listCredentials();
-
-    if (creds.length === 0) {
-      return {
-        success: true,
-        message: 'No credentials stored.\n\nUse `aquaman credentials add <service> <key>` to add one.'
-      };
-    }
-
-    const lines = ['Stored credentials:', ''];
-    for (const cred of creds) {
-      lines.push(`  ${cred.service}/${cred.key}`);
-    }
-
-    return {
-      success: true,
-      message: lines.join('\n'),
-      data: creds
-    };
-  } catch (error) {
-    return {
-      success: false,
-      message: `Failed to list credentials: ${error}`
-    };
-  }
+export async function listCommand(_ctx: CommandContext): Promise<CommandResult> {
+  return {
+    success: true,
+    message: 'Run in your terminal:\n  aquaman credentials list'
+  };
 }
 
 /**
  * /aquaman logs - Show recent audit entries
  */
-export async function logsCommand(ctx: CommandContext, count: number = 10): Promise<CommandResult> {
-  if (!ctx.embeddedMode) {
-    return {
-      success: false,
-      message: 'Embedded mode not available.'
-    };
-  }
-
-  try {
-    const entries = await ctx.embeddedMode.getRecentAuditEntries(count);
-
-    if (entries.length === 0) {
-      return {
-        success: true,
-        message: 'No audit entries found.'
-      };
-    }
-
-    const lines = [`Last ${entries.length} audit entries:`, ''];
-    for (const entry of entries) {
-      const time = new Date(entry.timestamp).toISOString();
-      const type = entry.type.toUpperCase().padEnd(16);
-      let details = '';
-
-      if (entry.type === 'credential_access') {
-        details = `${entry.data.service} ${entry.data.operation} ${entry.data.success ? 'OK' : 'FAIL'}`;
-      } else {
-        details = JSON.stringify(entry.data).slice(0, 60);
-      }
-
-      lines.push(`${time} [${type}] ${details}`);
-    }
-
-    return {
-      success: true,
-      message: lines.join('\n'),
-      data: entries
-    };
-  } catch (error) {
-    return {
-      success: false,
-      message: `Failed to get audit logs: ${error}`
-    };
-  }
+export async function logsCommand(_ctx: CommandContext, _count: number = 10): Promise<CommandResult> {
+  return {
+    success: true,
+    message: 'Run in your terminal:\n  aquaman audit tail'
+  };
 }
 
 /**
  * /aquaman verify - Verify audit log integrity
  */
-export async function verifyCommand(ctx: CommandContext): Promise<CommandResult> {
-  if (!ctx.embeddedMode) {
-    return {
-      success: false,
-      message: 'Embedded mode not available.'
-    };
-  }
-
-  try {
-    const result = await ctx.embeddedMode.verifyAuditIntegrity();
-
-    if (result.valid) {
-      return {
-        success: true,
-        message: 'Audit log integrity verified. No tampering detected.'
-      };
-    } else {
-      return {
-        success: false,
-        message: 'Audit log integrity FAILED!\n\n' +
-          'Errors:\n' +
-          result.errors.map(e => `  - ${e}`).join('\n')
-      };
-    }
-  } catch (error) {
-    return {
-      success: false,
-      message: `Failed to verify audit log: ${error}`
-    };
-  }
-}
-
-/**
- * /aquaman mode <embedded|proxy> - Switch mode
- */
-export async function modeCommand(ctx: CommandContext, mode: 'embedded' | 'proxy'): Promise<CommandResult> {
-  if (mode !== 'embedded' && mode !== 'proxy') {
-    return {
-      success: false,
-      message: 'Invalid mode. Use "embedded" or "proxy".'
-    };
-  }
-
-  // Mode switching requires configuration change
+export async function verifyCommand(_ctx: CommandContext): Promise<CommandResult> {
   return {
     success: true,
-    message: `To switch to ${mode} mode, update your openclaw.json:\n\n` +
-      `{\n  "plugins": {\n    "aquaman": {\n      "mode": "${mode}"\n    }\n  }\n}\n\n` +
-      `Then restart OpenClaw.`
+    message: 'Run in your terminal:\n  aquaman audit verify'
   };
 }
 
@@ -272,18 +122,13 @@ export async function executeCommand(
     case 'list':
       return listCommand(ctx);
 
-    case 'logs':
+    case 'logs': {
       const count = args[0] ? parseInt(args[0], 10) : 10;
       return logsCommand(ctx, count);
+    }
 
     case 'verify':
       return verifyCommand(ctx);
-
-    case 'mode':
-      if (args.length < 1) {
-        return { success: false, message: 'Usage: /aquaman mode <embedded|proxy>' };
-      }
-      return modeCommand(ctx, args[0] as 'embedded' | 'proxy');
 
     case 'help':
     default:
@@ -291,17 +136,12 @@ export async function executeCommand(
         success: true,
         message: `aquaman plugin commands:
 
-  /aquaman status    - Show plugin status and stored credentials
+  /aquaman status    - Show plugin status
   /aquaman add       - Add a credential (shows instructions)
   /aquaman list      - List stored credentials
-  /aquaman logs [n]  - Show recent audit entries (default: 10)
+  /aquaman logs [n]  - Show recent audit entries
   /aquaman verify    - Verify audit log integrity
-  /aquaman mode      - Switch between embedded and proxy mode
-  /aquaman help      - Show this help message
-
-Mode comparison:
-  embedded: Simpler setup, credentials in Gateway memory
-  proxy:    Stronger isolation, credentials in separate process`
+  /aquaman help      - Show this help message`
       };
   }
 }
@@ -313,7 +153,7 @@ export function getAvailableCommands(ctx: CommandContext): PluginCommand[] {
   return [
     {
       name: 'status',
-      description: 'Show aquaman plugin status and stored credentials',
+      description: 'Show aquaman plugin status',
       execute: async () => {
         const result = await statusCommand(ctx);
         return result.message;
@@ -354,18 +194,6 @@ export function getAvailableCommands(ctx: CommandContext): PluginCommand[] {
       description: 'Verify audit log integrity',
       execute: async () => {
         const result = await verifyCommand(ctx);
-        return result.message;
-      }
-    },
-    {
-      name: 'mode',
-      description: 'Switch between embedded and proxy mode',
-      execute: async (args) => {
-        const mode = args.mode || args._?.[0];
-        if (!mode) {
-          return 'Usage: /aquaman mode <embedded|proxy>';
-        }
-        const result = await modeCommand(ctx, mode as 'embedded' | 'proxy');
         return result.message;
       }
     },

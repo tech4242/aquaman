@@ -16,13 +16,14 @@ import type { RequestInfo } from 'aquaman-proxy';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { tmpSocketPath, cleanupSocket, udsFetch } from '../helpers/uds-proxy.js';
 
 describe('Proxy + Audit Log Integration', () => {
   let proxy: CredentialProxy;
   let upstream: MockUpstream;
   let store: MemoryStore;
   let auditLogger: AuditLogger;
-  let proxyPort: number;
+  let socketPath: string;
   let upstreamPort: number;
   let auditDir: string;
 
@@ -49,16 +50,18 @@ describe('Proxy + Audit Log Integration', () => {
     });
     await auditLogger.initialize();
 
+    socketPath = tmpSocketPath();
+
     // Create service registry pointing to mock upstream
     const registry = createServiceRegistry();
     registry.override('anthropic', {
       upstream: `http://127.0.0.1:${upstreamPort}`
     });
 
-    // Start proxy — onRequest callback writes to audit logger
+    // Start proxy -- onRequest callback writes to audit logger
     // This mirrors how the CLI daemon drives audit logging
     proxy = createCredentialProxy({
-      port: 0,
+      socketPath,
       store,
       serviceRegistry: registry,
       allowedServices: ['anthropic'],
@@ -74,23 +77,23 @@ describe('Proxy + Audit Log Integration', () => {
     });
 
     await proxy.start();
-    proxyPort = proxy.getPort();
   });
 
   afterEach(async () => {
     await proxy?.stop();
     await upstream?.stop();
     fs.rmSync(auditDir, { recursive: true, force: true });
+    cleanupSocket(socketPath);
   });
 
   it('should create a credential_access audit entry when proxy injects credentials', async () => {
-    const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
+    const response = await udsFetch(socketPath, '/anthropic/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: 'test', messages: [] })
     });
 
-    expect(response.ok).toBe(true);
+    expect(response.status).toBe(200);
 
     // Give async audit write a moment
     await new Promise(r => setTimeout(r, 100));
@@ -113,7 +116,7 @@ describe('Proxy + Audit Log Integration', () => {
 
   it('should maintain hash chain integrity after multiple requests', async () => {
     for (let i = 0; i < 3; i++) {
-      await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
+      await udsFetch(socketPath, '/anthropic/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: 'test', messages: [] })
@@ -128,12 +131,14 @@ describe('Proxy + Audit Log Integration', () => {
   });
 
   it('should not create audit entry for unauthenticated requests', async () => {
-    // Request to non-existent service — should fail, no credential access
-    await fetch(`http://127.0.0.1:${proxyPort}/unknown/v1/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({})
-    }).catch(() => {});
+    // Request to non-existent service -- should fail, no credential access
+    try {
+      await udsFetch(socketPath, '/unknown/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+    } catch { /* connection may be reset */ }
 
     await new Promise(r => setTimeout(r, 100));
 
@@ -151,13 +156,13 @@ describe('Proxy + Audit Log Integration', () => {
   it('should verify upstream received the injected credential', async () => {
     upstream.setExpectedAuth({ header: 'x-api-key', value: TEST_KEY });
 
-    const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
+    const response = await udsFetch(socketPath, '/anthropic/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: 'test', messages: [] })
     });
 
-    expect(response.ok).toBe(true);
+    expect(response.status).toBe(200);
 
     const lastReq = upstream.getLastRequest();
     expect(lastReq).toBeDefined();

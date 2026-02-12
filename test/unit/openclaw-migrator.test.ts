@@ -247,9 +247,8 @@ describe('OpenClaw Migrator', () => {
           entries: {
             'aquaman-plugin': {
               config: {
-                mode: 'proxy',
                 backend: 'keychain',
-                proxyPort: 8081,
+                services: ['anthropic', 'openai'],
               }
             }
           }

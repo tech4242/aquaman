@@ -15,7 +15,6 @@ describe('config utilities', () => {
     it('should return valid default config', () => {
       const config = getDefaultConfig();
 
-      expect(config.credentials.proxyPort).toBe(8081);
       expect(config.credentials.backend).toBe('keychain');
       expect(config.audit.enabled).toBe(true);
       expect(config.openclaw.autoLaunch).toBe(true);
@@ -27,13 +26,6 @@ describe('config utilities', () => {
       expect(config.credentials.proxiedServices).toContain('anthropic');
       expect(config.credentials.proxiedServices).toContain('openai');
       expect(config.credentials.proxiedServices.length).toBeGreaterThan(0);
-    });
-
-    it('should enable TLS by default', () => {
-      const config = getDefaultConfig();
-
-      expect(config.credentials.tls?.enabled).toBe(true);
-      expect(config.credentials.tls?.autoGenerate).toBe(true);
     });
 
     it('should include OpenClaw config', () => {
@@ -57,12 +49,6 @@ describe('config utilities', () => {
       Object.assign(process.env, originalEnv);
     });
 
-    it('should override port from AQUAMAN_PORT', () => {
-      process.env['AQUAMAN_PORT'] = '9999';
-      const config = applyEnvOverrides(getDefaultConfig());
-      expect(config.credentials.proxyPort).toBe(9999);
-    });
-
     it('should override backend from AQUAMAN_BACKEND', () => {
       process.env['AQUAMAN_BACKEND'] = 'vault';
       const config = applyEnvOverrides(getDefaultConfig());
@@ -79,18 +65,6 @@ describe('config utilities', () => {
       process.env['AQUAMAN_SERVICES'] = 'anthropic,slack';
       const config = applyEnvOverrides(getDefaultConfig());
       expect(config.credentials.proxiedServices).toEqual(['anthropic', 'slack']);
-    });
-
-    it('should override bind address from AQUAMAN_BIND_ADDRESS', () => {
-      process.env['AQUAMAN_BIND_ADDRESS'] = '0.0.0.0';
-      const config = applyEnvOverrides(getDefaultConfig());
-      expect(config.credentials.bindAddress).toBe('0.0.0.0');
-    });
-
-    it('should override TLS enabled from AQUAMAN_TLS_ENABLED', () => {
-      process.env['AQUAMAN_TLS_ENABLED'] = 'false';
-      const config = applyEnvOverrides(getDefaultConfig());
-      expect(config.credentials.tls?.enabled).toBe(false);
     });
 
     it('should override audit enabled from AQUAMAN_AUDIT_ENABLED', () => {

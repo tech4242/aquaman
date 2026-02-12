@@ -11,7 +11,7 @@
  *
  * The plugin will:
  *   - Start the aquaman proxy on plugin load
- *   - Set ANTHROPIC_BASE_URL, OPENAI_BASE_URL etc. to route through proxy
+ *   - Set ANTHROPIC_BASE_URL, OPENAI_BASE_URL etc. to route through proxy via UDS
  *   - The proxy injects credentials into requests
  *   - Agent never sees the actual API keys
  */
@@ -50,12 +50,17 @@ try { PLUGIN_VERSION = JSON.parse(fs.readFileSync(pluginPkgPath, 'utf-8')).versi
 
 let proxyManager: ProxyManager | null = null;
 let httpInterceptor: HttpInterceptor | null = null;
-let clientToken: string | null = null;
+let socketPath: string | null = null;
 let dynamicHostMap: Map<string, string> | null = null;
-const proxyPort = 8081;
 const services = ["anthropic", "openai"];
 
-/** Fallback host map used when proxy doesn't provide one (backward compat) */
+/** Default socket path */
+function getDefaultSocketPath(): string {
+  const configDir = path.join(os.homedir(), '.aquaman');
+  return path.join(configDir, 'proxy.sock');
+}
+
+/** Fallback host map used when proxy doesn't provide one */
 const FALLBACK_HOST_MAP = new Map<string, string>([
   ['api.anthropic.com', 'anthropic'],
   ['api.openai.com', 'openai'],
@@ -85,21 +90,6 @@ const FALLBACK_HOST_MAP = new Map<string, string>([
 ]);
 
 /**
- * Get external proxy URL from environment (for Docker two-container mode).
- * When set, the plugin skips spawning a local proxy and routes traffic to the external URL.
- */
-function getExternalProxyUrl(): string | null {
-  return process.env.AQUAMAN_PROXY_URL || null;
-}
-
-/**
- * Get external client token from environment (for Docker two-container mode).
- */
-function getExternalClientToken(): string | null {
-  return process.env.AQUAMAN_CLIENT_TOKEN || null;
-}
-
-/**
  * Check if aquaman CLI is installed (fs-based, no shell execution)
  */
 function isAquamanInstalled(): boolean {
@@ -109,12 +99,12 @@ function isAquamanInstalled(): boolean {
 /**
  * Start the aquaman proxy daemon using ProxyManager
  */
-async function startProxy(port: number, log: OpenClawPluginApi["logger"]): Promise<boolean> {
+async function startProxy(log: OpenClawPluginApi["logger"]): Promise<boolean> {
   try {
     const mgr = createProxyManager({
-      config: { proxyPort: port },
+      config: {},
       onReady: (info) => {
-        clientToken = info.token || null;
+        socketPath = info.socketPath;
         if (info.hostMap && typeof info.hostMap === "object") {
           dynamicHostMap = new Map(Object.entries(info.hostMap));
         }
@@ -127,6 +117,7 @@ async function startProxy(port: number, log: OpenClawPluginApi["logger"]): Promi
     });
     await mgr.start();
     proxyManager = mgr;
+    socketPath = mgr.getSocketPath();
     return true;
   } catch (err) {
     log.error(`Failed to start proxy: ${err}`);
@@ -146,7 +137,7 @@ function stopProxy(): void {
     proxyManager.stop();
     proxyManager = null;
   }
-  clientToken = null;
+  socketPath = null;
 }
 
 /**
@@ -154,16 +145,18 @@ function stopProxy(): void {
  * This is what provides credential isolation for channels that don't support base URL overrides.
  */
 function activateHttpInterceptor(log: OpenClawPluginApi["logger"]): void {
+  if (!socketPath) {
+    log.error("Cannot activate HTTP interceptor: no socket path");
+    return;
+  }
+
   // Use dynamic host map from proxy (includes custom services from services.yaml)
   // Falls back to builtin map for backward compatibility
   const hostMap = dynamicHostMap || FALLBACK_HOST_MAP;
 
-  const baseUrl = getExternalProxyUrl() || `http://127.0.0.1:${proxyPort}`;
-
   httpInterceptor = createHttpInterceptor({
-    proxyBaseUrl: baseUrl,
+    socketPath,
     hostMap,
-    clientToken: clientToken || undefined,
     log: (msg) => log.info(msg),
   });
 
@@ -172,13 +165,11 @@ function activateHttpInterceptor(log: OpenClawPluginApi["logger"]): void {
 }
 
 /**
- * Set environment variables for SDK clients
+ * Set environment variables for SDK clients using sentinel hostname
  */
 function configureEnvironment(log: OpenClawPluginApi["logger"]): void {
-  const baseUrl = getExternalProxyUrl() || `http://127.0.0.1:${proxyPort}`;
-
   for (const service of services) {
-    const serviceUrl = `${baseUrl}/${service}`;
+    const serviceUrl = `http://aquaman.local/${service}`;
 
     switch (service) {
       case "anthropic":
@@ -202,10 +193,9 @@ function configureEnvironment(log: OpenClawPluginApi["logger"]): void {
 }
 
 /**
- * Register the aquaman_status tool (shared between local and external proxy modes)
+ * Register the aquaman_status tool
  */
 function registerStatusTool(api: OpenClawPluginApi): void {
-  const externalUrl = getExternalProxyUrl();
   api.registerTool(
     () => {
       return {
@@ -219,10 +209,8 @@ function registerStatusTool(api: OpenClawPluginApi): void {
         },
         async execute() {
           return {
-            externalProxy: externalUrl !== null,
-            proxyUrl: externalUrl || `http://127.0.0.1:${proxyPort}`,
-            proxyRunning: externalUrl !== null || proxyManager !== null,
-            proxyPort,
+            proxyRunning: proxyManager !== null,
+            socketPath: socketPath || getDefaultSocketPath(),
             services,
             httpInterceptorActive: httpInterceptor?.isActive() ?? false,
             environmentVariables: Object.fromEntries(
@@ -297,37 +285,6 @@ export default function register(api: OpenClawPluginApi): void {
   // Auto-generate auth-profiles.json if missing
   ensureAuthProfiles(api.logger);
 
-  const externalUrl = getExternalProxyUrl();
-
-  // External proxy mode (Docker two-container architecture)
-  if (externalUrl) {
-    api.logger.info(`External proxy mode: ${externalUrl}`);
-    clientToken = getExternalClientToken();
-    configureEnvironment(api.logger);
-
-    if (api.registerLifecycle) {
-      api.registerLifecycle({
-        async onGatewayStart() {
-          // Load dynamic host map from external proxy (includes custom services)
-          const map = await loadHostMap(externalUrl, clientToken);
-          dynamicHostMap = map.size > 0 ? map : FALLBACK_HOST_MAP;
-          activateHttpInterceptor(api.logger);
-          api.logger.info("HTTP interceptor active (external proxy mode)");
-        },
-        async onGatewayStop() {
-          if (httpInterceptor) {
-            httpInterceptor.deactivate();
-            httpInterceptor = null;
-          }
-        },
-      });
-    }
-
-    registerStatusTool(api);
-    api.logger.info("Aquaman plugin registered successfully");
-    return;
-  }
-
   // Local proxy mode — requires aquaman CLI
   if (!isAquamanInstalled()) {
     api.logger.warn(
@@ -342,22 +299,21 @@ export default function register(api: OpenClawPluginApi): void {
 
   api.logger.info("aquaman CLI found, will start proxy on gateway start");
 
-  // Configure environment variables immediately
+  // Configure environment variables immediately (sentinel hostname)
   configureEnvironment(api.logger);
 
   // Register lifecycle hooks if available
   if (api.registerLifecycle) {
     api.registerLifecycle({
       async onGatewayStart() {
-        api.logger.info(`Starting aquaman proxy on port ${proxyPort}...`);
+        api.logger.info("Starting aquaman proxy...");
 
-        const started = await startProxy(proxyPort, api.logger);
-        if (started) {
+        const started = await startProxy(api.logger);
+        if (started && socketPath) {
           api.logger.info("Aquaman proxy started successfully");
 
           // Check for version mismatch between plugin and proxy
-          const proxyBaseUrl = `http://127.0.0.1:${proxyPort}`;
-          const proxyVersion = await getProxyVersion(proxyBaseUrl);
+          const proxyVersion = await getProxyVersion(socketPath);
           if (proxyVersion && proxyVersion !== PLUGIN_VERSION) {
             api.logger.warn(
               `Warning: plugin version ${PLUGIN_VERSION} \u2260 proxy version ${proxyVersion}. ` +
@@ -368,19 +324,22 @@ export default function register(api: OpenClawPluginApi): void {
           // Activate HTTP interceptor to redirect channel traffic through proxy
           activateHttpInterceptor(api.logger);
         } else {
-          api.logger.error(
-            `Failed to start aquaman proxy on port ${proxyPort}`
-          );
-          // Check if another instance is already running on the port
-          const alreadyRunning = await isProxyRunning(proxyPort);
+          api.logger.error("Failed to start aquaman proxy");
+          // Check if another instance is already running
+          const defaultSock = getDefaultSocketPath();
+          const alreadyRunning = await isProxyRunning(defaultSock);
           if (alreadyRunning) {
+            socketPath = defaultSock;
             api.logger.info(
-              `Another aquaman instance is already running on port ${proxyPort} — using it`
+              "Another aquaman instance is already running — using it"
             );
+            // Load host map from existing proxy
+            const map = await loadHostMap(defaultSock);
+            dynamicHostMap = map.size > 0 ? map : FALLBACK_HOST_MAP;
             activateHttpInterceptor(api.logger);
           } else {
             api.logger.error(
-              `Port ${proxyPort} may be in use. Check with: lsof -i :${proxyPort}`
+              "No running proxy found. Check: aquaman doctor"
             );
           }
         }
@@ -407,7 +366,7 @@ export default function register(api: OpenClawPluginApi): void {
           .action(() => {
             console.log("\nAquaman Status:");
             console.log(`  Proxy running: ${proxyManager !== null}`);
-            console.log(`  Proxy port: ${proxyPort}`);
+            console.log(`  Socket path: ${socketPath || getDefaultSocketPath()}`);
             console.log(`  Services: ${services.join(", ")}`);
             console.log("\nEnvironment Variables:");
             for (const service of services) {

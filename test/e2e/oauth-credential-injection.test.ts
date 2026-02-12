@@ -7,10 +7,10 @@
  * upstream request.
  *
  * Architecture:
- *   Test → Proxy (port 0) → Mock Upstream (port 0)
- *                ↓
+ *   Test -> Proxy (UDS) -> Mock Upstream (port 0)
+ *                |
  *         MemoryStore
- *                ↓
+ *                |
  *         Mock Token Server (port 0)
  *
  * Safety: MemoryStore + mock upstream + mock token server. All localhost,
@@ -23,6 +23,7 @@ import { CredentialProxy, createCredentialProxy, createServiceRegistry } from 'a
 import { MemoryStore } from 'aquaman-core';
 import { MockUpstream, createMockUpstream } from '../helpers/mock-upstream.js';
 import type { RequestInfo } from 'aquaman-proxy';
+import { tmpSocketPath, cleanupSocket, udsFetch } from '../helpers/uds-proxy.js';
 
 // Test credentials (all fake, never leave localhost)
 const TEST_CLIENT_ID = 'test-client-id-abc';
@@ -88,7 +89,7 @@ describe('OAuth Credential Injection E2E', () => {
   let store: MemoryStore;
   let tokenServer: ReturnType<typeof createMockTokenServer>;
   let requestLog: RequestInfo[];
-  let proxyPort: number;
+  let socketPath: string;
   let tokenPort: number;
 
   beforeEach(async () => {
@@ -107,6 +108,7 @@ describe('OAuth Credential Injection E2E', () => {
     await store.set('ms-teams', 'tenant_id', TEST_TENANT_ID);
 
     requestLog = [];
+    socketPath = tmpSocketPath();
 
     // Build registry with overrides pointing to local mocks
     const registry = createServiceRegistry();
@@ -121,7 +123,7 @@ describe('OAuth Credential Injection E2E', () => {
     });
 
     proxy = createCredentialProxy({
-      port: 0,
+      socketPath,
       store,
       serviceRegistry: registry,
       allowedServices: ['ms-teams'],
@@ -129,7 +131,6 @@ describe('OAuth Credential Injection E2E', () => {
     });
 
     await proxy.start();
-    proxyPort = proxy.getPort();
   });
 
   afterEach(async () => {
@@ -137,14 +138,15 @@ describe('OAuth Credential Injection E2E', () => {
     await upstream.stop();
     await tokenServer.stop();
     store.clear();
+    cleanupSocket(socketPath);
   });
 
   it('exchanges client credentials and injects Bearer token', async () => {
-    const response = await fetch(`http://127.0.0.1:${proxyPort}/ms-teams/v1.0/teams/123/channels`, {
+    const response = await udsFetch(socketPath, '/ms-teams/v1.0/teams/123/channels', {
       method: 'GET',
     });
 
-    expect(response.ok).toBe(true);
+    expect(response.status).toBe(200);
 
     // Verify upstream received Bearer token
     const lastUpstream = upstream.getLastRequest();
@@ -161,7 +163,7 @@ describe('OAuth Credential Injection E2E', () => {
   });
 
   it('resolves {tenant_id} template in token URL', async () => {
-    await fetch(`http://127.0.0.1:${proxyPort}/ms-teams/v1.0/me`, {
+    await udsFetch(socketPath, '/ms-teams/v1.0/me', {
       method: 'GET',
     });
 
@@ -173,10 +175,10 @@ describe('OAuth Credential Injection E2E', () => {
   it('caches token across multiple requests', async () => {
     // Make 3 requests through the proxy
     for (let i = 0; i < 3; i++) {
-      const response = await fetch(`http://127.0.0.1:${proxyPort}/ms-teams/v1.0/me`, {
+      const response = await udsFetch(socketPath, '/ms-teams/v1.0/me', {
         method: 'GET',
       });
-      expect(response.ok).toBe(true);
+      expect(response.status).toBe(200);
     }
 
     // Token server should only be called once (token cached)
@@ -191,6 +193,7 @@ describe('OAuth Credential Injection E2E', () => {
 
     // Need a fresh proxy to clear the token cache from prior tests
     await proxy.stop();
+    const freshSocketPath = tmpSocketPath();
     const registry = createServiceRegistry();
     registry.override('ms-teams', {
       upstream: `http://127.0.0.1:${upstream.port}`,
@@ -202,26 +205,27 @@ describe('OAuth Credential Injection E2E', () => {
       },
     });
     proxy = createCredentialProxy({
-      port: 0,
+      socketPath: freshSocketPath,
       store,
       serviceRegistry: registry,
       allowedServices: ['ms-teams'],
       onRequest: (info) => requestLog.push(info),
     });
     await proxy.start();
-    proxyPort = proxy.getPort();
 
-    const response = await fetch(`http://127.0.0.1:${proxyPort}/ms-teams/v1.0/me`, {
+    const response = await udsFetch(freshSocketPath, '/ms-teams/v1.0/me', {
       method: 'GET',
     });
 
     expect(response.status).toBe(500);
+
+    cleanupSocket(freshSocketPath);
   });
 
   it('returns 401 when client credentials are missing', async () => {
     store.clear();
 
-    const response = await fetch(`http://127.0.0.1:${proxyPort}/ms-teams/v1.0/me`, {
+    const response = await udsFetch(socketPath, '/ms-teams/v1.0/me', {
       method: 'GET',
     });
 

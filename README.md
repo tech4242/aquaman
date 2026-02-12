@@ -46,24 +46,17 @@ aquaman doctor                 # diagnose issues with actionable fixes
 aquaman help                   # list all commands
 ```
 
-### Server (Docker)
+### Docker Setup
 
-Two-container deployment: aquaman (proxy, internet access) + OpenClaw
-(gateway, internal network only — no direct internet access).
+Single-image deployment — same UDS architecture as local, containerized.
 
 ```bash
 git clone https://github.com/tech4242/aquaman.git && cd aquaman
 cp docker/.env.example docker/.env
-# Edit docker/.env — set backend and credentials
-docker compose -f docker/docker-compose.yml --profile with-openclaw up -d
-```
-
-For tool execution sandboxing (tools run in ephemeral containers with
-read-only filesystem, dropped capabilities, network restricted to
-proxy only):
-
-```bash
-docker compose -f docker/docker-compose.yml --profile with-openclaw-sandboxed up -d
+# Edit docker/.env — pick a backend and set its credentials
+# needless to say instead of .env you should handle your env properly but this is a starting point you can test.
+npm run docker:build
+npm run docker:run
 ```
 
 ## How It Works
@@ -72,15 +65,16 @@ docker compose -f docker/docker-compose.yml --profile with-openclaw-sandboxed up
 Agent / OpenClaw Gateway              Aquaman Proxy
 ┌──────────────────────┐              ┌──────────────────────┐
 │                      │              │                      │
-│  ANTHROPIC_BASE_URL  │──request────>│  Keychain / 1Pass /  │
-│  = localhost:8081    │              │  Vault / Encrypted   │
-│                      │<─response────│                      │
-│  fetch() interceptor │──channel────>│  + Auth injected:    │
-│  redirects channel   │   traffic    │    header / url-path │
+│  ANTHROPIC_BASE_URL  │══ Unix ════> │  Keychain / 1Pass /  │
+│  = aquaman.local     │   Domain     │  Vault / Encrypted   │
+│                      │<═ Socket ═══ │                      │
+│  fetch() interceptor │══ (UDS) ══=> │  + Auth injected:    │
+│  redirects channel   │              │    header / url-path │
 │  API traffic         │              │    basic / oauth     │
 │                      │              │                      │
-│  No credentials.     │              │                      │
-│  Nothing to steal.   │              │                      │
+│  No credentials.     │  ~/.aquaman/ │                      │
+│  No open ports.      │  proxy.sock  │                      │
+│  Nothing to steal.   │  (chmod 600) │                      │
 └──────────────────────┘              └───┬──────────┬───────┘
                                          │          │
                                          │          ▼
@@ -93,10 +87,10 @@ Agent / OpenClaw Gateway              Aquaman Proxy
 ```
 
 1. **Store** — Credentials live in a vault backend (Keychain, 1Password, Vault, encrypted file)
-2. **Proxy** — Aquaman runs a reverse proxy in a separate process on localhost
+2. **Proxy** — Aquaman runs a reverse proxy in a separate process, connected via Unix domain socket — no TCP port, no network exposure
 3. **Inject** — Proxy looks up the credential and adds the auth header before forwarding
 
-The agent only knows a localhost URL. It never sees a key.
+The agent only sees a sentinel hostname (`aquaman.local`). It never sees a key, and no port is open for other processes to probe.
 
 ## Credential Backends
 
@@ -116,7 +110,7 @@ The agent only knows a localhost URL. It never sees a key.
 
 ## Why Aquaman
 
-**Security** — Process-level credential isolation, tamper-evident audit logs with SHA-256 hash chains
+**Security** — Process-level credential isolation via Unix domain socket (no TCP port, no network exposure). Socket file permissions (`chmod 600`) restrict access to the owning user. Tamper-evident audit logs with SHA-256 hash chains
 
 **DevOps** — Plugs into Keychain, 1Password, and HashiCorp Vault; YAML-based service config; 23 builtin services across 4 auth modes
 

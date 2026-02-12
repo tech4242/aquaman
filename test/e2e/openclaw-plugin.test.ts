@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, cpSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, cpSync, writeFileSync, rmSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 
@@ -50,6 +50,13 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
     mkdirSync(path.join(testStateDir, 'extensions'), { recursive: true });
     cpSync(PLUGIN_SRC, installPath, { recursive: true });
 
+    // Symlink root node_modules so plugin dependencies (undici) are resolvable.
+    // cpSync copies the empty hoisted node_modules dir — remove it first.
+    const rootNodeModules = path.resolve(__dirname, '../../node_modules');
+    const pluginNodeModules = path.join(installPath, 'node_modules');
+    try { rmSync(pluginNodeModules, { recursive: true, force: true }); } catch { /* ok */ }
+    try { symlinkSync(rootNodeModules, pluginNodeModules, 'dir'); } catch { /* already exists */ }
+
     // Create a dummy aquaman CLI script so isAquamanInstalled() finds it via `which`
     const testBinDir = path.join(testStateDir, 'bin');
     mkdirSync(testBinDir, { recursive: true });
@@ -68,10 +75,8 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
             'aquaman-plugin': {
               enabled: true,
               config: {
-                mode: 'proxy',
                 backend: 'keychain',
                 services: ['anthropic', 'openai'],
-                proxyPort: 8081
               }
             }
           },
@@ -130,13 +135,13 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
     it('sets ANTHROPIC_BASE_URL environment variable', () => {
       const result = runOpenClaw('plugins list');
 
-      expect(result).toContain('ANTHROPIC_BASE_URL=http://127.0.0.1:8081/anthropic');
+      expect(result).toContain('ANTHROPIC_BASE_URL=http://aquaman.local/anthropic');
     });
 
     it('sets OPENAI_BASE_URL environment variable', () => {
       const result = runOpenClaw('plugins list');
 
-      expect(result).toContain('OPENAI_BASE_URL=http://127.0.0.1:8081/openai');
+      expect(result).toContain('OPENAI_BASE_URL=http://aquaman.local/openai');
     });
 
     it('registers successfully', () => {
@@ -149,7 +154,7 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
   describe('OpenClaw 2026.2.x Compatibility', () => {
     it('gateway accepts localhost base URL override', () => {
       const result = runOpenClaw('plugins list');
-      expect(result).toContain('ANTHROPIC_BASE_URL=http://127.0.0.1:8081/anthropic');
+      expect(result).toContain('ANTHROPIC_BASE_URL=http://aquaman.local/anthropic');
       // No warnings about URL overrides requiring credentials
       expect(result).not.toMatch(/credential.*required.*override/i);
       expect(result).not.toMatch(/rejected.*base.?url/i);

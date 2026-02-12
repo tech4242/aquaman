@@ -44,12 +44,9 @@ export function createTempEnv(options: TempEnvOptions = {}): TempEnv {
       [
         'credentials:',
         '  backend: encrypted-file',
-        '  proxyPort: 8081',
         '  proxiedServices:',
         '    - anthropic',
         '    - openai',
-        '  tls:',
-        '    enabled: false',
         'audit:',
         '  enabled: true',
         `  logDir: ${path.join(aquamanDir, 'audit')}`,
@@ -77,10 +74,8 @@ export function createTempEnv(options: TempEnvOptions = {}): TempEnv {
             'aquaman-plugin': {
               enabled: true,
               config: {
-                mode: 'proxy',
                 backend: 'keychain',
                 services: ['anthropic', 'openai'],
-                proxyPort: 8081,
               },
             },
           },

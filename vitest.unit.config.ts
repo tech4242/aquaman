@@ -21,7 +21,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      'aquaman-core': path.resolve(__dirname, 'packages/core/src/index.ts'),
+      'aquaman-core': path.resolve(__dirname, 'packages/proxy/src/core/index.ts'),
       'aquaman-proxy': path.resolve(__dirname, 'packages/proxy/src/index.ts'),
       'aquaman-plugin': path.resolve(__dirname, 'packages/plugin/src/index.ts')
     }

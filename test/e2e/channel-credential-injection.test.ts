@@ -7,8 +7,8 @@
  * - Additional headers (Twitch: Authorization + Client-Id)
  *
  * Architecture:
- *   Test → Proxy (dynamic port) → Mock Upstream (dynamic port)
- *                ↓
+ *   Test -> Proxy (UDS) -> Mock Upstream (dynamic port)
+ *                |
  *        Credential Store (Memory)
  */
 
@@ -17,13 +17,14 @@ import { CredentialProxy, createCredentialProxy, createServiceRegistry } from 'a
 import { MemoryStore } from 'aquaman-core';
 import { MockUpstream, createMockUpstream } from '../helpers/mock-upstream.js';
 import type { RequestInfo } from 'aquaman-proxy';
+import { tmpSocketPath, cleanupSocket, udsFetch } from '../helpers/uds-proxy.js';
 
 describe('Channel Credential Injection E2E', () => {
   let proxy: CredentialProxy;
   let upstream: MockUpstream;
   let store: MemoryStore;
   let requestLog: RequestInfo[];
-  let proxyPort: number;
+  let socketPath: string;
   let upstreamPort: number;
 
   // Test credentials
@@ -62,6 +63,7 @@ describe('Channel Credential Injection E2E', () => {
     await store.set('cloudflare-ai', 'api_token', TEST_CLOUDFLARE_AI_TOKEN);
 
     requestLog = [];
+    socketPath = tmpSocketPath();
 
     const registry = createServiceRegistry();
 
@@ -101,7 +103,7 @@ describe('Channel Credential Injection E2E', () => {
     });
 
     proxy = createCredentialProxy({
-      port: 0,
+      socketPath,
       store,
       serviceRegistry: registry,
       allowedServices: ['telegram', 'twilio', 'twitch', 'elevenlabs', 'slack', 'discord', 'matrix', 'line', 'zalo', 'xai', 'cloudflare-ai'],
@@ -111,24 +113,24 @@ describe('Channel Credential Injection E2E', () => {
     });
 
     await proxy.start();
-    proxyPort = proxy.getPort();
   });
 
   afterEach(async () => {
     await proxy.stop();
     await upstream.stop();
     store.clear();
+    cleanupSocket(socketPath);
   });
 
   describe('Telegram URL-path auth', () => {
     it('injects bot token into URL path for Telegram requests', async () => {
-      const response = await fetch(`http://127.0.0.1:${proxyPort}/telegram/getUpdates`, {
+      const response = await udsFetch(socketPath, '/telegram/getUpdates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ offset: 0, timeout: 10 })
       });
 
-      expect(response.ok).toBe(true);
+      expect(response.status).toBe(200);
 
       const lastRequest = upstream.getLastRequest();
       expect(lastRequest).toBeDefined();
@@ -139,13 +141,13 @@ describe('Channel Credential Injection E2E', () => {
     });
 
     it('handles nested paths for Telegram file downloads', async () => {
-      const response = await fetch(`http://127.0.0.1:${proxyPort}/telegram/sendMessage`, {
+      const response = await udsFetch(socketPath, '/telegram/sendMessage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat_id: 123, text: 'test' })
       });
 
-      expect(response.ok).toBe(true);
+      expect(response.status).toBe(200);
 
       const lastRequest = upstream.getLastRequest();
       expect(lastRequest!.path).toBe(`/bot${TEST_TELEGRAM_TOKEN}/sendMessage`);
@@ -154,7 +156,7 @@ describe('Channel Credential Injection E2E', () => {
     it('returns 401 when telegram bot_token is missing', async () => {
       store.clear();
 
-      const response = await fetch(`http://127.0.0.1:${proxyPort}/telegram/getUpdates`, {
+      const response = await udsFetch(socketPath, '/telegram/getUpdates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
@@ -166,11 +168,11 @@ describe('Channel Credential Injection E2E', () => {
 
   describe('Twilio HTTP Basic auth', () => {
     it('injects Basic auth header with encoded credentials', async () => {
-      const response = await fetch(`http://127.0.0.1:${proxyPort}/twilio/2010-04-01/Accounts`, {
+      const response = await udsFetch(socketPath, '/twilio/2010-04-01/Accounts', {
         method: 'GET'
       });
 
-      expect(response.ok).toBe(true);
+      expect(response.status).toBe(200);
 
       const lastRequest = upstream.getLastRequest();
       expect(lastRequest).toBeDefined();
@@ -186,11 +188,11 @@ describe('Channel Credential Injection E2E', () => {
 
   describe('Twitch additional headers', () => {
     it('injects both Authorization and Client-Id headers', async () => {
-      const response = await fetch(`http://127.0.0.1:${proxyPort}/twitch/helix/users`, {
+      const response = await udsFetch(socketPath, '/twitch/helix/users', {
         method: 'GET'
       });
 
-      expect(response.ok).toBe(true);
+      expect(response.status).toBe(200);
 
       const lastRequest = upstream.getLastRequest();
       expect(lastRequest).toBeDefined();
@@ -205,13 +207,13 @@ describe('Channel Credential Injection E2E', () => {
 
   describe('ElevenLabs custom header auth', () => {
     it('injects xi-api-key header', async () => {
-      const response = await fetch(`http://127.0.0.1:${proxyPort}/elevenlabs/v1/text-to-speech/voice-id`, {
+      const response = await udsFetch(socketPath, '/elevenlabs/v1/text-to-speech/voice-id', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: 'Hello', model_id: 'eleven_monolingual_v1' })
       });
 
-      expect(response.ok).toBe(true);
+      expect(response.status).toBe(200);
 
       const lastRequest = upstream.getLastRequest();
       expect(lastRequest).toBeDefined();
@@ -221,13 +223,13 @@ describe('Channel Credential Injection E2E', () => {
 
   describe('Slack header auth', () => {
     it('injects Bearer token for Slack requests', async () => {
-      const response = await fetch(`http://127.0.0.1:${proxyPort}/slack/chat.postMessage`, {
+      const response = await udsFetch(socketPath, '/slack/chat.postMessage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channel: '#test', text: 'hello' })
       });
 
-      expect(response.ok).toBe(true);
+      expect(response.status).toBe(200);
 
       const lastRequest = upstream.getLastRequest();
       expect(lastRequest).toBeDefined();
@@ -237,13 +239,13 @@ describe('Channel Credential Injection E2E', () => {
 
   describe('Discord header auth', () => {
     it('injects Bot-prefixed token for Discord requests', async () => {
-      const response = await fetch(`http://127.0.0.1:${proxyPort}/discord/channels/123/messages`, {
+      const response = await udsFetch(socketPath, '/discord/channels/123/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: 'hello' })
       });
 
-      expect(response.ok).toBe(true);
+      expect(response.status).toBe(200);
 
       const lastRequest = upstream.getLastRequest();
       expect(lastRequest).toBeDefined();
@@ -254,13 +256,13 @@ describe('Channel Credential Injection E2E', () => {
 
   describe('Matrix header auth', () => {
     it('injects Bearer token for Matrix requests', async () => {
-      const response = await fetch(`http://127.0.0.1:${proxyPort}/matrix/_matrix/client/v3/rooms/!abc:matrix.org/send/m.room.message`, {
+      const response = await udsFetch(socketPath, '/matrix/_matrix/client/v3/rooms/!abc:matrix.org/send/m.room.message', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ msgtype: 'm.text', body: 'hello' })
       });
 
-      expect(response.ok).toBe(true);
+      expect(response.status).toBe(200);
 
       const lastRequest = upstream.getLastRequest();
       expect(lastRequest).toBeDefined();
@@ -270,13 +272,13 @@ describe('Channel Credential Injection E2E', () => {
 
   describe('LINE header auth', () => {
     it('injects Bearer token for LINE requests', async () => {
-      const response = await fetch(`http://127.0.0.1:${proxyPort}/line/v2/bot/message/push`, {
+      const response = await udsFetch(socketPath, '/line/v2/bot/message/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ to: 'U123', messages: [{ type: 'text', text: 'hello' }] })
       });
 
-      expect(response.ok).toBe(true);
+      expect(response.status).toBe(200);
 
       const lastRequest = upstream.getLastRequest();
       expect(lastRequest).toBeDefined();
@@ -286,13 +288,13 @@ describe('Channel Credential Injection E2E', () => {
 
   describe('Zalo custom header auth', () => {
     it('injects access_token header without prefix for Zalo requests', async () => {
-      const response = await fetch(`http://127.0.0.1:${proxyPort}/zalo/v3.0/oa/message/cs`, {
+      const response = await udsFetch(socketPath, '/zalo/v3.0/oa/message/cs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ recipient: { user_id: '123' }, message: { text: 'hello' } })
       });
 
-      expect(response.ok).toBe(true);
+      expect(response.status).toBe(200);
 
       const lastRequest = upstream.getLastRequest();
       expect(lastRequest).toBeDefined();
@@ -303,13 +305,13 @@ describe('Channel Credential Injection E2E', () => {
 
   describe('xAI header auth', () => {
     it('injects Bearer token for xAI Grok requests', async () => {
-      const response = await fetch(`http://127.0.0.1:${proxyPort}/xai/v1/chat/completions`, {
+      const response = await udsFetch(socketPath, '/xai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: 'grok-3', messages: [{ role: 'user', content: 'hi' }] })
       });
 
-      expect(response.ok).toBe(true);
+      expect(response.status).toBe(200);
 
       const lastRequest = upstream.getLastRequest();
       expect(lastRequest).toBeDefined();
@@ -320,13 +322,13 @@ describe('Channel Credential Injection E2E', () => {
 
   describe('Cloudflare AI Gateway header auth', () => {
     it('injects cf-aig-authorization header for Cloudflare AI Gateway requests', async () => {
-      const response = await fetch(`http://127.0.0.1:${proxyPort}/cloudflare-ai/v1/account-id/gateway-id/anthropic/v1/messages`, {
+      const response = await udsFetch(socketPath, '/cloudflare-ai/v1/account-id/gateway-id/anthropic/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 5, messages: [{ role: 'user', content: 'hi' }] })
       });
 
-      expect(response.ok).toBe(true);
+      expect(response.status).toBe(200);
 
       const lastRequest = upstream.getLastRequest();
       expect(lastRequest).toBeDefined();
@@ -341,30 +343,31 @@ describe('Channel Credential Injection E2E', () => {
       // Create a new proxy that allows nostr
       await proxy.stop();
 
+      const nostrSocketPath = tmpSocketPath();
       const registry2 = createServiceRegistry();
       const proxy2 = createCredentialProxy({
-        port: 0,
+        socketPath: nostrSocketPath,
         store,
         serviceRegistry: registry2,
         allowedServices: ['nostr'],
       });
       await proxy2.start();
 
-      const response = await fetch(`http://127.0.0.1:${proxy2.getPort()}/nostr/relay`, {
+      const response = await udsFetch(nostrSocketPath, '/nostr/relay', {
         method: 'GET'
       });
 
       expect(response.status).toBe(400);
-      const body = await response.text();
-      expect(body).toContain('at-rest storage only');
+      expect(response.body).toContain('at-rest storage only');
 
       await proxy2.stop();
+      cleanupSocket(nostrSocketPath);
     });
   });
 
   describe('Request logging', () => {
     it('logs channel requests in audit trail', async () => {
-      await fetch(`http://127.0.0.1:${proxyPort}/telegram/getUpdates`, {
+      await udsFetch(socketPath, '/telegram/getUpdates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})

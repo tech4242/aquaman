@@ -2,7 +2,7 @@
  * Core types for aquaman credential isolation layer
  *
  * This module focuses on unique features NOT in OpenClaw:
- * - Credential proxy with TLS
+ * - Credential proxy via Unix domain socket
  * - Enterprise backends (1Password, Vault)
  * - Hash-chained tamper-evident audit logs
  * - Dynamic service registry
@@ -54,16 +54,8 @@ export interface ServiceConfig {
 
 export interface CredentialsConfig {
   backend: 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc';
-  proxyPort: number;
   proxiedServices: string[];
-  bindAddress?: string;
   encryptionPassword?: string;
-  tls?: {
-    enabled: boolean;
-    certPath?: string;
-    keyPath?: string;
-    autoGenerate?: boolean;
-  };
   // 1Password options
   onePasswordVault?: string;
   onePasswordAccount?: string;

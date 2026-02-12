@@ -39,14 +39,7 @@ export function getDefaultConfig(): WrapperConfig {
   return {
     credentials: {
       backend: 'keychain',
-      proxyPort: 8081,
       proxiedServices: ['anthropic', 'openai', 'slack', 'discord', 'github'],
-      tls: {
-        enabled: true,
-        autoGenerate: true,
-        certPath: path.join(getConfigDir(), 'certs', 'proxy.crt'),
-        keyPath: path.join(getConfigDir(), 'certs', 'proxy.key')
-      },
       vaultMountPath: 'secret'
     },
     audit: {
@@ -87,11 +80,6 @@ export function loadConfig(): WrapperConfig {
 export function applyEnvOverrides(config: WrapperConfig): WrapperConfig {
   const env = process.env;
 
-  if (env['AQUAMAN_PORT']) {
-    const port = parseInt(env['AQUAMAN_PORT'], 10);
-    if (!isNaN(port)) config.credentials.proxyPort = port;
-  }
-
   if (env['AQUAMAN_BACKEND']) {
     const b = env['AQUAMAN_BACKEND'] as WrapperConfig['credentials']['backend'];
     if (['keychain', '1password', 'vault', 'encrypted-file', 'keepassxc'].includes(b)) {
@@ -103,19 +91,8 @@ export function applyEnvOverrides(config: WrapperConfig): WrapperConfig {
     config.credentials.proxiedServices = env['AQUAMAN_SERVICES'].split(',').map(s => s.trim()).filter(Boolean);
   }
 
-  if (env['AQUAMAN_BIND_ADDRESS']) {
-    config.credentials.bindAddress = env['AQUAMAN_BIND_ADDRESS'];
-  }
-
   if (env['AQUAMAN_ENCRYPTION_PASSWORD']) {
     config.credentials.encryptionPassword = env['AQUAMAN_ENCRYPTION_PASSWORD'];
-  }
-
-  if (env['AQUAMAN_TLS_ENABLED']) {
-    if (!config.credentials.tls) {
-      config.credentials.tls = { enabled: false };
-    }
-    config.credentials.tls.enabled = env['AQUAMAN_TLS_ENABLED'] === 'true';
   }
 
   if (env['AQUAMAN_AUDIT_ENABLED']) {
@@ -141,16 +118,6 @@ function mergeConfig(
   base: WrapperConfig,
   override: Partial<WrapperConfig>
 ): WrapperConfig {
-  // Merge TLS config, ensuring enabled has a value
-  const baseTls = base.credentials.tls;
-  const overrideTls = override.credentials?.tls;
-  const mergedTls = baseTls || overrideTls ? {
-    enabled: overrideTls?.enabled ?? baseTls?.enabled ?? true,
-    certPath: overrideTls?.certPath ?? baseTls?.certPath,
-    keyPath: overrideTls?.keyPath ?? baseTls?.keyPath,
-    autoGenerate: overrideTls?.autoGenerate ?? baseTls?.autoGenerate
-  } : undefined;
-
   // Deprecation: ignore encryptionPassword from YAML config (env-var only)
   if (override.credentials && 'encryptionPassword' in override.credentials) {
     console.warn('Warning: credentials.encryptionPassword in config.yaml is deprecated and ignored. Use AQUAMAN_ENCRYPTION_PASSWORD env var instead.');
@@ -162,7 +129,6 @@ function mergeConfig(
     credentials: {
       ...base.credentials,
       ...override.credentials,
-      tls: mergedTls
     },
     audit: {
       ...base.audit,

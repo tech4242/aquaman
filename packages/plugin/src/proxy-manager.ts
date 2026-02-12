@@ -2,22 +2,20 @@
  * Proxy process lifecycle manager
  *
  * Spawns and manages the aquaman proxy daemon as a separate process
- * for maximum credential isolation.
+ * for maximum credential isolation. Communicates via Unix domain socket.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import type { PluginConfig } from './config-schema.js';
 
 export interface ProxyConnectionInfo {
   ready: boolean;
-  port: number;
-  protocol: 'http' | 'https';
-  baseUrl: string;
+  socketPath: string;
   services: string[];
   backend: string;
-  token?: string;
   hostMap?: Record<string, string>;
 }
 
@@ -79,11 +77,8 @@ export class ProxyManager {
         return;
       }
 
-      // Build arguments
-      const args = [
-        'plugin-mode',
-        '--port', String(config.proxyPort || 8081)
-      ];
+      // Build arguments — UDS is the default, no --port needed
+      const args = ['plugin-mode'];
 
       // Spawn proxy process
       this.process = spawn(binaryPath, args, {
@@ -140,15 +135,7 @@ export class ProxyManager {
 
         if (!this.connectionInfo) {
           const stderrText = stderr || stdout;
-          let error: Error;
-          if (stderrText.includes('EADDRINUSE') || stderrText.includes('already in use')) {
-            const port = config.proxyPort || 8081;
-            error = new Error(
-              `Proxy port ${port} is in use. Stop the existing instance: aquaman stop`
-            );
-          } else {
-            error = new Error(`Proxy exited with code ${code}: ${stderrText}`);
-          }
+          const error = new Error(`Proxy exited with code ${code}: ${stderrText}`);
           reject(error);
         }
       });
@@ -205,20 +192,10 @@ export class ProxyManager {
   }
 
   /**
-   * Get client authentication token
+   * Get socket path
    */
-  getClientToken(): string | null {
-    return this.connectionInfo?.token || null;
-  }
-
-  /**
-   * Get base URL for a service
-   */
-  getServiceUrl(service: string): string | null {
-    if (!this.connectionInfo) {
-      return null;
-    }
-    return `${this.connectionInfo.baseUrl}/${service}`;
+  getSocketPath(): string | null {
+    return this.connectionInfo?.socketPath || null;
   }
 
   /**

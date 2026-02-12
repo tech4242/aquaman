@@ -8,15 +8,16 @@ OpenClaw Gateway plugin for [aquaman](https://github.com/tech4242/aquaman) crede
 Agent / OpenClaw Gateway              Aquaman Proxy
 ┌──────────────────────┐              ┌──────────────────────┐
 │                      │              │                      │
-│  ANTHROPIC_BASE_URL  │──request────>│  Keychain / 1Pass /  │
-│  = localhost:8081    │              │  Vault / Encrypted   │
-│                      │<─response────│                      │
-│  fetch() interceptor │──channel────>│  + Auth injected:    │
-│  redirects channel   │   traffic    │    header / url-path │
+│  ANTHROPIC_BASE_URL  │══ Unix ════>│  Keychain / 1Pass /  │
+│  = aquaman.local     │   Domain    │  Vault / Encrypted   │
+│                      │<═ Socket ═══│                      │
+│  fetch() interceptor │══ (UDS) ══=>│  + Auth injected:    │
+│  redirects channel   │              │    header / url-path │
 │  API traffic         │              │    basic / oauth     │
 │                      │              │                      │
-│  No credentials.     │              │                      │
-│  Nothing to steal.   │              │                      │
+│  No credentials.     │  ~/.aquaman/ │                      │
+│  No open ports.      │  proxy.sock  │                      │
+│  Nothing to steal.   │  (chmod 600) │                      │
 └──────────────────────┘              └───┬──────────┬───────┘
                                          │          │
                                          │          ▼
@@ -28,7 +29,7 @@ Agent / OpenClaw Gateway              Aquaman Proxy
                                slack.com/api  ...
 ```
 
-This plugin makes the left side work. It routes all LLM and channel API traffic through the aquaman proxy so credentials never enter the Gateway process.
+This plugin makes the left side work. It routes all LLM and channel API traffic through the aquaman proxy via Unix domain socket so credentials never enter the Gateway process. No TCP port is opened — traffic flows through `~/.aquaman/proxy.sock`.
 
 ## Quick Start
 
@@ -54,12 +55,10 @@ Troubleshooting: `aquaman doctor`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `mode` | `"embedded"` \| `"proxy"` | `"embedded"` | Isolation mode |
 | `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` \| `"keepassxc"` | `"keychain"` | Credential store |
 | `services` | `string[]` | `["anthropic", "openai"]` | Services to proxy |
-| `proxyPort` | `number` | `8081` | Proxy listen port |
 
-> Advanced settings (TLS, audit, vault) go in `~/.aquaman/config.yaml`.
+> Advanced settings (audit, vault) go in `~/.aquaman/config.yaml`.
 
 ## Security Audit Note
 

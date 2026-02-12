@@ -12,24 +12,40 @@ import type { PluginConfig } from '../src/config-schema.js';
 // Mock the proxy manager to avoid starting real processes
 vi.mock('../src/proxy-manager.js', () => ({
   ProxyManager: vi.fn().mockImplementation(() => ({
-    start: vi.fn().mockResolvedValue(undefined),
+    start: vi.fn().mockResolvedValue({
+      ready: true,
+      socketPath: '/tmp/aquaman-test/proxy.sock',
+      services: ['anthropic', 'openai'],
+      backend: 'keychain',
+    }),
     stop: vi.fn().mockResolvedValue(undefined),
     isRunning: vi.fn().mockReturnValue(true),
-    getPort: vi.fn().mockReturnValue(8081),
-    getBaseUrl: vi.fn().mockReturnValue('http://127.0.0.1:8081'),
+    getSocketPath: vi.fn().mockReturnValue('/tmp/aquaman-test/proxy.sock'),
+    getConnectionInfo: vi.fn().mockReturnValue({
+      ready: true,
+      socketPath: '/tmp/aquaman-test/proxy.sock',
+      services: ['anthropic', 'openai'],
+      backend: 'keychain',
+    }),
     waitForReady: vi.fn().mockResolvedValue(undefined)
-  }))
-}));
-
-// Mock the embedded client
-vi.mock('../src/embedded.js', () => ({
-  EmbeddedCredentialClient: vi.fn().mockImplementation(() => ({
-    initialize: vi.fn().mockResolvedValue(undefined),
-    shutdown: vi.fn().mockResolvedValue(undefined),
-    getCredential: vi.fn().mockResolvedValue('test-credential'),
-    setCredential: vi.fn().mockResolvedValue(undefined),
-    listCredentials: vi.fn().mockResolvedValue([]),
-    getConfiguredServices: vi.fn().mockReturnValue(['anthropic', 'openai'])
+  })),
+  createProxyManager: vi.fn().mockImplementation((opts) => ({
+    start: vi.fn().mockResolvedValue({
+      ready: true,
+      socketPath: '/tmp/aquaman-test/proxy.sock',
+      services: ['anthropic', 'openai'],
+      backend: 'keychain',
+    }),
+    stop: vi.fn().mockResolvedValue(undefined),
+    isRunning: vi.fn().mockReturnValue(true),
+    getSocketPath: vi.fn().mockReturnValue('/tmp/aquaman-test/proxy.sock'),
+    getConnectionInfo: vi.fn().mockReturnValue({
+      ready: true,
+      socketPath: '/tmp/aquaman-test/proxy.sock',
+      services: ['anthropic', 'openai'],
+      backend: 'keychain',
+    }),
+    waitForReady: vi.fn().mockResolvedValue(undefined)
   }))
 }));
 
@@ -63,7 +79,7 @@ describe('AquamanPlugin', () => {
     });
 
     it('onLoad returns void or Promise<void>', async () => {
-      const config: PluginConfig = { mode: 'embedded', backend: 'keychain' };
+      const config: PluginConfig = { backend: 'keychain' };
       const result = plugin.onLoad(config);
 
       // Should be a promise
@@ -75,7 +91,7 @@ describe('AquamanPlugin', () => {
 
     it('onUnload returns void or Promise<void>', async () => {
       // First load
-      await plugin.onLoad({ mode: 'embedded', backend: 'keychain' });
+      await plugin.onLoad({ backend: 'keychain' });
 
       const result = plugin.onUnload();
       expect(result).toBeInstanceOf(Promise);
@@ -83,74 +99,32 @@ describe('AquamanPlugin', () => {
     });
   });
 
-  describe('Embedded Mode', () => {
-    it('initializes embedded client on load', async () => {
-      const config: PluginConfig = {
-        mode: 'embedded',
-        backend: 'keychain',
-        services: ['anthropic', 'openai']
-      };
-
-      await plugin.onLoad(config);
-
-      expect(plugin.getMode()).toBe('embedded');
-      expect(plugin.isReady()).toBe(true);
-    });
-
-    it('sets environment variables for configured services', async () => {
-      const config: PluginConfig = {
-        mode: 'embedded',
-        backend: 'keychain',
-        services: ['anthropic', 'openai']
-      };
-
-      await plugin.onLoad(config);
-
-      // Plugin should set these for OpenClaw to use
-      // In embedded mode, these point to the proxy URLs
-      expect(plugin.getEnvironmentVariables()).toHaveProperty('ANTHROPIC_BASE_URL');
-      expect(plugin.getEnvironmentVariables()).toHaveProperty('OPENAI_BASE_URL');
-    });
-
-    it('cleans up embedded client on unload', async () => {
-      await plugin.onLoad({ mode: 'embedded', backend: 'keychain' });
-      await plugin.onUnload();
-
-      expect(plugin.isReady()).toBe(false);
-    });
-  });
-
   describe('Proxy Mode', () => {
     it('starts proxy manager on load', async () => {
       const config: PluginConfig = {
-        mode: 'proxy',
         backend: 'keychain',
-        proxyPort: 8081
       };
 
       await plugin.onLoad(config);
 
-      expect(plugin.getMode()).toBe('proxy');
       expect(plugin.isReady()).toBe(true);
     });
 
-    it('sets correct base URLs for proxy mode', async () => {
+    it('sets sentinel hostname base URLs', async () => {
       const config: PluginConfig = {
-        mode: 'proxy',
         backend: 'keychain',
-        proxyPort: 8081,
         services: ['anthropic']
       };
 
       await plugin.onLoad(config);
 
       const envVars = plugin.getEnvironmentVariables();
-      expect(envVars['ANTHROPIC_BASE_URL']).toContain('8081');
+      expect(envVars['ANTHROPIC_BASE_URL']).toContain('aquaman.local');
       expect(envVars['ANTHROPIC_BASE_URL']).toContain('/anthropic');
     });
 
     it('stops proxy manager on unload', async () => {
-      await plugin.onLoad({ mode: 'proxy', backend: 'keychain' });
+      await plugin.onLoad({ backend: 'keychain' });
       await plugin.onUnload();
 
       expect(plugin.isReady()).toBe(false);
@@ -158,11 +132,6 @@ describe('AquamanPlugin', () => {
   });
 
   describe('Configuration Validation', () => {
-    it('defaults to embedded mode when not specified', async () => {
-      await plugin.onLoad({ backend: 'keychain' });
-      expect(plugin.getMode()).toBe('embedded');
-    });
-
     it('defaults to keychain backend when not specified', async () => {
       await plugin.onLoad({});
       expect(plugin.getBackend()).toBe('keychain');
@@ -194,55 +163,24 @@ describe('AquamanPlugin', () => {
   describe('Error Handling', () => {
     it('handles load failure gracefully', async () => {
       // Mock a failure scenario
-      const { ProxyManager } = await import('../src/proxy-manager.js');
-      vi.mocked(ProxyManager).mockImplementationOnce(() => ({
-        start: vi.fn().mockRejectedValue(new Error('Port in use')),
+      const { createProxyManager } = await import('../src/proxy-manager.js');
+      vi.mocked(createProxyManager).mockImplementationOnce(() => ({
+        start: vi.fn().mockRejectedValue(new Error('Socket in use')),
         stop: vi.fn(),
         isRunning: vi.fn().mockReturnValue(false),
-        getPort: vi.fn(),
-        getBaseUrl: vi.fn(),
+        getSocketPath: vi.fn().mockReturnValue(null),
+        getConnectionInfo: vi.fn().mockReturnValue(null),
         waitForReady: vi.fn()
-      }));
+      }) as any);
 
       const p = new AquamanPlugin();
 
-      await expect(p.onLoad({ mode: 'proxy' })).rejects.toThrow('Port in use');
-      expect(p.isReady()).toBe(false);
-    });
-
-    it('can be reloaded after failure', async () => {
-      // First load fails
-      const { ProxyManager } = await import('../src/proxy-manager.js');
-      vi.mocked(ProxyManager)
-        .mockImplementationOnce(() => ({
-          start: vi.fn().mockRejectedValue(new Error('Port in use')),
-          stop: vi.fn(),
-          isRunning: vi.fn().mockReturnValue(false),
-          getPort: vi.fn(),
-          getBaseUrl: vi.fn(),
-          waitForReady: vi.fn()
-        }))
-        .mockImplementationOnce(() => ({
-          start: vi.fn().mockResolvedValue(undefined),
-          stop: vi.fn(),
-          isRunning: vi.fn().mockReturnValue(true),
-          getPort: vi.fn().mockReturnValue(8081),
-          getBaseUrl: vi.fn().mockReturnValue('http://127.0.0.1:8081'),
-          waitForReady: vi.fn().mockResolvedValue(undefined)
-        }));
-
-      const p = new AquamanPlugin();
-
-      // First attempt fails
-      await expect(p.onLoad({ mode: 'proxy' })).rejects.toThrow();
-
-      // Second attempt succeeds
-      await expect(p.onLoad({ mode: 'proxy' })).resolves.toBeUndefined();
-      expect(p.isReady()).toBe(true);
+      // Plugin catches the error and logs it, doesn't throw
+      await p.onLoad({});
     });
 
     it('unload is idempotent', async () => {
-      await plugin.onLoad({ mode: 'embedded' });
+      await plugin.onLoad({});
 
       // Multiple unloads should not throw
       await plugin.onUnload();

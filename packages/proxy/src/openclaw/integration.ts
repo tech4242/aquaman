@@ -11,7 +11,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { generateOpenClawEnv, writeEnvFile, appendToShellRc, formatEnvForDisplay } from './env-writer.js';
-import type { WrapperConfig, ServiceConfig } from 'aquaman-core';
+import type { WrapperConfig, ServiceConfig } from '../core/index.js';
 
 export interface OpenClawInfo {
   installed: boolean;
@@ -72,20 +72,12 @@ export class OpenClawIntegration {
   }
 
   /**
-   * Configure environment variables for OpenClaw
+   * Configure environment variables for OpenClaw.
+   * Uses sentinel hostname (aquaman.local) — the plugin's HTTP interceptor
+   * routes these through the UDS proxy.
    */
-  async configureOpenClaw(proxyPort: number, tlsEnabled: boolean): Promise<Record<string, string>> {
-    const certPath = this.config.credentials.tls?.certPath;
-
-    const env = generateOpenClawEnv({
-      proxyHost: '127.0.0.1',
-      proxyPort,
-      tlsEnabled,
-      services: this.services,
-      nodeExtraCaCerts: tlsEnabled && certPath && fs.existsSync(certPath) ? certPath : undefined
-    });
-
-    return env;
+  async configureOpenClaw(): Promise<Record<string, string>> {
+    return generateOpenClawEnv({ services: this.services });
   }
 
   /**
@@ -123,10 +115,7 @@ export class OpenClawIntegration {
       );
     }
 
-    const env = await this.configureOpenClaw(
-      this.config.credentials.proxyPort,
-      this.config.credentials.tls?.enabled ?? false
-    );
+    const env = await this.configureOpenClaw();
 
     const binaryPath = this.config.openclaw.binaryPath || 'openclaw';
     const args = options.args || [];
@@ -144,11 +133,7 @@ export class OpenClawIntegration {
    * Get environment variables for display (dry-run mode)
    */
   async getEnvForDisplay(): Promise<string> {
-    const env = await this.configureOpenClaw(
-      this.config.credentials.proxyPort,
-      this.config.credentials.tls?.enabled ?? false
-    );
-
+    const env = await this.configureOpenClaw();
     return formatEnvForDisplay(env);
   }
 }

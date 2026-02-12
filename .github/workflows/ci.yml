@@ -28,8 +28,6 @@ jobs:
         run: |
           rm -f package-lock.json
           npm install --legacy-peer-deps
-      - name: Build core package
-        run: npm run build:core
       - run: npm run lint
       - run: npm run typecheck
 
@@ -58,8 +56,6 @@ jobs:
         run: |
           rm -f package-lock.json
           npm install --legacy-peer-deps
-      - name: Build core package
-        run: npm run build:core
       - run: npm test
 
   coverage:
@@ -83,8 +79,6 @@ jobs:
         run: |
           rm -f package-lock.json
           npm install --legacy-peer-deps
-      - name: Build core package
-        run: npm run build:core
       - run: npm run test:coverage
       - uses: codecov/codecov-action@v5
         with:
@@ -125,6 +119,36 @@ jobs:
       - name: Install openclaw
         if: steps.cache-openclaw.outputs.cache-hit != 'true'
         run: npm install -g openclaw@2026.2.9
-      - name: Build core package
-        run: npm run build:core
       - run: npx vitest run test/e2e/openclaw-plugin.test.ts
+
+      - name: Install plugin for security audit
+        run: |
+          mkdir -p ~/.openclaw/extensions/aquaman-plugin
+          cp packages/plugin/index.ts ~/.openclaw/extensions/aquaman-plugin/
+          cp packages/plugin/package.json ~/.openclaw/extensions/aquaman-plugin/
+          cp packages/plugin/openclaw.plugin.json ~/.openclaw/extensions/aquaman-plugin/
+          cp -r packages/plugin/src ~/.openclaw/extensions/aquaman-plugin/src/
+
+      - name: OpenClaw security audit
+        run: |
+          OUTPUT=$(openclaw security audit --deep 2>&1) || true
+          echo "$OUTPUT"
+
+          # Filter to aquaman-plugin findings only
+          AQUAMAN_FINDINGS=$(echo "$OUTPUT" | grep -i "aquaman-plugin" || true)
+
+          if [ -z "$AQUAMAN_FINDINGS" ]; then
+            echo "No aquaman-plugin findings"
+            exit 0
+          fi
+
+          # Allow ONLY dangerous-exec on proxy-manager.ts
+          UNEXPECTED=$(echo "$AQUAMAN_FINDINGS" | grep -v "dangerous-exec.*proxy-manager" || true)
+
+          if [ -n "$UNEXPECTED" ]; then
+            echo "UNEXPECTED scanner findings:"
+            echo "$UNEXPECTED"
+            exit 1
+          fi
+
+          echo "Only expected finding: dangerous-exec on proxy-manager.ts"

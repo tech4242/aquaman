@@ -115,7 +115,7 @@ describe('aquaman setup E2E', () => {
         const config = JSON.parse(readFileSync(openclawJsonPath, 'utf-8'));
         expect(config.plugins?.entries?.['aquaman-plugin']).toBeDefined();
         expect(config.plugins.entries['aquaman-plugin'].enabled).toBe(true);
-        expect(config.plugins.entries['aquaman-plugin'].config.mode).toBe('proxy');
+        expect(config.plugins.entries['aquaman-plugin'].config.backend).toBeDefined();
       }
     }, TEST_TIMEOUT);
 

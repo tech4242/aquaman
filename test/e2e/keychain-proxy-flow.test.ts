@@ -16,6 +16,7 @@ import { CredentialProxy, createCredentialProxy, createServiceRegistry } from 'a
 import type { CredentialStore } from 'aquaman-core';
 import { MockUpstream, createMockUpstream } from '../helpers/mock-upstream.js';
 import type { RequestInfo } from 'aquaman-proxy';
+import { tmpSocketPath, cleanupSocket, udsFetch } from '../helpers/uds-proxy.js';
 
 // Check if keytar is available before defining tests
 let keychainAvailable = false;
@@ -130,7 +131,7 @@ describe.skipIf(!keychainAvailable)('Keychain Proxy Flow E2E', () => {
   let upstream: MockUpstream;
   let store: TestKeychainStore;
   let requestLog: RequestInfo[];
-  let proxyPort: number;
+  let socketPath: string;
 
   beforeEach(async () => {
     upstream = createMockUpstream();
@@ -142,6 +143,7 @@ describe.skipIf(!keychainAvailable)('Keychain Proxy Flow E2E', () => {
     await store.set('anthropic', 'api_key', TEST_ANTHROPIC_KEY);
 
     requestLog = [];
+    socketPath = tmpSocketPath();
 
     const registry = createServiceRegistry();
     registry.override('anthropic', {
@@ -152,7 +154,7 @@ describe.skipIf(!keychainAvailable)('Keychain Proxy Flow E2E', () => {
     });
 
     proxy = createCredentialProxy({
-      port: 0,
+      socketPath,
       store,
       serviceRegistry: registry,
       allowedServices: ['anthropic', 'twilio'],
@@ -160,7 +162,6 @@ describe.skipIf(!keychainAvailable)('Keychain Proxy Flow E2E', () => {
     });
 
     await proxy.start();
-    proxyPort = proxy.getPort();
   });
 
   afterEach(async () => {
@@ -168,16 +169,17 @@ describe.skipIf(!keychainAvailable)('Keychain Proxy Flow E2E', () => {
     await upstream.stop();
     // Always clean up test keychain entries
     await store.cleanup();
+    cleanupSocket(socketPath);
   });
 
   it('injects credential from macOS Keychain into upstream request', async () => {
-    const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
+    const response = await udsFetch(socketPath, '/anthropic/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: 'test', max_tokens: 1, messages: [] }),
     });
 
-    expect(response.ok).toBe(true);
+    expect(response.status).toBe(200);
 
     const lastRequest = upstream.getLastRequest();
     expect(lastRequest).toBeDefined();
@@ -188,7 +190,7 @@ describe.skipIf(!keychainAvailable)('Keychain Proxy Flow E2E', () => {
     // Delete the credential we stored in beforeEach
     await store.delete('anthropic', 'api_key');
 
-    const response = await fetch(`http://127.0.0.1:${proxyPort}/anthropic/v1/messages`, {
+    const response = await udsFetch(socketPath, '/anthropic/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: 'test', max_tokens: 1, messages: [] }),
@@ -201,11 +203,11 @@ describe.skipIf(!keychainAvailable)('Keychain Proxy Flow E2E', () => {
     await store.set('twilio', 'account_sid', TEST_TWILIO_SID);
     await store.set('twilio', 'auth_token', TEST_TWILIO_TOKEN);
 
-    const response = await fetch(`http://127.0.0.1:${proxyPort}/twilio/2010-04-01/Accounts`, {
+    const response = await udsFetch(socketPath, '/twilio/2010-04-01/Accounts', {
       method: 'GET',
     });
 
-    expect(response.ok).toBe(true);
+    expect(response.status).toBe(200);
 
     const lastRequest = upstream.getLastRequest();
     expect(lastRequest).toBeDefined();

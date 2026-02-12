@@ -8,15 +8,16 @@ Credential isolation proxy and CLI for [aquaman](https://github.com/tech4242/aqu
 Agent / OpenClaw Gateway              Aquaman Proxy
 ┌──────────────────────┐              ┌──────────────────────┐
 │                      │              │                      │
-│  ANTHROPIC_BASE_URL  │──request────>│  Keychain / 1Pass /  │
-│  = localhost:8081    │              │  Vault / Encrypted   │
-│                      │<─response────│                      │
-│  fetch() interceptor │──channel────>│  + Auth injected:    │
-│  redirects channel   │   traffic    │    header / url-path │
+│  ANTHROPIC_BASE_URL  │══ Unix ════>│  Keychain / 1Pass /  │
+│  = aquaman.local     │   Domain    │  Vault / Encrypted   │
+│                      │<═ Socket ═══│                      │
+│  fetch() interceptor │══ (UDS) ══=>│  + Auth injected:    │
+│  redirects channel   │              │    header / url-path │
 │  API traffic         │              │    basic / oauth     │
 │                      │              │                      │
-│  No credentials.     │              │                      │
-│  Nothing to steal.   │              │                      │
+│  No credentials.     │  ~/.aquaman/ │                      │
+│  No open ports.      │  proxy.sock  │                      │
+│  Nothing to steal.   │  (chmod 600) │                      │
 └──────────────────────┘              └───┬──────────┬───────┘
                                          │          │
                                          │          ▼
@@ -28,7 +29,7 @@ Agent / OpenClaw Gateway              Aquaman Proxy
                                slack.com/api  ...
 ```
 
-This package is the right side. A reverse proxy that intercepts API requests and injects credentials from secure backends. 23 builtin services, four auth modes.
+This package is the right side. A reverse proxy that listens on a Unix domain socket (`~/.aquaman/proxy.sock`) and injects credentials from secure backends. No TCP port, no network exposure. 23 builtin services, four auth modes.
 
 ## Quick Start
 
@@ -54,7 +55,7 @@ Standalone:
 npm install -g aquaman-proxy
 aquaman init
 aquaman credentials add anthropic api_key
-aquaman daemon
+aquaman daemon                               # listens on ~/.aquaman/proxy.sock
 ```
 
 Troubleshooting: `aquaman doctor`
