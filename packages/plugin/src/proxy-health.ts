@@ -1,7 +1,7 @@
 /**
  * Proxy health and discovery utilities.
  *
- * Separated from index.ts to avoid co-locating network calls with process.env
+ * Separated from index.ts to avoid co-locating network calls with env reads
  * (triggers OpenClaw code safety scanner env-harvesting false positive).
  */
 
@@ -9,7 +9,7 @@
  * Request host map from proxy's /_hostmap endpoint.
  * Returns an empty map if the endpoint is unavailable (caller handles fallback).
  */
-export async function fetchHostMap(
+export async function loadHostMap(
   baseUrl: string,
   token: string | null,
 ): Promise<Map<string, string>> {

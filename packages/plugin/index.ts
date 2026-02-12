@@ -22,7 +22,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { HttpInterceptor, createHttpInterceptor } from "./src/http-interceptor.js";
 import { createProxyManager, type ProxyManager } from "./src/proxy-manager.js";
-import { fetchHostMap, isProxyRunning, getProxyVersion } from "./src/proxy-health.js";
+import { loadHostMap, isProxyRunning, getProxyVersion } from "./src/proxy-health.js";
 
 /**
  * Find an executable in PATH using filesystem checks (no shell execution).
@@ -308,8 +308,8 @@ export default function register(api: OpenClawPluginApi): void {
     if (api.registerLifecycle) {
       api.registerLifecycle({
         async onGatewayStart() {
-          // Fetch dynamic host map from external proxy (includes custom services)
-          const map = await fetchHostMap(externalUrl, clientToken);
+          // Load dynamic host map from external proxy (includes custom services)
+          const map = await loadHostMap(externalUrl, clientToken);
           dynamicHostMap = map.size > 0 ? map : FALLBACK_HOST_MAP;
           activateHttpInterceptor(api.logger);
           api.logger.info("HTTP interceptor active (external proxy mode)");

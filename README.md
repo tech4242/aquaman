@@ -110,6 +110,10 @@ The agent only knows a localhost URL. It never sees a key.
 
 **Important:** `encrypted-file` is a last-resort backend for headless Linux/CI environments without a native keyring. For better security, install `libsecret-1-dev` (for GNOME Keyring) or use 1Password/Vault.
 
+## Security Audit
+
+`openclaw security audit --deep` will report one `dangerous-exec` finding for the plugin. This is expected — spawning the proxy as a separate process is how aquaman keeps credentials out of the agent. `aquaman setup` adds the plugin to `plugins.allow` automatically so OpenClaw knows you trust it.
+
 ## Why Aquaman
 
 **Security** — Process-level credential isolation, tamper-evident audit logs with SHA-256 hash chains

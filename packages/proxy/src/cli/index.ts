@@ -841,6 +841,12 @@ program
           if (!openclawConfig.plugins) openclawConfig.plugins = {};
           if (!openclawConfig.plugins.entries) openclawConfig.plugins.entries = {};
 
+          // Set plugins.allow so OpenClaw trusts the plugin (avoids extensions_no_allowlist audit warning)
+          if (!openclawConfig.plugins.allow) openclawConfig.plugins.allow = [];
+          if (!openclawConfig.plugins.allow.includes('aquaman-plugin')) {
+            openclawConfig.plugins.allow.push('aquaman-plugin');
+          }
+
           openclawConfig.plugins.entries['aquaman-plugin'] = {
             enabled: true,
             config: {
@@ -1087,7 +1093,26 @@ program
         issues++;
       }
 
-      // 8. Auth profiles exist
+      // 8. plugins.allow includes aquaman-plugin
+      if (fs.existsSync(openclawJsonPath)) {
+        try {
+          const openclawConfig = JSON.parse(fs.readFileSync(openclawJsonPath, 'utf-8'));
+          const allowList: string[] = openclawConfig.plugins?.allow || [];
+          if (allowList.includes('aquaman-plugin')) {
+            console.log(`  \u2713 ${aqua('Plugin')} in plugins.allow trust list`);
+          } else {
+            console.log(`  \u2717 ${aqua('Plugin')} not in plugins.allow trust list`);
+            console.log('    \u2192 Run: aquaman setup (or add "aquaman-plugin" to plugins.allow in openclaw.json)');
+            console.log('    Note: "openclaw security audit" will show a dangerous-exec finding for proxy-manager.ts.');
+            console.log('    This is expected \u2014 the plugin spawns the proxy as a separate process for credential isolation.');
+            issues++;
+          }
+        } catch {
+          // openclaw.json invalid — already reported above
+        }
+      }
+
+      // 9. Auth profiles exist
       const profilesPath = path.join(openclawStateDir, 'agents', 'main', 'agent', 'auth-profiles.json');
       if (fs.existsSync(profilesPath)) {
         console.log(`  \u2713 ${aqua('Auth profiles')} exist`);
@@ -1098,7 +1123,7 @@ program
       }
     }
 
-    // 9. Unmigrated plaintext credentials
+    // 10. Unmigrated plaintext credentials
     if (openclawDetected) {
       try {
         const { extractCredentials, extractPluginCredentials, scanCredentialsDir } = await import('../migration/openclaw-migrator.js');

@@ -61,6 +61,10 @@ Troubleshooting: `aquaman doctor`
 
 > Advanced settings (TLS, audit, vault) go in `~/.aquaman/config.yaml`.
 
+## Security Audit Note
+
+Running `openclaw security audit --deep` will show a `dangerous-exec` finding for this plugin. That's expected — the plugin spawns the aquaman proxy as a separate process, which is the whole point of credential isolation. `aquaman setup` adds the plugin to your `plugins.allow` trust list automatically.
+
 ## Documentation
 
 See the [main README](https://github.com/tech4242/aquaman#readme) for architecture, Docker deployment, and manual testing.
