@@ -74,6 +74,48 @@ const isProcessRunning = (pid: number): boolean => {
   }
 };
 
+/** Prompt for secret input with echo suppression (TTY) or plain readline (pipe) */
+async function promptSecretInput(prompt: string): Promise<string> {
+  const readline = await import('node:readline');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+  if (process.stdin.isTTY) {
+    return new Promise((resolve) => {
+      process.stdout.write(prompt);
+      const stdin = process.stdin;
+      stdin.setRawMode(true);
+      stdin.resume();
+      let input = '';
+      const onData = (data: Buffer) => {
+        const char = data.toString();
+        if (char === '\n' || char === '\r') {
+          stdin.setRawMode(false);
+          stdin.removeListener('data', onData);
+          stdin.pause();
+          rl.close();
+          process.stdout.write('\n');
+          resolve(input.trim());
+        } else if (char === '\x7f' || char === '\b') {
+          input = input.slice(0, -1);
+        } else if (char === '\x03') {
+          stdin.setRawMode(false);
+          process.exit(0);
+        } else {
+          input += char;
+        }
+      };
+      stdin.on('data', onData);
+    });
+  }
+
+  return new Promise((resolve) => {
+    rl.question(prompt, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
 const program = new Command();
 
 program
@@ -499,12 +541,12 @@ program
     }
 
     const config = getDefaultConfig();
-    fs.writeFileSync(configPath, yamlStringify(config), 'utf-8');
+    fs.writeFileSync(configPath, yamlStringify(config), { encoding: 'utf-8', mode: 0o600 });
     console.log(`Created ${configPath}`);
 
     // Create audit directory
     const auditDir = path.join(getConfigDir(), 'audit');
-    fs.mkdirSync(auditDir, { recursive: true });
+    fs.mkdirSync(auditDir, { recursive: true, mode: 0o700 });
     console.log(`Created ${auditDir}`);
 
     console.log('\nNext steps:');
@@ -622,12 +664,8 @@ program
           console.error('  KeePassXC backend requires AQUAMAN_KEEPASS_PASSWORD environment variable.');
           process.exit(1);
         } else {
-          const readline = await import('node:readline');
-          const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-          const password = await new Promise<string>((resolve) => {
-            rl.question('  ? KeePassXC master password: ', resolve);
-          });
-          rl.close();
+          // Use hidden input to avoid echoing the master password
+          const password = await promptSecretInput('  ? KeePassXC master password: ');
           if (!password.trim()) {
             console.error('  KeePassXC backend requires a master password.');
             process.exit(1);
@@ -641,11 +679,11 @@ program
     ensureConfigDir();
     const config = getDefaultConfig();
     config.credentials.backend = backend;
-    fs.writeFileSync(configPath, yamlStringify(config), 'utf-8');
+    fs.writeFileSync(configPath, yamlStringify(config), { encoding: 'utf-8', mode: 0o600 });
 
     // Create audit directory
     const auditDir = path.join(configDir, 'audit');
-    fs.mkdirSync(auditDir, { recursive: true });
+    fs.mkdirSync(auditDir, { recursive: true, mode: 0o700 });
 
     // 3. Prompt for API keys (or read from env in non-interactive mode)
     let store;
@@ -840,8 +878,8 @@ program
             }
 
             const profilesDir = path.dirname(profilesPath);
-            fs.mkdirSync(profilesDir, { recursive: true });
-            fs.writeFileSync(profilesPath, JSON.stringify({ version: 1, profiles, order }, null, 2));
+            fs.mkdirSync(profilesDir, { recursive: true, mode: 0o700 });
+            fs.writeFileSync(profilesPath, JSON.stringify({ version: 1, profiles, order }, null, 2), { mode: 0o600 });
             console.log('  \u2713 Auth profiles generated at ' + profilesPath);
           }
         }

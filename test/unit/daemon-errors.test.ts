@@ -70,3 +70,43 @@ describe('Actionable error responses', () => {
     expect(response.headers['content-type']).toBe('application/json');
   });
 });
+
+describe('Service name validation', () => {
+  let proxy: CredentialProxy;
+  let store: MemoryStore;
+  let socketPath: string;
+
+  beforeEach(async () => {
+    store = new MemoryStore();
+    socketPath = tmpSocketPath();
+
+    proxy = createCredentialProxy({
+      socketPath,
+      store,
+      serviceRegistry: createServiceRegistry(),
+      allowedServices: ['anthropic'],
+    });
+    await proxy.start();
+  });
+
+  afterEach(async () => {
+    await proxy.stop();
+    store.clear();
+    cleanupSocket(socketPath);
+  });
+
+  it('rejects path traversal in service name', async () => {
+    const res = await udsFetch(socketPath, '/../etc/passwd');
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects service names with special characters', async () => {
+    const res = await udsFetch(socketPath, '/sl@ck/api');
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects service names with null bytes', async () => {
+    const res = await udsFetch(socketPath, '/slack%00evil/api');
+    expect(res.status).toBe(404);
+  });
+});

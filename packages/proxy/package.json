@@ -1,6 +1,6 @@
 {
   "name": "aquaman-proxy",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Credential isolation proxy daemon for OpenClaw",
   "type": "module",
   "main": "dist/index.js",
@@ -29,6 +29,7 @@
   "keywords": [
     "aquaman",
     "openclaw",
+    "openclaw-plugin",
     "security",
     "credentials",
     "proxy"

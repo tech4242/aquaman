@@ -115,19 +115,20 @@ jobs:
           path: |
             /usr/local/lib/node_modules/openclaw
             /usr/local/bin/openclaw
-          key: openclaw-${{ runner.os }}-node24-2026.2.9
+          key: openclaw-${{ runner.os }}-node24-2026.2.15
       - name: Install openclaw
         if: steps.cache-openclaw.outputs.cache-hit != 'true'
-        run: npm install -g openclaw@2026.2.9
+        run: npm install -g openclaw@2026.2.15
       - run: npx vitest run test/e2e/openclaw-plugin.test.ts
 
       - name: Install plugin for security audit
         run: |
+          rm -rf ~/.openclaw/extensions/aquaman-plugin
           mkdir -p ~/.openclaw/extensions/aquaman-plugin
           cp packages/plugin/index.ts ~/.openclaw/extensions/aquaman-plugin/
           cp packages/plugin/package.json ~/.openclaw/extensions/aquaman-plugin/
           cp packages/plugin/openclaw.plugin.json ~/.openclaw/extensions/aquaman-plugin/
-          cp -r packages/plugin/src ~/.openclaw/extensions/aquaman-plugin/src/
+          cp -r packages/plugin/src ~/.openclaw/extensions/aquaman-plugin/src
           cd ~/.openclaw/extensions/aquaman-plugin && npm install --omit=dev --silent
 
       - name: OpenClaw security audit

@@ -208,22 +208,30 @@ describe('plugin-mode hostMap in startup JSON', () => {
       });
       child = proc;
 
-      let stdout = '';
-      const timeout = setTimeout(() => reject(new Error(`Timeout. stdout: ${stdout}`)), 20_000);
+      let buffer = '';
+      let resolved = false;
+      const timeout = setTimeout(() => reject(new Error(`Timeout. buffer: ${buffer}`)), 20_000);
 
       proc.stdout!.on('data', (data: Buffer) => {
-        stdout += data.toString();
-        for (const line of stdout.split('\n')) {
+        if (resolved) return;
+        buffer += data.toString();
+
+        // Split into complete lines; keep the last (possibly incomplete) chunk
+        const parts = buffer.split('\n');
+        buffer = parts.pop()!; // keep incomplete trailing chunk
+
+        for (const line of parts) {
           const trimmed = line.trim();
           if (trimmed.startsWith('{') && trimmed.includes('"ready"')) {
             try {
               const parsed = JSON.parse(trimmed);
               if (parsed.ready === true) {
+                resolved = true;
                 clearTimeout(timeout);
                 resolve(parsed);
                 return;
               }
-            } catch { /* keep buffering */ }
+            } catch { /* not valid JSON yet */ }
           }
         }
       });
@@ -231,7 +239,7 @@ describe('plugin-mode hostMap in startup JSON', () => {
       proc.on('error', (err) => { clearTimeout(timeout); reject(err); });
       proc.on('exit', (code) => {
         clearTimeout(timeout);
-        reject(new Error(`Exited with ${code}. stdout: ${stdout}`));
+        if (!resolved) reject(new Error(`Exited with ${code}. buffer: ${buffer}`));
       });
     });
 

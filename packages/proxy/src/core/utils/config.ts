@@ -148,12 +148,12 @@ function mergeConfig(
 export function ensureConfigDir(): void {
   const configDir = getConfigDir();
   if (!fs.existsSync(configDir)) {
-    fs.mkdirSync(configDir, { recursive: true });
+    fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
   }
 }
 
 export function saveConfig(config: WrapperConfig): void {
   ensureConfigDir();
   const configPath = getConfigPath();
-  fs.writeFileSync(configPath, stringifyYaml(config), 'utf-8');
+  fs.writeFileSync(configPath, stringifyYaml(config), { encoding: 'utf-8', mode: 0o600 });
 }

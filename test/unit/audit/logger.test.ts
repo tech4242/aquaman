@@ -36,6 +36,19 @@ describe('AuditLogger', () => {
       expect(fs.existsSync(path.join(testDir, 'integrity'))).toBe(true);
     });
 
+    it('should create directories with mode 0o700', async () => {
+      const freshDir = path.join(os.tmpdir(), `aquaman-perm-test-${Date.now()}`);
+      try {
+        const freshLogger = createAuditLogger({ logDir: freshDir, enabled: true });
+        await freshLogger.initialize();
+        expect(fs.statSync(freshDir).mode & 0o777).toBe(0o700);
+        expect(fs.statSync(path.join(freshDir, 'archive')).mode & 0o777).toBe(0o700);
+        expect(fs.statSync(path.join(freshDir, 'integrity')).mode & 0o777).toBe(0o700);
+      } finally {
+        fs.rmSync(freshDir, { recursive: true, force: true });
+      }
+    });
+
     it('should recover state from existing log', async () => {
       // Write some entries
       await logger.logToolCall('session1', 'agent1', 'bash', { command: 'ls' });
