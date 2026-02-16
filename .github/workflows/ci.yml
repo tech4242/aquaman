@@ -131,6 +131,25 @@ jobs:
           cp -r packages/plugin/src ~/.openclaw/extensions/aquaman-plugin/src
           cd ~/.openclaw/extensions/aquaman-plugin && npm install --omit=dev --silent
 
+          # Write openclaw.json with plugin allowlist (but no tools.profile —
+          # that's the operator's choice, not ours to impose)
+          cat > ~/.openclaw/openclaw.json << 'EOF'
+          {
+            "plugins": {
+              "allow": ["aquaman-plugin"],
+              "entries": {
+                "aquaman-plugin": {
+                  "enabled": true,
+                  "config": {
+                    "backend": "encrypted-file",
+                    "services": ["anthropic", "openai"]
+                  }
+                }
+              }
+            }
+          }
+          EOF
+
       - name: OpenClaw security audit
         run: |
           OUTPUT=$(openclaw security audit --deep 2>&1) || true
@@ -144,10 +163,16 @@ jobs:
             exit 0
           fi
 
-          # Allow ONLY dangerous-exec on proxy-manager.ts
+          # Expected findings (not aquaman code issues):
+          # 1. dangerous-exec on proxy-manager.ts — true positive, plugin spawns proxy process
+          # 2. tools_reachable_permissive_policy — environment advisory, not a code vulnerability;
+          #    operator chooses their own tools.profile, aquaman should not force "coding" mode
           UNEXPECTED=$(echo "$AQUAMAN_FINDINGS" \
             | grep -v -e "dangerous-exec.*proxy-manager" \
             | grep -v -e "code_safety.*dangerous code patterns" \
+            | grep -v -e "tools_reachable_permissive_policy" \
+            | grep -v -e "Enabled extension plugins:" \
+            | grep -v -e "permissive tool policy" \
             || true)
 
           if [ -n "$UNEXPECTED" ]; then
@@ -156,4 +181,4 @@ jobs:
             exit 1
           fi
 
-          echo "Only expected finding: dangerous-exec on proxy-manager.ts"
+          echo "Only expected findings: dangerous-exec on proxy-manager.ts, tools_reachable_permissive_policy (env advisory)"

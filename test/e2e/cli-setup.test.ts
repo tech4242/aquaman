@@ -116,6 +116,7 @@ describe('aquaman setup E2E', () => {
         expect(config.plugins?.entries?.['aquaman-plugin']).toBeDefined();
         expect(config.plugins.entries['aquaman-plugin'].enabled).toBe(true);
         expect(config.plugins.entries['aquaman-plugin'].config.backend).toBeDefined();
+        expect(config.plugins?.allow).toContain('aquaman-plugin');
       }
     }, TEST_TIMEOUT);
 

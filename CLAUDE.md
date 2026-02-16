@@ -111,7 +111,13 @@ OpenClaw 2026.2.6+ includes a code safety scanner that checks plugin files for d
 
 There is no suppression mechanism (no inline annotations, no `.auditignore`). The only fix is to ensure trigger patterns don't co-exist in the same file.
 
-**Current state (v0.7.0, tested through 2026.2.15):** 1 expected finding: `dangerous-exec` on `proxy-manager.ts` (true positive — it spawns the proxy process). 0 env-harvesting findings. The scanner recursively scans `src/` and `dist/` subdirectories (since 2026.2.9).
+OpenClaw 2026.2.15+ also reports an environment-level advisory:
+
+- **`tools_reachable_permissive_policy`**: fires when any plugin is enabled and the default tool policy is permissive (no `tools.profile` set). This warns that agents could be prompt-injected into calling plugin tools (like `aquaman_status`) when handling untrusted input. This is the operator's configuration choice — aquaman should NOT force a restrictive profile. The fix is for the operator to set `"tools": { "profile": "coding" }` in `openclaw.json` if their agents handle untrusted input.
+
+There is no suppression mechanism for code findings (no inline annotations, no `.auditignore`). The only fix is to ensure trigger patterns don't co-exist in the same file.
+
+**Current state (v0.7.0, tested through 2026.2.15):** 2 expected findings: `dangerous-exec` on `proxy-manager.ts` (true positive — it spawns the proxy process), `tools_reachable_permissive_policy` (environment advisory — not a code issue). 0 env-harvesting findings. The scanner recursively scans `src/` and `dist/` subdirectories (since 2026.2.9).
 
 **Mitigations:**
 - `aquaman setup` auto-sets `plugins.allow: ["aquaman-plugin"]` in `openclaw.json` (resolves the `extensions_no_allowlist` audit finding)
