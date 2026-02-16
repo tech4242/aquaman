@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { execSync, spawnSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, cpSync, writeFileSync, rmSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
@@ -15,45 +15,30 @@ const PLUGIN_SRC = path.resolve(__dirname, '../../packages/plugin');
 
 let testStateDir: string;
 
-// Resolve the openclaw binary path once — avoids npx auto-install issues
-// and ensures we use a known installation.
-function resolveOpenClawPath(): string | null {
-  // Prefer node_modules/.bin (devDependency)
-  const localBin = path.resolve(__dirname, '../../node_modules/.bin/openclaw');
-  if (existsSync(localBin)) return localBin;
-  // Fall back to globally installed
-  try {
-    return execSync('which openclaw', { encoding: 'utf-8', stdio: 'pipe' }).trim();
-  } catch {
-    return null;
-  }
-}
-
-const OPENCLAW_BIN = resolveOpenClawPath();
-
+// Check if OpenClaw is available via npx
 function isOpenClawInstalled(): boolean {
-  return OPENCLAW_BIN !== null;
+  try {
+    execSync('npx openclaw --version', { stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Run openclaw with the temp state dir.
-// Uses spawnSync for reliable stdout/stderr capture without shell redirection.
+// Strips VITEST env var — OpenClaw 2026.2.x suppresses plugin output when
+// it detects a test runner environment.
 function runOpenClaw(args: string): string {
   const testBinDir = path.join(testStateDir, 'bin');
-  const result = spawnSync(OPENCLAW_BIN!, args.split(/\s+/), {
+  const { VITEST, ...env } = process.env;
+  return execSync(`npx openclaw ${args} 2>&1`, {
     encoding: 'utf-8',
     env: {
-      ...process.env,
+      ...env,
       OPENCLAW_STATE_DIR: testStateDir,
       PATH: `${testBinDir}:${process.env.PATH}`
-    },
-    timeout: 60_000,
+    }
   });
-  const output = (result.stdout || '') + (result.stderr || '');
-  if (!output.trim()) {
-    console.log('[openclaw-plugin.test] empty output diagnostics:',
-      JSON.stringify({ bin: OPENCLAW_BIN, args, status: result.status, signal: result.signal, error: String(result.error || '') }));
-  }
-  return output;
 }
 
 const OPENCLAW_AVAILABLE = isOpenClawInstalled();
