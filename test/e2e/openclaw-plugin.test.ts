@@ -15,10 +15,11 @@ const PLUGIN_SRC = path.resolve(__dirname, '../../packages/plugin');
 
 let testStateDir: string;
 
-// Check if OpenClaw is available via npx
+// Check if OpenClaw is globally installed (not via npx auto-install, which
+// can produce empty output on Linux CI).
 function isOpenClawInstalled(): boolean {
   try {
-    execSync('npx openclaw --version', { stdio: 'pipe' });
+    execSync('openclaw --version', { stdio: 'pipe' });
     return true;
   } catch {
     return false;
@@ -28,7 +29,7 @@ function isOpenClawInstalled(): boolean {
 // Run openclaw with the temp state dir
 function runOpenClaw(args: string): string {
   const testBinDir = path.join(testStateDir, 'bin');
-  return execSync(`npx openclaw ${args} 2>&1`, {
+  return execSync(`openclaw ${args} 2>&1`, {
     encoding: 'utf-8',
     env: {
       ...process.env,
