@@ -345,6 +345,50 @@ describe('OnePasswordStore', () => {
     });
   });
 
+  describe('metadata key sanitization', () => {
+    beforeEach(() => {
+      mockSpawnSync.mockImplementation((command, args) => {
+        if (command === 'which') {
+          return { status: 0, stdout: '/usr/local/bin/op\n', stderr: '', pid: 1, signal: null, output: [] };
+        }
+        if (args?.[0] === 'account') {
+          return { status: 0, stdout: '{}', stderr: '', pid: 2, signal: null, output: [] };
+        }
+        if (args?.[0] === 'vault' && args?.[1] === 'get') {
+          return { status: 0, stdout: '{}', stderr: '', pid: 3, signal: null, output: [] };
+        }
+        if (args?.[0] === 'item' && args?.[1] === 'get') {
+          return { status: 1, stdout: '', stderr: 'not found', pid: 4, signal: null, output: [] };
+        }
+        if (args?.[0] === 'item' && args?.[1] === 'create') {
+          return { status: 0, stdout: '{}', stderr: '', pid: 5, signal: null, output: [] };
+        }
+        return { status: 0, stdout: '{}', stderr: '', pid: 6, signal: null, output: [] };
+      });
+    });
+
+    it('rejects metadata keys with = sign', async () => {
+      const { OnePasswordStore } = await import('aquaman-core');
+      const store = new OnePasswordStore();
+      await expect(store.set('svc', 'key', 'val', { 'evil=inject': 'x' }))
+        .rejects.toThrow('Invalid metadata key');
+    });
+
+    it('rejects metadata keys starting with -', async () => {
+      const { OnePasswordStore } = await import('aquaman-core');
+      const store = new OnePasswordStore();
+      await expect(store.set('svc', 'key', 'val', { '--vault': 'x' }))
+        .rejects.toThrow('Invalid metadata key');
+    });
+
+    it('rejects metadata keys with op:// prefix', async () => {
+      const { OnePasswordStore } = await import('aquaman-core');
+      const store = new OnePasswordStore();
+      await expect(store.set('svc', 'key', 'val', { 'op://vault': 'x' }))
+        .rejects.toThrow('Invalid metadata key');
+    });
+  });
+
   describe('isAvailable', () => {
     it('returns false when op not installed', async () => {
       mockSpawnSync.mockReturnValue({

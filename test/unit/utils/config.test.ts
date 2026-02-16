@@ -4,10 +4,14 @@
 
 import { describe, it, expect, afterEach } from 'vitest';
 import * as os from 'node:os';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
   getDefaultConfig,
   expandPath,
-  applyEnvOverrides
+  applyEnvOverrides,
+  ensureConfigDir,
+  saveConfig
 } from 'aquaman-core';
 
 describe('config utilities', () => {
@@ -107,6 +111,39 @@ describe('config utilities', () => {
     it('should leave relative paths unchanged', () => {
       const result = expandPath('relative/path');
       expect(result).toBe('relative/path');
+    });
+  });
+
+  describe('file permissions', () => {
+    let tmpDir: string;
+    const originalEnv = process.env['AQUAMAN_CONFIG_DIR'];
+
+    afterEach(() => {
+      if (tmpDir && fs.existsSync(tmpDir)) {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+      if (originalEnv === undefined) {
+        delete process.env['AQUAMAN_CONFIG_DIR'];
+      } else {
+        process.env['AQUAMAN_CONFIG_DIR'] = originalEnv;
+      }
+    });
+
+    it('ensureConfigDir creates directory with mode 0o700', () => {
+      tmpDir = path.join(os.tmpdir(), `aquaman-perm-test-${Date.now()}`);
+      process.env['AQUAMAN_CONFIG_DIR'] = tmpDir;
+      ensureConfigDir();
+      const stat = fs.statSync(tmpDir);
+      expect(stat.mode & 0o777).toBe(0o700);
+    });
+
+    it('saveConfig writes file with mode 0o600', () => {
+      tmpDir = path.join(os.tmpdir(), `aquaman-perm-test-${Date.now()}`);
+      process.env['AQUAMAN_CONFIG_DIR'] = tmpDir;
+      saveConfig(getDefaultConfig());
+      const configFile = path.join(tmpDir, 'config.yaml');
+      const stat = fs.statSync(configFile);
+      expect(stat.mode & 0o777).toBe(0o600);
     });
   });
 });

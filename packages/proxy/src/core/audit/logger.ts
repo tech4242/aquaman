@@ -77,9 +77,9 @@ export class AuditLogger {
     const archiveDir = path.join(this.logDir, 'archive');
     const integrityDir = path.join(this.logDir, 'integrity');
 
-    fs.mkdirSync(this.logDir, { recursive: true });
-    fs.mkdirSync(archiveDir, { recursive: true });
-    fs.mkdirSync(integrityDir, { recursive: true });
+    fs.mkdirSync(this.logDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(archiveDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(integrityDir, { recursive: true, mode: 0o700 });
 
     // Recover state from existing log
     await this.recoverState();
@@ -129,7 +129,7 @@ export class AuditLogger {
       try {
         const entry = JSON.parse(line) as AuditEntry;
         // Write to main log
-        fs.appendFileSync(this.currentLogPath, JSON.stringify(entry) + '\n');
+        fs.appendFileSync(this.currentLogPath, JSON.stringify(entry) + '\n', { mode: 0o600 });
         this.lastHash = entry.hash;
         this.entryCount++;
       } catch {
@@ -138,7 +138,7 @@ export class AuditLogger {
     }
 
     // Clear WAL after recovery
-    fs.writeFileSync(this.walPath, '');
+    fs.writeFileSync(this.walPath, '', { mode: 0o600 });
   }
 
   async logToolCall(
@@ -226,15 +226,15 @@ export class AuditLogger {
 
     // Write to WAL first (for crash recovery)
     if (this.walEnabled) {
-      fs.appendFileSync(this.walPath, line);
+      fs.appendFileSync(this.walPath, line, { mode: 0o600 });
     }
 
     // Write to main log
-    fs.appendFileSync(this.currentLogPath, line);
+    fs.appendFileSync(this.currentLogPath, line, { mode: 0o600 });
 
     // Clear WAL entry after successful write
     if (this.walEnabled) {
-      fs.writeFileSync(this.walPath, '');
+      fs.writeFileSync(this.walPath, '', { mode: 0o600 });
     }
 
     this.lastHash = entry.hash;

@@ -62,7 +62,12 @@ Troubleshooting: `aquaman doctor`
 
 ## Security Audit Note
 
-Running `openclaw security audit --deep` will show a `dangerous-exec` finding for this plugin. That's expected — the plugin spawns the aquaman proxy as a separate process, which is the whole point of credential isolation. `aquaman setup` adds the plugin to your `plugins.allow` trust list automatically.
+Running `openclaw security audit --deep` will show two expected findings:
+
+- **`dangerous-exec`** on `proxy-manager.ts` — the plugin spawns the aquaman proxy as a separate process, which is the whole point of credential isolation.
+- **`tools_reachable_permissive_policy`** — advisory that plugin tools are reachable under the default tool policy. This is about your OpenClaw tool profile setting, not about aquaman. Set `"tools": { "profile": "coding" }` in `openclaw.json` if your agents handle untrusted input.
+
+`aquaman setup` adds the plugin to your `plugins.allow` trust list automatically.
 
 ## Documentation
 

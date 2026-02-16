@@ -120,6 +120,7 @@ describe('aquaman doctor E2E', () => {
       expect(stdout).toContain('Config exists');
       expect(stdout).toContain('Plugin installed');
       expect(stdout).toContain('Plugin configured');
+      expect(stdout).toContain('plugins.allow trust list');
       expect(stdout).toContain('Auth profiles exist');
     }, TEST_TIMEOUT);
   });

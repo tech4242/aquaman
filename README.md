@@ -106,7 +106,12 @@ The agent only sees a sentinel hostname (`aquaman.local`). It never sees a key, 
 
 ## Security Audit
 
-`openclaw security audit --deep` will report one `dangerous-exec` finding for the plugin. This is expected — spawning the proxy as a separate process is how aquaman keeps credentials out of the agent. `aquaman setup` adds the plugin to `plugins.allow` automatically so OpenClaw knows you trust it.
+`openclaw security audit --deep` reports two expected findings:
+
+- **`dangerous-exec`** on `proxy-manager.ts` — the plugin spawns the proxy as a separate process. This is how aquaman keeps credentials out of the agent.
+- **`tools_reachable_permissive_policy`** — OpenClaw warns that plugin tools (like `aquaman_status`) are reachable when no restrictive tool profile is set. This is an environment-level advisory about your agent's tool policy, not a vulnerability in aquaman. If your agents handle untrusted input, set `"tools": { "profile": "coding" }` in `openclaw.json` to restrict which tools agents can call.
+
+`aquaman setup` adds the plugin to `plugins.allow` automatically so OpenClaw knows you trust it.
 
 ## Why Aquaman
 

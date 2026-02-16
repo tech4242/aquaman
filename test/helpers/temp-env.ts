@@ -70,6 +70,7 @@ export function createTempEnv(options: TempEnvOptions = {}): TempEnv {
       path.join(openclawDir, 'openclaw.json'),
       JSON.stringify({
         plugins: {
+          allow: ['aquaman-plugin'],
           entries: {
             'aquaman-plugin': {
               enabled: true,

@@ -25,13 +25,16 @@ function isOpenClawInstalled(): boolean {
   }
 }
 
-// Run openclaw with the temp state dir
+// Run openclaw with the temp state dir.
+// Strips VITEST env var — OpenClaw 2026.2.x suppresses plugin output when
+// it detects a test runner environment.
 function runOpenClaw(args: string): string {
   const testBinDir = path.join(testStateDir, 'bin');
+  const { VITEST, ...env } = process.env;
   return execSync(`npx openclaw ${args} 2>&1`, {
     encoding: 'utf-8',
     env: {
-      ...process.env,
+      ...env,
       OPENCLAW_STATE_DIR: testStateDir,
       PATH: `${testBinDir}:${process.env.PATH}`
     }

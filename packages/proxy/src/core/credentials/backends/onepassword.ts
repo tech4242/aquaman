@@ -14,6 +14,9 @@ export interface OnePasswordStoreOptions {
 const DEFAULT_VAULT = 'aquaman';
 const ITEM_PREFIX = 'aquaman';
 
+// Metadata key validation: must start with letter, only alphanum/underscore/hyphen
+const SAFE_METADATA_KEY = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+
 export class OnePasswordStore implements CredentialStore {
   private vault: string;
   private account?: string;
@@ -151,9 +154,12 @@ export class OnePasswordStore implements CredentialStore {
         '--tags', tags.join(',')
       ];
 
-      // Add metadata as fields
+      // Add metadata as fields (sanitize keys to prevent CLI injection)
       if (metadata) {
         for (const [k, v] of Object.entries(metadata)) {
+          if (!SAFE_METADATA_KEY.test(k)) {
+            throw new Error(`Invalid metadata key "${k}": must match /^[a-zA-Z][a-zA-Z0-9_-]*$/`);
+          }
           createArgs.push(`${k}=${v}`);
         }
       }

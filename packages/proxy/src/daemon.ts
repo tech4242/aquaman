@@ -13,6 +13,9 @@ import { type CredentialStore, generateId } from './core/index.js';
 import { ServiceRegistry, createServiceRegistry, type ServiceDefinition, type AuthMode } from './service-registry.js';
 import { OAuthTokenCache, createOAuthTokenCache } from './oauth-token-cache.js';
 
+// Service name validation: lowercase alphanum, dots, hyphens, underscores
+const SAFE_SERVICE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
+
 // Read version from package.json
 const __daemonFilename = fileURLToPath(import.meta.url);
 const __daemonDirname = path.dirname(__daemonFilename);
@@ -74,9 +77,9 @@ export class CredentialProxy {
 
     this.server = http.createServer(requestHandler);
 
-    // Clean up stale socket
-    if (fs.existsSync(this.options.socketPath)) {
-      fs.unlinkSync(this.options.socketPath);
+    // Clean up stale socket (atomic — no TOCTOU race)
+    try { fs.unlinkSync(this.options.socketPath); } catch (e: any) {
+      if (e.code !== 'ENOENT') throw e;
     }
 
     // Ensure socket directory exists
@@ -86,14 +89,20 @@ export class CredentialProxy {
     }
 
     return new Promise((resolve, reject) => {
+      // Set restrictive umask so the socket file is created owner-only.
+      // process.umask() is unsupported in worker threads — guard with try/catch.
+      let prevUmask: number | undefined;
+      try { prevUmask = process.umask(0o177); } catch { /* worker thread */ }
+
       this.server!.listen(this.options.socketPath, () => {
-        fs.chmodSync(this.options.socketPath, 0o600); // owner-only
+        if (prevUmask !== undefined) try { process.umask(prevUmask); } catch { /* worker */ }
         this.running = true;
         console.log(`Credential proxy listening on ${this.options.socketPath}`);
         resolve();
       });
 
       this.server!.on('error', (err: NodeJS.ErrnoException) => {
+        if (prevUmask !== undefined) try { process.umask(prevUmask); } catch { /* worker */ }
         reject(err);
       });
     });
@@ -127,6 +136,13 @@ export class CredentialProxy {
     // Parse service from path: /anthropic/v1/messages -> anthropic
     const pathParts = url.split('/').filter(p => p);
     const service = pathParts[0];
+
+    // Validate service name to prevent path traversal / injection
+    if (service && !SAFE_SERVICE_NAME.test(service)) {
+      res.statusCode = 404;
+      res.end('Not found');
+      return;
+    }
 
     if (!service || !this.options.allowedServices.includes(service)) {
       res.statusCode = 404;

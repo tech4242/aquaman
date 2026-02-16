@@ -266,10 +266,11 @@ function ensureAuthProfiles(log: OpenClawPluginApi["logger"]): void {
   }
 
   const dir = path.dirname(profilesPath);
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   fs.writeFileSync(
     profilesPath,
-    JSON.stringify({ version: 1, profiles, order }, null, 2)
+    JSON.stringify({ version: 1, profiles, order }, null, 2),
+    { mode: 0o600 }
   );
   log.info(
     `Generated auth-profiles.json with placeholder keys at ${profilesPath}`
