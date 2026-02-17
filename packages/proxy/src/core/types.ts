@@ -53,7 +53,7 @@ export interface ServiceConfig {
 }
 
 export interface CredentialsConfig {
-  backend: 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc' | 'systemd-creds';
+  backend: 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc' | 'systemd-creds' | 'bitwarden';
   proxiedServices: string[];
   encryptionPassword?: string;
   // 1Password options
@@ -69,6 +69,10 @@ export interface CredentialsConfig {
   keepassxcKeyFilePath?: string;
   // systemd-creds options
   systemdCredsDir?: string;
+  // Bitwarden options
+  bitwardenFolder?: string;
+  bitwardenOrganizationId?: string;
+  bitwardenCollectionId?: string;
 }
 
 export interface AuditConfig {
@@ -93,4 +97,4 @@ export interface WrapperConfig {
   openclaw: OpenClawConfig;
 }
 
-export type CredentialBackend = 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc' | 'systemd-creds';
+export type CredentialBackend = 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc' | 'systemd-creds' | 'bitwarden';

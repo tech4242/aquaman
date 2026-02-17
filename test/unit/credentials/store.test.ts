@@ -239,8 +239,8 @@ describe('validatePasswordStrength', () => {
 });
 
 describe('createCredentialStore', () => {
-  it('should create encrypted-file store with strong password', () => {
-    const store = createCredentialStore({
+  it('should create encrypted-file store with strong password', async () => {
+    const store = await createCredentialStore({
       backend: 'encrypted-file',
       encryptionPassword: 'test-password-123'
     });
@@ -248,27 +248,27 @@ describe('createCredentialStore', () => {
     expect(store).toBeInstanceOf(EncryptedFileStore);
   });
 
-  it('should throw for encrypted-file without password', () => {
-    expect(() =>
+  it('should throw for encrypted-file without password', async () => {
+    await expect(
       createCredentialStore({ backend: 'encrypted-file' })
-    ).toThrow('encryptionPassword required');
+    ).rejects.toThrow('encryptionPassword required');
   });
 
-  it('should throw for encrypted-file with weak password', () => {
-    expect(() =>
+  it('should throw for encrypted-file with weak password', async () => {
+    await expect(
       createCredentialStore({ backend: 'encrypted-file', encryptionPassword: 'short' })
-    ).toThrow('Weak encryption password');
+    ).rejects.toThrow('Weak encryption password');
   });
 
-  it('should throw for vault backend without address', () => {
+  it('should throw for vault backend without address', async () => {
     // Clear VAULT_ADDR env var if set
     const originalAddr = process.env['VAULT_ADDR'];
     delete process.env['VAULT_ADDR'];
 
     try {
-      expect(() =>
+      await expect(
         createCredentialStore({ backend: 'vault' })
-      ).toThrow('vaultAddress required');
+      ).rejects.toThrow('vaultAddress required');
     } finally {
       if (originalAddr) {
         process.env['VAULT_ADDR'] = originalAddr;
@@ -276,14 +276,14 @@ describe('createCredentialStore', () => {
     }
   });
 
-  it('should throw for keepassxc backend without password or key file', () => {
+  it('should throw for keepassxc backend without password or key file', async () => {
     const originalPassword = process.env['AQUAMAN_KEEPASS_PASSWORD'];
     delete process.env['AQUAMAN_KEEPASS_PASSWORD'];
 
     try {
-      expect(() =>
+      await expect(
         createCredentialStore({ backend: 'keepassxc' })
-      ).toThrow('KeePassXC backend requires a master password');
+      ).rejects.toThrow('KeePassXC backend requires a master password');
     } finally {
       if (originalPassword) {
         process.env['AQUAMAN_KEEPASS_PASSWORD'] = originalPassword;
@@ -291,8 +291,8 @@ describe('createCredentialStore', () => {
     }
   });
 
-  it('should create keepassxc store with password', () => {
-    const store = createCredentialStore({
+  it('should create keepassxc store with password', async () => {
+    const store = await createCredentialStore({
       backend: 'keepassxc',
       encryptionPassword: 'test-keepass-password'
     });
