@@ -259,8 +259,9 @@ Both packages are pinned to exact versions of each other and must be bumped toge
 | `package.json` (root) | `version` |
 | `packages/proxy/package.json` | `version` |
 | `packages/plugin/package.json` | `version`, `peerDependencies.aquaman-proxy` (exact pin) |
+| `docker/Dockerfile` | `aquaman-proxy@<version>` in `npm install` |
 
-All three `version` fields and the cross-package dependency pin must match the new version.
+All three `version` fields, the cross-package dependency pin, and the Docker install pin must match the new version.
 
 ## Credential Backends
 
@@ -274,6 +275,40 @@ Since the Gateway runs on Unix-like systems, backend choice depends on deploymen
 | `1password` | Any (via `op` CLI) | Team credential sharing |
 | `vault` | Any (via HTTP API) | Enterprise secrets management |
 | `systemd-creds` | Linux (systemd ≥ 256) | TPM2-backed, no root needed, no master password |
+
+### systemd-creds Backend Internals
+
+**Implementation:** `packages/proxy/src/core/credentials/backends/systemd-creds.ts`
+
+**Requirements:** Linux with systemd ≥ 256 (for `--user` support). No root/sudo required. TPM2 chip recommended but not strictly required.
+
+**File structure:** Each credential is a separate `.cred` file in `~/.aquaman/creds.d/`:
+
+```
+~/.aquaman/creds.d/
+  anthropic--api_key.cred    # encrypted with systemd-creds --user
+  openai--api_key.cred
+  _index.cred                # encrypted index of all credentials
+```
+
+The `--` separator distinguishes service from key (both may contain single dashes). The `_index.cred` file stores the credential inventory (also encrypted).
+
+**Encryption flow:** Values are piped via stdin to `systemd-creds --user encrypt --name=<credName> - -`, which outputs the encrypted blob to stdout. The proxy writes the blob to a `.cred` file (`mode: 0o600`). Decryption reverses the process via `systemd-creds --user decrypt`. The per-user credential key is managed by systemd — no master password needed. When TPM2 is available, secrets are bound to the machine and can't be decrypted elsewhere.
+
+**In-memory caching:** Decrypted values are cached in a `Map` for the proxy process lifetime. Each credential is decrypted at most once per proxy start.
+
+**Comparison with encrypted-file:**
+
+| | `encrypted-file` | `systemd-creds` |
+|---|---|---|
+| Master password | Required (12+ chars) | None |
+| Hardware binding | No | Yes (TPM2) |
+| Portability | Can move between machines | Bound to machine |
+| Platform | Any | Linux (systemd ≥ 256) |
+
+**Input validation:** Service and key names must match `/^[a-z0-9][a-z0-9._-]*$/`. The resolved `.cred` file path is checked to not escape `credsDir` (path traversal prevention).
+
+**Auto-detection in `aquaman setup`:** On Linux, if `systemd-creds --version` reports systemd ≥ 256, the setup wizard selects `systemd-creds` as the default backend (before falling back to `encrypted-file`).
 
 ## Testing the OpenClaw Plugin
 

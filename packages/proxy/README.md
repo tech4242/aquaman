@@ -44,7 +44,7 @@ openclaw                                  # proxy starts automatically via plugi
 > `aquaman setup` auto-detects your credential backend. macOS defaults to Keychain,
 > Linux defaults to encrypted file. Override with `--backend`:
 > `aquaman setup --backend keepassxc`
-> Options: `keychain`, `encrypted-file`, `keepassxc`, `1password`, `vault`
+> Options: `keychain`, `encrypted-file`, `keepassxc`, `1password`, `vault`, `systemd-creds`
 
 Existing plaintext credentials are migrated automatically during setup.
 Run again anytime to migrate new credentials: `aquaman migrate openclaw --auto`

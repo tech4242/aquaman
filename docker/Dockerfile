@@ -1,7 +1,7 @@
 FROM alpine/openclaw:latest
 
 # Install aquaman proxy (includes credential stores, audit, CLI)
-RUN npm install -g aquaman-proxy@0.7.0
+RUN npm install -g aquaman-proxy@0.8.0
 
 # Install plugin into OpenClaw extensions
 RUN mkdir -p /home/node/.openclaw/extensions/aquaman-plugin

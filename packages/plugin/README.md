@@ -42,7 +42,7 @@ openclaw                                  # proxy starts automatically
 > `aquaman setup` auto-detects your credential backend. macOS defaults to Keychain,
 > Linux defaults to encrypted file. Override with `--backend`:
 > `aquaman setup --backend keepassxc`
-> Options: `keychain`, `encrypted-file`, `keepassxc`, `1password`, `vault`
+> Options: `keychain`, `encrypted-file`, `keepassxc`, `1password`, `vault`, `systemd-creds`
 
 Existing plaintext credentials are migrated automatically during setup.
 Run again anytime to migrate new credentials: `aquaman migrate openclaw --auto`
@@ -55,7 +55,7 @@ Troubleshooting: `aquaman doctor`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` \| `"keepassxc"` | `"keychain"` | Credential store |
+| `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` \| `"keepassxc"` \| `"systemd-creds"` | `"keychain"` | Credential store |
 | `services` | `string[]` | `["anthropic", "openai"]` | Services to proxy |
 
 > Advanced settings (audit, vault) go in `~/.aquaman/config.yaml`.
