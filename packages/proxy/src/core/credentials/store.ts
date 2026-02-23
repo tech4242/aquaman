@@ -10,6 +10,7 @@ import { encryptWithPassword, decryptWithPassword } from '../utils/hash.js';
 import { getConfigDir } from '../utils/config.js';
 import type { CredentialBackend } from '../types.js';
 import { KeePassXCStore } from './backends/keepassxc.js';
+import { SystemdCredsStore } from './backends/systemd-creds.js';
 
 export interface Credential {
   service: string;
@@ -43,6 +44,8 @@ export interface CredentialStoreOptions {
   // KeePassXC options
   keepassxcDatabasePath?: string;
   keepassxcKeyFilePath?: string;
+  // systemd-creds options
+  systemdCredsDir?: string;
 }
 
 /**
@@ -369,6 +372,12 @@ export function createCredentialStore(options: CredentialStoreOptions): Credenti
         throw new Error('KeePassXC backend requires a master password (AQUAMAN_KEEPASS_PASSWORD) or key file (keepassxcKeyFilePath)');
       }
       return new KeePassXCStore({ dbPath, password, keyFilePath: keyFile });
+    }
+
+    case 'systemd-creds': {
+      return new SystemdCredsStore({
+        credsDir: options.systemdCredsDir,
+      });
     }
 
     default:

@@ -558,7 +558,7 @@ program
 program
   .command('setup')
   .description('All-in-one setup wizard — creates config, stores credentials, installs plugin')
-  .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, keepassxc, 1password, vault)')
+  .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, keepassxc, 1password, vault, systemd-creds)')
   .option('--no-openclaw', 'Skip OpenClaw plugin installation')
   .option('--non-interactive', 'Use environment variables instead of prompts (for CI)')
   .action(async (options) => {

@@ -29,7 +29,11 @@ export {
   createVaultStore,
   type KeePassXCStoreOptions,
   KeePassXCStore,
-  createKeePassXCStore
+  createKeePassXCStore,
+  type SystemdCredsStoreOptions,
+  SystemdCredsStore,
+  createSystemdCredsStore,
+  isSystemdCredsAvailable
 } from './credentials/index.js';
 
 // Audit

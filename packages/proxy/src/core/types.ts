@@ -91,4 +91,4 @@ export interface WrapperConfig {
   openclaw: OpenClawConfig;
 }
 
-export type CredentialBackend = 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc';
+export type CredentialBackend = 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc' | 'systemd-creds';
