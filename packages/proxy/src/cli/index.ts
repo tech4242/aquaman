@@ -558,7 +558,7 @@ program
 program
   .command('setup')
   .description('All-in-one setup wizard — creates config, stores credentials, installs plugin')
-  .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, keepassxc, 1password, vault)')
+  .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, keepassxc, 1password, vault, systemd-creds)')
   .option('--no-openclaw', 'Skip OpenClaw plugin installation')
   .option('--non-interactive', 'Use environment variables instead of prompts (for CI)')
   .action(async (options) => {
@@ -593,19 +593,20 @@ program
       if (platform === 'darwin') {
         backend = 'keychain';
       } else {
-        // Linux: check for libsecret
+        // Linux: check for libsecret first, then systemd-creds, then encrypted-file
         try {
           const { execSync } = await import('node:child_process');
           execSync('pkg-config --exists libsecret-1', { stdio: 'pipe' });
           backend = 'keychain';
         } catch {
-          backend = 'encrypted-file';
+          const { isSystemdCredsAvailable } = await import('../core/credentials/backends/systemd-creds.js');
+          backend = isSystemdCredsAvailable() ? 'systemd-creds' : 'encrypted-file';
         }
       }
     }
 
     // Validate backend
-    const validBackends = ['keychain', 'encrypted-file', 'keepassxc', '1password', 'vault'];
+    const validBackends = ['keychain', 'encrypted-file', 'keepassxc', '1password', 'vault', 'systemd-creds'];
     if (!validBackends.includes(backend)) {
       console.error(`  Invalid backend: ${backend}`);
       console.error(`  Valid options: ${validBackends.join(', ')}`);
@@ -672,6 +673,13 @@ program
           }
           process.env['AQUAMAN_KEEPASS_PASSWORD'] = password.trim();
         }
+      }
+    } else if (backend === 'systemd-creds') {
+      const { isSystemdCredsAvailable } = await import('../core/credentials/backends/systemd-creds.js');
+      if (!isSystemdCredsAvailable()) {
+        console.error('  systemd-creds backend requires systemd-creds with --user support (systemd >= 256).');
+        console.error('  Try: systemd-creds --version');
+        process.exit(1);
       }
     }
 
@@ -964,6 +972,14 @@ program
     let store: import('../core/index.js').CredentialStore | null = null;
     try {
       config = loadConfig();
+
+      if (config.credentials.backend === 'systemd-creds') {
+        const { isSystemdCredsAvailable } = await import('../core/credentials/backends/systemd-creds.js');
+        if (!isSystemdCredsAvailable()) {
+          throw new Error('systemd-creds backend requires systemd >= 256 with --user support');
+        }
+      }
+
       store = createCredentialStore({
         backend: config.credentials.backend,
         encryptionPassword: config.credentials.encryptionPassword,

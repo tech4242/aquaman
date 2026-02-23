@@ -29,7 +29,7 @@ openclaw                                  # proxy starts automatically via plugi
 > `aquaman setup` auto-detects your credential backend. macOS defaults to Keychain,
 > Linux defaults to encrypted file. Override with `--backend`:
 > `aquaman setup --backend keepassxc`
-> Options: `keychain`, `encrypted-file`, `keepassxc`, `1password`, `vault`
+> Options: `keychain`, `encrypted-file`, `keepassxc`, `1password`, `vault`, `systemd-creds`
 
 Existing plaintext credentials are migrated automatically during setup.
 The migration detects credentials from channels (Telegram, Slack, etc.)
@@ -101,8 +101,9 @@ The agent only sees a sentinel hostname (`aquaman.local`). It never sees a key, 
 | `keepassxc` | Existing KeePass users | Set `AQUAMAN_KEEPASS_PASSWORD` or key file |
 | `1password` | Team credential sharing | `brew install 1password-cli && op signin` |
 | `vault` | Enterprise secrets management | Set `VAULT_ADDR` + `VAULT_TOKEN` |
+| `systemd-creds` | Linux with systemd ≥ 256 | TPM2-backed, no root required |
 
-**Important:** `encrypted-file` is a last-resort backend for headless Linux/CI environments without a native keyring. For better security, install `libsecret-1-dev` (for GNOME Keyring) or use 1Password/Vault.
+**Important:** `encrypted-file` is a last-resort backend for headless Linux/CI environments without a native keyring. For better security, install `libsecret-1-dev` (for GNOME Keyring), use `systemd-creds` (Linux with TPM2), or use 1Password/Vault.
 
 ## Security Audit
 

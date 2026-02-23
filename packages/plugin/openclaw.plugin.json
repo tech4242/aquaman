@@ -14,7 +14,7 @@
     "properties": {
       "backend": {
         "type": "string",
-        "enum": ["keychain", "1password", "vault", "encrypted-file", "keepassxc"],
+        "enum": ["keychain", "1password", "vault", "encrypted-file", "keepassxc", "systemd-creds"],
         "default": "keychain",
         "description": "Credential storage backend"
       },

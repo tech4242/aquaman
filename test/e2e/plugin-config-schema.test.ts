@@ -105,7 +105,7 @@ describe('Plugin Config Schema', () => {
 
   it('should have correct enum values for backend', () => {
     const backendSchema = manifest.configSchema.properties.backend;
-    expect(backendSchema.enum).toEqual(['keychain', '1password', 'vault', 'encrypted-file', 'keepassxc']);
+    expect(backendSchema.enum).toEqual(['keychain', '1password', 'vault', 'encrypted-file', 'keepassxc', 'systemd-creds']);
     expect(backendSchema.default).toBe('keychain');
   });
 

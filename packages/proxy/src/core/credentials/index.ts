@@ -30,3 +30,10 @@ export {
   KeePassXCStore,
   createKeePassXCStore
 } from './backends/keepassxc.js';
+
+export {
+  type SystemdCredsStoreOptions,
+  SystemdCredsStore,
+  createSystemdCredsStore,
+  isSystemdCredsAvailable
+} from './backends/systemd-creds.js';

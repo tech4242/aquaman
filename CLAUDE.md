@@ -66,7 +66,7 @@ The `openclaw.plugin.json` manifest defines `additionalProperties: false` with o
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` \| `"keepassxc"` | `"keychain"` | Credential store |
+| `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` \| `"keepassxc"` \| `"systemd-creds"` | `"keychain"` | Credential store |
 | `services` | `string[]` | `["anthropic", "openai"]` | Services to proxy |
 
 **Do NOT add extra keys** (like `proxyAutoStart`, `auditEnabled`) to `openclaw.json` — OpenClaw validates against the manifest schema and will reject them. Use `~/.aquaman/config.yaml` for advanced settings.
@@ -198,7 +198,7 @@ aquaman setup --no-openclaw             # Skip plugin installation
 ```
 
 **What it does:**
-1. Detects platform → picks default backend (macOS=keychain, Linux=encrypted-file)
+1. Detects platform → picks default backend (macOS=keychain, Linux=keychain if libsecret, else systemd-creds if available, else encrypted-file)
 2. Runs `init` internally (creates `~/.aquaman/`, config.yaml, audit dir)
 3. Prompts for Anthropic + OpenAI API keys (interactive) or reads from env vars (non-interactive)
 4. Detects OpenClaw (`~/.openclaw/` or `which openclaw`)
@@ -273,6 +273,7 @@ Since the Gateway runs on Unix-like systems, backend choice depends on deploymen
 | `keepassxc` | Any (with .kdbx file) | Users with existing KeePass databases |
 | `1password` | Any (via `op` CLI) | Team credential sharing |
 | `vault` | Any (via HTTP API) | Enterprise secrets management |
+| `systemd-creds` | Linux (systemd ≥ 256) | TPM2-backed, no root needed, no master password |
 
 ## Testing the OpenClaw Plugin
 
@@ -484,7 +485,7 @@ Promise.all([
 | File | Purpose |
 |------|---------|
 | `packages/proxy/src/core/credentials/store.ts` | Backend abstraction (keychain, encrypted-file, memory) |
-| `packages/proxy/src/core/credentials/backends/` | 1Password and Vault backend implementations |
+| `packages/proxy/src/core/credentials/backends/` | 1Password, Vault, KeePassXC, and systemd-creds backend implementations |
 | `packages/proxy/src/core/audit/logger.ts` | Hash-chained logging |
 | `packages/proxy/src/daemon.ts` | HTTP proxy server on UDS (header, url-path, basic, oauth auth modes) |
 | `packages/proxy/src/cli/index.ts` | CLI (Commander.js, 18 commands incl. `setup`, `doctor`, `migrate openclaw`) |
