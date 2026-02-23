@@ -39,7 +39,9 @@ function execFileAsync(
         (err as any).stderr = stderr;
         reject(err);
       } else {
-        resolve({ stdout: stdout as string, stderr: stderr as string });
+        const out = typeof stdout === 'string' ? stdout : stdout.toString('utf-8');
+        const errOut = typeof stderr === 'string' ? stderr : stderr.toString('utf-8');
+        resolve({ stdout: out, stderr: errOut });
       }
     });
     if (input != null) {

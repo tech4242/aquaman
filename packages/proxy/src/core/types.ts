@@ -53,7 +53,7 @@ export interface ServiceConfig {
 }
 
 export interface CredentialsConfig {
-  backend: 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc';
+  backend: 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc' | 'systemd-creds';
   proxiedServices: string[];
   encryptionPassword?: string;
   // 1Password options
@@ -67,6 +67,8 @@ export interface CredentialsConfig {
   // KeePassXC options
   keepassxcDatabasePath?: string;
   keepassxcKeyFilePath?: string;
+  // systemd-creds options
+  systemdCredsDir?: string;
 }
 
 export interface AuditConfig {
