@@ -12,7 +12,7 @@
  * the per-user credential key stored by systemd-homed or generated on first use.
  */
 
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -49,6 +49,8 @@ function execFileAsync(
   });
 }
 
+const SAFE_CRED_NAME = /^[a-z0-9][a-z0-9._-]*$/;
+
 export class SystemdCredsStore implements CredentialStore {
   private credsDir: string;
   private cache = new Map<string, string>();
@@ -65,16 +67,29 @@ export class SystemdCredsStore implements CredentialStore {
     }
   }
 
+  private assertSafeName(label: 'service' | 'key', value: string): void {
+    if (!SAFE_CRED_NAME.test(value)) {
+      throw new Error(`Invalid ${label} name: ${value}. Allowed pattern: ${SAFE_CRED_NAME.source}`);
+    }
+  }
+
   /**
    * Build a filename-safe credential name from service + key.
    * Uses double-dash separator since service/key names may use single dashes.
    */
   private credName(service: string, key: string): string {
+    this.assertSafeName('service', service);
+    this.assertSafeName('key', key);
     return `${service}--${key}`;
   }
 
   private credPath(service: string, key: string): string {
-    return path.join(this.credsDir, `${this.credName(service, key)}.cred`);
+    const candidate = path.resolve(this.credsDir, `${this.credName(service, key)}.cred`);
+    const root = path.resolve(this.credsDir) + path.sep;
+    if (!candidate.startsWith(root)) {
+      throw new Error(`Credential path escaped credsDir: ${candidate}`);
+    }
+    return candidate;
   }
 
   private indexPath(): string {
@@ -229,17 +244,13 @@ export class SystemdCredsStore implements CredentialStore {
 
 /**
  * Check if systemd-creds --user is available on this system.
- * Returns true if systemd >= 256 and the encrypt subcommand works.
+ * Returns true if systemd >= 256.
  */
-export async function isSystemdCredsAvailable(): Promise<boolean> {
+export function isSystemdCredsAvailable(): boolean {
   try {
-    const { stdout } = await execFileAsync(
-      'systemd-creds',
-      ['--version'],
-      { encoding: 'utf-8' }
-    );
+    const out = execFileSync('systemd-creds', ['--version'], { encoding: 'utf-8' });
     // Parse version: "systemd 258 (...)"
-    const match = stdout.match(/systemd\s+(\d+)/);
+    const match = out.match(/systemd\s+(\d+)/);
     if (!match) return false;
     const version = parseInt(match[1], 10);
     return version >= 256;

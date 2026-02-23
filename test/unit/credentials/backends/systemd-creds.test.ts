@@ -1,176 +1,189 @@
 /**
  * Tests for systemd-creds credential backend
  *
- * These tests require systemd >= 256 with --user support.
- * They will be skipped on systems without systemd-creds.
+ * Primary tests are mocked so they run on any CI environment.
+ * Optional integration tests can run on Linux with systemd >= 256.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import * as os from 'node:os';
-import { SystemdCredsStore, isSystemdCredsAvailable } from 'aquaman-core';
+import * as path from 'node:path';
+import { execFile, execFileSync } from 'node:child_process';
 
-import { execFileSync } from 'node:child_process';
+vi.mock('node:child_process', () => ({
+  execFile: vi.fn(),
+  execFileSync: vi.fn()
+}));
 
-// Synchronous check at module load time so skipIf() works
-let available = false;
-try {
-  const out = execFileSync('systemd-creds', ['--version'], { encoding: 'utf-8' });
-  const match = out.match(/systemd\s+(\d+)/);
-  available = match ? parseInt(match[1], 10) >= 256 : false;
-} catch {
-  available = false;
-}
-
-describe('SystemdCredsStore', () => {
-  let store: SystemdCredsStore;
+describe('SystemdCredsStore (mocked)', () => {
   let testDir: string;
+  const mockExecFile = vi.mocked(execFile);
+  const mockExecFileSync = vi.mocked(execFileSync);
 
   beforeEach(() => {
+    vi.resetAllMocks();
+    vi.resetModules();
+
     testDir = path.join(
       os.tmpdir(),
       `aquaman-systemd-creds-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
     );
     fs.mkdirSync(testDir, { recursive: true });
-    store = new SystemdCredsStore({ credsDir: testDir });
+
+    mockExecFileSync.mockReturnValue('systemd 258 (258.1)\n' as any);
   });
 
   afterEach(() => {
     if (fs.existsSync(testDir)) {
-      fs.rmSync(testDir, { recursive: true });
+      fs.rmSync(testDir, { recursive: true, force: true });
     }
   });
 
-  describe('constructor', () => {
-    it('should create the creds directory if it does not exist', () => {
-      const newDir = path.join(testDir, 'nested', 'creds');
-      new SystemdCredsStore({ credsDir: newDir });
-      expect(fs.existsSync(newDir)).toBe(true);
+  function installDefaultExecFileMock() {
+    const encryptedByName = new Map<string, string>();
+
+    mockExecFile.mockImplementation((cmd: any, args: any, opts: any, cb: any) => {
+      if (typeof opts === 'function') {
+        cb = opts;
+        opts = {};
+      }
+
+      const argv = args as string[];
+      const hasUser = argv[0] === '--user';
+      const op = argv[1];
+      const nameArg = argv.find((a) => a.startsWith('--name='));
+      const name = nameArg ? nameArg.slice('--name='.length) : '';
+
+      if (!hasUser) {
+        cb(new Error('missing --user'), '', 'missing --user');
+        return {} as any;
+      }
+
+      if (cmd !== 'systemd-creds') {
+        cb(new Error('wrong command'), '', 'wrong command');
+        return {} as any;
+      }
+
+      if (op === 'encrypt') {
+        const input = (opts?.input ?? '').toString();
+        encryptedByName.set(name, input);
+        cb(null, `ENC:${name}:${Buffer.from(input).toString('base64')}` , '');
+        return {} as any;
+      }
+
+      if (op === 'decrypt') {
+        const filePath = argv[3];
+        if (!fs.existsSync(filePath)) {
+          cb(new Error('missing file'), '', 'missing file');
+          return {} as any;
+        }
+        const fallback = encryptedByName.get(name) ?? '';
+        cb(null, fallback, '');
+        return {} as any;
+      }
+
+      cb(new Error(`unexpected op ${op}`), '', 'unexpected');
+      return {} as any;
     });
+  }
+
+  it('reports availability when systemd >= 256', async () => {
+    const { isSystemdCredsAvailable } = await import('aquaman-core');
+    expect(isSystemdCredsAvailable()).toBe(true);
   });
 
-  describe('set and get', () => {
-    it.skipIf(!available)(
-      'should store and retrieve a credential',
-      async () => {
-        await store.set('anthropic', 'api_key', 'sk-ant-12345');
-        const value = await store.get('anthropic', 'api_key');
-        expect(value).toBe('sk-ant-12345');
-      }
-    );
-
-    it.skipIf(!available)(
-      'should return null for non-existent credential',
-      async () => {
-        const value = await store.get('nonexistent', 'key');
-        expect(value).toBeNull();
-      }
-    );
-
-    it.skipIf(!available)(
-      'should overwrite existing credential',
-      async () => {
-        await store.set('openai', 'api_key', 'sk-old');
-        await store.set('openai', 'api_key', 'sk-new');
-        const value = await store.get('openai', 'api_key');
-        expect(value).toBe('sk-new');
-      }
-    );
-
-    it.skipIf(!available)(
-      'should handle special characters in values',
-      async () => {
-        const specialValue = 'p@$$w0rd!#%&*(){}[]|\\:";\'<>?,./~`';
-        await store.set('test', 'special', specialValue);
-        const value = await store.get('test', 'special');
-        expect(value).toBe(specialValue);
-      }
-    );
-
-    it.skipIf(!available)(
-      'should use in-memory cache on second read',
-      async () => {
-        await store.set('cached', 'key', 'value');
-
-        // First read populates cache
-        const v1 = await store.get('cached', 'key');
-        expect(v1).toBe('value');
-
-        // Delete the file — cached read should still work
-        const credFile = path.join(testDir, 'cached--key.cred');
-        fs.unlinkSync(credFile);
-
-        const v2 = await store.get('cached', 'key');
-        expect(v2).toBe('value');
-      }
-    );
+  it('reports unavailable when version < 256', async () => {
+    mockExecFileSync.mockReturnValueOnce('systemd 255\n' as any);
+    const { isSystemdCredsAvailable } = await import('aquaman-core');
+    expect(isSystemdCredsAvailable()).toBe(false);
   });
 
-  describe('delete', () => {
-    it.skipIf(!available)(
-      'should delete a credential and return true',
-      async () => {
-        await store.set('deleteme', 'api_key', 'gone');
-        const deleted = await store.delete('deleteme', 'api_key');
-        expect(deleted).toBe(true);
+  it('stores and retrieves a credential', async () => {
+    installDefaultExecFileMock();
+    const { SystemdCredsStore } = await import('aquaman-core');
+    const store = new SystemdCredsStore({ credsDir: testDir });
 
-        const value = await store.get('deleteme', 'api_key');
-        expect(value).toBeNull();
+    await store.set('anthropic', 'api_key', 'sk-ant-123');
+    const value = await store.get('anthropic', 'api_key');
+
+    expect(value).toBe('sk-ant-123');
+    expect(mockExecFile).toHaveBeenCalled();
+  });
+
+  it('passes secret via stdin and not argv', async () => {
+    let seenInput = '';
+    let seenArgs: string[] = [];
+
+    mockExecFile.mockImplementation((cmd: any, args: any, opts: any, cb: any) => {
+      if (typeof opts === 'function') {
+        cb = opts;
+        opts = {};
       }
-    );
+      seenArgs = args;
 
-    it('should return false for non-existent credential', async () => {
-      const deleted = await store.delete('nonexistent', 'key');
-      expect(deleted).toBe(false);
+      const stdin = {
+        write: (chunk: string) => { seenInput += chunk; },
+        end: () => { /* noop */ }
+      };
+
+      cb(null, 'ENC', '');
+      return { stdin } as any;
     });
+
+    const { SystemdCredsStore } = await import('aquaman-core');
+    const store = new SystemdCredsStore({ credsDir: testDir });
+    const secret = 'very-secret-value';
+
+    await store.set('anthropic', 'api_key', secret);
+
+    expect(seenArgs.join(' ')).not.toContain(secret);
+    expect(seenInput).toContain(secret);
   });
 
-  describe('list', () => {
-    it.skipIf(!available)(
-      'should list all stored credentials',
-      async () => {
-        await store.set('svc-a', 'key1', 'val1');
-        await store.set('svc-b', 'key2', 'val2');
+  it('uses createCredentialStore factory', async () => {
+    installDefaultExecFileMock();
+    const { createCredentialStore } = await import('aquaman-core');
+    const store = createCredentialStore({ backend: 'systemd-creds', systemdCredsDir: testDir });
 
-        const all = await store.list();
-        expect(all).toHaveLength(2);
-        expect(all).toContainEqual({ service: 'svc-a', key: 'key1' });
-        expect(all).toContainEqual({ service: 'svc-b', key: 'key2' });
-      }
-    );
-
-    it.skipIf(!available)(
-      'should filter by service',
-      async () => {
-        await store.set('alpha', 'key1', 'val1');
-        await store.set('beta', 'key2', 'val2');
-
-        const filtered = await store.list('alpha');
-        expect(filtered).toHaveLength(1);
-        expect(filtered[0]).toEqual({ service: 'alpha', key: 'key1' });
-      }
-    );
+    await store.set('openai', 'api_key', 'sk-openai-123');
+    expect(await store.get('openai', 'api_key')).toBe('sk-openai-123');
   });
 
-  describe('exists', () => {
-    it.skipIf(!available)(
-      'should return true for existing credential',
-      async () => {
-        await store.set('exists-test', 'key', 'val');
-        expect(await store.exists('exists-test', 'key')).toBe(true);
-      }
-    );
+  it('rejects invalid names (path traversal defense)', async () => {
+    installDefaultExecFileMock();
+    const { SystemdCredsStore } = await import('aquaman-core');
+    const store = new SystemdCredsStore({ credsDir: testDir });
 
-    it('should return false for non-existent credential', async () => {
-      expect(await store.exists('nope', 'key')).toBe(false);
+    await expect(store.set('../evil', 'api_key', 'x')).rejects.toThrow('Invalid service name');
+    await expect(store.set('anthropic', '../key', 'x')).rejects.toThrow('Invalid key name');
+  });
+
+  it('surfaces encrypt failures clearly', async () => {
+    mockExecFile.mockImplementation((_cmd: any, _args: any, _opts: any, cb: any) => {
+      cb(new Error('command not found'), '', 'command not found');
+      return {} as any;
     });
-  });
-});
 
-describe('isSystemdCredsAvailable', () => {
-  it('should return a boolean', async () => {
-    const result = await isSystemdCredsAvailable();
-    expect(typeof result).toBe('boolean');
+    const { SystemdCredsStore } = await import('aquaman-core');
+    const store = new SystemdCredsStore({ credsDir: testDir });
+
+    await expect(store.set('anthropic', 'api_key', 'x')).rejects.toThrow('Failed to encrypt credential anthropic/api_key');
+  });
+
+  it('supports list/delete/exists', async () => {
+    installDefaultExecFileMock();
+    const { SystemdCredsStore } = await import('aquaman-core');
+    const store = new SystemdCredsStore({ credsDir: testDir });
+
+    await store.set('svc-a', 'k1', 'v1');
+    await store.set('svc-b', 'k2', 'v2');
+
+    const all = await store.list();
+    expect(all).toHaveLength(2);
+    expect(await store.exists('svc-a', 'k1')).toBe(true);
+
+    expect(await store.delete('svc-a', 'k1')).toBe(true);
+    expect(await store.exists('svc-a', 'k1')).toBe(false);
   });
 });

@@ -198,7 +198,7 @@ aquaman setup --no-openclaw             # Skip plugin installation
 ```
 
 **What it does:**
-1. Detects platform → picks default backend (macOS=keychain, Linux=encrypted-file)
+1. Detects platform → picks default backend (macOS=keychain, Linux=keychain if libsecret, else systemd-creds if available, else encrypted-file)
 2. Runs `init` internally (creates `~/.aquaman/`, config.yaml, audit dir)
 3. Prompts for Anthropic + OpenAI API keys (interactive) or reads from env vars (non-interactive)
 4. Detects OpenClaw (`~/.openclaw/` or `which openclaw`)
