@@ -8,6 +8,12 @@ coverage:
       default:
         target: 60%
 
+comment:
+  layout: "diff, flags, files"
+  behavior: default
+  require_changes: false
+  require_base: false
+
 ignore:
   - "test/**/*"
   - "**/dist/**"
