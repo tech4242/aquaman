@@ -8,7 +8,7 @@ export default defineConfig({
     include: ['test/**/*.test.ts'],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'json', 'html'],
+      reporter: ['text', 'json', 'lcov', 'html'],
       include: ['src/**/*.ts', 'packages/*/src/**/*.ts'],
       exclude: ['src/cli/index.ts', 'src/types.ts', 'packages/*/src/cli/**'],
       // Core business logic has 86-98% coverage
