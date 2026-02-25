@@ -29,7 +29,7 @@ openclaw                                  # proxy starts automatically via plugi
 > `aquaman setup` auto-detects your credential backend. macOS defaults to Keychain,
 > Linux defaults to encrypted file. Override with `--backend`:
 > `aquaman setup --backend keepassxc`
-> Options: `keychain`, `encrypted-file`, `keepassxc`, `1password`, `vault`, `systemd-creds`
+> Options: `keychain`, `encrypted-file`, `keepassxc`, `1password`, `vault`, `systemd-creds`, `bitwarden`
 
 Existing plaintext credentials are migrated automatically during setup.
 The migration detects credentials from channels (Telegram, Slack, etc.)
@@ -86,7 +86,7 @@ Agent / OpenClaw Gateway              Aquaman Proxy
                                slack.com/api  ...
 ```
 
-1. **Store** — Credentials live in a vault backend (Keychain, 1Password, Vault, encrypted file)
+1. **Store** — Credentials live in a vault backend (Keychain, 1Password, Vault, Bitwarden, encrypted file)
 2. **Proxy** — Aquaman runs a reverse proxy in a separate process, connected via Unix domain socket — no TCP port, no network exposure
 3. **Inject** — Proxy looks up the credential and adds the auth header before forwarding
 
@@ -102,6 +102,7 @@ The agent only sees a sentinel hostname (`aquaman.local`). It never sees a key, 
 | `1password` | Team credential sharing | `brew install 1password-cli && op signin` |
 | `vault` | Enterprise secrets management | Set `VAULT_ADDR` + `VAULT_TOKEN` |
 | `systemd-creds` | Linux with systemd ≥ 256 | TPM2-backed, no root required |
+| `bitwarden` | Bitwarden users | `bw login && export BW_SESSION=$(bw unlock --raw)` |
 
 **Important:** `encrypted-file` is a last-resort backend for headless Linux/CI environments without a native keyring. For better security, install `libsecret-1-dev` (for GNOME Keyring), use `systemd-creds` (Linux with TPM2), or use 1Password/Vault.
 
@@ -118,6 +119,6 @@ The agent only sees a sentinel hostname (`aquaman.local`). It never sees a key, 
 
 **Security** — Process-level credential isolation via Unix domain socket (no TCP port, no network exposure). Socket file permissions (`chmod 600`) restrict access to the owning user. Tamper-evident audit logs with SHA-256 hash chains
 
-**DevOps** — Plugs into Keychain, 1Password, and HashiCorp Vault; YAML-based service config; 23 builtin services across 4 auth modes
+**DevOps** — Plugs into Keychain, 1Password, HashiCorp Vault, and Bitwarden; YAML-based service config; 23 builtin services across 4 auth modes
 
 **Developers** — Transparent reverse proxy, no SDK changes, works with any OpenClaw workflow or standalone app

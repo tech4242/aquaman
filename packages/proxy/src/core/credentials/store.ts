@@ -44,6 +44,10 @@ export interface CredentialStoreOptions {
   // KeePassXC options
   keepassxcDatabasePath?: string;
   keepassxcKeyFilePath?: string;
+  // Bitwarden options
+  bitwardenFolder?: string;
+  bitwardenOrganizationId?: string;
+  bitwardenCollectionId?: string;
   // systemd-creds options
   systemdCredsDir?: string;
 }
@@ -313,7 +317,7 @@ export function validatePasswordStrength(password: string): { valid: boolean; er
   return { valid: errors.length === 0, errors };
 }
 
-export function createCredentialStore(options: CredentialStoreOptions): CredentialStore {
+export async function createCredentialStore(options: CredentialStoreOptions): Promise<CredentialStore> {
   switch (options.backend) {
     case 'keychain':
       return new KeychainStore();
@@ -372,6 +376,16 @@ export function createCredentialStore(options: CredentialStoreOptions): Credenti
         throw new Error('KeePassXC backend requires a master password (AQUAMAN_KEEPASS_PASSWORD) or key file (keepassxcKeyFilePath)');
       }
       return new KeePassXCStore({ dbPath, password, keyFilePath: keyFile });
+    }
+
+    case 'bitwarden': {
+      // Dynamically import to avoid loading if not used
+      const { BitwardenStore } = await import('./backends/bitwarden.js');
+      return new BitwardenStore({
+        folder: options.bitwardenFolder,
+        organizationId: options.bitwardenOrganizationId,
+        collectionId: options.bitwardenCollectionId
+      });
     }
 
     case 'systemd-creds': {

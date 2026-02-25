@@ -144,7 +144,7 @@ describe('SystemdCredsStore (mocked)', () => {
   it('uses createCredentialStore factory', async () => {
     installDefaultExecFileMock();
     const { createCredentialStore } = await import('aquaman-core');
-    const store = createCredentialStore({ backend: 'systemd-creds', systemdCredsDir: testDir });
+    const store = await createCredentialStore({ backend: 'systemd-creds', systemdCredsDir: testDir });
 
     await store.set('openai', 'api_key', 'sk-openai-123');
     expect(await store.get('openai', 'api_key')).toBe('sk-openai-123');
