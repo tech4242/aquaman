@@ -66,7 +66,7 @@ The `openclaw.plugin.json` manifest defines `additionalProperties: false` with o
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` \| `"keepassxc"` \| `"systemd-creds"` | `"keychain"` | Credential store |
+| `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` \| `"keepassxc"` \| `"systemd-creds"` \| `"bitwarden"` | `"keychain"` | Credential store |
 | `services` | `string[]` | `["anthropic", "openai"]` | Services to proxy |
 
 **Do NOT add extra keys** (like `proxyAutoStart`, `auditEnabled`) to `openclaw.json` — OpenClaw validates against the manifest schema and will reject them. Use `~/.aquaman/config.yaml` for advanced settings.
@@ -275,6 +275,7 @@ Since the Gateway runs on Unix-like systems, backend choice depends on deploymen
 | `1password` | Any (via `op` CLI) | Team credential sharing |
 | `vault` | Any (via HTTP API) | Enterprise secrets management |
 | `systemd-creds` | Linux (systemd ≥ 256) | TPM2-backed, no root needed, no master password |
+| `bitwarden` | Any (via `bw` CLI) | Bitwarden users |
 
 ### systemd-creds Backend Internals
 
@@ -520,7 +521,7 @@ Promise.all([
 | File | Purpose |
 |------|---------|
 | `packages/proxy/src/core/credentials/store.ts` | Backend abstraction (keychain, encrypted-file, memory) |
-| `packages/proxy/src/core/credentials/backends/` | 1Password, Vault, KeePassXC, and systemd-creds backend implementations |
+| `packages/proxy/src/core/credentials/backends/` | 1Password, Vault, KeePassXC, systemd-creds, and Bitwarden backend implementations |
 | `packages/proxy/src/core/audit/logger.ts` | Hash-chained logging |
 | `packages/proxy/src/daemon.ts` | HTTP proxy server on UDS (header, url-path, basic, oauth auth modes) |
 | `packages/proxy/src/cli/index.ts` | CLI (Commander.js, 18 commands incl. `setup`, `doctor`, `migrate openclaw`) |

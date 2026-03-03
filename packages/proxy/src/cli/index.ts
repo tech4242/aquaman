@@ -177,7 +177,7 @@ program
     // Initialize credential store
     let credentialStore;
     try {
-      credentialStore = createCredentialStore({
+      credentialStore = await createCredentialStore({
         backend: config.credentials.backend,
         encryptionPassword: config.credentials.encryptionPassword,
         vaultAddress: config.credentials.vaultAddress,
@@ -187,7 +187,10 @@ program
         onePasswordVault: config.credentials.onePasswordVault,
         onePasswordAccount: config.credentials.onePasswordAccount,
         keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
-        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
+        bitwardenFolder: config.credentials.bitwardenFolder,
+        bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
+        bitwardenCollectionId: config.credentials.bitwardenCollectionId
       });
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
@@ -349,7 +352,7 @@ program
     // Initialize credential store
     let credentialStore;
     try {
-      credentialStore = createCredentialStore({
+      credentialStore = await createCredentialStore({
         backend: config.credentials.backend,
         encryptionPassword: config.credentials.encryptionPassword,
         vaultAddress: config.credentials.vaultAddress,
@@ -359,7 +362,10 @@ program
         onePasswordVault: config.credentials.onePasswordVault,
         onePasswordAccount: config.credentials.onePasswordAccount,
         keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
-        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
+        bitwardenFolder: config.credentials.bitwardenFolder,
+        bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
+        bitwardenCollectionId: config.credentials.bitwardenCollectionId
       });
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
@@ -421,7 +427,7 @@ program
     // Initialize credential store
     let credentialStore;
     try {
-      credentialStore = createCredentialStore({
+      credentialStore = await createCredentialStore({
         backend: config.credentials.backend,
         encryptionPassword: config.credentials.encryptionPassword,
         vaultAddress: config.credentials.vaultAddress,
@@ -431,7 +437,10 @@ program
         onePasswordVault: config.credentials.onePasswordVault,
         onePasswordAccount: config.credentials.onePasswordAccount,
         keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
-        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
+        bitwardenFolder: config.credentials.bitwardenFolder,
+        bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
+        bitwardenCollectionId: config.credentials.bitwardenCollectionId
       });
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
@@ -558,7 +567,7 @@ program
 program
   .command('setup')
   .description('All-in-one setup wizard — creates config, stores credentials, installs plugin')
-  .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, keepassxc, 1password, vault, systemd-creds)')
+  .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, keepassxc, 1password, vault, systemd-creds, bitwarden)')
   .option('--no-openclaw', 'Skip OpenClaw plugin installation')
   .option('--non-interactive', 'Use environment variables instead of prompts (for CI)')
   .action(async (options) => {
@@ -606,7 +615,7 @@ program
     }
 
     // Validate backend
-    const validBackends = ['keychain', 'encrypted-file', 'keepassxc', '1password', 'vault', 'systemd-creds'];
+    const validBackends = ['keychain', 'encrypted-file', 'keepassxc', '1password', 'vault', 'systemd-creds', 'bitwarden'];
     if (!validBackends.includes(backend)) {
       console.error(`  Invalid backend: ${backend}`);
       console.error(`  Valid options: ${validBackends.join(', ')}`);
@@ -681,6 +690,40 @@ program
         console.error('  Try: systemd-creds --version');
         process.exit(1);
       }
+    } else if (backend === 'bitwarden') {
+      try {
+        const { execSync } = await import('node:child_process');
+        execSync('which bw', { stdio: 'pipe' });
+        // Check status
+        const statusJson = execSync('bw status', { stdio: 'pipe', encoding: 'utf-8' });
+        const status = JSON.parse(statusJson);
+        if (status.status === 'unauthenticated') {
+          console.error('  Bitwarden CLI is installed but not logged in.');
+          console.error('  Run: bw login');
+          process.exit(1);
+        }
+        if (status.status === 'locked') {
+          const session = process.env['BW_SESSION'];
+          if (!session) {
+            console.error('  Bitwarden vault is locked.');
+            console.error('  Run: export BW_SESSION=$(bw unlock --raw)');
+            process.exit(1);
+          }
+          // Verify session works
+          try {
+            execSync('bw sync', { stdio: 'pipe', env: { ...process.env, BW_SESSION: session } });
+          } catch {
+            console.error('  BW_SESSION is invalid or expired.');
+            console.error('  Run: export BW_SESSION=$(bw unlock --raw)');
+            process.exit(1);
+          }
+        }
+      } catch {
+        console.error('  Bitwarden CLI not found.');
+        console.error('  Install: https://bitwarden.com/help/cli/');
+        console.error('  Then: bw login && export BW_SESSION=$(bw unlock --raw)');
+        process.exit(1);
+      }
     }
 
     // 2. Run init internally (create dirs, config)
@@ -696,7 +739,7 @@ program
     // 3. Prompt for API keys (or read from env in non-interactive mode)
     let store;
     try {
-      store = createCredentialStore({
+      store = await createCredentialStore({
         backend: config.credentials.backend,
         encryptionPassword: config.credentials.encryptionPassword || process.env['AQUAMAN_ENCRYPTION_PASSWORD'] || process.env['AQUAMAN_KEEPASS_PASSWORD'],
         vaultAddress: config.credentials.vaultAddress || process.env['VAULT_ADDR'],
@@ -704,7 +747,10 @@ program
         onePasswordVault: config.credentials.onePasswordVault,
         onePasswordAccount: config.credentials.onePasswordAccount,
         keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
-        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
+        bitwardenFolder: config.credentials.bitwardenFolder,
+        bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
+        bitwardenCollectionId: config.credentials.bitwardenCollectionId
       });
     } catch (err) {
       console.error(`  Failed to initialize ${backend} credential store: ${err instanceof Error ? err.message : err}`);
@@ -980,7 +1026,17 @@ program
         }
       }
 
-      store = createCredentialStore({
+      if (config.credentials.backend === 'bitwarden') {
+        const { BitwardenStore } = await import('../core/credentials/backends/bitwarden.js');
+        if (!BitwardenStore.isAvailable()) {
+          throw new Error('Bitwarden CLI (bw) not found. Install: https://bitwarden.com/help/cli/');
+        }
+        if (!BitwardenStore.isUnlocked()) {
+          throw new Error('Bitwarden vault is locked. Run: export BW_SESSION=$(bw unlock --raw)');
+        }
+      }
+
+      store = await createCredentialStore({
         backend: config.credentials.backend,
         encryptionPassword: config.credentials.encryptionPassword,
         vaultAddress: config.credentials.vaultAddress,
@@ -988,7 +1044,10 @@ program
         onePasswordVault: config.credentials.onePasswordVault,
         onePasswordAccount: config.credentials.onePasswordAccount,
         keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
-        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
+        bitwardenFolder: config.credentials.bitwardenFolder,
+        bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
+        bitwardenCollectionId: config.credentials.bitwardenCollectionId
       });
 
       // 3. Count credentials
@@ -1355,7 +1414,7 @@ credentials
 
     let store;
     try {
-      store = createCredentialStore({
+      store = await createCredentialStore({
         backend,
         encryptionPassword: config.credentials.encryptionPassword,
         vaultAddress: config.credentials.vaultAddress,
@@ -1365,7 +1424,10 @@ credentials
         onePasswordVault: config.credentials.onePasswordVault,
         onePasswordAccount: config.credentials.onePasswordAccount,
         keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
-        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
+        bitwardenFolder: config.credentials.bitwardenFolder,
+        bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
+        bitwardenCollectionId: config.credentials.bitwardenCollectionId
       });
     } catch (error) {
       console.error('Credential store not available:', error instanceof Error ? error.message : error);
@@ -1414,7 +1476,7 @@ credentials
     const config = loadConfig();
     let store;
     try {
-      store = createCredentialStore({
+      store = await createCredentialStore({
         backend: config.credentials.backend,
         encryptionPassword: config.credentials.encryptionPassword,
         vaultAddress: config.credentials.vaultAddress,
@@ -1422,7 +1484,10 @@ credentials
         onePasswordVault: config.credentials.onePasswordVault,
         onePasswordAccount: config.credentials.onePasswordAccount,
         keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
-        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
+        bitwardenFolder: config.credentials.bitwardenFolder,
+        bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
+        bitwardenCollectionId: config.credentials.bitwardenCollectionId
       });
     } catch {
       console.error('Credential store not available.');
@@ -1449,7 +1514,7 @@ credentials
     const config = loadConfig();
     let store;
     try {
-      store = createCredentialStore({
+      store = await createCredentialStore({
         backend: config.credentials.backend,
         encryptionPassword: config.credentials.encryptionPassword,
         vaultAddress: config.credentials.vaultAddress,
@@ -1457,7 +1522,10 @@ credentials
         onePasswordVault: config.credentials.onePasswordVault,
         onePasswordAccount: config.credentials.onePasswordAccount,
         keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
-        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
+        bitwardenFolder: config.credentials.bitwardenFolder,
+        bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
+        bitwardenCollectionId: config.credentials.bitwardenCollectionId
       });
     } catch {
       console.error('Credential store not available.');
@@ -1475,7 +1543,7 @@ credentials
 credentials
   .command('guide')
   .description('Show setup commands for seeding credentials based on your backend')
-  .option('--backend <backend>', 'Override backend (keychain, encrypted-file, vault, 1password)')
+  .option('--backend <backend>', 'Override backend (keychain, encrypted-file, vault, 1password, bitwarden)')
   .option('--service <name>', 'Show commands for a single service only')
   .action(async (options) => {
     const config = loadConfig();
@@ -1838,7 +1906,7 @@ migrate
       // Migrate
       let store;
       try {
-        store = createCredentialStore({
+        store = await createCredentialStore({
           backend: appConfig.credentials.backend,
           encryptionPassword: appConfig.credentials.encryptionPassword,
           vaultAddress: appConfig.credentials.vaultAddress,
@@ -2007,7 +2075,7 @@ migrate
       console.log('(dry run - no credentials will be written)\n');
     }
 
-    const store = createCredentialStore({
+    const store = await createCredentialStore({
       backend: appConfig.credentials.backend,
       encryptionPassword: appConfig.credentials.encryptionPassword,
       vaultAddress: appConfig.credentials.vaultAddress,
@@ -2073,7 +2141,7 @@ program
 
     // Check for stored credentials
     try {
-      const store = createCredentialStore({
+      const store = await createCredentialStore({
         backend: config.credentials.backend,
         encryptionPassword: config.credentials.encryptionPassword,
         vaultAddress: config.credentials.vaultAddress,
@@ -2081,7 +2149,10 @@ program
         onePasswordVault: config.credentials.onePasswordVault,
         onePasswordAccount: config.credentials.onePasswordAccount,
         keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
-        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath
+        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
+        bitwardenFolder: config.credentials.bitwardenFolder,
+        bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
+        bitwardenCollectionId: config.credentials.bitwardenCollectionId
       });
       const creds = await store.list();
       console.log(`\nStored credentials: ${creds.length}`);
