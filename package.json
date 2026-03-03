@@ -1,6 +1,6 @@
 {
   "name": "aquaman",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "description": "Credential isolation proxy for OpenClaw — secrets stay submerged, agents stay dry. 🔱🦞",
   "type": "module",

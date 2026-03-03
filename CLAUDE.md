@@ -205,7 +205,7 @@ aquaman setup --no-openclaw             # Skip plugin installation
 5. If OpenClaw found: installs plugin, writes openclaw.json, generates auth-profiles.json
 6. Prints success message
 
-**Non-interactive env vars:** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AQUAMAN_ENCRYPTION_PASSWORD`, `AQUAMAN_KEEPASS_PASSWORD`, `VAULT_ADDR`, `VAULT_TOKEN`
+**Non-interactive env vars:** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AQUAMAN_ENCRYPTION_PASSWORD`, `AQUAMAN_KEEPASS_PASSWORD`, `VAULT_ADDR`, `VAULT_TOKEN`, `BW_SESSION`
 
 ## CLI: `aquaman doctor`
 

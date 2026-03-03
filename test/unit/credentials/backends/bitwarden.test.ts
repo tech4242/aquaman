@@ -675,6 +675,40 @@ describe('BitwardenStore', () => {
       expect(creds[0].service).toBe('service');
       expect(creds[0].key).toBe('complex-key-name');
     });
+
+    it('handles hyphenated service names correctly', async () => {
+      mockSpawnSync.mockImplementation((command, args) => {
+        if (command === 'which') {
+          return mockSpawnResult(0, '/usr/local/bin/bw\n');
+        }
+        if (args?.[0] === 'status') {
+          return mockSpawnResult(0, JSON.stringify({ status: 'unlocked' }));
+        }
+        if (args?.[0] === 'list' && args?.[1] === 'items') {
+          return mockSpawnResult(
+            0,
+            JSON.stringify([
+              { name: 'aquaman::google-chat::bot_token' },
+              { name: 'aquaman::ms-teams::client_secret' }
+            ])
+          );
+        }
+        return mockSpawnResult(0, '{}');
+      });
+
+      const { BitwardenStore } = await import(
+        '../../../../packages/proxy/src/core/credentials/backends/bitwarden.js'
+      );
+      const store = new BitwardenStore();
+
+      const creds = await store.list();
+
+      expect(creds).toHaveLength(2);
+      expect(creds[0].service).toBe('google-chat');
+      expect(creds[0].key).toBe('bot_token');
+      expect(creds[1].service).toBe('ms-teams');
+      expect(creds[1].key).toBe('client_secret');
+    });
   });
 
   describe('metadata key sanitization', () => {

@@ -111,6 +111,18 @@ export function applyEnvOverrides(config: WrapperConfig): WrapperConfig {
     config.credentials.vaultNamespace = env['VAULT_NAMESPACE'];
   }
 
+  if (env['AQUAMAN_BITWARDEN_FOLDER']) {
+    config.credentials.bitwardenFolder = env['AQUAMAN_BITWARDEN_FOLDER'];
+  }
+
+  if (env['AQUAMAN_BITWARDEN_ORGANIZATION_ID']) {
+    config.credentials.bitwardenOrganizationId = env['AQUAMAN_BITWARDEN_ORGANIZATION_ID'];
+  }
+
+  if (env['AQUAMAN_BITWARDEN_COLLECTION_ID']) {
+    config.credentials.bitwardenCollectionId = env['AQUAMAN_BITWARDEN_COLLECTION_ID'];
+  }
+
   return config;
 }
 
