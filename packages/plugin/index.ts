@@ -16,7 +16,17 @@
  *   - Agent never sees the actual API keys
  */
 
-import type { OpenClawPluginApi, OpenClawPluginDefinition } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+
+// OpenClawPluginDefinition exists in the SDK internals but isn't re-exported from "openclaw/plugin-sdk".
+// Mirror the type here until OpenClaw exposes it from the barrel.
+type OpenClawPluginDefinition = {
+  id?: string;
+  name?: string;
+  description?: string;
+  version?: string;
+  register?: (api: OpenClawPluginApi) => void | Promise<void>;
+};
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -202,6 +212,7 @@ function registerStatusTool(api: OpenClawPluginApi, services: string[]): void {
     () => {
       return {
         name: "aquaman_status",
+        label: "Aquaman Status",
         description:
           "Check aquaman credential proxy status and configured services",
         parameters: {
@@ -209,8 +220,8 @@ function registerStatusTool(api: OpenClawPluginApi, services: string[]): void {
           properties: {},
           required: [] as string[],
         },
-        async execute() {
-          return {
+        async execute(_toolCallId: string, _params: unknown) {
+          const status = {
             proxyRunning: proxyManager !== null,
             socketPath: socketPath || getDefaultSocketPath(),
             services,
@@ -226,6 +237,10 @@ function registerStatusTool(api: OpenClawPluginApi, services: string[]): void {
                 return [key, process.env[key] ?? null];
               })
             ),
+          };
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify(status, null, 2) }],
+            details: status,
           };
         },
       };

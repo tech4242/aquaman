@@ -42,7 +42,7 @@ packages/
 The plugin (`packages/plugin/`) integrates with the OpenClaw Gateway's plugin SDK. Plugins run inside the Gateway process and have access to lifecycle hooks, CLI registration, and tool registration.
 
 **How it works:**
-1. Plugin exports `OpenClawPluginDefinition` object (imported from `openclaw/plugin-sdk/core`)
+1. Plugin exports `OpenClawPluginDefinition` object (imported from `openclaw/plugin-sdk`)
 2. On load: reads `services` from `api.pluginConfig` (defaults to `["anthropic", "openai"]`)
 3. On load: auto-generates `auth-profiles.json` with placeholder keys if missing
 4. On load: sets `ANTHROPIC_BASE_URL=http://aquaman.local/anthropic`, `OPENAI_BASE_URL=http://aquaman.local/openai` (sentinel hostname routed to UDS)
