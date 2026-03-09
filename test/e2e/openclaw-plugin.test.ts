@@ -206,12 +206,13 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
       expect(existsSync(indexPath)).toBe(true);
     });
 
-    it('entry point exports register function', () => {
+    it('entry point exports plugin definition object', () => {
       const pluginPath = path.join(testStateDir, 'extensions', 'aquaman-plugin');
       const indexPath = path.join(pluginPath, 'index.ts');
       const content = readFileSync(indexPath, 'utf-8');
 
-      expect(content).toContain('export default function register');
+      expect(content).toContain('const plugin: OpenClawPluginDefinition');
+      expect(content).toContain('export default plugin');
     });
   });
 });
