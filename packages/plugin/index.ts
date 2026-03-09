@@ -16,7 +16,7 @@
  *   - Agent never sees the actual API keys
  */
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi, OpenClawPluginDefinition } from "openclaw/plugin-sdk/core";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -52,7 +52,7 @@ let proxyManager: ProxyManager | null = null;
 let httpInterceptor: HttpInterceptor | null = null;
 let socketPath: string | null = null;
 let dynamicHostMap: Map<string, string> | null = null;
-const services = ["anthropic", "openai"];
+let configuredServices: string[] = ["anthropic", "openai"];
 
 /** Default socket path */
 function getDefaultSocketPath(): string {
@@ -169,7 +169,7 @@ function activateHttpInterceptor(log: OpenClawPluginApi["logger"]): void {
 /**
  * Set environment variables for SDK clients using sentinel hostname
  */
-function configureEnvironment(log: OpenClawPluginApi["logger"]): void {
+function configureEnvironment(log: OpenClawPluginApi["logger"], services: string[]): void {
   for (const service of services) {
     const serviceUrl = `http://aquaman.local/${service}`;
 
@@ -197,7 +197,7 @@ function configureEnvironment(log: OpenClawPluginApi["logger"]): void {
 /**
  * Register the aquaman_status tool
  */
-function registerStatusTool(api: OpenClawPluginApi): void {
+function registerStatusTool(api: OpenClawPluginApi, services: string[]): void {
   api.registerTool(
     () => {
       return {
@@ -239,7 +239,7 @@ function registerStatusTool(api: OpenClawPluginApi): void {
  * OpenClaw checks its auth store before making API calls — without a placeholder
  * key, requests are rejected before they ever reach the proxy.
  */
-function ensureAuthProfiles(log: OpenClawPluginApi["logger"]): void {
+function ensureAuthProfiles(log: OpenClawPluginApi["logger"], services: string[]): void {
   const stateDir =
     process.env.OPENCLAW_STATE_DIR ||
     path.join(os.homedir(), ".openclaw");
@@ -280,127 +280,155 @@ function ensureAuthProfiles(log: OpenClawPluginApi["logger"]): void {
 }
 
 /**
- * OpenClaw plugin register function
+ * Aquaman OpenClaw Plugin Definition
  */
-export default function register(api: OpenClawPluginApi): void {
-  api.logger.info("Aquaman plugin loaded");
+const plugin: OpenClawPluginDefinition = {
+  id: 'aquaman-plugin',
+  name: 'Aquaman Vault',
+  version: PLUGIN_VERSION,
+  description: 'Credential isolation for OpenClaw — API keys never enter the agent process',
 
-  // Auto-generate auth-profiles.json if missing
-  ensureAuthProfiles(api.logger);
+  register(api) {
+    api.logger.info("Aquaman plugin loaded");
 
-  // Local proxy mode — requires aquaman CLI
-  if (!isAquamanInstalled()) {
-    api.logger.warn(
-      "aquaman CLI not found. Install with: npm install -g aquaman-proxy"
-    );
-    api.logger.warn(
-      "Then run: aquaman setup"
-    );
-    configureEnvironment(api.logger);
-    return;
-  }
+    // Read services from plugin config
+    const pluginCfg = api.pluginConfig as { backend?: string; services?: string[] } | undefined;
+    configuredServices = pluginCfg?.services ?? ["anthropic", "openai"];
 
-  api.logger.info("aquaman CLI found, will start proxy on gateway start");
+    // Auto-generate auth-profiles.json if missing
+    ensureAuthProfiles(api.logger, configuredServices);
 
-  // Configure environment variables immediately (sentinel hostname)
-  configureEnvironment(api.logger);
+    // Local proxy mode — requires aquaman CLI
+    if (!isAquamanInstalled()) {
+      api.logger.warn(
+        "aquaman CLI not found. Install with: npm install -g aquaman-proxy"
+      );
+      api.logger.warn(
+        "Then run: aquaman setup"
+      );
+      configureEnvironment(api.logger, configuredServices);
+      return;
+    }
 
-  // Register lifecycle hooks if available
-  if (api.registerLifecycle) {
-    api.registerLifecycle({
-      async onGatewayStart() {
-        api.logger.info("Starting aquaman proxy...");
+    api.logger.info("aquaman CLI found, will start proxy on gateway start");
 
-        const started = await startProxy(api.logger);
+    // Configure environment variables immediately (sentinel hostname)
+    configureEnvironment(api.logger, configuredServices);
+
+    // Register service for proxy lifecycle management
+    api.registerService({
+      id: 'aquaman-proxy',
+      async start(ctx) {
+        ctx.logger.info("Starting aquaman proxy...");
+
+        const started = await startProxy(ctx.logger);
         if (started && socketPath) {
-          api.logger.info("Aquaman proxy started successfully");
+          ctx.logger.info("Aquaman proxy started successfully");
 
           // Check for version mismatch between plugin and proxy
           const proxyVersion = await getProxyVersion(socketPath);
           if (proxyVersion && proxyVersion !== PLUGIN_VERSION) {
-            api.logger.warn(
+            ctx.logger.warn(
               `Warning: plugin version ${PLUGIN_VERSION} \u2260 proxy version ${proxyVersion}. ` +
               `Update both: npm install -g aquaman-proxy && openclaw plugins install aquaman-plugin`
             );
           }
 
           // Activate HTTP interceptor to redirect channel traffic through proxy
-          activateHttpInterceptor(api.logger);
+          activateHttpInterceptor(ctx.logger);
         } else {
-          api.logger.error("Failed to start aquaman proxy");
+          ctx.logger.error("Failed to start aquaman proxy");
           // Check if another instance is already running
           const defaultSock = getDefaultSocketPath();
           const alreadyRunning = await isProxyRunning(defaultSock);
           if (alreadyRunning) {
             socketPath = defaultSock;
-            api.logger.info(
+            ctx.logger.info(
               "Another aquaman instance is already running — using it"
             );
             // Load host map from existing proxy
             const map = await loadHostMap(defaultSock);
             dynamicHostMap = map.size > 0 ? map : FALLBACK_HOST_MAP;
-            activateHttpInterceptor(api.logger);
+            activateHttpInterceptor(ctx.logger);
           } else {
-            api.logger.error(
+            ctx.logger.error(
               "No running proxy found. Check: aquaman doctor"
             );
           }
         }
       },
-
-      async onGatewayStop() {
-        api.logger.info("Stopping aquaman proxy...");
+      async stop(ctx) {
+        ctx.logger.info("Stopping aquaman proxy...");
         stopProxy();
-      },
+      }
     });
+
+    // Register /aquaman-status slash command for humans
+    api.registerCommand({
+      name: 'aquaman-status',
+      description: 'Show aquaman credential proxy status and configured services',
+      acceptsArgs: false,
+      requireAuth: true,
+      async handler() {
+        const status = {
+          proxyRunning: proxyManager !== null,
+          socketPath: socketPath || getDefaultSocketPath(),
+          services: configuredServices,
+          httpInterceptorActive: httpInterceptor?.isActive() ?? false,
+        };
+        return { text: JSON.stringify(status, null, 2) };
+      }
+    });
+
+    // Register CLI commands if available
+    if (api.registerCli) {
+      api.registerCli(
+        ({ program }) => {
+          const aquamanCmd = program
+            .command("aquaman")
+            .description("Aquaman credential management");
+
+          aquamanCmd
+            .command("status")
+            .description("Show aquaman proxy status")
+            .action(() => {
+              console.log("\nAquaman Status:");
+              console.log(`  Proxy running: ${proxyManager !== null}`);
+              console.log(`  Socket path: ${socketPath || getDefaultSocketPath()}`);
+              console.log(`  Services: ${configuredServices.join(", ")}`);
+              console.log("\nEnvironment Variables:");
+              for (const service of configuredServices) {
+                const envKey =
+                  service === "anthropic"
+                    ? "ANTHROPIC_BASE_URL"
+                    : service === "openai"
+                      ? "OPENAI_BASE_URL"
+                      : `${service.toUpperCase()}_BASE_URL`;
+                console.log(`  ${envKey}=${process.env[envKey] ?? "(not set)"}`);
+              }
+            });
+
+          aquamanCmd
+            .command("add <service> [key]")
+            .description("Add a credential (opens secure prompt)")
+            .action((service: string, key: string = "api_key") => {
+              console.log(`\n  Run in your terminal:\n    aquaman credentials add ${service} ${key}\n`);
+            });
+
+          aquamanCmd
+            .command("list")
+            .description("List stored credentials")
+            .action(() => {
+              console.log(`\n  Run in your terminal:\n    aquaman credentials list\n`);
+            });
+        },
+        { commands: ["aquaman"] }
+      );
+    }
+
+    registerStatusTool(api, configuredServices);
+    api.logger.info("Aquaman plugin registered successfully");
   }
+};
 
-  // Register CLI commands if available
-  if (api.registerCli) {
-    api.registerCli(
-      ({ program }) => {
-        const aquamanCmd = program
-          .command("aquaman")
-          .description("Aquaman credential management");
-
-        aquamanCmd
-          .command("status")
-          .description("Show aquaman proxy status")
-          .action(() => {
-            console.log("\nAquaman Status:");
-            console.log(`  Proxy running: ${proxyManager !== null}`);
-            console.log(`  Socket path: ${socketPath || getDefaultSocketPath()}`);
-            console.log(`  Services: ${services.join(", ")}`);
-            console.log("\nEnvironment Variables:");
-            for (const service of services) {
-              const envKey =
-                service === "anthropic"
-                  ? "ANTHROPIC_BASE_URL"
-                  : service === "openai"
-                    ? "OPENAI_BASE_URL"
-                    : `${service.toUpperCase()}_BASE_URL`;
-              console.log(`  ${envKey}=${process.env[envKey] ?? "(not set)"}`);
-            }
-          });
-
-        aquamanCmd
-          .command("add <service> [key]")
-          .description("Add a credential (opens secure prompt)")
-          .action((service: string, key: string = "api_key") => {
-            console.log(`\n  Run in your terminal:\n    aquaman credentials add ${service} ${key}\n`);
-          });
-
-        aquamanCmd
-          .command("list")
-          .description("List stored credentials")
-          .action(() => {
-            console.log(`\n  Run in your terminal:\n    aquaman credentials list\n`);
-          });
-      },
-      { commands: ["aquaman"] }
-    );
-  }
-
-  registerStatusTool(api);
-  api.logger.info("Aquaman plugin registered successfully");
-}
+export default plugin;

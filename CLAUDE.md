@@ -42,16 +42,17 @@ packages/
 The plugin (`packages/plugin/`) integrates with the OpenClaw Gateway's plugin SDK. Plugins run inside the Gateway process and have access to lifecycle hooks, CLI registration, and tool registration.
 
 **How it works:**
-1. Plugin exports `register(api)` function (not a class)
-2. On load: auto-generates `auth-profiles.json` with placeholder keys if missing
-3. On load: sets `ANTHROPIC_BASE_URL=http://aquaman.local/anthropic`, `OPENAI_BASE_URL=http://aquaman.local/openai` (sentinel hostname routed to UDS)
-4. On `onGatewayStart`: spawns `aquaman plugin-mode` via `ProxyManager` (from `src/proxy-manager.ts`) — proxy listens on UDS (`~/.aquaman/proxy.sock`)
-5. On `onGatewayStart`: activates `globalThis.fetch` interceptor to redirect channel API traffic through proxy
-6. On `onGatewayStop`: deactivates interceptor, stops proxy via `ProxyManager`
-7. Registers `/aquaman` CLI commands and `aquaman_status` tool
+1. Plugin exports `OpenClawPluginDefinition` object (imported from `openclaw/plugin-sdk/core`)
+2. On load: reads `services` from `api.pluginConfig` (defaults to `["anthropic", "openai"]`)
+3. On load: auto-generates `auth-profiles.json` with placeholder keys if missing
+4. On load: sets `ANTHROPIC_BASE_URL=http://aquaman.local/anthropic`, `OPENAI_BASE_URL=http://aquaman.local/openai` (sentinel hostname routed to UDS)
+5. Via `registerService('aquaman-proxy')`: spawns `aquaman plugin-mode` via `ProxyManager` (from `src/proxy-manager.ts`) — proxy listens on UDS (`~/.aquaman/proxy.sock`)
+6. Via `registerService('aquaman-proxy')`: activates `globalThis.fetch` interceptor to redirect channel API traffic through proxy
+7. Via `registerService('aquaman-proxy')` stop: deactivates interceptor, stops proxy via `ProxyManager`
+8. Registers `/aquaman-status` command (human-facing), `aquaman_status` tool (agent-facing), and `/aquaman` CLI commands
 
 **Key files:**
-- `index.ts` - Plugin entry point with `export default function register(api)` — this is the actual running code OpenClaw loads. Does NOT import `child_process` or `fetch` directly (separated to avoid OpenClaw security scanner false positives).
+- `index.ts` - Plugin entry point with `OpenClawPluginDefinition` object export (`export default plugin`) — this is the actual running code OpenClaw loads. Does NOT import `child_process` or `fetch` directly (separated to avoid OpenClaw security scanner false positives).
 - `src/proxy-manager.ts` - Spawns/manages the proxy child process (contains `child_process` import)
 - `src/proxy-health.ts` - Proxy health check and host map fetching (contains `fetch` calls)
 - `src/plugin.ts` - Class-based plugin implementation (alternative architecture, used by standalone tests)
