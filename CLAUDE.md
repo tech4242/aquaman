@@ -117,7 +117,7 @@ OpenClaw 2026.2.15+ also reports an environment-level advisory:
 
 There is no suppression mechanism for code findings (no inline annotations, no `.auditignore`). The only fix is to ensure trigger patterns don't co-exist in the same file.
 
-**Current state (v0.7.0, tested through 2026.2.15):** 2 expected findings: `dangerous-exec` on `proxy-manager.ts` (true positive — it spawns the proxy process), `tools_reachable_permissive_policy` (environment advisory — not a code issue). 0 env-harvesting findings. The scanner recursively scans `src/` and `dist/` subdirectories (since 2026.2.9).
+**Current state (v0.9.1, tested through 2026.3.8):** 2 expected findings: `dangerous-exec` on `proxy-manager.ts` (true positive — it spawns the proxy process), `tools_reachable_permissive_policy` (environment advisory — not a code issue). 0 env-harvesting findings. The scanner recursively scans `src/` and `dist/` subdirectories (since 2026.2.9). Note: OpenClaw 2026.3.x fresh installs default `tools.profile` to `messaging` — `aquaman_status` tool may not surface unless the operator configures `tools.profile` to include it.
 
 **Mitigations:**
 - `aquaman setup` auto-sets `plugins.allow: ["aquaman-plugin"]` in `openclaw.json` (resolves the `extensions_no_allowlist` audit finding)
@@ -158,7 +158,9 @@ this.keytar = mod.default || mod;
 2. `globalThis.fetch` interceptor matches hostname → service name
 3. Rewrites URL to `http://aquaman.local/telegram/sendMessage` (dispatched over UDS)
 4. Proxy handles auth based on `authMode`:
-   - `header`: injects auth header (Anthropic, OpenAI, GitHub, xAI, Cloudflare AI Gateway, Slack, Discord, Matrix, Mattermost, LINE, Twitch, ElevenLabs, Telnyx, Zalo)
+   - `header`: injects auth header
+     - **Providers:** Anthropic, OpenAI, GitHub, xAI, Cloudflare AI Gateway, Mistral, Hugging Face, ElevenLabs
+     - **Channels:** Slack, Discord, Matrix, Mattermost, LINE, Twitch, Telnyx, Zalo
    - `url-path`: rewrites path to `/bot<TOKEN>/method` (Telegram)
    - `basic`: injects `Authorization: Basic base64(user:pass)` (Twilio, BlueBubbles, Nextcloud Talk)
    - `oauth`: exchanges client credentials for access token (MS Teams, Feishu, Google Chat)
@@ -409,9 +411,9 @@ curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/anthropic/v1/messag
 npx tsx packages/proxy/src/cli/index.ts stop
 ```
 
-## Manual Channel Testing
+## Manual Testing
 
-Step-by-step guide for manually testing credential injection across all auth modes.
+Step-by-step guide for manually testing credential injection across all auth modes (providers and channels).
 
 ### 1. Store test credentials
 
@@ -421,13 +423,16 @@ node -e "
 const kt = require('./node_modules/keytar');
 const k = kt.default || kt;
 Promise.all([
-  // Header auth
+  // Providers (header auth)
   k.setPassword('aquaman/anthropic', 'api_key', 'sk-ant-manual-test'),
+  k.setPassword('aquaman/mistral', 'api_key', 'mistral-manual-test-key'),
+  k.setPassword('aquaman/huggingface', 'api_key', 'hf-manual-test-key'),
+  // Channels (header auth)
   k.setPassword('aquaman/slack', 'bot_token', 'xoxb-manual-test-token'),
   k.setPassword('aquaman/discord', 'bot_token', 'discord-manual-test-token'),
-  // URL-path auth
+  // Channels (URL-path auth)
   k.setPassword('aquaman/telegram', 'bot_token', '123456:MANUAL-TEST-TOKEN'),
-  // Basic auth
+  // Channels (basic auth)
   k.setPassword('aquaman/twilio', 'account_sid', 'AC-manual-test-sid'),
   k.setPassword('aquaman/twilio', 'auth_token', 'manual-test-auth-token'),
 ]).then(() => console.log('All test credentials stored'));
@@ -443,7 +448,9 @@ npx tsx packages/proxy/src/cli/index.ts plugin-mode
 
 ### 3. Test each auth mode
 
-**Header auth (Anthropic):**
+#### Providers
+
+**Anthropic (header auth):**
 ```bash
 curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/anthropic/v1/messages \
   -H "Content-Type: application/json" \
@@ -451,25 +458,43 @@ curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/anthropic/v1/messag
 # Expect: 401 from Anthropic (confirms proxy injected the test key)
 ```
 
-**Header auth (Slack):**
+**Mistral (header auth):**
+```bash
+curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/mistral/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"mistral-large-latest","messages":[{"role":"user","content":"hi"}]}'
+# Expect: 401 from Mistral (confirms Bearer token injected)
+```
+
+**Hugging Face (header auth):**
+```bash
+curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/huggingface/models/meta-llama/Llama-3-8B \
+  -H "Content-Type: application/json" \
+  -d '{"inputs":"hi"}'
+# Expect: 401 from Hugging Face (confirms Bearer token injected)
+```
+
+#### Channels
+
+**Slack (header auth):**
 ```bash
 curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/slack/auth.test
 # Expect: {"ok":false,"error":"invalid_auth"} (confirms Bearer token injected)
 ```
 
-**Header auth (Discord):**
+**Discord (header auth):**
 ```bash
 curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/discord/api/v10/users/@me
 # Expect: 401 from Discord (confirms Bot token injected)
 ```
 
-**URL-path auth (Telegram):**
+**Telegram (URL-path auth):**
 ```bash
 curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/telegram/getMe
 # Expect: {"ok":false,"error_code":401} (token injected into URL path)
 ```
 
-**Basic auth (Twilio):**
+**Twilio (basic auth):**
 ```bash
 curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/twilio/2010-04-01/Accounts.json
 # Expect: 401 from Twilio (Basic auth header injected)
@@ -499,7 +524,11 @@ node -e "
 const kt = require('./node_modules/keytar');
 const k = kt.default || kt;
 Promise.all([
+  // Providers
   k.deletePassword('aquaman/anthropic', 'api_key'),
+  k.deletePassword('aquaman/mistral', 'api_key'),
+  k.deletePassword('aquaman/huggingface', 'api_key'),
+  // Channels
   k.deletePassword('aquaman/slack', 'bot_token'),
   k.deletePassword('aquaman/discord', 'bot_token'),
   k.deletePassword('aquaman/telegram', 'bot_token'),
@@ -525,7 +554,7 @@ Promise.all([
 | `packages/proxy/src/core/audit/logger.ts` | Hash-chained logging |
 | `packages/proxy/src/daemon.ts` | HTTP proxy server on UDS (header, url-path, basic, oauth auth modes) |
 | `packages/proxy/src/cli/index.ts` | CLI (Commander.js, 18 commands incl. `setup`, `doctor`, `migrate openclaw`) |
-| `packages/proxy/src/service-registry.ts` | Builtin service definitions (23 services) |
+| `packages/proxy/src/service-registry.ts` | Builtin service definitions (25 services) |
 | `packages/proxy/src/oauth-token-cache.ts` | OAuth client credentials token exchange + caching |
 | `packages/proxy/src/migration/openclaw-migrator.ts` | Migrates channel + plugin creds from openclaw.json to secure store |
 | `packages/proxy/src/openclaw/env-writer.ts` | Generates env vars for OpenClaw integration |
@@ -538,7 +567,8 @@ Promise.all([
 | `packages/plugin/src/http-interceptor.ts` | `globalThis.fetch` override for channel traffic interception (uses `undici.Agent` with UDS dispatcher) |
 | `test/e2e/openclaw-plugin.test.ts` | Plugin integration tests |
 | `test/e2e/credential-proxy.test.ts` | Proxy E2E tests |
-| `test/e2e/channel-credential-injection.test.ts` | Channel auth mode E2E tests (Telegram, Twilio, Twitch, etc.) |
+| `test/e2e/channel-credential-injection.test.ts` | Channel auth mode E2E tests (Telegram, Twilio, Twitch, Slack, etc.) |
+| `test/e2e/provider-credential-injection.test.ts` | LLM/AI provider auth E2E tests (xAI, Cloudflare AI, Mistral, Hugging Face, ElevenLabs) |
 | `test/e2e/oauth-credential-injection.test.ts` | OAuth flow E2E tests (mock token server) |
 | `test/e2e/keychain-proxy-flow.test.ts` | Real keychain backend E2E (macOS only) |
 | `test/e2e/cli-plugin-mode.test.ts` | CLI startup/output E2E tests |

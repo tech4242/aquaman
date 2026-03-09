@@ -1543,7 +1543,7 @@ credentials
 credentials
   .command('guide')
   .description('Show setup commands for seeding credentials based on your backend')
-  .option('--backend <backend>', 'Override backend (keychain, encrypted-file, vault, 1password, bitwarden)')
+  .option('--backend <backend>', 'Override backend (keychain, encrypted-file, keepassxc, 1password, vault, systemd-creds, bitwarden)')
   .option('--service <name>', 'Show commands for a single service only')
   .action(async (options) => {
     const config = loadConfig();
