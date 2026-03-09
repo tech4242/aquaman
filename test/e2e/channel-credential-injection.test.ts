@@ -1,10 +1,15 @@
 /**
- * E2E tests for channel credential injection (new auth modes).
+ * E2E tests for channel credential injection.
  *
- * Tests the new auth modes added to support OpenClaw channel credentials:
+ * Tests auth injection for OpenClaw messaging channel services:
+ * - Header auth (Slack, Discord, Matrix, LINE, Zalo)
  * - URL-path auth (Telegram: /bot<TOKEN>/method)
  * - HTTP Basic auth (Twilio: base64(sid:token))
  * - Additional headers (Twitch: Authorization + Client-Id)
+ * - Auth mode "none" (Nostr: at-rest storage only, proxy rejects traffic)
+ *
+ * LLM/AI provider tests are in provider-credential-injection.test.ts.
+ * OAuth channel tests (MS Teams, Feishu, Google Chat) are in oauth-credential-injection.test.ts.
  *
  * Architecture:
  *   Test -> Proxy (UDS) -> Mock Upstream (dynamic port)
@@ -33,14 +38,12 @@ describe('Channel Credential Injection E2E', () => {
   const TEST_TWILIO_TOKEN = 'auth-token-test-789';
   const TEST_TWITCH_TOKEN = 'twitch-oauth-token-abc';
   const TEST_TWITCH_CLIENT_ID = 'twitch-client-id-xyz';
-  const TEST_ELEVENLABS_KEY = 'el-api-key-test-456';
   const TEST_SLACK_TOKEN = 'xoxb-slack-bot-token-test';
   const TEST_DISCORD_TOKEN = 'discord-bot-token-test-123';
   const TEST_MATRIX_TOKEN = 'syt_matrix_access_token_test';
   const TEST_LINE_TOKEN = 'line-channel-access-token-test';
   const TEST_ZALO_TOKEN = 'zalo-bot-token-test-456';
-  const TEST_XAI_KEY = 'xai-api-key-test-789';
-  const TEST_CLOUDFLARE_AI_TOKEN = 'cf-ai-api-token-test-012';
+  const TEST_TELNYX_KEY = 'telnyx-api-key-test-321';
 
   beforeEach(async () => {
     upstream = createMockUpstream();
@@ -53,14 +56,12 @@ describe('Channel Credential Injection E2E', () => {
     await store.set('twilio', 'auth_token', TEST_TWILIO_TOKEN);
     await store.set('twitch', 'access_token', TEST_TWITCH_TOKEN);
     await store.set('twitch', 'client_id', TEST_TWITCH_CLIENT_ID);
-    await store.set('elevenlabs', 'api_key', TEST_ELEVENLABS_KEY);
     await store.set('slack', 'bot_token', TEST_SLACK_TOKEN);
     await store.set('discord', 'bot_token', TEST_DISCORD_TOKEN);
     await store.set('matrix', 'access_token', TEST_MATRIX_TOKEN);
     await store.set('line', 'channel_access_token', TEST_LINE_TOKEN);
     await store.set('zalo', 'bot_token', TEST_ZALO_TOKEN);
-    await store.set('xai', 'api_key', TEST_XAI_KEY);
-    await store.set('cloudflare-ai', 'api_token', TEST_CLOUDFLARE_AI_TOKEN);
+    await store.set('telnyx', 'api_key', TEST_TELNYX_KEY);
 
     requestLog = [];
     socketPath = tmpSocketPath();
@@ -75,9 +76,6 @@ describe('Channel Credential Injection E2E', () => {
       upstream: `http://127.0.0.1:${upstreamPort}`
     });
     registry.override('twitch', {
-      upstream: `http://127.0.0.1:${upstreamPort}`
-    });
-    registry.override('elevenlabs', {
       upstream: `http://127.0.0.1:${upstreamPort}`
     });
     registry.override('slack', {
@@ -95,10 +93,7 @@ describe('Channel Credential Injection E2E', () => {
     registry.override('zalo', {
       upstream: `http://127.0.0.1:${upstreamPort}`
     });
-    registry.override('xai', {
-      upstream: `http://127.0.0.1:${upstreamPort}`
-    });
-    registry.override('cloudflare-ai', {
+    registry.override('telnyx', {
       upstream: `http://127.0.0.1:${upstreamPort}`
     });
 
@@ -106,7 +101,7 @@ describe('Channel Credential Injection E2E', () => {
       socketPath,
       store,
       serviceRegistry: registry,
-      allowedServices: ['telegram', 'twilio', 'twitch', 'elevenlabs', 'slack', 'discord', 'matrix', 'line', 'zalo', 'xai', 'cloudflare-ai'],
+      allowedServices: ['telegram', 'twilio', 'twitch', 'slack', 'discord', 'matrix', 'line', 'zalo', 'telnyx'],
       onRequest: (info) => {
         requestLog.push(info);
       }
@@ -205,22 +200,6 @@ describe('Channel Credential Injection E2E', () => {
     });
   });
 
-  describe('ElevenLabs custom header auth', () => {
-    it('injects xi-api-key header', async () => {
-      const response = await udsFetch(socketPath, '/elevenlabs/v1/text-to-speech/voice-id', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'Hello', model_id: 'eleven_monolingual_v1' })
-      });
-
-      expect(response.status).toBe(200);
-
-      const lastRequest = upstream.getLastRequest();
-      expect(lastRequest).toBeDefined();
-      expect(lastRequest!.headers['xi-api-key']).toBe(TEST_ELEVENLABS_KEY);
-    });
-  });
-
   describe('Slack header auth', () => {
     it('injects Bearer token for Slack requests', async () => {
       const response = await udsFetch(socketPath, '/slack/chat.postMessage', {
@@ -303,37 +282,19 @@ describe('Channel Credential Injection E2E', () => {
     });
   });
 
-  describe('xAI header auth', () => {
-    it('injects Bearer token for xAI Grok requests', async () => {
-      const response = await udsFetch(socketPath, '/xai/v1/chat/completions', {
+  describe('Telnyx header auth', () => {
+    it('injects Bearer token for Telnyx requests', async () => {
+      const response = await udsFetch(socketPath, '/telnyx/v2/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'grok-3', messages: [{ role: 'user', content: 'hi' }] })
+        body: JSON.stringify({ from: '+15551234567', to: '+15559876543', text: 'hello' })
       });
 
       expect(response.status).toBe(200);
 
       const lastRequest = upstream.getLastRequest();
       expect(lastRequest).toBeDefined();
-      expect(lastRequest!.headers['authorization']).toBe(`Bearer ${TEST_XAI_KEY}`);
-      expect(lastRequest!.path).toBe('/v1/chat/completions');
-    });
-  });
-
-  describe('Cloudflare AI Gateway header auth', () => {
-    it('injects cf-aig-authorization header for Cloudflare AI Gateway requests', async () => {
-      const response = await udsFetch(socketPath, '/cloudflare-ai/v1/account-id/gateway-id/anthropic/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 5, messages: [{ role: 'user', content: 'hi' }] })
-      });
-
-      expect(response.status).toBe(200);
-
-      const lastRequest = upstream.getLastRequest();
-      expect(lastRequest).toBeDefined();
-      expect(lastRequest!.headers['cf-aig-authorization']).toBe(`Bearer ${TEST_CLOUDFLARE_AI_TOKEN}`);
-      expect(lastRequest!.path).toBe('/v1/account-id/gateway-id/anthropic/v1/messages');
+      expect(lastRequest!.headers['authorization']).toBe(`Bearer ${TEST_TELNYX_KEY}`);
     });
   });
 

@@ -25,6 +25,7 @@ Agent / OpenClaw Gateway              Aquaman Proxy
                                          │  (hash-chained log)
                                          ▼
                                api.anthropic.com
+                               api.mistral.ai
                                api.telegram.org
                                slack.com/api  ...
 ```

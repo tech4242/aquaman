@@ -99,6 +99,26 @@ const BUILTIN_SERVICES: ServiceDefinition[] = [
     authMode: 'header',
     hostPatterns: ['gateway.ai.cloudflare.com']
   },
+  {
+    name: 'mistral',
+    upstream: 'https://api.mistral.ai',
+    authHeader: 'Authorization',
+    authPrefix: 'Bearer ',
+    credentialKey: 'api_key',
+    description: 'Mistral AI API',
+    authMode: 'header',
+    hostPatterns: ['api.mistral.ai']
+  },
+  {
+    name: 'huggingface',
+    upstream: 'https://api-inference.huggingface.co',
+    authHeader: 'Authorization',
+    authPrefix: 'Bearer ',
+    credentialKey: 'api_key',
+    description: 'Hugging Face Inference API',
+    authMode: 'header',
+    hostPatterns: ['api-inference.huggingface.co']
+  },
 
   // ── Header Auth Channels ────────────────────────────────────────────
   {

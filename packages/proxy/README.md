@@ -25,11 +25,12 @@ Agent / OpenClaw Gateway              Aquaman Proxy
                                          │  (hash-chained log)
                                          ▼
                                api.anthropic.com
+                               api.mistral.ai
                                api.telegram.org
                                slack.com/api  ...
 ```
 
-This package is the right side. A reverse proxy that listens on a Unix domain socket (`~/.aquaman/proxy.sock`) and injects credentials from secure backends. No TCP port, no network exposure. 23 builtin services, four auth modes.
+This package is the right side. A reverse proxy that listens on a Unix domain socket (`~/.aquaman/proxy.sock`) and injects credentials from secure backends. No TCP port, no network exposure. 25 builtin services, six auth modes.
 
 ## Quick Start
 
@@ -76,15 +77,15 @@ Troubleshooting: `aquaman doctor`
 | `aquaman audit tail` | Recent audit entries |
 | `aquaman audit verify` | Verify hash chain integrity |
 
-## 23 Builtin Services
+## 25 Builtin Services
 
 | Category | Services |
 |----------|----------|
-| **LLM / AI** | Anthropic, OpenAI, GitHub, xAI, Cloudflare AI Gateway |
-| **Header** | Slack, Discord, Matrix, Mattermost, LINE, Twitch, Telnyx, ElevenLabs, Zalo |
-| **URL-path** | Telegram |
-| **HTTP Basic** | Twilio, BlueBubbles, Nextcloud Talk |
-| **OAuth** | MS Teams, Feishu, Google Chat |
+| **Providers** | Anthropic, OpenAI, GitHub, xAI, Cloudflare AI Gateway, Mistral, Hugging Face, ElevenLabs |
+| **Channels (header)** | Slack, Discord, Matrix, Mattermost, LINE, Twitch, Telnyx, Zalo |
+| **Channels (URL-path)** | Telegram |
+| **Channels (basic)** | Twilio, BlueBubbles, Nextcloud Talk |
+| **Channels (OAuth)** | MS Teams, Feishu, Google Chat |
 | **At-rest only** | Nostr, Tlon |
 
 ## Documentation
