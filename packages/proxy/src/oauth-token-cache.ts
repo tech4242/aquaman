@@ -77,6 +77,9 @@ export class OAuthTokenCache {
     let tokenUrl = config.tokenUrl;
     const templateMatch = tokenUrl.match(/\{(\w+)\}/g);
     if (templateMatch) {
+      // Capture original hostname before template resolution for SSRF prevention
+      const originalHost = new URL(config.tokenUrl.replace(/\{\w+\}/g, 'placeholder')).hostname;
+
       for (const placeholder of templateMatch) {
         const key = placeholder.slice(1, -1);
         const value = await store.get(service, key);
@@ -84,6 +87,21 @@ export class OAuthTokenCache {
           throw new Error(`OAuth token URL requires credential "${key}" for service ${service}`);
         }
         tokenUrl = tokenUrl.replace(placeholder, value);
+      }
+
+      // Validate resolved URL hostname hasn't changed (prevents SSRF via credential store poisoning)
+      try {
+        const resolvedHost = new URL(tokenUrl).hostname;
+        if (resolvedHost !== originalHost) {
+          throw new Error(
+            `OAuth token URL hostname changed after template resolution for ${service}: expected "${originalHost}", got "${resolvedHost}"`
+          );
+        }
+      } catch (e) {
+        if (e instanceof TypeError) {
+          throw new Error(`OAuth token URL is not a valid URL after template resolution for ${service}: ${tokenUrl}`);
+        }
+        throw e;
       }
     }
 

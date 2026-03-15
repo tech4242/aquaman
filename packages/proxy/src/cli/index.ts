@@ -47,6 +47,15 @@ const noColor = process.env['NO_COLOR'] !== undefined ||
                 (!process.stdout.isTTY && process.env['FORCE_COLOR'] === undefined);
 const aqua = (s: string) => noColor ? s : `\x1b[38;2;127;255;212m${s}\x1b[0m`;
 
+// Credential name validation — shared pattern from daemon.ts and systemd-creds backend
+const SAFE_CRED_NAME = /^[a-z0-9][a-z0-9._-]*$/;
+function validateCredName(label: string, value: string): void {
+  if (!SAFE_CRED_NAME.test(value)) {
+    console.error(`Invalid ${label}: "${value}". Allowed: lowercase alphanumeric, dots, hyphens, underscores.`);
+    process.exit(1);
+  }
+}
+
 // PID file management
 const getPidFile = () => path.join(getConfigDir(), 'daemon.pid');
 
@@ -1494,6 +1503,9 @@ credentials
   .description('Add a credential')
   .option('--backend <backend>', 'Override credential backend')
   .action(async (service: string, key: string, options) => {
+    validateCredName('service', service);
+    validateCredName('key', key);
+
     const config = loadConfig();
     const backend = options.backend || config.credentials.backend;
 
@@ -1596,6 +1608,9 @@ credentials
   .command('delete <service> <key>')
   .description('Delete a credential')
   .action(async (service: string, key: string) => {
+    validateCredName('service', service);
+    validateCredName('key', key);
+
     const config = loadConfig();
     let store;
     try {
