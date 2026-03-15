@@ -118,7 +118,7 @@ OpenClaw 2026.2.15+ also reports an environment-level advisory:
 
 There is no suppression mechanism for code findings (no inline annotations, no `.auditignore`). The only fix is to ensure trigger patterns don't co-exist in the same file.
 
-**Current state (v0.9.1, tested through 2026.3.8):** 2 expected findings: `dangerous-exec` on `proxy-manager.ts` (true positive — it spawns the proxy process), `tools_reachable_permissive_policy` (environment advisory — not a code issue). 0 env-harvesting findings. The scanner recursively scans `src/` and `dist/` subdirectories (since 2026.2.9). Note: OpenClaw 2026.3.x fresh installs default `tools.profile` to `messaging` — `aquaman_status` tool may not surface unless the operator configures `tools.profile` to include it.
+**Current state (v0.9.2, tested through 2026.3.8):** 2 expected findings: `dangerous-exec` on `proxy-manager.ts` (true positive — it spawns the proxy process), `tools_reachable_permissive_policy` (environment advisory — not a code issue). 0 env-harvesting findings. The `request-policy.ts` file contains no `child_process`, `process.env`, or `fetch` — zero scanner risk. The scanner recursively scans `src/` and `dist/` subdirectories (since 2026.2.9). Note: OpenClaw 2026.3.x fresh installs default `tools.profile` to `messaging` — `aquaman_status` tool may not surface unless the operator configures `tools.profile` to include it.
 
 **Mitigations:**
 - `aquaman setup` auto-sets `plugins.allow: ["aquaman-plugin"]` in `openclaw.json` (resolves the `extensions_no_allowlist` audit finding)
@@ -147,12 +147,13 @@ this.keytar = mod.default || mod;
 **Standard (header auth):**
 1. Agent sends request to `http://aquaman.local/anthropic/v1/messages` (routed to UDS via undici dispatcher)
 2. Proxy parses service name from path (`anthropic`)
-3. Looks up credential from vault: `anthropic/api_key`
-4. Strips any existing auth header from the request
-5. Injects real auth header: `x-api-key: <actual-key-from-vault>`
-6. Forwards to upstream: `https://api.anthropic.com/v1/messages`
-7. Response piped back to agent
-8. Access logged in audit trail with hash chaining
+3. **Policy check:** evaluates method + remaining path against `config.yaml` policy rules (if configured). Denied → 403 JSON, request never gets credentials
+4. Looks up credential from vault: `anthropic/api_key`
+5. Strips any existing auth header from the request
+6. Injects real auth header: `x-api-key: <actual-key-from-vault>`
+7. Forwards to upstream: `https://api.anthropic.com/v1/messages`
+8. Response piped back to agent
+9. Access logged in audit trail with hash chaining
 
 **Channel traffic (via fetch interceptor):**
 1. Channel code calls `fetch('https://api.telegram.org/bot.../sendMessage')`
@@ -392,9 +393,9 @@ openclaw agent --local --message "hello" --session-id test --json 2>&1 | head -8
 ### Automated tests:
 
 ```bash
-npm run test:e2e                # All e2e tests (15 files)
-npm run test:unit               # All unit tests (14 files)
-npm test                        # Everything (~422 tests, 29 files)
+npm run test:e2e                # All e2e tests (17 files)
+npm run test:unit               # All unit tests (18 files)
+npm test                        # Everything (~548 tests, 35 files)
 ```
 
 ### Quick proxy-only smoke test:
@@ -539,6 +540,116 @@ Promise.all([
 "
 ```
 
+## Manual Policy Smoke Test
+
+Step-by-step guide for manually testing request-level policy enforcement.
+
+### 1. Store test credentials
+
+```bash
+node -e "
+const kt = require('./node_modules/keytar');
+const k = kt.default || kt;
+Promise.all([
+  k.setPassword('aquaman/anthropic', 'api_key', 'sk-ant-policy-test'),
+  k.setPassword('aquaman/openai', 'api_key', 'sk-openai-policy-test'),
+  k.setPassword('aquaman/slack', 'bot_token', 'xoxb-policy-test-token'),
+]).then(() => console.log('Test credentials stored'));
+"
+```
+
+### 2. Write policy config
+
+```bash
+cat > ~/.aquaman/config.yaml << 'YAML'
+credentials:
+  backend: keychain
+  proxiedServices: [anthropic, openai, slack]
+audit:
+  enabled: true
+  logDir: ~/.aquaman/audit
+services:
+  configPath: ~/.aquaman/services.yaml
+openclaw:
+  autoLaunch: false
+  configMethod: env
+policy:
+  anthropic:
+    defaultAction: allow
+    rules:
+      - method: "*"
+        path: "/v1/organizations/**"
+        action: deny
+  openai:
+    defaultAction: allow
+    rules:
+      - method: "*"
+        path: "/v1/organization/**"
+        action: deny
+      - method: DELETE
+        path: "/v1/**"
+        action: deny
+  slack:
+    defaultAction: allow
+    rules:
+      - method: "*"
+        path: "/admin.*"
+        action: deny
+YAML
+```
+
+### 3. Start proxy and test
+
+```bash
+npx tsx packages/proxy/src/cli/index.ts daemon &
+sleep 2
+
+# Allowed: Anthropic inference (expect 401 from upstream = credential injected)
+curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/anthropic/v1/messages \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-sonnet-4-20250514","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}'
+# Expect: {"type":"error","error":{"type":"authentication_error",...}}
+
+# Denied: Anthropic admin API (expect 403 from policy)
+curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/anthropic/v1/organizations/org123/members
+# Expect: {"error":"Request denied by policy: GET /anthropic/v1/organizations/org123/members","fix":"Check policy rules..."}
+
+# Denied: OpenAI DELETE (expect 403 from policy)
+curl -s -X DELETE --unix-socket ~/.aquaman/proxy.sock http://localhost/openai/v1/files/file-abc
+# Expect: {"error":"Request denied by policy: DELETE /openai/v1/files/file-abc","fix":"..."}
+
+# Denied: Slack admin method (expect 403 from policy)
+curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/slack/admin.users.list
+# Expect: {"error":"Request denied by policy: GET /slack/admin.users.list","fix":"..."}
+
+# Allowed: Slack normal method (expect response from Slack)
+curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/slack/auth.test | head -c 100
+# Expect: HTML or JSON from Slack (not 403)
+
+npx tsx packages/proxy/src/cli/index.ts stop
+```
+
+### 4. Verify doctor output
+
+```bash
+npx tsx packages/proxy/src/cli/index.ts doctor
+# Expect: ✓ Policy valid (3 services, 4 rules)
+```
+
+### 5. Cleanup
+
+```bash
+node -e "
+const kt = require('./node_modules/keytar');
+const k = kt.default || kt;
+Promise.all([
+  k.deletePassword('aquaman/anthropic', 'api_key'),
+  k.deletePassword('aquaman/openai', 'api_key'),
+  k.deletePassword('aquaman/slack', 'bot_token'),
+]).then(() => console.log('Test credentials removed'));
+"
+```
+
 ## Key Design Principles
 
 1. **Credentials never in agent memory** - Proxy injects auth, agent sees nothing
@@ -554,6 +665,7 @@ Promise.all([
 | `packages/proxy/src/core/credentials/backends/` | 1Password, Vault, KeePassXC, systemd-creds, and Bitwarden backend implementations |
 | `packages/proxy/src/core/audit/logger.ts` | Hash-chained logging |
 | `packages/proxy/src/daemon.ts` | HTTP proxy server on UDS (header, url-path, basic, oauth auth modes) |
+| `packages/proxy/src/request-policy.ts` | Request-level policy enforcement (method+path rules, segment-based glob matching) |
 | `packages/proxy/src/cli/index.ts` | CLI (Commander.js, 18 commands incl. `setup`, `doctor`, `migrate openclaw`) |
 | `packages/proxy/src/service-registry.ts` | Builtin service definitions (25 services) |
 | `packages/proxy/src/oauth-token-cache.ts` | OAuth client credentials token exchange + caching |
@@ -571,6 +683,8 @@ Promise.all([
 | `test/e2e/channel-credential-injection.test.ts` | Channel auth mode E2E tests (Telegram, Twilio, Twitch, Slack, etc.) |
 | `test/e2e/provider-credential-injection.test.ts` | LLM/AI provider auth E2E tests (xAI, Cloudflare AI, Mistral, Hugging Face, ElevenLabs) |
 | `test/e2e/oauth-credential-injection.test.ts` | OAuth flow E2E tests (mock token server) |
+| `test/e2e/request-policy.test.ts` | Request policy enforcement E2E tests (403 responses, audit logging, backward compat) |
+| `test/unit/request-policy.test.ts` | Request policy unit tests (path matching, policy evaluation, validation, presets) |
 | `test/e2e/keychain-proxy-flow.test.ts` | Real keychain backend E2E (macOS only) |
 | `test/e2e/cli-plugin-mode.test.ts` | CLI startup/output E2E tests |
 | `test/e2e/cli-setup.test.ts` | `aquaman setup` E2E tests |

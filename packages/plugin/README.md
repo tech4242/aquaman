@@ -11,10 +11,10 @@ Agent / OpenClaw Gateway              Aquaman Proxy
 │  ANTHROPIC_BASE_URL  │══ Unix ════>│  Keychain / 1Pass /  │
 │  = aquaman.local     │   Domain    │  Vault / Encrypted   │
 │                      │<═ Socket ═══│                      │
-│  fetch() interceptor │══ (UDS) ══=>│  + Auth injected:    │
-│  redirects channel   │              │    header / url-path │
-│  API traffic         │              │    basic / oauth     │
-│                      │              │                      │
+│  fetch() interceptor │══ (UDS) ══=>│  + Policy enforced   │
+│  redirects channel   │              │  + Auth injected:    │
+│  API traffic         │              │    header / url-path │
+│                      │              │    basic / oauth     │
 │  No credentials.     │  ~/.aquaman/ │                      │
 │  No open ports.      │  proxy.sock  │                      │
 │  Nothing to steal.   │  (chmod 600) │                      │
@@ -60,6 +60,12 @@ Troubleshooting: `aquaman doctor`
 | `services` | `string[]` | `["anthropic", "openai"]` | Services to proxy |
 
 > Advanced settings (audit, vault) go in `~/.aquaman/config.yaml`.
+
+## Request Policies
+
+Service allowlisting controls *which* APIs the agent can reach. Request policies add a second layer: *which endpoints* within those services. The proxy enforces method + path rules from `~/.aquaman/config.yaml` — denied requests return 403 before credentials are injected. `aquaman setup` applies safe defaults.
+
+See [main README](https://github.com/tech4242/aquaman#request-policies) for configuration details.
 
 ## Security Audit Note
 

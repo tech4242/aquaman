@@ -11,10 +11,10 @@ Agent / OpenClaw Gateway              Aquaman Proxy
 │  ANTHROPIC_BASE_URL  │══ Unix ════>│  Keychain / 1Pass /  │
 │  = aquaman.local     │   Domain    │  Vault / Encrypted   │
 │                      │<═ Socket ═══│                      │
-│  fetch() interceptor │══ (UDS) ══=>│  + Auth injected:    │
-│  redirects channel   │              │    header / url-path │
-│  API traffic         │              │    basic / oauth     │
-│                      │              │                      │
+│  fetch() interceptor │══ (UDS) ══=>│  + Policy enforced   │
+│  redirects channel   │              │  + Auth injected:    │
+│  API traffic         │              │    header / url-path │
+│                      │              │    basic / oauth     │
 │  No credentials.     │  ~/.aquaman/ │                      │
 │  No open ports.      │  proxy.sock  │                      │
 │  Nothing to steal.   │  (chmod 600) │                      │
@@ -87,6 +87,23 @@ Troubleshooting: `aquaman doctor`
 | **Channels (basic)** | Twilio, BlueBubbles, Nextcloud Talk |
 | **Channels (OAuth)** | MS Teams, Feishu, Google Chat |
 | **At-rest only** | Nostr, Tlon |
+
+## Request Policies
+
+Service allowlisting controls *which* APIs the agent can reach. Request policies add a second layer: *which endpoints* within those services. Denied requests are blocked before credential injection.
+
+```yaml
+# ~/.aquaman/config.yaml
+policy:
+  anthropic:
+    defaultAction: allow
+    rules:
+      - method: "*"
+        path: "/v1/organizations/**"
+        action: deny
+```
+
+`aquaman setup` applies safe defaults. `aquaman doctor` validates policy config. See [main README](https://github.com/tech4242/aquaman#request-policies) for full docs.
 
 ## Documentation
 

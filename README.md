@@ -8,7 +8,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Credential isolation for OpenClaw — secrets stay submerged, agents stay dry.
+Credential isolation for OpenClaw — secrets stay submerged, agents stay dry. Containers protect the host. Aquaman protects the credentials.
 
 You have bought yourself a brand new Mac Mini (or credits at your favorite cloud provider) and now you are still scared about your API credentials because you read all the articles. 
 
@@ -68,9 +68,10 @@ Agent / OpenClaw Gateway              Aquaman Proxy
 │  ANTHROPIC_BASE_URL  │══ Unix ════> │  Keychain / 1Pass /  │
 │  = aquaman.local     │   Domain     │  Vault / Encrypted   │
 │                      │<═ Socket ═══ │                      │
-│  fetch() interceptor │══ (UDS) ══=> │  + Auth injected:    │
-│  redirects channel   │              │    header / url-path │
-│  API traffic         │              │    basic / oauth     │
+│  fetch() interceptor │══ (UDS) ══=> │  + Policy enforced   │
+│  redirects channel   │              │  + Auth injected:    │
+│  API traffic         │              │    header / url-path │
+│                      │              │    basic / oauth     │
 │                      │              │                      │
 │  No credentials.     │  ~/.aquaman/ │                      │
 │  No open ports.      │  proxy.sock  │                      │
@@ -115,9 +116,58 @@ The agent only sees a sentinel hostname (`aquaman.local`). It never sees a key, 
 
 `aquaman setup` adds the plugin to `plugins.allow` automatically so OpenClaw knows you trust it.
 
+## Request Policies
+
+Aquaman has two layers of access control:
+
+1. **Service allowlisting** — `proxiedServices` controls *which services* the agent can reach at all. This is the perimeter.
+2. **Request policies** — per-service method + path rules control *which endpoints* the agent can call. This is the interior.
+
+OAuth scopes can't distinguish between "draft an email" and "send an email" — they're both `gmail.send`. Aquaman's request policies fill that gap: allow the service, then restrict what happens inside it.
+
+```yaml
+# ~/.aquaman/config.yaml
+policy:
+  anthropic:
+    defaultAction: allow
+    rules:
+      - method: "*"
+        path: "/v1/organizations/**"
+        action: deny          # block admin/billing API
+  openai:
+    defaultAction: allow
+    rules:
+      - method: "*"
+        path: "/v1/organization/**"
+        action: deny          # block admin API
+      - method: DELETE
+        path: "/v1/**"
+        action: deny          # no deletions
+  slack:
+    defaultAction: allow
+    rules:
+      - method: "*"
+        path: "/admin.*"
+        action: deny          # block Slack admin methods
+  gmail:
+    defaultAction: allow
+    rules:
+      - method: POST
+        path: "/v1/users/*/messages/send"
+        action: deny          # drafts ok, sending blocked
+```
+
+**How it works:**
+- **No policy = allow all** (backward compatible)
+- **First match wins** — rules are evaluated top-to-bottom, unmatched requests fall through to `defaultAction`
+- **Denied before auth** — policy is checked before credential injection, so blocked requests never get real auth headers
+- **Path globs:** `*` matches within a segment (like shell glob), `**` matches zero or more path segments
+- **`aquaman setup`** applies safe defaults for stored services (blocks admin/billing endpoints)
+- **`aquaman doctor`** validates your policy config and warns about typos
+
 ## Why Aquaman
 
-**Security** — Process-level credential isolation via Unix domain socket (no TCP port, no network exposure). Socket file permissions (`chmod 600`) restrict access to the owning user. Tamper-evident audit logs with SHA-256 hash chains
+**Security** — Process-level credential isolation via Unix domain socket (no TCP port, no network exposure). Socket file permissions (`chmod 600`) restrict access to the owning user. Two-layer access control: service allowlisting decides *which* APIs an agent can reach, request policies decide *what* it can do — denied requests never get real credentials. Tamper-evident audit logs with SHA-256 hash chains
 
 **DevOps** — Plugs into Keychain, 1Password, HashiCorp Vault, and Bitwarden; YAML-based service config; 23 builtin services across 4 auth modes
 

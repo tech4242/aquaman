@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { createCredentialProxy, type CredentialProxy } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
 import { createOpenClawIntegration } from '../openclaw/integration.js';
+import { loadPolicyFromConfig, validatePolicyConfig, getDefaultPolicyPresets } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 
 // Read version from package.json (single source of truth)
@@ -203,11 +204,13 @@ program
 
     // Start credential proxy
     const socketPath = path.join(getConfigDir(), 'proxy.sock');
+    const policyConfig = loadPolicyFromConfig(config);
     const credentialProxy = createCredentialProxy({
       socketPath,
       store: credentialStore,
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
+      policyConfig,
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
@@ -377,11 +380,13 @@ program
     const serviceRegistry = createServiceRegistry({ configPath: config.services.configPath });
 
     // Start credential proxy
+    const policyConfig2 = loadPolicyFromConfig(config);
     const credentialProxy = createCredentialProxy({
       socketPath,
       store: credentialStore,
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
+      policyConfig: policyConfig2,
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
@@ -459,11 +464,13 @@ program
     const serviceRegistry = createServiceRegistry({ configPath: config.services.configPath });
 
     // Start credential proxy
+    const policyConfig3 = loadPolicyFromConfig(config);
     const credentialProxy = createCredentialProxy({
       socketPath,
       store: credentialStore,
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
+      policyConfig: policyConfig3,
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
@@ -569,6 +576,7 @@ program
   .description('All-in-one setup wizard — creates config, stores credentials, installs plugin')
   .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, keepassxc, 1password, vault, systemd-creds, bitwarden)')
   .option('--no-openclaw', 'Skip OpenClaw plugin installation')
+  .option('--no-policy', 'Skip request policy preset configuration')
   .option('--non-interactive', 'Use environment variables instead of prompts (for CI)')
   .action(async (options) => {
     const os = await import('node:os');
@@ -835,6 +843,48 @@ program
         console.log('    \u2713 Stored openai/api_key\n');
       } else {
         console.log('    Skipped\n');
+      }
+    }
+
+    // 3.5. Apply request policy presets
+    if (options.policy !== false && storedServices.length > 0) {
+      let shouldApplyPolicy = true;
+
+      if (!isNonInteractive) {
+        const rl = (await import('node:readline')).createInterface({
+          input: process.stdin,
+          output: process.stdout
+        });
+        const answer = await new Promise<string>((resolve) => {
+          rl.question('  ? Enable API request policies? (Y/n): ', resolve);
+        });
+        rl.close();
+        shouldApplyPolicy = answer.toLowerCase() !== 'n';
+        if (shouldApplyPolicy) {
+          console.log('    Policies restrict which API endpoints agents can call.\n');
+        }
+      }
+
+      if (shouldApplyPolicy) {
+        const presets = getDefaultPolicyPresets();
+        const policyToApply: Record<string, any> = {};
+        for (const svc of storedServices) {
+          if (presets[svc]) {
+            policyToApply[svc] = presets[svc];
+          }
+        }
+
+        if (Object.keys(policyToApply).length > 0) {
+          config.policy = policyToApply;
+          saveConfig(config);
+
+          console.log('  Applying default policy presets:');
+          for (const svc of Object.keys(policyToApply)) {
+            console.log(`    \u2713 ${svc}: inference only (admin/billing endpoints denied)`);
+          }
+          console.log('');
+          console.log('  Customize policies later: ~/.aquaman/config.yaml\n');
+        }
       }
     }
 
@@ -1135,6 +1185,34 @@ program
           issues++;
         }
       }
+    }
+
+    // 5.5 Policy config
+    if (config?.policy && Object.keys(config.policy).length > 0) {
+      const policyConfigDoc = loadPolicyFromConfig(config);
+      const validation = validatePolicyConfig(policyConfigDoc);
+      if (validation.valid) {
+        const serviceCount = Object.keys(policyConfigDoc).length;
+        const ruleCount = Object.values(policyConfigDoc).reduce((sum, sp) => sum + sp.rules.length, 0);
+        console.log(`  \u2713 ${aqua('Policy')} valid (${serviceCount} service${serviceCount !== 1 ? 's' : ''}, ${ruleCount} rule${ruleCount !== 1 ? 's' : ''})`);
+        // Warn about policies for non-proxied services
+        if (config.credentials.proxiedServices) {
+          for (const svc of Object.keys(policyConfigDoc)) {
+            if (!config.credentials.proxiedServices.includes(svc)) {
+              console.log(`  \u26a0 ${aqua('Policy')} service "${svc}" has rules but is not in proxiedServices`);
+              issues++;
+            }
+          }
+        }
+      } else {
+        for (const err of validation.errors) {
+          console.log(`  \u2717 ${aqua('Policy')} ${err}`);
+        }
+        issues++;
+      }
+    } else {
+      console.log(`  \u2139 ${aqua('Policy')} not configured \u2014 agents can call any endpoint on proxied services`);
+      console.log('    \u2192 Run: aquaman setup (or add policy rules to ~/.aquaman/config.yaml)');
     }
 
     // 6. OpenClaw detection

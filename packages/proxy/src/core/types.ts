@@ -95,6 +95,7 @@ export interface WrapperConfig {
   audit: AuditConfig;
   services: ServicesConfig;
   openclaw: OpenClawConfig;
+  policy?: Record<string, { defaultAction: 'allow' | 'deny'; rules: Array<{ method: string; path: string; action: 'allow' | 'deny' }> }>;
 }
 
 export type CredentialBackend = 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc' | 'systemd-creds' | 'bitwarden';

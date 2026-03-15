@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { type CredentialStore, generateId } from './core/index.js';
 import { ServiceRegistry, createServiceRegistry, type ServiceDefinition, type AuthMode } from './service-registry.js';
 import { OAuthTokenCache, createOAuthTokenCache } from './oauth-token-cache.js';
+import { matchPolicy, type PolicyConfig } from './request-policy.js';
 
 // Service name validation: lowercase alphanum, dots, hyphens, underscores
 const SAFE_SERVICE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
@@ -29,6 +30,7 @@ export interface CredentialProxyOptions {
   onRequest?: (info: RequestInfo) => void;
   serviceRegistry?: ServiceRegistry;
   requestTimeout?: number; // Upstream request timeout in ms, defaults to 30000 (30s)
+  policyConfig?: PolicyConfig;
 }
 
 export interface RequestInfo {
@@ -172,6 +174,8 @@ export class CredentialProxy {
       credentialKey: serviceDef.credentialKey
     };
 
+    const remainingPath = '/' + pathParts.slice(1).join('/');
+
     const requestInfo: RequestInfo = {
       id: requestId,
       service,
@@ -180,6 +184,23 @@ export class CredentialProxy {
       timestamp: new Date(),
       authenticated: false
     };
+
+    // Policy check — before credential retrieval
+    if (this.options.policyConfig) {
+      const policyResult = matchPolicy(service, req.method || 'GET', remainingPath, this.options.policyConfig);
+      if (!policyResult.allowed) {
+        requestInfo.error = `Policy denied: ${req.method || 'GET'} ${remainingPath}`;
+        requestInfo.statusCode = 403;
+        this.emitRequest(requestInfo);
+        res.setHeader('Content-Type', 'application/json');
+        res.statusCode = 403;
+        res.end(JSON.stringify({
+          error: `Request denied by policy: ${req.method || 'GET'} ${url}`,
+          fix: `Check policy rules for "${service}" in ~/.aquaman/config.yaml`
+        }));
+        return;
+      }
+    }
 
     try {
       // Get primary credential from store
@@ -201,7 +222,6 @@ export class CredentialProxy {
       requestInfo.authenticated = true;
 
       // Build upstream URL based on auth mode
-      const remainingPath = '/' + pathParts.slice(1).join('/');
       let upstreamPath: string;
 
       if (authMode === 'url-path' && serviceDef.authPathTemplate) {
