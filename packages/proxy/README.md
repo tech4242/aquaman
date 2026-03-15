@@ -1,20 +1,19 @@
 # aquaman-proxy
 
-Credential isolation proxy and CLI for [aquaman](https://github.com/tech4242/aquaman).
-
-## How It Works
+The proxy daemon and CLI for [aquaman](https://github.com/tech4242/aquaman) — credential isolation for OpenClaw.
 
 ```
 Agent / OpenClaw Gateway              Aquaman Proxy
 ┌──────────────────────┐              ┌──────────────────────┐
 │                      │              │                      │
-│  ANTHROPIC_BASE_URL  │══ Unix ════>│  Keychain / 1Pass /  │
-│  = aquaman.local     │   Domain    │  Vault / Encrypted   │
-│                      │<═ Socket ═══│                      │
-│  fetch() interceptor │══ (UDS) ══=>│  + Policy enforced   │
+│  ANTHROPIC_BASE_URL  │══ Unix ═════>│  Keychain / 1Pass /  │
+│  = aquaman.local     │   Domain     │  Vault / Encrypted   │
+│                      │<═ Socket ════│                      │
+│  fetch() interceptor │══ (UDS) ════>│  + Policy enforced   │
 │  redirects channel   │              │  + Auth injected:    │
 │  API traffic         │              │    header / url-path │
 │                      │              │    basic / oauth     │
+│                      │              │                      │
 │  No credentials.     │  ~/.aquaman/ │                      │
 │  No open ports.      │  proxy.sock  │                      │
 │  Nothing to steal.   │  (chmod 600) │                      │
@@ -30,33 +29,22 @@ Agent / OpenClaw Gateway              Aquaman Proxy
                                slack.com/api  ...
 ```
 
-This package is the right side. A reverse proxy that listens on a Unix domain socket (`~/.aquaman/proxy.sock`) and injects credentials from secure backends. No TCP port, no network exposure. 25 builtin services, six auth modes.
+This package is the right side — a reverse proxy on a Unix domain socket that stores credentials in secure backends, enforces request policies, injects auth headers, and logs every access. The agent never sees a key.
 
 ## Quick Start
 
-With OpenClaw:
-
-```bash
-npm install -g aquaman-proxy              # install the proxy CLI
-aquaman setup                             # stores keys, installs plugin, configures OpenClaw
-openclaw                                  # proxy starts automatically via plugin
-```
-
-> `aquaman setup` auto-detects your credential backend. macOS defaults to Keychain,
-> Linux defaults to encrypted file. Override with `--backend`:
-> `aquaman setup --backend keepassxc`
-> Options: `keychain`, `encrypted-file`, `keepassxc`, `1password`, `vault`, `systemd-creds`, `bitwarden`
-
-Existing plaintext credentials are migrated automatically during setup.
-Run again anytime to migrate new credentials: `aquaman migrate openclaw --auto`
-
-Standalone:
-
 ```bash
 npm install -g aquaman-proxy
+aquaman setup                   # stores keys, installs OpenClaw plugin, applies policy defaults
+openclaw                        # proxy starts automatically via plugin
+```
+
+Standalone (without OpenClaw):
+
+```bash
 aquaman init
 aquaman credentials add anthropic api_key
-aquaman daemon                               # listens on ~/.aquaman/proxy.sock
+aquaman daemon                  # listens on ~/.aquaman/proxy.sock
 ```
 
 Troubleshooting: `aquaman doctor`
@@ -65,7 +53,7 @@ Troubleshooting: `aquaman doctor`
 
 | Command | Description |
 |---------|-------------|
-| `aquaman setup` | Guided onboarding (stores keys, installs plugin) |
+| `aquaman setup` | Guided onboarding (stores keys, installs plugin, applies policy defaults) |
 | `aquaman doctor` | Diagnose issues with actionable fixes |
 | `aquaman credentials add <svc> <key>` | Store a credential |
 | `aquaman credentials list` | List stored credentials |
@@ -88,26 +76,20 @@ Troubleshooting: `aquaman doctor`
 | **Channels (OAuth)** | MS Teams, Feishu, Google Chat |
 | **At-rest only** | Nostr, Tlon |
 
-## Request Policies
+## Security
 
-Service allowlisting controls *which* APIs the agent can reach. Request policies add a second layer: *which endpoints* within those services. Denied requests are blocked before credential injection.
+The proxy enforces four layers of protection:
 
-```yaml
-# ~/.aquaman/config.yaml
-policy:
-  anthropic:
-    defaultAction: allow
-    rules:
-      - method: "*"
-        path: "/v1/organizations/**"
-        action: deny
-```
+- **Process isolation** — credentials in a separate address space, connected via UDS (`chmod 600`)
+- **Service allowlisting** — `proxiedServices` controls which APIs the agent can reach
+- **Request policies** — method + path rules per service, checked *before* credential injection ([details](https://github.com/tech4242/aquaman#request-policies))
+- **Audit trail** — SHA-256 hash-chained logs of every credential use
 
-`aquaman setup` applies safe defaults. `aquaman doctor` validates policy config. See [main README](https://github.com/tech4242/aquaman#request-policies) for full docs.
+7 credential backends: Keychain, 1Password, Vault, Bitwarden, KeePassXC, systemd-creds, encrypted-file.
 
 ## Documentation
 
-See the [main README](https://github.com/tech4242/aquaman#readme) for architecture, credential backends, Docker deployment, and configuration.
+See the [main README](https://github.com/tech4242/aquaman#readme) for the full security model, request policy config, Docker deployment, and architecture diagrams.
 
 ## License
 
