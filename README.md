@@ -148,6 +148,7 @@ policy:
 - **Denied before auth** — blocked requests never get real credentials
 - **Path globs:** `*` matches within a segment, `**` matches zero or more segments
 - **`aquaman setup`** applies safe defaults (blocks admin/billing endpoints for stored services)
+- **`aquaman policy list`** shows all configured rules; **`aquaman policy test <svc> <method> <path>`** dry-runs a request
 - **`aquaman doctor`** validates your policy config and warns about typos
 
 ## Credential Backends

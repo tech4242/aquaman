@@ -32,7 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { createCredentialProxy, type CredentialProxy } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
 import { createOpenClawIntegration } from '../openclaw/integration.js';
-import { loadPolicyFromConfig, validatePolicyConfig, getDefaultPolicyPresets } from '../request-policy.js';
+import { loadPolicyFromConfig, validatePolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 
 // Read version from package.json (single source of truth)
@@ -878,11 +878,11 @@ program
           config.policy = policyToApply;
           saveConfig(config);
 
-          console.log('  Applying default policy presets:');
-          for (const svc of Object.keys(policyToApply)) {
-            console.log(`    \u2713 ${svc}: inference only (admin/billing endpoints denied)`);
+          console.log('  Applying default policy presets:\n');
+          for (const [svc, sp] of Object.entries(policyToApply) as [string, ServicePolicy][]) {
+            console.log(formatServicePolicy(svc, sp, '    '));
+            console.log('');
           }
-          console.log('');
           console.log('  Customize policies later: ~/.aquaman/config.yaml\n');
         }
       }
@@ -1195,6 +1195,13 @@ program
         const serviceCount = Object.keys(policyConfigDoc).length;
         const ruleCount = Object.values(policyConfigDoc).reduce((sum, sp) => sum + sp.rules.length, 0);
         console.log(`  \u2713 ${aqua('Policy')} valid (${serviceCount} service${serviceCount !== 1 ? 's' : ''}, ${ruleCount} rule${ruleCount !== 1 ? 's' : ''})`);
+        for (const [svc, sp] of Object.entries(policyConfigDoc)) {
+          const denyRules = sp.rules.filter(r => r.action === 'deny');
+          if (denyRules.length > 0) {
+            const summary = denyRules.map(r => r.method !== '*' ? `${r.action} ${r.method} ${r.path}` : `${r.action} ${r.path}`).join(', ');
+            console.log(`      ${svc}: ${summary}`);
+          }
+        }
         // Warn about policies for non-proxied services
         if (config.credentials.proxiedServices) {
           for (const svc of Object.keys(policyConfigDoc)) {
@@ -1756,6 +1763,49 @@ services
     }
   });
 
+// Policy commands
+const policy = program.command('policy').description('Request policy management');
+
+policy
+  .command('list')
+  .description('List configured policy rules')
+  .action(async () => {
+    const config = loadConfig();
+    const policyConfig = loadPolicyFromConfig(config);
+
+    if (Object.keys(policyConfig).length === 0) {
+      console.log('No policies configured. Run: aquaman setup');
+      return;
+    }
+
+    for (const [name, sp] of Object.entries(policyConfig)) {
+      console.log(formatServicePolicy(name, sp));
+    }
+  });
+
+policy
+  .command('test <service> <method> <path>')
+  .description('Test whether a request would be allowed or denied')
+  .action(async (service: string, method: string, reqPath: string) => {
+    const config = loadConfig();
+    const policyConfig = loadPolicyFromConfig(config);
+
+    const result = matchPolicy(service, method.toUpperCase(), reqPath, policyConfig);
+
+    if (!policyConfig[service]) {
+      console.log(`  \u2713 ALLOWED (no policy for service "${service}")`);
+      return;
+    }
+
+    if (result.allowed) {
+      const svcPolicy = policyConfig[service];
+      console.log(`  \u2713 ALLOWED (no matching rule, default: ${svcPolicy.defaultAction})`);
+    } else {
+      const rule = result.matchedRule!;
+      console.log(`  \u2717 DENIED by rule: ${rule.method} ${rule.path} \u2192 ${rule.action}`);
+    }
+  });
+
 // Migration commands
 const migrate = program.command('migrate').description('Migrate credentials from other sources');
 
@@ -2217,6 +2267,19 @@ program
       console.log(`  - ${service}`);
     }
 
+    // Policy summary
+    const policyConfig = loadPolicyFromConfig(config);
+    const policySvcCount = Object.keys(policyConfig).length;
+    if (policySvcCount > 0) {
+      const ruleCount = Object.values(policyConfig).reduce((sum, sp) => sum + sp.rules.length, 0);
+      console.log(`\nRequest policies: ${policySvcCount} service${policySvcCount !== 1 ? 's' : ''}, ${ruleCount} rule${ruleCount !== 1 ? 's' : ''}`);
+      for (const [svc, sp] of Object.entries(policyConfig)) {
+        console.log(`  - ${svc}: ${sp.rules.length} rule${sp.rules.length !== 1 ? 's' : ''} (default: ${sp.defaultAction})`);
+      }
+    } else {
+      console.log('\nRequest policies: not configured');
+    }
+
     // Check for stored credentials
     try {
       const store = await createCredentialStore({
@@ -2249,6 +2312,17 @@ program
     console.log(`\nOpenClaw: ${info.installed ? `installed (${info.version})` : 'not found'}`);
   });
 
+/** Format a single service policy for display (used by policy list, setup, doctor) */
+function formatServicePolicy(name: string, sp: ServicePolicy, indent = '  '): string {
+  const lines: string[] = [];
+  lines.push(`${indent}${name} (default: ${sp.defaultAction})`);
+  for (const rule of sp.rules) {
+    const method = rule.method.padEnd(6);
+    lines.push(`${indent}  ${rule.action === 'deny' ? 'deny' : 'allow'}  ${method} ${rule.path}`);
+  }
+  return lines.join('\n');
+}
+
 function formatEntry(entry: any): string {
   switch (entry.type) {
     case 'tool_call':
@@ -2256,7 +2330,7 @@ function formatEntry(entry: any): string {
     case 'tool_result':
       return `Result for ${entry.data.toolCallId}`;
     case 'credential_access':
-      return `${entry.data.service} ${entry.data.operation} ${entry.data.success ? 'OK' : 'FAIL'}`;
+      return `${entry.data.service} ${entry.data.operation} ${entry.data.success ? 'OK' : `FAIL: ${entry.data.error || 'unknown'}`}`;
     default:
       return JSON.stringify(entry.data).slice(0, 80);
   }

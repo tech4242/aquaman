@@ -62,6 +62,8 @@ Troubleshooting: `aquaman doctor`
 | `aquaman start` | Start proxy + launch OpenClaw |
 | `aquaman stop` | Stop running proxy |
 | `aquaman status` | Show config and proxy status |
+| `aquaman policy list` | List configured policy rules |
+| `aquaman policy test <svc> <method> <path>` | Dry-run a request against policy rules |
 | `aquaman audit tail` | Recent audit entries |
 | `aquaman audit verify` | Verify hash chain integrity |
 
