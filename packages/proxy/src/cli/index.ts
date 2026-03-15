@@ -32,6 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { createCredentialProxy, type CredentialProxy } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
 import { createOpenClawIntegration } from '../openclaw/integration.js';
+import { loadPolicyFromConfig, validatePolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 
 // Read version from package.json (single source of truth)
@@ -45,6 +46,15 @@ const VERSION: string = pkgJson.version;
 const noColor = process.env['NO_COLOR'] !== undefined ||
                 (!process.stdout.isTTY && process.env['FORCE_COLOR'] === undefined);
 const aqua = (s: string) => noColor ? s : `\x1b[38;2;127;255;212m${s}\x1b[0m`;
+
+// Credential name validation — shared pattern from daemon.ts and systemd-creds backend
+const SAFE_CRED_NAME = /^[a-z0-9][a-z0-9._-]*$/;
+function validateCredName(label: string, value: string): void {
+  if (!SAFE_CRED_NAME.test(value)) {
+    console.error(`Invalid ${label}: "${value}". Allowed: lowercase alphanumeric, dots, hyphens, underscores.`);
+    process.exit(1);
+  }
+}
 
 // PID file management
 const getPidFile = () => path.join(getConfigDir(), 'daemon.pid');
@@ -203,11 +213,13 @@ program
 
     // Start credential proxy
     const socketPath = path.join(getConfigDir(), 'proxy.sock');
+    const policyConfig = loadPolicyFromConfig(config);
     const credentialProxy = createCredentialProxy({
       socketPath,
       store: credentialStore,
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
+      policyConfig,
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
@@ -377,11 +389,13 @@ program
     const serviceRegistry = createServiceRegistry({ configPath: config.services.configPath });
 
     // Start credential proxy
+    const policyConfig2 = loadPolicyFromConfig(config);
     const credentialProxy = createCredentialProxy({
       socketPath,
       store: credentialStore,
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
+      policyConfig: policyConfig2,
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
@@ -459,11 +473,13 @@ program
     const serviceRegistry = createServiceRegistry({ configPath: config.services.configPath });
 
     // Start credential proxy
+    const policyConfig3 = loadPolicyFromConfig(config);
     const credentialProxy = createCredentialProxy({
       socketPath,
       store: credentialStore,
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
+      policyConfig: policyConfig3,
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
@@ -569,6 +585,7 @@ program
   .description('All-in-one setup wizard — creates config, stores credentials, installs plugin')
   .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, keepassxc, 1password, vault, systemd-creds, bitwarden)')
   .option('--no-openclaw', 'Skip OpenClaw plugin installation')
+  .option('--no-policy', 'Skip request policy preset configuration')
   .option('--non-interactive', 'Use environment variables instead of prompts (for CI)')
   .action(async (options) => {
     const os = await import('node:os');
@@ -835,6 +852,48 @@ program
         console.log('    \u2713 Stored openai/api_key\n');
       } else {
         console.log('    Skipped\n');
+      }
+    }
+
+    // 3.5. Apply request policy presets
+    if (options.policy !== false && storedServices.length > 0) {
+      let shouldApplyPolicy = true;
+
+      if (!isNonInteractive) {
+        const rl = (await import('node:readline')).createInterface({
+          input: process.stdin,
+          output: process.stdout
+        });
+        const answer = await new Promise<string>((resolve) => {
+          rl.question('  ? Enable API request policies? (Y/n): ', resolve);
+        });
+        rl.close();
+        shouldApplyPolicy = answer.toLowerCase() !== 'n';
+        if (shouldApplyPolicy) {
+          console.log('    Policies restrict which API endpoints agents can call.\n');
+        }
+      }
+
+      if (shouldApplyPolicy) {
+        const presets = getDefaultPolicyPresets();
+        const policyToApply: Record<string, any> = {};
+        for (const svc of storedServices) {
+          if (presets[svc]) {
+            policyToApply[svc] = presets[svc];
+          }
+        }
+
+        if (Object.keys(policyToApply).length > 0) {
+          config.policy = policyToApply;
+          saveConfig(config);
+
+          console.log('  Applying default policy presets:\n');
+          for (const [svc, sp] of Object.entries(policyToApply) as [string, ServicePolicy][]) {
+            console.log(formatServicePolicy(svc, sp, '    '));
+            console.log('');
+          }
+          console.log('  Customize policies later: ~/.aquaman/config.yaml\n');
+        }
       }
     }
 
@@ -1137,6 +1196,41 @@ program
       }
     }
 
+    // 5.5 Policy config
+    if (config?.policy && Object.keys(config.policy).length > 0) {
+      const policyConfigDoc = loadPolicyFromConfig(config);
+      const validation = validatePolicyConfig(policyConfigDoc);
+      if (validation.valid) {
+        const serviceCount = Object.keys(policyConfigDoc).length;
+        const ruleCount = Object.values(policyConfigDoc).reduce((sum, sp) => sum + sp.rules.length, 0);
+        console.log(`  \u2713 ${aqua('Policy')} valid (${serviceCount} service${serviceCount !== 1 ? 's' : ''}, ${ruleCount} rule${ruleCount !== 1 ? 's' : ''})`);
+        for (const [svc, sp] of Object.entries(policyConfigDoc)) {
+          const denyRules = sp.rules.filter(r => r.action === 'deny');
+          if (denyRules.length > 0) {
+            const summary = denyRules.map(r => r.method !== '*' ? `${r.action} ${r.method} ${r.path}` : `${r.action} ${r.path}`).join(', ');
+            console.log(`      ${svc}: ${summary}`);
+          }
+        }
+        // Warn about policies for non-proxied services
+        if (config.credentials.proxiedServices) {
+          for (const svc of Object.keys(policyConfigDoc)) {
+            if (!config.credentials.proxiedServices.includes(svc)) {
+              console.log(`  \u26a0 ${aqua('Policy')} service "${svc}" has rules but is not in proxiedServices`);
+              issues++;
+            }
+          }
+        }
+      } else {
+        for (const err of validation.errors) {
+          console.log(`  \u2717 ${aqua('Policy')} ${err}`);
+        }
+        issues++;
+      }
+    } else {
+      console.log(`  \u2139 ${aqua('Policy')} not configured \u2014 agents can call any endpoint on proxied services`);
+      console.log('    \u2192 Run: aquaman setup (or add policy rules to ~/.aquaman/config.yaml)');
+    }
+
     // 6. OpenClaw detection
     let openclawDetected = false;
     let cliFound = false;
@@ -1409,6 +1503,9 @@ credentials
   .description('Add a credential')
   .option('--backend <backend>', 'Override credential backend')
   .action(async (service: string, key: string, options) => {
+    validateCredName('service', service);
+    validateCredName('key', key);
+
     const config = loadConfig();
     const backend = options.backend || config.credentials.backend;
 
@@ -1511,6 +1608,9 @@ credentials
   .command('delete <service> <key>')
   .description('Delete a credential')
   .action(async (service: string, key: string) => {
+    validateCredName('service', service);
+    validateCredName('key', key);
+
     const config = loadConfig();
     let store;
     try {
@@ -1675,6 +1775,49 @@ services
         console.log(`  - ${error}`);
       }
       process.exit(1);
+    }
+  });
+
+// Policy commands
+const policy = program.command('policy').description('Request policy management');
+
+policy
+  .command('list')
+  .description('List configured policy rules')
+  .action(async () => {
+    const config = loadConfig();
+    const policyConfig = loadPolicyFromConfig(config);
+
+    if (Object.keys(policyConfig).length === 0) {
+      console.log('No policies configured. Run: aquaman setup');
+      return;
+    }
+
+    for (const [name, sp] of Object.entries(policyConfig)) {
+      console.log(formatServicePolicy(name, sp));
+    }
+  });
+
+policy
+  .command('test <service> <method> <path>')
+  .description('Test whether a request would be allowed or denied')
+  .action(async (service: string, method: string, reqPath: string) => {
+    const config = loadConfig();
+    const policyConfig = loadPolicyFromConfig(config);
+
+    const result = matchPolicy(service, method.toUpperCase(), reqPath, policyConfig);
+
+    if (!policyConfig[service]) {
+      console.log(`  \u2713 ALLOWED (no policy for service "${service}")`);
+      return;
+    }
+
+    if (result.allowed) {
+      const svcPolicy = policyConfig[service];
+      console.log(`  \u2713 ALLOWED (no matching rule, default: ${svcPolicy.defaultAction})`);
+    } else {
+      const rule = result.matchedRule!;
+      console.log(`  \u2717 DENIED by rule: ${rule.method} ${rule.path} \u2192 ${rule.action}`);
     }
   });
 
@@ -2139,6 +2282,19 @@ program
       console.log(`  - ${service}`);
     }
 
+    // Policy summary
+    const policyConfig = loadPolicyFromConfig(config);
+    const policySvcCount = Object.keys(policyConfig).length;
+    if (policySvcCount > 0) {
+      const ruleCount = Object.values(policyConfig).reduce((sum, sp) => sum + sp.rules.length, 0);
+      console.log(`\nRequest policies: ${policySvcCount} service${policySvcCount !== 1 ? 's' : ''}, ${ruleCount} rule${ruleCount !== 1 ? 's' : ''}`);
+      for (const [svc, sp] of Object.entries(policyConfig)) {
+        console.log(`  - ${svc}: ${sp.rules.length} rule${sp.rules.length !== 1 ? 's' : ''} (default: ${sp.defaultAction})`);
+      }
+    } else {
+      console.log('\nRequest policies: not configured');
+    }
+
     // Check for stored credentials
     try {
       const store = await createCredentialStore({
@@ -2171,6 +2327,17 @@ program
     console.log(`\nOpenClaw: ${info.installed ? `installed (${info.version})` : 'not found'}`);
   });
 
+/** Format a single service policy for display (used by policy list, setup, doctor) */
+function formatServicePolicy(name: string, sp: ServicePolicy, indent = '  '): string {
+  const lines: string[] = [];
+  lines.push(`${indent}${name} (default: ${sp.defaultAction})`);
+  for (const rule of sp.rules) {
+    const method = rule.method.padEnd(6);
+    lines.push(`${indent}  ${rule.action === 'deny' ? 'deny' : 'allow'}  ${method} ${rule.path}`);
+  }
+  return lines.join('\n');
+}
+
 function formatEntry(entry: any): string {
   switch (entry.type) {
     case 'tool_call':
@@ -2178,7 +2345,7 @@ function formatEntry(entry: any): string {
     case 'tool_result':
       return `Result for ${entry.data.toolCallId}`;
     case 'credential_access':
-      return `${entry.data.service} ${entry.data.operation} ${entry.data.success ? 'OK' : 'FAIL'}`;
+      return `${entry.data.service} ${entry.data.operation} ${entry.data.success ? 'OK' : `FAIL: ${entry.data.error || 'unknown'}`}`;
     default:
       return JSON.stringify(entry.data).slice(0, 80);
   }

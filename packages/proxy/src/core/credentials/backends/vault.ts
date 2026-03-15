@@ -14,6 +14,7 @@ export interface VaultStoreOptions {
 
 const DEFAULT_MOUNT_PATH = 'secret';
 const AQUAMAN_PATH_PREFIX = 'aquaman';
+const SAFE_CRED_NAME = /^[a-z0-9][a-z0-9._-]*$/;
 
 export class VaultStore implements CredentialStore {
   private address: string;
@@ -36,7 +37,15 @@ export class VaultStore implements CredentialStore {
     }
   }
 
+  private validateName(label: string, value: string): void {
+    if (!SAFE_CRED_NAME.test(value)) {
+      throw new Error(`Invalid ${label} name: "${value}". Allowed pattern: ${SAFE_CRED_NAME.source}`);
+    }
+  }
+
   private getPath(service: string, key: string): string {
+    this.validateName('service', service);
+    this.validateName('key', key);
     return `${AQUAMAN_PATH_PREFIX}/${service}/${key}`;
   }
 

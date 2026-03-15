@@ -48,5 +48,17 @@ export {
   createOpenClawIntegration
 } from './openclaw/integration.js';
 
+// Request Policy
+export {
+  type PolicyRule,
+  type ServicePolicy,
+  type PolicyConfig,
+  matchPathPattern,
+  matchPolicy,
+  loadPolicyFromConfig,
+  validatePolicyConfig,
+  getDefaultPolicyPresets
+} from './request-policy.js';
+
 // Core (merged from aquaman-core)
 export * from './core/index.js';

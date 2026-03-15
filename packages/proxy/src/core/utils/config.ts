@@ -153,7 +153,8 @@ function mergeConfig(
     openclaw: {
       ...base.openclaw,
       ...override.openclaw
-    }
+    },
+    policy: override.policy !== undefined ? { ...base.policy, ...override.policy } : base.policy
   };
 }
 

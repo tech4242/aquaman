@@ -12,6 +12,9 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import type { ServiceConfig } from '../core/index.js';
 
+/** Matches the SAFE_SERVICE_NAME pattern from daemon.ts — prevents shell injection in export statements */
+const SAFE_SERVICE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
+
 export interface EnvConfig {
   services: ServiceConfig[];
 }
@@ -26,6 +29,9 @@ export function generateOpenClawEnv(config: EnvConfig): Record<string, string> {
 
   // For each service, set the base URL to point to our sentinel hostname
   for (const service of config.services) {
+    if (!SAFE_SERVICE_NAME.test(service.name)) {
+      continue; // Skip services with unsafe names — prevents shell injection in RC files
+    }
     const baseUrl = `http://aquaman.local/${service.name}`;
 
     // Map service names to OpenClaw environment variables

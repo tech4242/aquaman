@@ -1,19 +1,18 @@
 # aquaman-plugin
 
-OpenClaw Gateway plugin for [aquaman](https://github.com/tech4242/aquaman) credential isolation.
-
-## How It Works
+OpenClaw Gateway plugin for [aquaman](https://github.com/tech4242/aquaman) — credential isolation for OpenClaw.
 
 ```
 Agent / OpenClaw Gateway              Aquaman Proxy
 ┌──────────────────────┐              ┌──────────────────────┐
 │                      │              │                      │
-│  ANTHROPIC_BASE_URL  │══ Unix ════>│  Keychain / 1Pass /  │
-│  = aquaman.local     │   Domain    │  Vault / Encrypted   │
-│                      │<═ Socket ═══│                      │
-│  fetch() interceptor │══ (UDS) ══=>│  + Auth injected:    │
-│  redirects channel   │              │    header / url-path │
-│  API traffic         │              │    basic / oauth     │
+│  ANTHROPIC_BASE_URL  │══ Unix ═════>│  Keychain / 1Pass /  │
+│  = aquaman.local     │   Domain     │  Vault / Encrypted   │
+│                      │<═ Socket ════│                      │
+│  fetch() interceptor │══ (UDS) ════>│  + Policy enforced   │
+│  redirects channel   │              │  + Auth injected:    │
+│  API traffic         │              │    header / url-path │
+│                      │              │    basic / oauth     │
 │                      │              │                      │
 │  No credentials.     │  ~/.aquaman/ │                      │
 │  No open ports.      │  proxy.sock  │                      │
@@ -30,23 +29,21 @@ Agent / OpenClaw Gateway              Aquaman Proxy
                                slack.com/api  ...
 ```
 
-This plugin makes the left side work. It routes all LLM and channel API traffic through the aquaman proxy via Unix domain socket so credentials never enter the Gateway process. No TCP port is opened — traffic flows through `~/.aquaman/proxy.sock`.
+This plugin is the left side — it runs inside the Gateway process and routes all LLM and channel API traffic through the aquaman proxy via Unix domain socket. Credentials never enter the agent's address space.
+
+**What it does on load:**
+1. Sets `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` to `http://aquaman.local/<service>` (routed to UDS)
+2. Spawns the proxy daemon via `ProxyManager`
+3. Activates a `globalThis.fetch` interceptor to redirect channel API traffic through the proxy
+4. Registers `/aquaman-status` command and `aquaman_status` tool
 
 ## Quick Start
 
 ```bash
-npm install -g aquaman-proxy              # install the proxy CLI
-aquaman setup                             # stores keys, installs plugin, configures OpenClaw
-openclaw                                  # proxy starts automatically
+npm install -g aquaman-proxy
+aquaman setup                   # stores keys, installs this plugin, applies policy defaults
+openclaw                        # proxy starts automatically
 ```
-
-> `aquaman setup` auto-detects your credential backend. macOS defaults to Keychain,
-> Linux defaults to encrypted file. Override with `--backend`:
-> `aquaman setup --backend keepassxc`
-> Options: `keychain`, `encrypted-file`, `keepassxc`, `1password`, `vault`, `systemd-creds`, `bitwarden`
-
-Existing plaintext credentials are migrated automatically during setup.
-Run again anytime to migrate new credentials: `aquaman migrate openclaw --auto`
 
 Troubleshooting: `aquaman doctor`
 
@@ -59,20 +56,20 @@ Troubleshooting: `aquaman doctor`
 | `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` \| `"keepassxc"` \| `"systemd-creds"` \| `"bitwarden"` | `"keychain"` | Credential store |
 | `services` | `string[]` | `["anthropic", "openai"]` | Services to proxy |
 
-> Advanced settings (audit, vault) go in `~/.aquaman/config.yaml`.
+> Advanced settings (audit, vault, request policies) go in `~/.aquaman/config.yaml`. See [request policy docs](https://github.com/tech4242/aquaman#request-policies).
 
-## Security Audit Note
+## Security Audit
 
-Running `openclaw security audit --deep` will show two expected findings:
+`openclaw security audit --deep` reports two expected findings:
 
-- **`dangerous-exec`** on `proxy-manager.ts` — the plugin spawns the aquaman proxy as a separate process, which is the whole point of credential isolation.
-- **`tools_reachable_permissive_policy`** — advisory that plugin tools are reachable under the default tool policy. This is about your OpenClaw tool profile setting, not about aquaman. Set `"tools": { "profile": "coding" }` in `openclaw.json` if your agents handle untrusted input.
+- **`dangerous-exec`** on `proxy-manager.ts` — the plugin spawns the proxy as a separate process. This is how credential isolation works.
+- **`tools_reachable_permissive_policy`** — advisory about your tool policy, not an aquaman vulnerability. Set `"tools": { "profile": "coding" }` in `openclaw.json` if your agents handle untrusted input.
 
-`aquaman setup` adds the plugin to your `plugins.allow` trust list automatically.
+`aquaman setup` adds the plugin to `plugins.allow` automatically.
 
 ## Documentation
 
-See the [main README](https://github.com/tech4242/aquaman#readme) for architecture, Docker deployment, and manual testing.
+See the [main README](https://github.com/tech4242/aquaman#readme) for the full security model, architecture diagrams, and manual testing guides.
 
 ## License
 

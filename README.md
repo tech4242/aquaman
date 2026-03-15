@@ -3,18 +3,22 @@
 [![CI](https://github.com/tech4242/aquaman/actions/workflows/ci.yml/badge.svg)](https://github.com/tech4242/aquaman/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/tech4242/aquaman/branch/main/graph/badge.svg)](https://codecov.io/gh/tech4242/aquaman)
 [![npm version](https://img.shields.io/npm/v/aquaman-proxy?label=aquaman-proxy)](https://www.npmjs.com/package/aquaman-proxy)
-[![npm downloads](https://img.shields.io/npm/dm/aquaman-proxy)](https://www.npmjs.com/package/aquaman-proxy)
-[![Security: process isolation](https://img.shields.io/badge/security-process%20isolation-critical)](https://github.com/tech4242/aquaman#how-it-works)
+[![npm downloads](https://img.shields.io/npm/dt/aquaman-proxy)](https://www.npmjs.com/package/aquaman-proxy)
+[![Security: process isolation](https://img.shields.io/badge/security-process%20isolation-critical)](https://github.com/tech4242/aquaman#security-model)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Credential isolation for OpenClaw — secrets stay submerged, agents stay dry.
 
-You have bought yourself a brand new Mac Mini (or credits at your favorite cloud provider) and now you are still scared about your API credentials because you read all the articles. 
+You bought a brand new Mac Mini, set up OpenClaw, and now you're staring at your `~/.openclaw/openclaw.json` wondering why your Anthropic API key is sitting there in plaintext. You read the articles. You know what happens when an agent gets prompt-injected. We get it.
 
-We get it.
+Aquaman fixes this with three layers of defense:
 
-With Aquaman API keys never enter the agent process. Aquaman stores them in a secure vault of your choosing and injects auth headers via a separate proxy. Even a fully compromised agent should not be able to exfiltrate your keys.
+1. **Process isolation** — API keys live in a separate proxy process. The agent never sees them. Even RCE in the agent can't reach credentials — they're in a different address space.
+2. **Request policies** — Per-service rules control *which endpoints* an agent can call. Block admin APIs, prevent deletions, allow drafts but deny sends. Denied requests never get real credentials.
+3. **Tamper-evident audit** — Every credential use is logged with SHA-256 hash chains. You can prove what was accessed and detect tampering after the fact.
+
+No SDK changes required. The proxy is transparent — your agent talks to `aquaman.local`, the proxy injects auth and forwards to the real API.
 
 ## Quick Start
 
@@ -68,9 +72,10 @@ Agent / OpenClaw Gateway              Aquaman Proxy
 │  ANTHROPIC_BASE_URL  │══ Unix ════> │  Keychain / 1Pass /  │
 │  = aquaman.local     │   Domain     │  Vault / Encrypted   │
 │                      │<═ Socket ═══ │                      │
-│  fetch() interceptor │══ (UDS) ══=> │  + Auth injected:    │
-│  redirects channel   │              │    header / url-path │
-│  API traffic         │              │    basic / oauth     │
+│  fetch() interceptor │══ (UDS) ══=> │  + Policy enforced   │
+│  redirects channel   │              │  + Auth injected:    │
+│  API traffic         │              │    header / url-path │
+│                      │              │    basic / oauth     │
 │                      │              │                      │
 │  No credentials.     │  ~/.aquaman/ │                      │
 │  No open ports.      │  proxy.sock  │                      │
@@ -86,11 +91,65 @@ Agent / OpenClaw Gateway              Aquaman Proxy
                                slack.com/api  ...
 ```
 
-1. **Store** — Credentials live in a vault backend (Keychain, 1Password, Vault, Bitwarden, encrypted file)
-2. **Proxy** — Aquaman runs a reverse proxy in a separate process, connected via Unix domain socket — no TCP port, no network exposure
-3. **Inject** — Proxy looks up the credential and adds the auth header before forwarding
+1. **Store** — Credentials live in a vault backend (Keychain, 1Password, Vault, Bitwarden, encrypted file, KeePassXC, systemd-creds)
+2. **Policy** — Proxy checks method + path rules *before* touching credentials. Denied requests get a 403, never real auth headers.
+3. **Inject** — Proxy looks up the credential and adds the auth header before forwarding. 25 builtin services, 4 auth modes (header, URL-path, HTTP Basic, OAuth).
+4. **Audit** — Every credential use is logged with SHA-256 hash chains.
 
 The agent only sees a sentinel hostname (`aquaman.local`). It never sees a key, and no port is open for other processes to probe.
+
+## Security Model
+
+| Layer | What it does | What it stops |
+|-------|-------------|---------------|
+| **Process isolation** | Credentials in separate process, connected via Unix domain socket (`chmod 600`) | Compromised agent can't read keys — different address space, no TCP port to probe |
+| **Service allowlisting** | `proxiedServices` controls which APIs the agent can reach | Agent can't talk to services you didn't authorize |
+| **Request policies** | Method + path rules per service, enforced before credential injection | Agent can reach Anthropic but not its admin API; can draft emails but not send them |
+| **Audit trail** | SHA-256 hash-chained logs of every credential use | Post-incident forensics, tamper detection, compliance evidence |
+
+## Request Policies
+
+OAuth scopes can't distinguish between "draft an email" and "send an email" — they're both `gmail.send`. Request policies fill that gap: allow the service, then restrict what happens inside it.
+
+```yaml
+# ~/.aquaman/config.yaml
+policy:
+  anthropic:
+    defaultAction: allow
+    rules:
+      - method: "*"
+        path: "/v1/organizations/**"
+        action: deny          # block admin/billing API
+  openai:
+    defaultAction: allow
+    rules:
+      - method: "*"
+        path: "/v1/organization/**"
+        action: deny          # block admin API
+      - method: DELETE
+        path: "/v1/**"
+        action: deny          # no deletions
+  slack:
+    defaultAction: allow
+    rules:
+      - method: "*"
+        path: "/admin.*"
+        action: deny          # block Slack admin methods
+  gmail:
+    defaultAction: allow
+    rules:
+      - method: POST
+        path: "/v1/users/*/messages/send"
+        action: deny          # drafts ok, sending blocked
+```
+
+- **No policy = allow all** (backward compatible)
+- **First match wins** — rules evaluated top-to-bottom, unmatched requests fall through to `defaultAction`
+- **Denied before auth** — blocked requests never get real credentials
+- **Path globs:** `*` matches within a segment, `**` matches zero or more segments
+- **`aquaman setup`** applies safe defaults (blocks admin/billing endpoints for stored services)
+- **`aquaman policy list`** shows all configured rules; **`aquaman policy test <svc> <method> <path>`** dry-runs a request
+- **`aquaman doctor`** validates your policy config and warns about typos
 
 ## Credential Backends
 
@@ -114,11 +173,3 @@ The agent only sees a sentinel hostname (`aquaman.local`). It never sees a key, 
 - **`tools_reachable_permissive_policy`** — OpenClaw warns that plugin tools (like `aquaman_status`) are reachable when no restrictive tool profile is set. This is an environment-level advisory about your agent's tool policy, not a vulnerability in aquaman. If your agents handle untrusted input, set `"tools": { "profile": "coding" }` in `openclaw.json` to restrict which tools agents can call.
 
 `aquaman setup` adds the plugin to `plugins.allow` automatically so OpenClaw knows you trust it.
-
-## Why Aquaman
-
-**Security** — Process-level credential isolation via Unix domain socket (no TCP port, no network exposure). Socket file permissions (`chmod 600`) restrict access to the owning user. Tamper-evident audit logs with SHA-256 hash chains
-
-**DevOps** — Plugs into Keychain, 1Password, HashiCorp Vault, and Bitwarden; YAML-based service config; 23 builtin services across 4 auth modes
-
-**Developers** — Transparent reverse proxy, no SDK changes, works with any OpenClaw workflow or standalone app
