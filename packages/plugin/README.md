@@ -45,6 +45,11 @@ aquaman setup                   # stores keys, installs this plugin, applies pol
 openclaw                        # proxy starts automatically
 ```
 
+> **We recommend `aquaman setup`** — it does more than just install the plugin: it stores credentials,
+> configures your backend, writes `openclaw.json`, and generates auth profiles. If you prefer to install
+> the plugin directly: `openclaw plugins install aquaman-plugin` (on OpenClaw 2026.3.22+, this checks
+> [ClawHub](https://clawhub.ai) first, then falls back to npm).
+
 Troubleshooting: `aquaman doctor`
 
 ## Config Options

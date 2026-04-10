@@ -16,10 +16,53 @@
  *   - Agent never sees the actual API keys
  */
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+// OpenClaw plugin SDK types — defined locally to avoid import resolution failures.
+// The root import "openclaw/plugin-sdk" broke for user-installed plugins in OpenClaw 2026.3.23
+// (GitHub issue #53403: jiti resolver can't walk from ~/.openclaw/extensions/ to OpenClaw's
+// package tree). Since we only use these as compile-time types, local definitions are zero-risk
+// and make the plugin resilient to SDK path changes. Revert to SDK import if OpenClaw stabilizes
+// module resolution for user-installed plugins.
 
-// OpenClawPluginDefinition exists in the SDK internals but isn't re-exported from "openclaw/plugin-sdk".
-// Mirror the type here until OpenClaw exposes it from the barrel.
+interface OpenClawPluginLogger {
+  info(msg: string): void;
+  warn(msg: string): void;
+  error(msg: string): void;
+}
+
+interface OpenClawPluginApi {
+  logger: OpenClawPluginLogger;
+  pluginConfig: unknown;
+  registerService(def: {
+    id: string;
+    start(ctx: { logger: OpenClawPluginLogger }): void | Promise<void>;
+    stop(ctx: { logger: OpenClawPluginLogger }): void | Promise<void>;
+  }): void;
+  registerCommand(def: {
+    name: string;
+    description: string;
+    acceptsArgs: boolean;
+    requireAuth: boolean;
+    handler(): Promise<{ text: string }>;
+  }): void;
+  registerCli?(
+    fn: (opts: { program: any }) => void,
+    opts: { commands: string[] },
+  ): void;
+  registerTool(
+    factory: () => {
+      name: string;
+      label: string;
+      description: string;
+      parameters: { type: "object"; properties: Record<string, unknown>; required: string[] };
+      execute(toolCallId: string, params: unknown): Promise<{
+        content: { type: "text"; text: string }[];
+        details: unknown;
+      }>;
+    },
+    opts: { names: string[] },
+  ): void;
+}
+
 type OpenClawPluginDefinition = {
   id?: string;
   name?: string;

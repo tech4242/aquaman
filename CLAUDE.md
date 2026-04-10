@@ -6,7 +6,7 @@ Credential isolation for **OpenClaw Gateway**. API keys and channel tokens never
 
 **Target platform:** OpenClaw Gateway on Unix-like systems (Linux, macOS, WSL2). The Gateway is OpenClaw's core server component—a Node.js/TypeScript service that runs as a systemd user service (Linux/WSL2) or LaunchAgent (macOS).
 
-**Published on npm** as `aquaman-plugin` and `aquaman-proxy`. Install via `openclaw plugins install aquaman-plugin`.
+**Published on npm** as `aquaman-plugin` and `aquaman-proxy`. Install via `openclaw plugins install aquaman-plugin`. Also publishable to ClawHub (OpenClaw's native plugin registry, default since 2026.3.22) for native discoverability.
 
 ## Architecture Decision: Isolation vs Detection
 
@@ -52,7 +52,7 @@ The plugin (`packages/plugin/`) integrates with the OpenClaw Gateway's plugin SD
 8. Registers `/aquaman-status` command (human-facing), `aquaman_status` tool (agent-facing), and `/aquaman` CLI commands
 
 **Key files:**
-- `index.ts` - Plugin entry point with `OpenClawPluginDefinition` object export (`export default plugin`) — this is the actual running code OpenClaw loads. Does NOT import `child_process` or `fetch` directly (separated to avoid OpenClaw security scanner false positives).
+- `index.ts` - Plugin entry point with `OpenClawPluginDefinition` object export (`export default plugin`) — this is the actual running code OpenClaw loads. Does NOT import `child_process` or `fetch` directly (separated to avoid OpenClaw security scanner false positives). SDK types (`OpenClawPluginApi`, `OpenClawPluginDefinition`) are defined locally to avoid `openclaw/plugin-sdk` import resolution failures on OpenClaw 2026.3.23+ (see #53403).
 - `src/proxy-manager.ts` - Spawns/manages the proxy child process (contains `child_process` import)
 - `src/proxy-health.ts` - Proxy health check and host map fetching (contains `fetch` calls)
 - `src/plugin.ts` - Class-based plugin implementation (alternative architecture, used by standalone tests)
@@ -118,7 +118,7 @@ OpenClaw 2026.2.15+ also reports an environment-level advisory:
 
 There is no suppression mechanism for code findings (no inline annotations, no `.auditignore`). The only fix is to ensure trigger patterns don't co-exist in the same file.
 
-**Current state (v0.9.2, tested through 2026.3.8):** 2 expected findings: `dangerous-exec` on `proxy-manager.ts` (true positive — it spawns the proxy process), `tools_reachable_permissive_policy` (environment advisory — not a code issue). 0 env-harvesting findings. The `request-policy.ts` file contains no `child_process`, `process.env`, or `fetch` — zero scanner risk. The scanner recursively scans `src/` and `dist/` subdirectories (since 2026.2.9). Note: OpenClaw 2026.3.x fresh installs default `tools.profile` to `messaging` — `aquaman_status` tool may not surface unless the operator configures `tools.profile` to include it.
+**Current state (v0.11.0, tested through 2026.4.9):** 2 expected findings: `dangerous-exec` on `proxy-manager.ts` (true positive — it spawns the proxy process), `tools_reachable_permissive_policy` (environment advisory — not a code issue). 0 env-harvesting findings. The `request-policy.ts` file contains no `child_process`, `process.env`, or `fetch` — zero scanner risk. The scanner recursively scans `src/` and `dist/` subdirectories (since 2026.2.9). Note: OpenClaw 2026.3.x+ fresh installs default `tools.profile` to `messaging` — `aquaman_status` tool may not surface unless the operator configures `tools.profile` to include it.
 
 **Mitigations:**
 - `aquaman setup` auto-sets `plugins.allow: ["aquaman-plugin"]` in `openclaw.json` (resolves the `extensions_no_allowlist` audit finding)

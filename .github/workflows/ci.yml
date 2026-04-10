@@ -87,9 +87,12 @@ jobs:
           fail_ci_if_error: true
 
   e2e-openclaw:
-    name: E2E OpenClaw Plugin
+    name: E2E OpenClaw Plugin (${{ matrix.openclaw-version }})
     runs-on: ubuntu-latest
     continue-on-error: true
+    strategy:
+      matrix:
+        openclaw-version: ['2026.4.7', '2026.4.9']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -115,10 +118,10 @@ jobs:
           path: |
             /usr/local/lib/node_modules/openclaw
             /usr/local/bin/openclaw
-          key: openclaw-${{ runner.os }}-node24-2026.3.8
+          key: openclaw-${{ runner.os }}-node24-${{ matrix.openclaw-version }}
       - name: Install openclaw
         if: steps.cache-openclaw.outputs.cache-hit != 'true'
-        run: npm install -g openclaw@2026.3.8
+        run: npm install -g openclaw@${{ matrix.openclaw-version }}
       - run: npx vitest run test/e2e/openclaw-plugin.test.ts
 
       - name: Install plugin for security audit
