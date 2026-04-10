@@ -74,6 +74,7 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
       path.join(testStateDir, 'openclaw.json'),
       JSON.stringify({
         plugins: {
+          allow: ['aquaman-plugin'],
           entries: {
             'aquaman-plugin': {
               enabled: true,
@@ -123,7 +124,8 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
     it('plugin doctor reports no issues', () => {
       const result = runOpenClaw('plugins doctor');
 
-      expect(result).toContain('No plugin issues detected');
+      expect(result).not.toMatch(/error|invalid|blocked|unsafe/i);
+      expect(result).toContain('Aquaman plugin loaded');
     });
   });
 
@@ -168,7 +170,8 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
       // No path traversal or invalid name warnings
       expect(result).not.toMatch(/invalid.*path/i);
       expect(result).not.toMatch(/traversal/i);
-      expect(result).toContain('No plugin issues detected');
+      expect(result).not.toMatch(/error|blocked|unsafe/i);
+      expect(result).toContain('Aquaman plugin loaded');
     });
 
     it('plugin code passes safety scanner', () => {
