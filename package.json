@@ -2,7 +2,7 @@
   "name": "aquaman",
   "version": "0.11.0",
   "private": true,
-  "description": "Credential isolation proxy for OpenClaw — secrets stay submerged, agents stay dry. 🔱🦞",
+  "description": "API key protection for OpenClaw — credentials stay in your vault, never in the agent's memory",
   "type": "module",
   "workspaces": [
     "packages/*"
@@ -26,14 +26,18 @@
     "docker:run": "docker run --rm -it aquaman"
   },
   "keywords": [
+    "aquaman",
     "openclaw",
     "security",
-    "audit",
     "credentials",
-    "ai-agent",
-    "keychain",
     "vault",
-    "1password"
+    "1password",
+    "api-key",
+    "secrets",
+    "keychain",
+    "bitwarden",
+    "ai-agent",
+    "api-protection"
   ],
   "author": "tech4242",
   "license": "MIT",

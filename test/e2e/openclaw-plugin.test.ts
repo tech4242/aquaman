@@ -115,10 +115,9 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
     it('plugin shows as loaded', () => {
       const result = runOpenClaw('plugins list');
 
-      // Should show loaded status
+      // Should show loaded status and our plugin name
       expect(result).toContain('loaded');
-      // Should show our description
-      expect(result).toContain('API key protection');
+      expect(result).toContain('aquaman-plugin');
     });
 
     it('plugin doctor reports no issues', () => {

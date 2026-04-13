@@ -1,6 +1,6 @@
 # aquaman-proxy
 
-The proxy daemon and CLI for [aquaman](https://github.com/tech4242/aquaman) — API key protection for OpenClaw.
+The proxy daemon and CLI for [aquaman](https://github.com/tech4242/aquaman) — API key protection for OpenClaw. Credentials stay in your vault, never in the agent's memory.
 
 ```
 Agent / OpenClaw Gateway              Aquaman Proxy
