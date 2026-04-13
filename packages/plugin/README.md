@@ -38,31 +38,16 @@ Agent / OpenClaw Gateway              Aquaman Proxy
 3. **Dangerous endpoints blocked** — request policies deny admin APIs, prevent deletions, block sends — before credentials are even injected
 4. **Tamper-evident audit log** — every credential use logged with SHA-256 hash chains
 
-## Install
-
-### Installed from ClawHub or `openclaw plugins install`?
-
-The plugin and proxy are installed together. Now run setup to store your keys:
+## Quick Start
 
 ```bash
-openclaw aquaman setup
+openclaw plugins install aquaman-plugin   # 1. install plugin + proxy
+openclaw aquaman setup                    # 2. store your API keys
+openclaw                                  # 3. done — proxy starts automatically
 ```
 
-Or in your terminal:
-
-```bash
-aquaman setup
-```
-
-### Fresh install (recommended for developers)
-
-```bash
-npm install -g aquaman-proxy
-aquaman setup
-openclaw
-```
-
-`aquaman setup` does everything: stores your API keys, picks the right vault backend for your OS, installs this plugin, and applies safe request policy defaults.
+> **Using npm?** `npm install -g aquaman-proxy && aquaman setup` does
+> the same thing. Use this if you prefer managing packages with npm.
 
 ## Available Commands
 

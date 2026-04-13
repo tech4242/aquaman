@@ -34,21 +34,13 @@ This package is the right side — a reverse proxy on a Unix domain socket that 
 ## Quick Start
 
 ```bash
-npm install -g aquaman-proxy
-aquaman setup                   # stores keys, installs OpenClaw plugin, applies policy defaults
-openclaw                        # proxy starts automatically via plugin
+npm install -g aquaman-proxy              # 1. install the proxy CLI
+aquaman setup                             # 2. store your API keys, install plugin
+openclaw                                  # 3. done — proxy starts automatically
 ```
 
-Standalone (without OpenClaw):
-
-```bash
-aquaman init
-aquaman credentials add anthropic api_key
-aquaman daemon                  # listens on ~/.aquaman/proxy.sock
-```
-
-> If you installed via ClawHub (`openclaw plugins install aquaman-plugin`), the proxy
-> is already bundled. Run `openclaw aquaman setup` or `aquaman setup` to store your keys.
+> **Installed via ClawHub?** The proxy is already bundled with the plugin.
+> Run `openclaw aquaman setup` to store your keys.
 
 Troubleshooting: `aquaman doctor`
 
