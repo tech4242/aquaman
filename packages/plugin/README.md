@@ -1,6 +1,8 @@
-# aquaman-plugin
+# Aquaman — API Key Protection for OpenClaw
 
-OpenClaw Gateway plugin for [aquaman](https://github.com/tech4242/aquaman) — credential isolation for OpenClaw.
+Your API keys and tokens stay in your vault. The agent never sees them.
+Even a compromised agent can't steal credentials — they live in a
+separate process.
 
 ```
 Agent / OpenClaw Gateway              Aquaman Proxy
@@ -29,28 +31,57 @@ Agent / OpenClaw Gateway              Aquaman Proxy
                                slack.com/api  ...
 ```
 
-This plugin is the left side — it runs inside the Gateway process and routes all LLM and channel API traffic through the aquaman proxy via Unix domain socket. Credentials never enter the agent's address space.
+## What It Does
 
-**What it does on load:**
-1. Sets `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` to `http://aquaman.local/<service>` (routed to UDS)
-2. Spawns the proxy daemon via `ProxyManager`
-3. Activates a `globalThis.fetch` interceptor to redirect channel API traffic through the proxy
-4. Registers `/aquaman-status` command and `aquaman_status` tool
+1. **Secrets stay in your vault** — Keychain, 1Password, HashiCorp Vault, KeePassXC, systemd-creds, Bitwarden, or encrypted file
+2. **Agent gets a proxy URL** — requests route through a local proxy that injects auth headers on the fly
+3. **Dangerous endpoints blocked** — request policies deny admin APIs, prevent deletions, block sends — before credentials are even injected
+4. **Tamper-evident audit log** — every credential use logged with SHA-256 hash chains
 
-## Quick Start
+## Install
+
+### Installed from ClawHub or `openclaw plugins install`?
+
+The plugin and proxy are installed together. Now run setup to store your keys:
+
+```bash
+openclaw aquaman setup
+```
+
+Or in your terminal:
+
+```bash
+aquaman setup
+```
+
+### Fresh install (recommended for developers)
 
 ```bash
 npm install -g aquaman-proxy
-aquaman setup                   # stores keys, installs this plugin, applies policy defaults
-openclaw                        # proxy starts automatically
+aquaman setup
+openclaw
 ```
 
-> **We recommend `aquaman setup`** — it does more than just install the plugin: it stores credentials,
-> configures your backend, writes `openclaw.json`, and generates auth profiles. If you prefer to install
-> the plugin directly: `openclaw plugins install aquaman-plugin` (on OpenClaw 2026.3.22+, this checks
-> [ClawHub](https://clawhub.ai) first, then falls back to npm).
+`aquaman setup` does everything: stores your API keys, picks the right vault backend for your OS, installs this plugin, and applies safe request policy defaults.
 
-Troubleshooting: `aquaman doctor`
+## Available Commands
+
+All commands work via OpenClaw CLI or your terminal:
+
+| OpenClaw CLI | Terminal | Description |
+|---|---|---|
+| `openclaw aquaman setup` | `aquaman setup` | Onboarding wizard — stores keys, configures backend |
+| `openclaw aquaman doctor` | `aquaman doctor` | Diagnostic checks with actionable fixes |
+| `openclaw aquaman credentials list` | `aquaman credentials list` | List stored credentials |
+| `openclaw aquaman credentials add` | `aquaman credentials add` | Add a credential (interactive) |
+| `openclaw aquaman policy-list` | `aquaman policy list` | Show request policy rules |
+| `openclaw aquaman audit-tail` | `aquaman audit tail` | Recent audit entries |
+| `openclaw aquaman services-list` | `aquaman services list` | List configured services |
+| `openclaw aquaman status` | `aquaman status` | Proxy status |
+
+Slash commands in chat: `/aquaman-status`, `/aquaman list`, `/aquaman doctor`
+
+Troubleshooting: `openclaw aquaman doctor` or `aquaman doctor`
 
 ## Config Options
 
@@ -74,7 +105,7 @@ Troubleshooting: `aquaman doctor`
 
 ## Documentation
 
-See the [main README](https://github.com/tech4242/aquaman#readme) for the full security model, architecture diagrams, and manual testing guides.
+See the [main README](https://github.com/tech4242/aquaman#readme) for the full security model, architecture diagrams, request policy config, and manual testing guides.
 
 ## License
 

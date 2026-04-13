@@ -118,7 +118,7 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
       // Should show loaded status
       expect(result).toContain('loaded');
       // Should show our description
-      expect(result).toContain('Credential isolation');
+      expect(result).toContain('API key protection');
     });
 
     it('plugin doctor reports no issues', () => {
@@ -134,7 +134,7 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
       const result = runOpenClaw('plugins list');
 
       // Should find the CLI (we linked it earlier)
-      expect(result).toContain('aquaman CLI found');
+      expect(result).toContain('aquaman proxy found');
     });
 
     it('sets ANTHROPIC_BASE_URL environment variable', () => {
@@ -200,7 +200,7 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
 
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
       expect(manifest.id).toBe('aquaman-plugin');
-      expect(manifest.name).toBe('Aquaman Vault');
+      expect(manifest.name).toBe('Aquaman — API Key Protection');
     });
 
     it('has index.ts entry point', () => {

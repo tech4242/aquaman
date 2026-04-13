@@ -8,7 +8,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Credential isolation for OpenClaw — secrets stay submerged, agents stay dry.
+API key protection for OpenClaw — secrets stay submerged, agents stay dry.
 
 You bought a brand new Mac Mini, set up OpenClaw, and now you're staring at your `~/.openclaw/openclaw.json` wondering why your Anthropic API key is sitting there in plaintext. You read the articles. You know what happens when an agent gets prompt-injected. We get it.
 

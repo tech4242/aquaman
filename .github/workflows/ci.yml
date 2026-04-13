@@ -129,7 +129,14 @@ jobs:
           cp packages/plugin/package.json ~/.openclaw/extensions/aquaman-plugin/
           cp packages/plugin/openclaw.plugin.json ~/.openclaw/extensions/aquaman-plugin/
           cp -r packages/plugin/src ~/.openclaw/extensions/aquaman-plugin/src
-          cd ~/.openclaw/extensions/aquaman-plugin && npm install --omit=dev --silent
+
+          # Link local proxy build (aquaman-proxy@0.11.0 isn't published yet)
+          mkdir -p ~/.openclaw/extensions/aquaman-plugin/node_modules/.bin
+          ln -sf $(pwd)/packages/proxy ~/.openclaw/extensions/aquaman-plugin/node_modules/aquaman-proxy
+          ln -sf $(pwd)/node_modules/.bin/aquaman ~/.openclaw/extensions/aquaman-plugin/node_modules/.bin/aquaman
+
+          # Install remaining deps (undici etc.)
+          cd ~/.openclaw/extensions/aquaman-plugin && npm install --omit=dev --silent --legacy-peer-deps
 
           # Write openclaw.json with plugin allowlist (but no tools.profile —
           # that's the operator's choice, not ours to impose)
