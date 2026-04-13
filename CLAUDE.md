@@ -6,7 +6,7 @@ Credential isolation for **OpenClaw Gateway**. API keys and channel tokens never
 
 **Target platform:** OpenClaw Gateway on Unix-like systems (Linux, macOS, WSL2). The Gateway is OpenClaw's core server component—a Node.js/TypeScript service that runs as a systemd user service (Linux/WSL2) or LaunchAgent (macOS).
 
-**Published on npm** as `aquaman-plugin` and `aquaman-proxy`. Install via `openclaw plugins install aquaman-plugin`.
+**Published on npm** as `aquaman-plugin` and `aquaman-proxy`. Install via `openclaw plugins install aquaman-plugin`. Also publishable to ClawHub (OpenClaw's native plugin registry, default since 2026.3.22) for native discoverability.
 
 ## Architecture Decision: Isolation vs Detection
 
@@ -52,7 +52,7 @@ The plugin (`packages/plugin/`) integrates with the OpenClaw Gateway's plugin SD
 8. Registers `/aquaman-status` command (human-facing), `aquaman_status` tool (agent-facing), and `/aquaman` CLI commands
 
 **Key files:**
-- `index.ts` - Plugin entry point with `OpenClawPluginDefinition` object export (`export default plugin`) — this is the actual running code OpenClaw loads. Does NOT import `child_process` or `fetch` directly (separated to avoid OpenClaw security scanner false positives).
+- `index.ts` - Plugin entry point with `OpenClawPluginDefinition` object export (`export default plugin`) — this is the actual running code OpenClaw loads. Does NOT import `child_process` or `fetch` directly (separated to avoid OpenClaw security scanner false positives). SDK types (`OpenClawPluginApi`, `OpenClawPluginDefinition`) are defined locally to avoid `openclaw/plugin-sdk` import resolution failures on OpenClaw 2026.3.23+ (see #53403). Registers commands/tools in ALL modes (even without proxy binary) for graceful degradation. CLI commands delegate to `execAquamanProxyCli()` / `execAquamanProxyInteractive()` from `proxy-manager.ts`.
 - `src/proxy-manager.ts` - Spawns/manages the proxy child process (contains `child_process` import)
 - `src/proxy-health.ts` - Proxy health check and host map fetching (contains `fetch` calls)
 - `src/plugin.ts` - Class-based plugin implementation (alternative architecture, used by standalone tests)
@@ -118,7 +118,7 @@ OpenClaw 2026.2.15+ also reports an environment-level advisory:
 
 There is no suppression mechanism for code findings (no inline annotations, no `.auditignore`). The only fix is to ensure trigger patterns don't co-exist in the same file.
 
-**Current state (v0.9.2, tested through 2026.3.8):** 2 expected findings: `dangerous-exec` on `proxy-manager.ts` (true positive — it spawns the proxy process), `tools_reachable_permissive_policy` (environment advisory — not a code issue). 0 env-harvesting findings. The `request-policy.ts` file contains no `child_process`, `process.env`, or `fetch` — zero scanner risk. The scanner recursively scans `src/` and `dist/` subdirectories (since 2026.2.9). Note: OpenClaw 2026.3.x fresh installs default `tools.profile` to `messaging` — `aquaman_status` tool may not surface unless the operator configures `tools.profile` to include it.
+**Current state (v0.11.0, tested through 2026.4.9):** 2 expected findings: `dangerous-exec` on `proxy-manager.ts` (true positive — it spawns the proxy process), `tools_reachable_permissive_policy` (environment advisory — not a code issue). 0 env-harvesting findings. The `request-policy.ts` file contains no `child_process`, `process.env`, or `fetch` — zero scanner risk. The scanner recursively scans `src/` and `dist/` subdirectories (since 2026.2.9). Note: OpenClaw 2026.3.x+ fresh installs default `tools.profile` to `messaging` — `aquaman_status` tool may not surface unless the operator configures `tools.profile` to include it.
 
 **Mitigations:**
 - `aquaman setup` auto-sets `plugins.allow: ["aquaman-plugin"]` in `openclaw.json` (resolves the `extensions_no_allowlist` audit finding)
@@ -357,6 +357,7 @@ EOF
 cat > ~/.openclaw/openclaw.json << 'EOF'
 {
   "plugins": {
+    "allow": ["aquaman-plugin"],
     "entries": {
       "aquaman-plugin": {
         "enabled": true,
@@ -378,7 +379,7 @@ openclaw agent --local --message "hello" --session-id test --json 2>&1 | head -8
 
 ```
 [plugins] Aquaman plugin loaded
-[plugins] aquaman CLI found, will start proxy on gateway start
+[plugins] aquaman proxy found, will start proxy on gateway start
 [plugins] Set ANTHROPIC_BASE_URL=http://aquaman.local/anthropic
 [plugins] Set OPENAI_BASE_URL=http://aquaman.local/openai
 [plugins] Aquaman plugin registered successfully
@@ -393,24 +394,81 @@ openclaw agent --local --message "hello" --session-id test --json 2>&1 | head -8
 ### Automated tests:
 
 ```bash
-npm run test:e2e                # All e2e tests (17 files)
+npm run test:e2e                # All e2e tests (18 files)
 npm run test:unit               # All unit tests (18 files)
-npm test                        # Everything (~548 tests, 35 files)
+npm test                        # Everything (~555 tests, 36 files)
 ```
 
-### Quick proxy-only smoke test:
+### Quick proxy smoke test (credential injection + policy + health):
 
 ```bash
-# Start proxy
-npx tsx packages/proxy/src/cli/index.ts daemon &
+# 1. Store dummy test credential
+node -e "
+const kt = require('./node_modules/keytar');
+const k = kt.default || kt;
+k.setPassword('aquaman/anthropic', 'api_key', 'sk-ant-smoketest-key').then(() => console.log('stored'));
+"
 
-# Curl through it via UDS (expect 401 with dummy key = proxy injected it)
+# 2. Start proxy
+npx tsx packages/proxy/src/cli/index.ts daemon &
+sleep 2
+
+# 3. Credential injection (expect 401 from Anthropic = proxy injected the dummy key)
 curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/anthropic/v1/messages \
   -H "Content-Type: application/json" \
   -d '{"model":"claude-sonnet-4-20250514","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}'
+# Expect: {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}
 
-# Stop
+# 4. Health endpoint
+curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/_health
+# Expect: {"status":"ok","version":"0.11.0",...}
+
+# 5. Policy enforcement (expect 403 — admin API blocked by default policy)
+curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/anthropic/v1/organizations/org123/members
+# Expect: {"error":"Request denied by policy: GET /anthropic/v1/organizations/org123/members","fix":"..."}
+
+# 6. Unknown service (expect 404)
+curl -s --unix-socket ~/.aquaman/proxy.sock http://localhost/unknown-service/test
+# Expect: Not found
+
+# 7. Stop proxy and clean up
 npx tsx packages/proxy/src/cli/index.ts stop
+node -e "
+const kt = require('./node_modules/keytar');
+const k = kt.default || kt;
+k.deletePassword('aquaman/anthropic', 'api_key').then(() => console.log('cleaned up'));
+"
+```
+
+### Quick plugin CLI smoke test (via bundled proxy binary):
+
+```bash
+# After installing plugin to ~/.openclaw/extensions/aquaman-plugin/ (see above):
+openclaw aquaman status          # Shows proxy status + binary found
+openclaw aquaman doctor          # Runs diagnostic checks
+openclaw aquaman credentials list # Lists stored credentials
+openclaw aquaman policy-list     # Shows request policy rules
+openclaw aquaman audit-tail      # Shows recent audit entries
+openclaw aquaman services-list   # Lists configured services
+```
+
+### Plugin degraded mode smoke test (ClawHub install without setup):
+
+```bash
+# Temporarily hide the aquaman binary to simulate missing proxy
+mv ~/.openclaw/extensions/aquaman-plugin/node_modules/.bin/aquaman /tmp/aquaman-hidden
+# Also remove from PATH if globally installed
+
+# Start OpenClaw — plugin should:
+# - Log "aquaman proxy not found" warning
+# - NOT set ANTHROPIC_BASE_URL (no sentinel env vars)
+# - Still register /aquaman-status command
+# - Still register aquaman_status tool
+openclaw plugins list 2>&1 | grep -E "aquaman|BASE_URL"
+# Expect: "aquaman proxy not found", NO "ANTHROPIC_BASE_URL" lines
+
+# Restore
+mv /tmp/aquaman-hidden ~/.openclaw/extensions/aquaman-plugin/node_modules/.bin/aquaman
 ```
 
 ## Manual Testing

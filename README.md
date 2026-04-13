@@ -8,7 +8,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Credential isolation for OpenClaw — secrets stay submerged, agents stay dry.
+API key protection for OpenClaw — credentials stay in your vault, never in the agent's memory. 🔱🦞
 
 You bought a brand new Mac Mini, set up OpenClaw, and now you're staring at your `~/.openclaw/openclaw.json` wondering why your Anthropic API key is sitting there in plaintext. You read the articles. You know what happens when an agent gets prompt-injected. We get it.
 
@@ -22,45 +22,27 @@ No SDK changes required. The proxy is transparent — your agent talks to `aquam
 
 ## Quick Start
 
-### Local (macOS / Linux)
-
 ```bash
-npm install -g aquaman-proxy              # install the proxy CLI
-aquaman setup                             # stores keys, installs OpenClaw plugin
-openclaw                                  # proxy starts automatically via plugin
+openclaw plugins install aquaman-plugin   # 1. install plugin + proxy
+openclaw aquaman setup                    # 2. store your API keys
+openclaw                                  # 3. done — proxy starts automatically
 ```
 
-> `aquaman setup` auto-detects your credential backend. macOS defaults to Keychain,
-> Linux defaults to encrypted file. Override with `--backend`:
-> `aquaman setup --backend keepassxc`
-> Options: `keychain`, `encrypted-file`, `keepassxc`, `1password`, `vault`, `systemd-creds`, `bitwarden`
+Troubleshooting: `openclaw aquaman doctor`
 
-Existing plaintext credentials are migrated automatically during setup.
-The migration detects credentials from channels (Telegram, Slack, etc.)
-**and** third-party plugins/skills (any `*token*`, `*key*`, `*secret*`,
-`*password*` fields in `openclaw.json` plugin configs). Upstream URLs are
-auto-detected from plugin config fields like `endpoint` or `baseUrl`.
-Run again anytime to migrate new credentials: `aquaman migrate openclaw --auto`
+> **Using npm?** `npm install -g aquaman-proxy && aquaman setup` does
+> the same thing — installs the proxy CLI, stores your keys, and installs
+> the plugin. Use this if you prefer managing packages with npm.
 
-The plugin starts the proxy for you — no extra steps. To check
-everything is wired up correctly:
+### Docker
 
-```bash
-aquaman doctor                 # diagnose issues with actionable fixes
-aquaman help                   # list all commands
-```
-
-### Docker Setup
-
-Single-image deployment — same UDS architecture as local, containerized.
+Single-image deployment — same UDS architecture, containerized.
 
 ```bash
 git clone https://github.com/tech4242/aquaman.git && cd aquaman
 cp docker/.env.example docker/.env
-# Edit docker/.env — pick a backend and set its credentials
-# needless to say instead of .env you should handle your env properly but this is a starting point you can test.
-npm run docker:build
-npm run docker:run
+# Edit docker/.env — pick a backend and set credentials
+npm run docker:build && npm run docker:run
 ```
 
 ## How It Works

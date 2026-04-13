@@ -9,7 +9,105 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import type { PluginConfig } from './config-schema.js';
+
+/**
+ * Find the aquaman proxy binary.
+ *
+ * Search order:
+ * 1. Plugin's own node_modules/.bin/aquaman (bundled dep — version-matched)
+ * 2. PATH (global install via npm install -g aquaman-proxy)
+ */
+export function findAquamanProxyBinary(): string | null {
+  // 1. Resolve from this file's location → plugin package root → node_modules/.bin/
+  const thisDir = path.dirname(fileURLToPath(import.meta.url));
+  const pluginRoot = path.resolve(thisDir, '..');
+  const localBin = path.join(pluginRoot, 'node_modules', '.bin', 'aquaman');
+  if (fs.existsSync(localBin)) {
+    return localBin;
+  }
+
+  // 2. Search PATH
+  const pathEnv = process.env.PATH || '';
+  const dirs = pathEnv.split(path.delimiter);
+  for (const dir of dirs) {
+    const candidate = path.join(dir, 'aquaman');
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // Not found in this dir
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Execute an aquaman proxy CLI command (non-interactive).
+ * Captures stdout/stderr and returns them.
+ */
+export function execAquamanProxyCli(
+  args: string[],
+  options?: { timeoutMs?: number },
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolve, reject) => {
+    const binary = findAquamanProxyBinary();
+    if (!binary) {
+      reject(new Error('aquaman proxy binary not found. Install with: npm install -g aquaman-proxy'));
+      return;
+    }
+
+    const proc = spawn(binary, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: process.env,
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+
+    proc.on('error', reject);
+    proc.on('close', (code) => {
+      resolve({ stdout, stderr, exitCode: code ?? 1 });
+    });
+
+    const timeout = options?.timeoutMs ?? 30_000;
+    const timer = setTimeout(() => {
+      proc.kill('SIGTERM');
+      reject(new Error(`aquaman CLI timed out after ${timeout}ms`));
+    }, timeout);
+
+    proc.on('close', () => clearTimeout(timer));
+  });
+}
+
+/**
+ * Execute an aquaman proxy CLI command interactively (stdio: inherit).
+ * Used for commands that need TTY input (setup, credentials add).
+ */
+export function execAquamanProxyInteractive(
+  args: string[],
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const binary = findAquamanProxyBinary();
+    if (!binary) {
+      reject(new Error('aquaman proxy binary not found. Install with: npm install -g aquaman-proxy'));
+      return;
+    }
+
+    const proc = spawn(binary, args, {
+      stdio: 'inherit',
+      env: process.env,
+    });
+
+    proc.on('error', reject);
+    proc.on('close', (code) => resolve(code ?? 1));
+  });
+}
 
 export interface ProxyConnectionInfo {
   ready: boolean;
@@ -66,7 +164,7 @@ export class ProxyManager {
       const config = this.options.config;
 
       // Find aquaman binary
-      const binaryPath = this.findAquamanBinary();
+      const binaryPath = this.findBinary();
 
       if (!binaryPath) {
         const error = new Error(
@@ -199,45 +297,10 @@ export class ProxyManager {
   }
 
   /**
-   * Find the aquaman binary
+   * Find the aquaman proxy binary
    */
-  private findAquamanBinary(): string | null {
-    // Check common locations
-    const locations = [
-      // In node_modules
-      path.join(process.cwd(), 'node_modules', '.bin', 'aquaman'),
-      path.join(process.cwd(), 'node_modules', '@aquaman', 'proxy', 'dist', 'cli', 'index.js'),
-
-      // Global install
-      '/usr/local/bin/aquaman',
-
-      // In PATH (will use which in spawn)
-      'aquaman'
-    ];
-
-    for (const loc of locations) {
-      if (loc === 'aquaman') {
-        // Check if in PATH using filesystem checks (no shell execution)
-        const pathEnv = process.env.PATH || '';
-        const dirs = pathEnv.split(path.delimiter);
-        for (const dir of dirs) {
-          const candidate = path.join(dir, 'aquaman');
-          try {
-            fs.accessSync(candidate, fs.constants.X_OK);
-            return 'aquaman';
-          } catch {
-            // Not found in this dir
-          }
-        }
-        continue;
-      }
-
-      if (fs.existsSync(loc)) {
-        return loc;
-      }
-    }
-
-    return null;
+  private findBinary(): string | null {
+    return findAquamanProxyBinary();
   }
 }
 

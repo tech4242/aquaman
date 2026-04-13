@@ -1,6 +1,6 @@
 # aquaman-proxy
 
-The proxy daemon and CLI for [aquaman](https://github.com/tech4242/aquaman) — credential isolation for OpenClaw.
+The proxy daemon and CLI for [aquaman](https://github.com/tech4242/aquaman) — API key protection for OpenClaw. Credentials stay in your vault, never in the agent's memory.
 
 ```
 Agent / OpenClaw Gateway              Aquaman Proxy
@@ -34,18 +34,13 @@ This package is the right side — a reverse proxy on a Unix domain socket that 
 ## Quick Start
 
 ```bash
-npm install -g aquaman-proxy
-aquaman setup                   # stores keys, installs OpenClaw plugin, applies policy defaults
-openclaw                        # proxy starts automatically via plugin
+npm install -g aquaman-proxy              # 1. install the proxy CLI
+aquaman setup                             # 2. store your API keys, install plugin
+openclaw                                  # 3. done — proxy starts automatically
 ```
 
-Standalone (without OpenClaw):
-
-```bash
-aquaman init
-aquaman credentials add anthropic api_key
-aquaman daemon                  # listens on ~/.aquaman/proxy.sock
-```
+> **Installed via ClawHub?** The proxy is already bundled with the plugin.
+> Run `openclaw aquaman setup` to store your keys.
 
 Troubleshooting: `aquaman doctor`
 

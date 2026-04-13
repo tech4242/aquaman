@@ -1,7 +1,7 @@
 {
   "name": "aquaman-plugin",
-  "version": "0.10.0",
-  "description": "Credential isolation plugin for OpenClaw",
+  "version": "0.11.0",
+  "description": "Protect API keys and secrets for OpenClaw — credentials stay in your vault, never in the agent's memory",
   "type": "module",
   "scripts": {
     "build": "echo 'OpenClaw runs TypeScript directly - no build needed'",
@@ -18,21 +18,23 @@
     "security",
     "credentials",
     "vault",
-    "1password"
+    "1password",
+    "api-key",
+    "secrets",
+    "keychain",
+    "bitwarden",
+    "credential-isolation",
+    "token-security",
+    "api-protection"
   ],
   "author": "tech4242",
   "license": "MIT",
   "dependencies": {
-    "undici": "^7.0.0"
+    "undici": "^7.0.0",
+    "aquaman-proxy": "0.11.0"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.1.11",
-    "aquaman-proxy": "0.10.0"
-  },
-  "peerDependenciesMeta": {
-    "aquaman-proxy": {
-      "optional": true
-    }
+    "openclaw": ">=2026.4.7"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

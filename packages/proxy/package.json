@@ -1,7 +1,7 @@
 {
   "name": "aquaman-proxy",
-  "version": "0.10.0",
-  "description": "Credential isolation proxy daemon for OpenClaw",
+  "version": "0.11.0",
+  "description": "API key protection proxy for OpenClaw — credentials stay in your vault, never in the agent's memory",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -29,10 +29,16 @@
   "keywords": [
     "aquaman",
     "openclaw",
-    "openclaw-plugin",
     "security",
     "credentials",
-    "proxy"
+    "vault",
+    "1password",
+    "api-key",
+    "secrets",
+    "keychain",
+    "bitwarden",
+    "proxy",
+    "api-protection"
   ],
   "author": "tech4242",
   "license": "MIT",

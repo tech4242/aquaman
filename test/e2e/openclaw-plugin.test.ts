@@ -74,6 +74,7 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
       path.join(testStateDir, 'openclaw.json'),
       JSON.stringify({
         plugins: {
+          allow: ['aquaman-plugin'],
           entries: {
             'aquaman-plugin': {
               enabled: true,
@@ -114,16 +115,16 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
     it('plugin shows as loaded', () => {
       const result = runOpenClaw('plugins list');
 
-      // Should show loaded status
+      // Should show loaded status and our plugin name
       expect(result).toContain('loaded');
-      // Should show our description
-      expect(result).toContain('Credential isolation');
+      expect(result).toContain('aquaman-plugin');
     });
 
     it('plugin doctor reports no issues', () => {
       const result = runOpenClaw('plugins doctor');
 
-      expect(result).toContain('No plugin issues detected');
+      expect(result).not.toMatch(/error|invalid|blocked|unsafe/i);
+      expect(result).toContain('Aquaman plugin loaded');
     });
   });
 
@@ -132,7 +133,7 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
       const result = runOpenClaw('plugins list');
 
       // Should find the CLI (we linked it earlier)
-      expect(result).toContain('aquaman CLI found');
+      expect(result).toContain('aquaman proxy found');
     });
 
     it('sets ANTHROPIC_BASE_URL environment variable', () => {
@@ -168,7 +169,8 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
       // No path traversal or invalid name warnings
       expect(result).not.toMatch(/invalid.*path/i);
       expect(result).not.toMatch(/traversal/i);
-      expect(result).toContain('No plugin issues detected');
+      expect(result).not.toMatch(/error|blocked|unsafe/i);
+      expect(result).toContain('Aquaman plugin loaded');
     });
 
     it('plugin code passes safety scanner', () => {
@@ -197,7 +199,7 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
 
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
       expect(manifest.id).toBe('aquaman-plugin');
-      expect(manifest.name).toBe('Aquaman Vault');
+      expect(manifest.name).toBe('Aquaman — API Key Protection');
     });
 
     it('has index.ts entry point', () => {

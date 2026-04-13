@@ -21,7 +21,7 @@ describe('Plugin Config Schema', () => {
     manifest = JSON.parse(raw);
 
     expect(manifest.id).toBe('aquaman-plugin');
-    expect(manifest.name).toBe('Aquaman Vault');
+    expect(manifest.name).toBe('Aquaman — API Key Protection');
     expect(manifest.configSchema).toBeDefined();
     expect(manifest.configSchema.additionalProperties).toBe(false);
   });
