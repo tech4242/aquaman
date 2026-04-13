@@ -46,6 +46,8 @@ openclaw aquaman setup                    # 2. store your API keys
 openclaw                                  # 3. done — proxy starts automatically
 ```
 
+The `aquaman` proxy binary is bundled as an npm dependency — no separate download or install needed.
+
 > **Using npm?** `npm install -g aquaman-proxy && aquaman setup` does
 > the same thing. Use this if you prefer managing packages with npm.
 

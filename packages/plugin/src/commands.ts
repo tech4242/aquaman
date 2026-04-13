@@ -76,9 +76,7 @@ export async function addCommand(
     success: true,
     message: `To add a credential for ${service}/${key}:\n\n` +
       `Run: openclaw aquaman credentials add ${service} ${key}\n` +
-      `Or in terminal: aquaman credentials add ${service} ${key}\n\n` +
-      `Or configure via environment variables:\n` +
-      `  export AQUAMAN_${service.toUpperCase()}_${key.toUpperCase()}=<your-key>`
+      `Or in terminal: aquaman credentials add ${service} ${key}`
   };
 }
 
