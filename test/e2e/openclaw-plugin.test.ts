@@ -123,7 +123,13 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
     it('plugin doctor reports no issues', () => {
       const result = runOpenClaw('plugins doctor');
 
-      expect(result).not.toMatch(/error|invalid|blocked|unsafe/i);
+      // Scope error matching to aquaman lines — OpenClaw 2026.4.24+ ships bundled
+      // plugins (memory-core) whose runtime-dep repair can fail in test envs without
+      // affecting aquaman.
+      const aquamanErrorLines = result
+        .split('\n')
+        .filter((line) => /error|invalid|blocked|unsafe/i.test(line) && /aquaman/i.test(line));
+      expect(aquamanErrorLines).toEqual([]);
       expect(result).toContain('Aquaman plugin loaded');
     });
   });
