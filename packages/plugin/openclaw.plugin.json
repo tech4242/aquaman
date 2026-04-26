@@ -1,7 +1,7 @@
 {
   "id": "aquaman-plugin",
   "name": "Aquaman — API Key Protection",
-  "version": "0.11.1",
+  "version": "0.11.2",
   "description": "Protect your API keys, tokens, and secrets — they stay in your vault (Keychain, 1Password, HashiCorp Vault, Bitwarden, and more), never in the agent's memory. Block dangerous API endpoints before credentials are injected. Works with 25+ services across 6 auth modes.",
   "author": "tech4242",
   "repository": "https://github.com/tech4242/aquaman",
