@@ -123,7 +123,16 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
     it('plugin doctor reports no issues', () => {
       const result = runOpenClaw('plugins doctor');
 
-      expect(result).not.toMatch(/error|invalid|blocked|unsafe/i);
+      // Scope error matching to aquaman lines, but strip path tokens first —
+      // GitHub Actions checks repos out into /home/runner/work/aquaman/aquaman/...,
+      // so file paths in unrelated bundled-plugin errors (e.g. memory-core's
+      // typebox load failure on OpenClaw 2026.4.24) would otherwise contain
+      // "aquaman" and be falsely attributed to us.
+      const aquamanErrorLines = result
+        .split('\n')
+        .map((line) => line.replace(/\/\S+/g, '<path>'))
+        .filter((line) => /error|invalid|blocked|unsafe/i.test(line) && /aquaman/i.test(line));
+      expect(aquamanErrorLines).toEqual([]);
       expect(result).toContain('Aquaman plugin loaded');
     });
   });

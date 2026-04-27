@@ -118,7 +118,7 @@ OpenClaw 2026.2.15+ also reports an environment-level advisory:
 
 There is no suppression mechanism for code findings (no inline annotations, no `.auditignore`). The only fix is to ensure trigger patterns don't co-exist in the same file.
 
-**Current state (v0.11.0, tested through 2026.4.9):** 2 expected findings: `dangerous-exec` on `proxy-manager.ts` (true positive — it spawns the proxy process), `tools_reachable_permissive_policy` (environment advisory — not a code issue). 0 env-harvesting findings. The `request-policy.ts` file contains no `child_process`, `process.env`, or `fetch` — zero scanner risk. The scanner recursively scans `src/` and `dist/` subdirectories (since 2026.2.9). Note: OpenClaw 2026.3.x+ fresh installs default `tools.profile` to `messaging` — `aquaman_status` tool may not surface unless the operator configures `tools.profile` to include it.
+**Current state (v0.11.2, tested through 2026.4.24):** 2 expected findings: `dangerous-exec` on `proxy-manager.ts` (true positive — it spawns the proxy process), `tools_reachable_permissive_policy` (environment advisory — not a code issue). 0 env-harvesting findings. The `request-policy.ts` file contains no `child_process`, `process.env`, or `fetch` — zero scanner risk. The scanner recursively scans `src/` and `dist/` subdirectories (since 2026.2.9). Note: OpenClaw 2026.3.x+ fresh installs default `tools.profile` to `messaging` — `aquaman_status` tool may not surface unless the operator configures `tools.profile` to include it.
 
 **Mitigations:**
 - `aquaman setup` auto-sets `plugins.allow: ["aquaman-plugin"]` in `openclaw.json` (resolves the `extensions_no_allowlist` audit finding)
