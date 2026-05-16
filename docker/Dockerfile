@@ -4,11 +4,14 @@ FROM alpine/openclaw:latest
 RUN npm install -g aquaman-proxy@0.11.3
 
 # Install plugin into OpenClaw extensions
+# Note: docker build context must contain a prebuilt plugin/dist/ directory
+# (run `npm run build -w aquaman-plugin && cp -r packages/plugin docker/plugin`
+# before `docker build`). The manifest's `openclaw.extensions` field points at
+# ./dist/index.js — the .ts source is not shipped.
 RUN mkdir -p /home/node/.openclaw/extensions/aquaman-plugin
 COPY plugin/package.json /home/node/.openclaw/extensions/aquaman-plugin/
 COPY plugin/openclaw.plugin.json /home/node/.openclaw/extensions/aquaman-plugin/
-COPY plugin/index.ts /home/node/.openclaw/extensions/aquaman-plugin/
-COPY plugin/src/ /home/node/.openclaw/extensions/aquaman-plugin/src/
+COPY plugin/dist/ /home/node/.openclaw/extensions/aquaman-plugin/dist/
 
 # Config
 COPY openclaw-config.json /home/node/.openclaw/openclaw.json
