@@ -558,25 +558,36 @@ program
   .action(async (options) => {
     ensureConfigDir();
     const configPath = path.join(getConfigDir(), 'config.yaml');
+    const configExists = fs.existsSync(configPath);
 
-    if (fs.existsSync(configPath) && !options.force) {
+    if (configExists && !options.force) {
       console.log(`Configuration already exists at ${configPath}`);
       console.log('Use --force to overwrite.');
-      return;
+    } else {
+      const config = getDefaultConfig();
+      fs.writeFileSync(configPath, yamlStringify(config), { encoding: 'utf-8', mode: 0o600 });
+      console.log(`Created ${configPath}`);
     }
 
-    const config = getDefaultConfig();
-    fs.writeFileSync(configPath, yamlStringify(config), { encoding: 'utf-8', mode: 0o600 });
-    console.log(`Created ${configPath}`);
-
-    // Create audit directory
-    const auditDir = path.join(getConfigDir(), 'audit');
+    // Resolve audit directory from the (possibly pre-existing) config so a
+    // custom logDir is honored; fall back to the default if the config is
+    // missing or unreadable. Creating the dir is idempotent — running init
+    // against an existing config heals a missing audit dir, which is what
+    // `aquaman doctor` directs users to do.
+    let auditDir = path.join(getConfigDir(), 'audit');
+    try {
+      const cfg = loadConfig();
+      if (cfg?.audit?.logDir) auditDir = expandPath(cfg.audit.logDir);
+    } catch { /* fall through to default */ }
+    const auditExisted = fs.existsSync(auditDir);
     fs.mkdirSync(auditDir, { recursive: true, mode: 0o700 });
-    console.log(`Created ${auditDir}`);
+    if (!auditExisted) console.log(`Created ${auditDir}`);
 
-    console.log('\nNext steps:');
-    console.log('1. Add your API keys: aquaman credentials add anthropic api_key');
-    console.log('2. Start the proxy:   aquaman start');
+    if (!configExists || options.force) {
+      console.log('\nNext steps:');
+      console.log('1. Add your API keys: aquaman credentials add anthropic api_key');
+      console.log('2. Start the proxy:   aquaman start');
+    }
   });
 
 // Setup command - all-in-one guided onboarding
@@ -1166,7 +1177,7 @@ program
 
     // 5. Audit logger
     if (config) {
-      const auditDir = config.audit.logDir;
+      const auditDir = expandPath(config.audit.logDir);
       const auditLog = path.join(auditDir, 'current.jsonl');
 
       if (!config.audit.enabled) {
