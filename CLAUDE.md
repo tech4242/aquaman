@@ -311,8 +311,15 @@ clawhub package publish packages/plugin \
   --source-path packages/plugin \
   --dry-run
 #   Requires `clawhub` CLI >= v0.15.0 (older versions don't have --clawscan-note).
-#   Verify file count + size are reasonable, --clawscan-note didn't error,
-#   and no tsbuildinfo / dead-code files leaked into the tarball.
+#   The publisher note is plain text or markdown, max 4000 characters AFTER
+#   .trim() (per clawhub/dist/schema/clawScanNote.js: normalizeClawScanNote).
+#   Whitespace-only normalizes to undefined and no note is sent. There is NO
+#   automatic file pickup — the path packages/plugin/.clawhub/publisher-note.md
+#   is our convention, not ClawHub's; only the --clawscan-note flag value
+#   reaches the registry. .clawhub/ is excluded from the npm/ClawHub tarball
+#   via the plugin's `files` field.
+#   Verify: file count + size are reasonable, --clawscan-note didn't error,
+#   note byte count below 4000, no tsbuildinfo / dead-code files in tarball.
 
 # 5. Smoke tests against a real OpenClaw install (see "Testing the OpenClaw
 #    Plugin" → "Quick proxy smoke test" + "Quick plugin CLI smoke test" below).
