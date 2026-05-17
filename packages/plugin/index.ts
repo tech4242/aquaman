@@ -206,17 +206,31 @@ function activateHttpInterceptor(log: OpenClawPluginApi["logger"]): void {
   }
 
   // Use dynamic host map from proxy (includes custom services from services.yaml)
-  // Falls back to builtin map for backward compatibility
-  const hostMap = dynamicHostMap || FALLBACK_HOST_MAP;
+  // Falls back to builtin map for backward compatibility.
+  const sourceMap = dynamicHostMap || FALLBACK_HOST_MAP;
+
+  // Restrict interception to services the operator opted into. The interceptor
+  // only redirects traffic to hosts whose service value appears in the plugin's
+  // `services` config. Channels not in `services` keep their normal direct-to-
+  // upstream behavior. (Closes ClawScan ASI02.)
+  const allowed = new Set(configuredServices);
+  const effectiveHostMap = new Map<string, string>();
+  for (const [host, service] of sourceMap) {
+    if (allowed.has(service)) effectiveHostMap.set(host, service);
+  }
 
   httpInterceptor = createHttpInterceptor({
     socketPath,
-    hostMap,
+    hostMap: effectiveHostMap,
     log: (msg) => log.info(msg),
   });
 
   httpInterceptor.activate();
-  log.info(`HTTP interceptor active: ${hostMap.size} host patterns redirected through proxy`);
+  const skipped = sourceMap.size - effectiveHostMap.size;
+  log.info(
+    `HTTP interceptor active: ${effectiveHostMap.size} host patterns redirected through proxy` +
+      (skipped > 0 ? ` (${skipped} known patterns skipped — not in plugin services config)` : "")
+  );
 }
 
 /**
@@ -361,11 +375,20 @@ const plugin: OpenClawPluginDefinition = {
     api.logger.info("Aquaman plugin loaded");
 
     // Read services from plugin config
-    const pluginCfg = api.pluginConfig as { backend?: string; services?: string[] } | undefined;
+    const pluginCfg = api.pluginConfig as
+      | { backend?: string; services?: string[]; autoGenerateAuthProfiles?: boolean }
+      | undefined;
     configuredServices = pluginCfg?.services ?? ["anthropic", "openai"];
 
-    // Auto-generate auth-profiles.json if missing
-    ensureAuthProfiles(api.logger, configuredServices);
+    // Auto-generate auth-profiles.json if missing. Opt-out via plugin config
+    // `autoGenerateAuthProfiles: false` for operators managing their own auth
+    // profiles. (Closes ClawScan ASI03.)
+    const autoGenerateAuthProfiles = pluginCfg?.autoGenerateAuthProfiles ?? true;
+    if (autoGenerateAuthProfiles) {
+      ensureAuthProfiles(api.logger, configuredServices);
+    } else {
+      api.logger.info("auto-generation of auth-profiles.json disabled by plugin config");
+    }
 
     // Check if aquaman proxy binary is available
     const proxyAvailable = isAquamanProxyInstalled();

@@ -27,6 +27,11 @@
         "items": { "type": "string" },
         "default": ["anthropic", "openai"],
         "description": "Services to proxy credentials for"
+      },
+      "autoGenerateAuthProfiles": {
+        "type": "boolean",
+        "default": true,
+        "description": "Auto-generate ~/.openclaw/agents/<id>/agent/auth-profiles.json with placeholder API-key profiles for anthropic and openai when the file does not exist. Set to false if you manage your own auth profiles."
       }
     }
   }
