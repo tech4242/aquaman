@@ -19,7 +19,7 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -b",
     "prepublishOnly": "npm run build",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
