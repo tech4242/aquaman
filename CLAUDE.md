@@ -281,6 +281,51 @@ The plugin is shipped as compiled JavaScript, not TypeScript source.
 2. `npm publish --workspace=aquaman-plugin` (its `prepublishOnly` triggers `tsc -b` → emits `dist/`)
 3. `clawhub package publish packages/plugin --source-repo tech4242/aquaman --source-commit $(git rev-parse HEAD) --source-ref main --source-path packages/plugin` (bundles the local `dist/` — `--source-repo` + `--source-commit` are mandatory together)
 
+## Pre-PR checklist
+
+Run all of these locally before opening a PR (and re-run before merge if the branch was touched). CI runs lint + typecheck + tests but does **not** run the dry-runs or smoke tests — those have caught more real issues than tests this past release.
+
+```bash
+# 1. Static checks
+npm run typecheck
+npm run lint
+
+# 2. Full test suite (~565 tests across ~36 files)
+npm test
+
+# 3. Package shape — npm tarball contents
+npm pack --dry-run --workspace=aquaman-proxy
+npm pack --dry-run --workspace=aquaman-plugin
+#   Verify the plugin tarball does NOT include:
+#   - dist/tsconfig.tsbuildinfo  (40 KB build cache; tsBuildInfoFile relocates it)
+#   - dist/src/index.{js,d.ts}, dist/src/plugin.{js,d.ts}, dist/src/commands.{js,d.ts}
+#     (excluded from compilation — old class-based plugin, standalone-test only)
+#   - .clawhub/  (excluded by files field)
+
+# 4. ClawHub publish dry-run (whenever the plugin changes)
+clawhub package publish packages/plugin \
+  --clawscan-note "$(cat packages/plugin/.clawhub/publisher-note.md)" \
+  --source-repo tech4242/aquaman \
+  --source-commit "$(git rev-parse HEAD)" \
+  --source-ref "$(git rev-parse --abbrev-ref HEAD)" \
+  --source-path packages/plugin \
+  --dry-run
+#   Requires `clawhub` CLI >= v0.15.0 (older versions don't have --clawscan-note).
+#   Verify file count + size are reasonable, --clawscan-note didn't error,
+#   and no tsbuildinfo / dead-code files leaked into the tarball.
+
+# 5. Smoke tests against a real OpenClaw install (see "Testing the OpenClaw
+#    Plugin" → "Quick proxy smoke test" + "Quick plugin CLI smoke test" below).
+#    Critical when changing: plugin index.ts, proxy-manager.ts, daemon.ts,
+#    request-policy.ts, service-registry.ts, or anything in the publish pipeline.
+```
+
+**Definition of done for the checklist:**
+- `npm test` is green (565 / 1 skipped / 0 failed at the time of writing).
+- `npm pack --dry-run` plugin tarball is ~25 KB / ~24 files. If it's growing past 30 KB or 30 files, something dead-code is leaking.
+- `clawhub package publish --dry-run` exits 0 and the file list matches `npm pack --dry-run` (minus `package-lock.json`-type npm metadata).
+- Smoke tests show the 5 expected `[plugins]` log lines on plugin load and credential injection returns the expected upstream rejection (401 from Anthropic with a fake key).
+
 ## Version Bumps
 
 Both packages are pinned to exact versions of each other and must be bumped together:
