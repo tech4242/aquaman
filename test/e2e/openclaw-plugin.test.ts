@@ -49,6 +49,18 @@ const OPENCLAW_AVAILABLE = isOpenClawInstalled();
 
 describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
   beforeAll(() => {
+    // The plugin manifest now points at dist/index.js, so we need a build
+    // before copying the fixture. Build is incremental — fast no-op if dist
+    // is current. CI typically runs typecheck (which also emits) before
+    // tests, so dist may already be present.
+    const distEntry = path.join(PLUGIN_SRC, 'dist', 'index.js');
+    if (!existsSync(distEntry)) {
+      execSync('npm run build -w aquaman-plugin', {
+        cwd: path.resolve(__dirname, '../..'),
+        stdio: 'pipe'
+      });
+    }
+
     // Create temp OPENCLAW_STATE_DIR
     testStateDir = mkdtempSync(path.join(tmpdir(), 'aquaman-e2e-'));
 
@@ -56,12 +68,6 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
     const installPath = path.join(testStateDir, 'extensions', 'aquaman-plugin');
     mkdirSync(path.join(testStateDir, 'extensions'), { recursive: true });
     cpSync(PLUGIN_SRC, installPath, { recursive: true });
-
-    // Remove dist/ if a local `tsc -b` left one behind — OpenClaw 2026.5.x prefers
-    // dist/index.js over the TS entry, and the compiled src/index.ts exports the
-    // standalone-test class shape that the runtime plugin loader can't invoke.
-    // CI and Docker only copy specific files (no dist/), so we mirror that here.
-    try { rmSync(path.join(installPath, 'dist'), { recursive: true, force: true }); } catch { /* ok */ }
 
     // Symlink root node_modules so plugin dependencies (undici) are resolvable.
     // cpSync copies the empty hoisted node_modules dir — remove it first.
@@ -247,19 +253,26 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
       expect(manifest.name).toBe('Aquaman — API Key Protection');
     });
 
-    it('has index.ts entry point', () => {
+    it('has compiled entry point at dist/index.js', () => {
       const pluginPath = path.join(testStateDir, 'extensions', 'aquaman-plugin');
-      const indexPath = path.join(pluginPath, 'index.ts');
-      expect(existsSync(indexPath)).toBe(true);
+      const distEntry = path.join(pluginPath, 'dist', 'index.js');
+      expect(existsSync(distEntry)).toBe(true);
     });
 
-    it('entry point exports plugin definition object', () => {
+    it('compiled entry point exports plugin definition object', () => {
       const pluginPath = path.join(testStateDir, 'extensions', 'aquaman-plugin');
-      const indexPath = path.join(pluginPath, 'index.ts');
-      const content = readFileSync(indexPath, 'utf-8');
+      const distEntry = path.join(pluginPath, 'dist', 'index.js');
+      const content = readFileSync(distEntry, 'utf-8');
 
-      expect(content).toContain('const plugin: OpenClawPluginDefinition');
+      // tsc strips type annotations but preserves the default-export statement.
       expect(content).toContain('export default plugin');
+    });
+
+    it('manifest points at the compiled dist entry', () => {
+      const pluginPath = path.join(testStateDir, 'extensions', 'aquaman-plugin');
+      const pkgPath = path.join(pluginPath, 'package.json');
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+      expect(pkg.openclaw.extensions).toEqual(['./dist/index.js']);
     });
   });
 });
@@ -386,6 +399,6 @@ describe('Plugin Test Infrastructure', () => {
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
 
     expect(pkg.openclaw).toBeDefined();
-    expect(pkg.openclaw.extensions).toContain('./index.ts');
+    expect(pkg.openclaw.extensions).toContain('./dist/index.js');
   });
 });

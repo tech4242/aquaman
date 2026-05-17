@@ -123,12 +123,14 @@ jobs:
 
       - name: Install plugin for security audit
         run: |
+          # Build the plugin (manifest now points at ./dist/index.js)
+          npm run build -w aquaman-plugin
+
           rm -rf ~/.openclaw/extensions/aquaman-plugin
           mkdir -p ~/.openclaw/extensions/aquaman-plugin
-          cp packages/plugin/index.ts ~/.openclaw/extensions/aquaman-plugin/
           cp packages/plugin/package.json ~/.openclaw/extensions/aquaman-plugin/
           cp packages/plugin/openclaw.plugin.json ~/.openclaw/extensions/aquaman-plugin/
-          cp -r packages/plugin/src ~/.openclaw/extensions/aquaman-plugin/src
+          cp -r packages/plugin/dist ~/.openclaw/extensions/aquaman-plugin/dist
 
           # Link local proxy build (aquaman-proxy@0.11.0 isn't published yet)
           mkdir -p ~/.openclaw/extensions/aquaman-plugin/node_modules/.bin

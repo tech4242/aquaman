@@ -52,7 +52,7 @@ The plugin (`packages/plugin/`) integrates with the OpenClaw Gateway's plugin SD
 8. Registers `/aquaman-status` command (human-facing), `aquaman_status` tool (agent-facing), and `/aquaman` CLI commands
 
 **Key files:**
-- `index.ts` - Plugin entry point with `OpenClawPluginDefinition` object export (`export default plugin`) — this is the actual running code OpenClaw loads. Does NOT import `child_process` or `fetch` directly (separated to avoid OpenClaw security scanner false positives). SDK types (`OpenClawPluginApi`, `OpenClawPluginDefinition`) are defined locally to avoid `openclaw/plugin-sdk` import resolution failures on OpenClaw 2026.3.23+ (see #53403). Registers commands/tools in ALL modes (even without proxy binary) for graceful degradation. CLI commands delegate to `execAquamanProxyCli()` / `execAquamanProxyInteractive()` from `proxy-manager.ts`.
+- `index.ts` - Plugin entry source with `OpenClawPluginDefinition` object export (`export default plugin`). **Compiled to `dist/index.js` at publish time** — the manifest's `openclaw.extensions` points at `./dist/index.js` and only `dist/` is shipped in the published package. Does NOT import `child_process` or `fetch` directly (separated to avoid OpenClaw security scanner false positives). SDK types (`OpenClawPluginApi`, `OpenClawPluginDefinition`) are defined locally to avoid `openclaw/plugin-sdk` import resolution failures on OpenClaw 2026.3.23+ (see #53403). Registers commands/tools in ALL modes (even without proxy binary) for graceful degradation. CLI commands delegate to `execAquamanProxyCli()` / `execAquamanProxyInteractive()` from `proxy-manager.ts`.
 - `src/proxy-manager.ts` - Spawns/manages the proxy child process (contains `child_process` import)
 - `src/proxy-health.ts` - Proxy health check and host map fetching (contains `fetch` calls)
 - `src/plugin.ts` - Class-based plugin implementation (alternative architecture, used by standalone tests)
@@ -118,12 +118,12 @@ OpenClaw 2026.2.15+ also reports an environment-level advisory:
 
 There is no suppression mechanism for code findings (no inline annotations, no `.auditignore`). The only fix is to ensure trigger patterns don't co-exist in the same file.
 
-**Current state (v0.11.2, tested through 2026.4.24):** 2 expected findings: `dangerous-exec` on `proxy-manager.ts` (true positive — it spawns the proxy process), `tools_reachable_permissive_policy` (environment advisory — not a code issue). 0 env-harvesting findings. The `request-policy.ts` file contains no `child_process`, `process.env`, or `fetch` — zero scanner risk. The scanner recursively scans `src/` and `dist/` subdirectories (since 2026.2.9). Note: OpenClaw 2026.3.x+ fresh installs default `tools.profile` to `messaging` — `aquaman_status` tool may not surface unless the operator configures `tools.profile` to include it.
+**Current state (v0.11.4+, tested against OpenClaw 2026.5.12):** 2 expected findings: `dangerous-exec` on `dist/src/proxy-manager.js` (true positive — it spawns the proxy process), `tools_reachable_permissive_policy` (environment advisory — not a code issue). 0 env-harvesting findings. The `request-policy.ts` file contains no `child_process`, `process.env`, or `fetch` — zero scanner risk. The scanner recursively scans `src/` and `dist/` subdirectories (since 2026.2.9). Note: OpenClaw 2026.3.x+ fresh installs default `tools.profile` to `messaging` — `aquaman_status` tool may not surface unless the operator configures `tools.profile` to include it.
 
 **Mitigations:**
 - `aquaman setup` auto-sets `plugins.allow: ["aquaman-plugin"]` in `openclaw.json` (resolves the `extensions_no_allowlist` audit finding)
 - `aquaman doctor` checks for `plugins.allow` and explains the expected `dangerous-exec` finding
-- `dist/` must NOT be present in the installed extension (`~/.openclaw/extensions/aquaman-plugin/`) — OpenClaw runs TypeScript directly, and `dist/` doubles the scanner findings
+- The plugin ships only `dist/` (no `.ts` source) — the scanner sees the compiled `dist/src/proxy-manager.js` once instead of finding the same pattern in both `.ts` and `.js`. See "Plugin build & publish pipeline" below.
 
 **When editing plugin files:** Do NOT add `fetch()` calls or the word "fetch" in comments to files that also reference `process.env`. Do NOT add `child_process` imports to files other than `proxy-manager.ts`. Function names containing "fetch" (e.g. `fetchHostMap`) also trigger the scanner — use alternatives like "load", "request", "get".
 
@@ -254,6 +254,30 @@ npm start                   # Start daemon
 npm run dev                 # Dev mode with watch
 ```
 
+## Plugin build & publish pipeline
+
+The plugin is shipped as compiled JavaScript, not TypeScript source.
+
+- `packages/plugin/tsconfig.json` compiles both the root `index.ts` and `src/**/*.ts` to `packages/plugin/dist/` (`rootDir: "."`, `outDir: "./dist"`).
+- `packages/plugin/package.json`:
+  - `scripts.build` → `tsc -b` (real compile)
+  - `scripts.prepublishOnly` → `npm run build` (so `npm publish` always builds first)
+  - `scripts.clean` → `rm -rf dist tsconfig.tsbuildinfo`
+  - `files` → `["dist", "openclaw.plugin.json", "LICENSE", "README.md"]` — no `.ts` source in the published tarball
+  - `openclaw.extensions` → `["./dist/index.js"]` — OpenClaw loads the compiled entry directly
+- The `e2e-openclaw` CI job and the manual end-to-end recipe both **build before copying** the plugin into `~/.openclaw/extensions/aquaman-plugin/`. They copy `package.json`, `openclaw.plugin.json`, and the entire `dist/` directory — never the `.ts` source.
+- Docker (`docker/Dockerfile`) likewise `COPY plugin/dist/` — the caller must run `npm run build -w aquaman-plugin && cp -r packages/plugin docker/plugin` before `docker build`.
+
+**Why compiled-only:**
+1. ClawHub publishing (since approximately 2026.5) requires `./dist/index.js` (or sibling `./index.js`) for any TS entry. There is no `--source-only` flag.
+2. Shipping both `.ts` and `.js` causes the OpenClaw security scanner to find `dangerous-exec` twice (once in source, once in compiled output). Shipping only the compiled form keeps it to a single true-positive finding.
+3. OpenClaw 2026.5.x already prefers compiled `dist/` over `.ts` source when both exist, so the compiled entry is what runs in production anyway.
+
+**Publishing flow** (in order):
+1. `npm publish --workspace=aquaman-proxy` (its own `prepublishOnly` triggers `tsc`)
+2. `npm publish --workspace=aquaman-plugin` (its `prepublishOnly` triggers `tsc -b` → emits `dist/`)
+3. `clawhub package publish packages/plugin --source-repo tech4242/aquaman --source-commit $(git rev-parse HEAD) --source-ref main --source-path packages/plugin` (bundles the local `dist/` — `--source-repo` + `--source-commit` are mandatory together)
+
 ## Version Bumps
 
 Both packages are pinned to exact versions of each other and must be bumped together:
@@ -262,10 +286,11 @@ Both packages are pinned to exact versions of each other and must be bumped toge
 |------|-----------------|
 | `package.json` (root) | `version` |
 | `packages/proxy/package.json` | `version` |
-| `packages/plugin/package.json` | `version`, `peerDependencies.aquaman-proxy` (exact pin) |
+| `packages/plugin/package.json` | `version`, `dependencies.aquaman-proxy` (exact pin), `openclaw.compat`/`build` fields as needed |
+| `packages/plugin/openclaw.plugin.json` | `version` |
 | `docker/Dockerfile` | `aquaman-proxy@<version>` in `npm install` |
 
-All three `version` fields, the cross-package dependency pin, and the Docker install pin must match the new version.
+All `version` fields, the cross-package dependency pin, and the Docker install pin must match the new version.
 
 ## Credential Backends
 
@@ -320,24 +345,28 @@ The `--` separator distinguishes service from key (both may contain single dashe
 ### Manual end-to-end test:
 
 ```bash
-# 1. Install plugin
+# 1. Build the plugin (manifest points at ./dist/index.js, must exist)
+npm run build -w aquaman-plugin
+
+# 2. Install plugin
 openclaw plugins install ./packages/plugin
-# or: cp -r packages/plugin ~/.openclaw/extensions/aquaman-plugin
+# or manually: copy package.json, openclaw.plugin.json, and dist/ into the extensions dir
 
-# 2. Sync after code changes
+# 3. Sync after code changes
+npm run build -w aquaman-plugin
 cp packages/plugin/package.json ~/.openclaw/extensions/aquaman-plugin/package.json
-cp packages/plugin/index.ts ~/.openclaw/extensions/aquaman-plugin/index.ts
-rm -rf ~/.openclaw/extensions/aquaman-plugin/src
-cp -r packages/plugin/src ~/.openclaw/extensions/aquaman-plugin/src
+cp packages/plugin/openclaw.plugin.json ~/.openclaw/extensions/aquaman-plugin/openclaw.plugin.json
+rm -rf ~/.openclaw/extensions/aquaman-plugin/dist
+cp -r packages/plugin/dist ~/.openclaw/extensions/aquaman-plugin/dist
 
-# 3. Add test credential (dummy key for testing)
+# 4. Add test credential (dummy key for testing)
 node -e "
 const kt = require('./node_modules/keytar');
 const k = kt.default || kt;
 k.setPassword('aquaman/anthropic', 'api_key', 'sk-ant-test-key').then(() => console.log('stored'));
 "
 
-# 4. Create auth-profiles.json placeholder
+# 5. Create auth-profiles.json placeholder
 mkdir -p ~/.openclaw/agents/main/agent
 cat > ~/.openclaw/agents/main/agent/auth-profiles.json << 'EOF'
 {
@@ -353,7 +382,7 @@ cat > ~/.openclaw/agents/main/agent/auth-profiles.json << 'EOF'
 }
 EOF
 
-# 5. Ensure openclaw.json has plugin config
+# 6. Ensure openclaw.json has plugin config
 cat > ~/.openclaw/openclaw.json << 'EOF'
 {
   "plugins": {
@@ -371,7 +400,7 @@ cat > ~/.openclaw/openclaw.json << 'EOF'
 }
 EOF
 
-# 6. Test via OpenClaw agent
+# 7. Test via OpenClaw agent
 openclaw agent --local --message "hello" --session-id test --json 2>&1 | head -8
 ```
 
