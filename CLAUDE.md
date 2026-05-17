@@ -68,9 +68,12 @@ The `openclaw.plugin.json` manifest defines `additionalProperties: false` with o
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` \| `"keepassxc"` \| `"systemd-creds"` \| `"bitwarden"` | `"keychain"` | Credential store |
-| `services` | `string[]` | `["anthropic", "openai"]` | Services to proxy |
+| `services` | `string[]` | `["anthropic", "openai"]` | Services to proxy. Also gates the HTTP interceptor's host map: only services in this list have their traffic redirected through the proxy (v0.11.4+). |
+| `autoGenerateAuthProfiles` | `boolean` | `true` | Auto-generate `~/.openclaw/agents/<id>/agent/auth-profiles.json` with placeholder API-key entries for `anthropic` + `openai` when the file doesn't exist. Set `false` to manage your own (v0.11.4+). |
 
 **Do NOT add extra keys** (like `proxyAutoStart`, `auditEnabled`) to `openclaw.json` — OpenClaw validates against the manifest schema and will reject them. Use `~/.aquaman/config.yaml` for advanced settings.
+
+**HTTP interceptor scope (v0.11.4+):** `activateHttpInterceptor()` in `packages/plugin/index.ts` filters the resolved host map (dynamic from proxy `/_hostmap`, or builtin `FALLBACK_HOST_MAP`) by `configuredServices` before activating the interceptor. Hosts whose service is not in the plugin's `services` config are never redirected. This narrows the attack surface (closes ClawScan ASI02) and matches user intent.
 
 ### OpenClaw Auth Profiles
 
@@ -276,7 +279,79 @@ The plugin is shipped as compiled JavaScript, not TypeScript source.
 **Publishing flow** (in order):
 1. `npm publish --workspace=aquaman-proxy` (its own `prepublishOnly` triggers `tsc`)
 2. `npm publish --workspace=aquaman-plugin` (its `prepublishOnly` triggers `tsc -b` → emits `dist/`)
-3. `clawhub package publish packages/plugin --source-repo tech4242/aquaman --source-commit $(git rev-parse HEAD) --source-ref main --source-path packages/plugin` (bundles the local `dist/` — `--source-repo` + `--source-commit` are mandatory together)
+3. `clawhub package publish packages/plugin --clawscan-note "$(cat packages/plugin/.clawhub/publisher-note.md)" --source-repo tech4242/aquaman --source-commit $(git rev-parse HEAD) --source-ref main --source-path packages/plugin` (bundles the local `dist/` — `--source-repo` + `--source-commit` are mandatory together; `--clawscan-note` requires `clawhub` CLI ≥ v0.15.0)
+
+### ClawHub `--clawscan-note` — what we learned
+
+The public docs (https://documentation.openclaw.ai/clawhub/cli and `/clawhub/security-audits`) are sparse on this flag — they describe the *purpose* ("context for behavior that may otherwise look unusual, such as network access, native host access, or provider-specific credentials"), confirm the note is "stored on the published version/release", and provide one example:
+
+```bash
+clawhub package publish ./plugin.tgz --clawscan-note "Native host access is limited to the local OpenClaw bridge."
+```
+
+Docs do **not** specify max length, markdown support, file conventions, edit/remove paths, or display location. The authoritative source for the technical contract is the clawhub CLI binary itself — `clawhub/dist/schema/clawScanNote.js`:
+
+- **Max 4000 characters** after `.trim()` — longer throws `ClawScan note must be at most 4000 characters.`
+- Whitespace-only normalizes to `undefined` (no note sent).
+- No format validation in the normalizer — markdown or plain text both pass through.
+- **No automatic file pickup.** Our `packages/plugin/.clawhub/publisher-note.md` path is purely a convention so the note is version-controlled and reproducible via `--clawscan-note "$(cat ...)"`; ClawHub doesn't look for that file. `.clawhub/` is excluded from the npm/ClawHub tarball via the plugin's `files` field.
+- Per-version: the note is attached to a specific published release. There's no documented post-publish update path. To change a note, publish a new version with the new note.
+
+**Style:** the docs' single example is one terse declarative sentence per concern. We write the note in plain prose (paragraph per finding, no markdown headings) so it renders well even if the ClawHub UI shows the text verbatim. Markdown rendering is not documented anywhere — when in doubt, prefer prose over markup.
+
+**Length budget:** keep the note ≤ 4000 chars after trim. Aim well under (current note is ~1200 chars). If we ever need more, split structurally rather than padding.
+
+## Pre-PR checklist
+
+Run all of these locally before opening a PR (and re-run before merge if the branch was touched). CI runs lint + typecheck + tests but does **not** run the dry-runs or smoke tests — those have caught more real issues than tests this past release.
+
+```bash
+# 1. Static checks
+npm run typecheck
+npm run lint
+
+# 2. Full test suite (~565 tests across ~36 files)
+npm test
+
+# 3. Package shape — npm tarball contents
+npm pack --dry-run --workspace=aquaman-proxy
+npm pack --dry-run --workspace=aquaman-plugin
+#   Verify the plugin tarball does NOT include:
+#   - dist/tsconfig.tsbuildinfo  (40 KB build cache; tsBuildInfoFile relocates it)
+#   - dist/src/index.{js,d.ts}, dist/src/plugin.{js,d.ts}, dist/src/commands.{js,d.ts}
+#     (excluded from compilation — old class-based plugin, standalone-test only)
+#   - .clawhub/  (excluded by files field)
+
+# 4. ClawHub publish dry-run (whenever the plugin changes)
+clawhub package publish packages/plugin \
+  --clawscan-note "$(cat packages/plugin/.clawhub/publisher-note.md)" \
+  --source-repo tech4242/aquaman \
+  --source-commit "$(git rev-parse HEAD)" \
+  --source-ref "$(git rev-parse --abbrev-ref HEAD)" \
+  --source-path packages/plugin \
+  --dry-run
+#   Requires `clawhub` CLI >= v0.15.0 (older versions don't have --clawscan-note).
+#   The publisher note is plain text or markdown, max 4000 characters AFTER
+#   .trim() (per clawhub/dist/schema/clawScanNote.js: normalizeClawScanNote).
+#   Whitespace-only normalizes to undefined and no note is sent. There is NO
+#   automatic file pickup — the path packages/plugin/.clawhub/publisher-note.md
+#   is our convention, not ClawHub's; only the --clawscan-note flag value
+#   reaches the registry. .clawhub/ is excluded from the npm/ClawHub tarball
+#   via the plugin's `files` field.
+#   Verify: file count + size are reasonable, --clawscan-note didn't error,
+#   note byte count below 4000, no tsbuildinfo / dead-code files in tarball.
+
+# 5. Smoke tests against a real OpenClaw install (see "Testing the OpenClaw
+#    Plugin" → "Quick proxy smoke test" + "Quick plugin CLI smoke test" below).
+#    Critical when changing: plugin index.ts, proxy-manager.ts, daemon.ts,
+#    request-policy.ts, service-registry.ts, or anything in the publish pipeline.
+```
+
+**Definition of done for the checklist:**
+- `npm test` is green (565 / 1 skipped / 0 failed at the time of writing).
+- `npm pack --dry-run` plugin tarball is ~25 KB / ~24 files. If it's growing past 30 KB or 30 files, something dead-code is leaking.
+- `clawhub package publish --dry-run` exits 0 and the file list matches `npm pack --dry-run` (minus `package-lock.json`-type npm metadata).
+- Smoke tests show the 5 expected `[plugins]` log lines on plugin load and credential injection returns the expected upstream rejection (401 from Anthropic with a fake key).
 
 ## Version Bumps
 

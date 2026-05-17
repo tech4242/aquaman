@@ -89,6 +89,39 @@ The agent only sees a sentinel hostname (`aquaman.local`). It never sees a key, 
 | **Request policies** | Method + path rules per service, enforced before credential injection | Agent can reach Anthropic but not its admin API; can draft emails but not send them |
 | **Audit trail** | SHA-256 hash-chained logs of every credential use | Post-incident forensics, tamper detection, compliance evidence |
 
+### Proxy process
+
+The plugin spawns the `aquaman` binary from the `aquaman-proxy` npm package, declared as an exact-pinned dependency (no semver range) and published by the same author (`tech4242`). After spawn, the plugin checks the running proxy's reported version against its own and logs a warning if they disagree. The spawn is what triggers `dangerous-exec` in OpenClaw's static scanner — it's intentional and is the whole point of the plugin.
+
+### HTTP interceptor scope
+
+The plugin overrides `globalThis.fetch` to redirect channel API traffic (Slack, Discord, Telegram, …) through the local proxy. Two important constraints:
+
+- **Only services you opted into get intercepted.** As of v0.11.4, the interceptor filters its known-host map by the plugin's `services` config — channels not in `services` keep their normal direct-to-upstream behavior. The 26-entry fallback map is a *catalog* of known services, not a list of what gets intercepted on any given install.
+- **Unix Domain Socket only, no network exposure.** The interceptor sends requests through `~/.aquaman/proxy.sock`, never a TCP port.
+
+### Auth profiles
+
+OpenClaw checks `~/.openclaw/agents/<id>/agent/auth-profiles.json` before making API calls — without a placeholder entry, the request never reaches the proxy. To avoid a 6-step onboarding, the plugin auto-writes this file on first load with placeholder entries for `anthropic` and `openai` only (never arbitrary services). The proxy strips the placeholder and injects the real credential.
+
+- The plugin never overwrites an existing `auth-profiles.json`.
+- To suppress generation entirely, set `autoGenerateAuthProfiles: false` in the plugin config (v0.11.4+). Operators managing their own auth profiles can opt out cleanly.
+
+### Audit log
+
+Every credential use is recorded in `~/.aquaman/audit/current.jsonl` with a SHA-256 hash chain — local-only, no telemetry. `aquaman doctor` surfaces issues; `aquaman audit tail` shows recent entries. The `policy` config (above) lets operators block specific upstream endpoints *before* credentials are injected; denied requests return `403` with an actionable fix message.
+
+### Scanner findings
+
+`openclaw security audit --deep` reports two expected findings:
+
+- **`dangerous-exec`** on the proxy-manager module — the plugin spawns the proxy as a separate process. This is how aquaman keeps credentials out of the agent.
+- **`tools_reachable_permissive_policy`** — OpenClaw warns that plugin tools (like `aquaman_status`) are reachable when no restrictive tool profile is set. This is an environment-level advisory about your agent's tool policy, not a vulnerability in aquaman. If your agents handle untrusted input, set `"tools": { "profile": "coding" }` in `openclaw.json` to restrict which tools agents can call.
+
+ClawHub's ClawScan additionally produces a higher-level review of plugin behavior. The current scan acknowledges credential isolation, proxy spawn, the host map, the auth-profiles generation, and the audit log — see the publisher note on the ClawHub package page for context on each item.
+
+`aquaman setup` adds the plugin to `plugins.allow` automatically so OpenClaw knows you trust it.
+
 ## Request Policies
 
 OAuth scopes can't distinguish between "draft an email" and "send an email" — they're both `gmail.send`. Request policies fill that gap: allow the service, then restrict what happens inside it.
@@ -147,11 +180,3 @@ policy:
 
 **Important:** `encrypted-file` is a last-resort backend for headless Linux/CI environments without a native keyring. For better security, install `libsecret-1-dev` (for GNOME Keyring), use `systemd-creds` (Linux with TPM2), or use 1Password/Vault.
 
-## Security Audit
-
-`openclaw security audit --deep` reports two expected findings:
-
-- **`dangerous-exec`** on `proxy-manager.ts` — the plugin spawns the proxy as a separate process. This is how aquaman keeps credentials out of the agent.
-- **`tools_reachable_permissive_policy`** — OpenClaw warns that plugin tools (like `aquaman_status`) are reachable when no restrictive tool profile is set. This is an environment-level advisory about your agent's tool policy, not a vulnerability in aquaman. If your agents handle untrusted input, set `"tools": { "profile": "coding" }` in `openclaw.json` to restrict which tools agents can call.
-
-`aquaman setup` adds the plugin to `plugins.allow` automatically so OpenClaw knows you trust it.

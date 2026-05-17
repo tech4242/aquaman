@@ -369,6 +369,127 @@ describe('Auto auth-profiles generation', () => {
   });
 });
 
+describe('Host map filter (ASI02)', () => {
+  // The plugin's activateHttpInterceptor() filters the resolved host map
+  // (dynamic from proxy, or FALLBACK_HOST_MAP) by configuredServices before
+  // handing it to createHttpInterceptor. This test replicates the filter
+  // logic directly to verify the contract.
+  function filterHostMap(
+    source: Map<string, string>,
+    configuredServices: string[]
+  ): Map<string, string> {
+    const allowed = new Set(configuredServices);
+    const out = new Map<string, string>();
+    for (const [host, service] of source) {
+      if (allowed.has(service)) out.set(host, service);
+    }
+    return out;
+  }
+
+  const sample = new Map<string, string>([
+    ['api.anthropic.com', 'anthropic'],
+    ['api.openai.com', 'openai'],
+    ['slack.com', 'slack'],
+    ['discord.com', 'discord'],
+    ['api.telegram.org', 'telegram'],
+  ]);
+
+  it('keeps only hosts whose service is in configuredServices', () => {
+    const filtered = filterHostMap(sample, ['anthropic', 'openai']);
+    expect(Array.from(filtered.keys())).toEqual(['api.anthropic.com', 'api.openai.com']);
+  });
+
+  it('returns an empty map when no configured services match', () => {
+    const filtered = filterHostMap(sample, ['mistral']);
+    expect(filtered.size).toBe(0);
+  });
+
+  it('keeps wildcard host entries when their service is configured', () => {
+    const withWildcards = new Map<string, string>([
+      ['slack.com', 'slack'],
+      ['*.slack.com', 'slack'],
+      ['discord.com', 'discord'],
+    ]);
+    const filtered = filterHostMap(withWildcards, ['slack']);
+    expect(Array.from(filtered.keys())).toEqual(['slack.com', '*.slack.com']);
+  });
+
+  it('is a strict allowlist — services not in the map are not added', () => {
+    const filtered = filterHostMap(sample, ['anthropic', 'github']);
+    expect(filtered.has('api.anthropic.com')).toBe(true);
+    expect(filtered.has('api.github.com')).toBe(false);
+  });
+});
+
+describe('autoGenerateAuthProfiles opt-out (ASI03)', () => {
+  let testDir: string;
+
+  beforeAll(() => {
+    testDir = mkdtempSync(path.join(tmpdir(), 'aquaman-authprofiles-optout-'));
+  });
+
+  afterAll(() => {
+    if (testDir) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  // Plugin's register() gates ensureAuthProfiles on the flag. This test
+  // replicates the gate logic.
+  function maybeGenerate(
+    flag: boolean | undefined,
+    services: string[],
+    profilesPath: string
+  ): void {
+    const autoGenerateAuthProfiles = flag ?? true;
+    if (!autoGenerateAuthProfiles) return;
+    if (existsSync(profilesPath)) return;
+
+    const profiles: Record<string, any> = {};
+    const order: Record<string, string[]> = {};
+    for (const service of services) {
+      if (service === 'anthropic' || service === 'openai') {
+        profiles[`${service}:default`] = {
+          type: 'api_key',
+          provider: service,
+          key: 'aquaman-proxy-managed',
+        };
+        order[service] = [`${service}:default`];
+      }
+    }
+    mkdirSync(path.dirname(profilesPath), { recursive: true, mode: 0o700 });
+    writeFileSync(profilesPath, JSON.stringify({ version: 1, profiles, order }, null, 2), {
+      mode: 0o600,
+    });
+  }
+
+  it('does NOT write auth-profiles.json when flag is false', () => {
+    const profilesPath = path.join(testDir, 'off', 'auth-profiles.json');
+    maybeGenerate(false, ['anthropic', 'openai'], profilesPath);
+    expect(existsSync(profilesPath)).toBe(false);
+  });
+
+  it('writes auth-profiles.json when flag is true (default behavior)', () => {
+    const profilesPath = path.join(testDir, 'on', 'auth-profiles.json');
+    maybeGenerate(true, ['anthropic', 'openai'], profilesPath);
+    expect(existsSync(profilesPath)).toBe(true);
+  });
+
+  it('writes auth-profiles.json when flag is undefined (default true)', () => {
+    const profilesPath = path.join(testDir, 'default', 'auth-profiles.json');
+    maybeGenerate(undefined, ['anthropic', 'openai'], profilesPath);
+    expect(existsSync(profilesPath)).toBe(true);
+  });
+
+  it('manifest configSchema declares autoGenerateAuthProfiles with default true', () => {
+    const manifestPath = path.join(PLUGIN_SRC, 'openclaw.plugin.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+    expect(manifest.configSchema.properties.autoGenerateAuthProfiles).toBeDefined();
+    expect(manifest.configSchema.properties.autoGenerateAuthProfiles.type).toBe('boolean');
+    expect(manifest.configSchema.properties.autoGenerateAuthProfiles.default).toBe(true);
+  });
+});
+
 describe('Plugin Test Infrastructure', () => {
   it('correctly detects OpenClaw availability', () => {
     expect(typeof OPENCLAW_AVAILABLE).toBe('boolean');

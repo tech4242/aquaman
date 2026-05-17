@@ -13,10 +13,18 @@
     "sourceMap": true,
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
-    "composite": true
+    "composite": true,
+    "tsBuildInfoFile": "./tsconfig.tsbuildinfo"
   },
   "include": ["index.ts", "src/**/*"],
-  "exclude": ["node_modules", "dist"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "test",
+    "src/plugin.ts",
+    "src/index.ts",
+    "src/commands.ts"
+  ],
   "references": [
     { "path": "../proxy" }
   ]
