@@ -279,7 +279,27 @@ The plugin is shipped as compiled JavaScript, not TypeScript source.
 **Publishing flow** (in order):
 1. `npm publish --workspace=aquaman-proxy` (its own `prepublishOnly` triggers `tsc`)
 2. `npm publish --workspace=aquaman-plugin` (its `prepublishOnly` triggers `tsc -b` → emits `dist/`)
-3. `clawhub package publish packages/plugin --source-repo tech4242/aquaman --source-commit $(git rev-parse HEAD) --source-ref main --source-path packages/plugin` (bundles the local `dist/` — `--source-repo` + `--source-commit` are mandatory together)
+3. `clawhub package publish packages/plugin --clawscan-note "$(cat packages/plugin/.clawhub/publisher-note.md)" --source-repo tech4242/aquaman --source-commit $(git rev-parse HEAD) --source-ref main --source-path packages/plugin` (bundles the local `dist/` — `--source-repo` + `--source-commit` are mandatory together; `--clawscan-note` requires `clawhub` CLI ≥ v0.15.0)
+
+### ClawHub `--clawscan-note` — what we learned
+
+The public docs (https://documentation.openclaw.ai/clawhub/cli and `/clawhub/security-audits`) are sparse on this flag — they describe the *purpose* ("context for behavior that may otherwise look unusual, such as network access, native host access, or provider-specific credentials"), confirm the note is "stored on the published version/release", and provide one example:
+
+```bash
+clawhub package publish ./plugin.tgz --clawscan-note "Native host access is limited to the local OpenClaw bridge."
+```
+
+Docs do **not** specify max length, markdown support, file conventions, edit/remove paths, or display location. The authoritative source for the technical contract is the clawhub CLI binary itself — `clawhub/dist/schema/clawScanNote.js`:
+
+- **Max 4000 characters** after `.trim()` — longer throws `ClawScan note must be at most 4000 characters.`
+- Whitespace-only normalizes to `undefined` (no note sent).
+- No format validation in the normalizer — markdown or plain text both pass through.
+- **No automatic file pickup.** Our `packages/plugin/.clawhub/publisher-note.md` path is purely a convention so the note is version-controlled and reproducible via `--clawscan-note "$(cat ...)"`; ClawHub doesn't look for that file. `.clawhub/` is excluded from the npm/ClawHub tarball via the plugin's `files` field.
+- Per-version: the note is attached to a specific published release. There's no documented post-publish update path. To change a note, publish a new version with the new note.
+
+**Style:** the docs' single example is one terse declarative sentence per concern. We write the note in plain prose (paragraph per finding, no markdown headings) so it renders well even if the ClawHub UI shows the text verbatim. Markdown rendering is not documented anywhere — when in doubt, prefer prose over markup.
+
+**Length budget:** keep the note ≤ 4000 chars after trim. Aim well under (current note is ~1200 chars). If we ever need more, split structurally rather than padding.
 
 ## Pre-PR checklist
 
