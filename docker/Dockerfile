@@ -1,7 +1,7 @@
 FROM alpine/openclaw:latest
 
 # Install aquaman proxy (includes credential stores, audit, CLI)
-RUN npm install -g aquaman-proxy@0.11.4
+RUN npm install -g aquaman-proxy@0.11.5
 
 # Install plugin into OpenClaw extensions
 # Note: docker build context must contain a prebuilt plugin/dist/ directory

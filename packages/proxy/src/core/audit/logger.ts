@@ -45,7 +45,25 @@ export interface AuditLoggerOptions {
   logDir: string;
   enabled?: boolean;
   walEnabled?: boolean;
+  /**
+   * Maximum size of `current.jsonl` before it auto-rotates into `archive/`.
+   * Default: 10 MB. Set to 0 to disable auto-rotation.
+   */
+  maxLogSizeBytes?: number;
+  /**
+   * Maximum number of archived log files to retain. Older archives are
+   * deleted after each rotation. Default: 10. Set to 0 to retain all.
+   *
+   * Note: the audit log records request metadata (service, method, path
+   * with query stripped, outcome) and the SHA-256 hash chain — not
+   * credential values. Operators should still protect `~/.aquaman/audit/`
+   * under their normal local-data retention policy.
+   */
+  maxArchives?: number;
 }
+
+const DEFAULT_MAX_LOG_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
+const DEFAULT_MAX_ARCHIVES = 10;
 
 export class AuditLogger {
   private logDir: string;
@@ -53,6 +71,8 @@ export class AuditLogger {
   private walPath: string;
   private enabled: boolean;
   private walEnabled: boolean;
+  private maxLogSizeBytes: number;
+  private maxArchives: number;
   private lastHash: string = GENESIS_HASH;
   private entryCount: number = 0;
   private initialized: boolean = false;
@@ -63,6 +83,8 @@ export class AuditLogger {
     this.walPath = path.join(this.logDir, 'current.wal');
     this.enabled = options.enabled ?? true;
     this.walEnabled = options.walEnabled ?? true;
+    this.maxLogSizeBytes = options.maxLogSizeBytes ?? DEFAULT_MAX_LOG_SIZE_BYTES;
+    this.maxArchives = options.maxArchives ?? DEFAULT_MAX_ARCHIVES;
   }
 
   async initialize(): Promise<void> {
@@ -240,7 +262,47 @@ export class AuditLogger {
     this.lastHash = entry.hash;
     this.entryCount++;
 
+    // Auto-rotate if the current log has crossed the size threshold.
+    if (this.maxLogSizeBytes > 0) {
+      try {
+        const { size } = fs.statSync(this.currentLogPath);
+        if (size >= this.maxLogSizeBytes) {
+          await this.rotateLog();
+          this.pruneArchives();
+        }
+      } catch {
+        // statSync failed (e.g. file removed between write and stat) — skip rotation
+      }
+    }
+
     return entry;
+  }
+
+  /**
+   * Delete archive files beyond `maxArchives`, oldest first.
+   */
+  private pruneArchives(): void {
+    if (this.maxArchives <= 0) return;
+    const archiveDir = path.join(this.logDir, 'archive');
+    if (!fs.existsSync(archiveDir)) return;
+
+    const entries = fs.readdirSync(archiveDir)
+      .filter((name) => name.startsWith('audit-') && name.endsWith('.jsonl'))
+      .map((name) => ({
+        name,
+        path: path.join(archiveDir, name),
+        mtime: fs.statSync(path.join(archiveDir, name)).mtimeMs,
+      }))
+      .sort((a, b) => b.mtime - a.mtime); // newest first
+
+    const toDelete = entries.slice(this.maxArchives);
+    for (const entry of toDelete) {
+      try {
+        fs.unlinkSync(entry.path);
+      } catch {
+        // best effort
+      }
+    }
   }
 
   async verifyIntegrity(): Promise<{ valid: boolean; errors: string[] }> {
