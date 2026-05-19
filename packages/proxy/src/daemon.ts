@@ -98,6 +98,10 @@ export class CredentialProxy {
 
       this.server!.listen(this.options.socketPath, () => {
         if (prevUmask !== undefined) try { process.umask(prevUmask); } catch { /* worker */ }
+        // Explicitly chmod the socket to 0o600 — umask isn't honored under
+        // Vitest worker threads (process.umask is unsupported there) and we
+        // want a hard guarantee, not a best-effort one.
+        try { fs.chmodSync(this.options.socketPath, 0o600); } catch { /* socket gone */ }
         this.running = true;
         console.log(`Credential proxy listening on ${this.options.socketPath}`);
         resolve();

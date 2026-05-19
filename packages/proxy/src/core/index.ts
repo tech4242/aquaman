@@ -44,6 +44,15 @@ export {
   redactSensitiveParams
 } from './audit/index.js';
 
+// Secret-pattern redactor (v0.12.0+)
+export {
+  type SecretPattern,
+  BUILTIN_PATTERNS,
+  redact,
+  redactDeep,
+  containsSecret
+} from './redactor/index.js';
+
 // Utils
 export {
   computeHash,
