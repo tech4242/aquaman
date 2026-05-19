@@ -1,8 +1,7 @@
 {
   "name": "aquaman-coder",
-  "version": "0.12.0-pre.0",
+  "version": "0.12.0",
   "description": "Vault adapter for AI coding agents — keep API keys, secrets, and .env contents out of your coding agent's memory and transcripts. Supports Claude Code (Codex, OpenCode, Cursor coming soon).",
-  "private": true,
   "type": "module",
   "bin": {
     "aquaman-coder": "dist/cli/index.js"
@@ -40,7 +39,7 @@
   "author": "tech4242",
   "license": "MIT",
   "dependencies": {
-    "aquaman-proxy": "0.11.5",
+    "aquaman-proxy": "0.12.0",
     "commander": "^11.0.0",
     "yaml": "^2.3.4"
   },

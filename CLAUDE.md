@@ -2,11 +2,28 @@
 
 ## What This Is
 
-Credential isolation for **OpenClaw Gateway**. API keys and channel tokens never enter the Gateway process—they're stored in secure backends and injected by a separate proxy. Covers LLM providers (Anthropic, OpenAI) **and** all OpenClaw channel credentials (Telegram, Slack, Discord, MS Teams, Matrix, LINE, Twitch, Twilio, etc.).
+Credential isolation for **AI agents**. API keys, channel tokens, and `.env`-grade secrets never enter the agent's process — they're stored in secure backends (Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, encrypted-file, systemd-creds) and injected by a separate proxy.
 
-**Target platform:** OpenClaw Gateway on Unix-like systems (Linux, macOS, WSL2). The Gateway is OpenClaw's core server component—a Node.js/TypeScript service that runs as a systemd user service (Linux/WSL2) or LaunchAgent (macOS).
+Two integration paths as of v0.12.0:
 
-**Published on npm** as `aquaman-plugin` and `aquaman-proxy`. Install via `openclaw plugins install aquaman-plugin`. Also publishable to ClawHub (OpenClaw's native plugin registry, default since 2026.3.22) for native discoverability.
+1. **OpenClaw Gateway** (`aquaman-plugin`) — original target. Covers LLM providers (Anthropic, OpenAI, Mistral, Hugging Face, xAI, Cloudflare AI Gateway, ElevenLabs) **and** OpenClaw channel credentials (Telegram, Slack, Discord, MS Teams, Matrix, LINE, Twitch, Twilio, etc.). 25 builtin services across 6 auth modes.
+2. **AI coding agents** (`aquaman-coder`, v0.12.0+) — Claude Code today; Codex / OpenCode / Cursor planned. Stops developers from putting plaintext `.env` files into projects just to make their coding agent work. Per-tool-call credential materialization via the `/broker/resolve` UDS endpoint.
+
+**Target platform:** Unix-like systems (Linux, macOS, WSL2). The OpenClaw Gateway runs as a systemd user service (Linux/WSL2) or LaunchAgent (macOS); the coding-agent path runs alongside the coder's own process.
+
+**Published on npm** as `aquaman-proxy`, `aquaman-plugin`, and (v0.12.0+) `aquaman-coder`. Install OpenClaw plugin via `openclaw plugins install aquaman-plugin`; install the coding-agent adapter via `npm install -g aquaman-coder`. Also publishable to ClawHub for native plugin discoverability.
+
+## Compliance posture (v0.12.0+)
+
+Aquaman ships runnable conformance tests mapped to:
+
+- **MITRE ATLAS** v5.3 — techniques AML.T0055, T0012, T0062, T0090 (`tests/compliance/atlas/`)
+- **NIST SP 800-53 Rev 5** — IA-5, AC-3, AC-6, AU-2/9/10, SC-12/28, SI-10 (`tests/compliance/nist/`)
+- **CISA/Five-Eyes** *Careful Adoption of Agentic AI Services* (April 2026) — alignment narrative
+- **CSA MAESTRO** — layered alignment narrative
+- **OWASP Top 10 for Agentic Apps** — ASI02, ASI03 alignment
+
+Run `aquaman compliance check` (human output) or `aquaman compliance check --json` (machine-readable evidence report keyed by control ID). Source: `docs/compliance/{atlas-mapping,nist-800-53,agentic-ai-guidance}.md`. The conformance tests are **source-repo only** — they're not bundled in the published npm tarball; they're for CI / audit pipelines that check out the repo.
 
 ## Architecture Decision: Isolation vs Detection
 
@@ -33,9 +50,18 @@ Agent Process                    Proxy Process (aquaman)
 
 ```
 packages/
-├── proxy/      # aquaman-proxy - HTTP proxy daemon, CLI (includes core at src/core/)
-└── plugin/     # aquaman-plugin - OpenClaw plugin
+├── proxy/      # aquaman-proxy - canonical core: daemon, broker, vault, audit,
+│               #   policy, CLI. The slim, "always present" package. Plugin and
+│               #   coder both depend on it; it never depends on them.
+├── plugin/     # aquaman-plugin - OpenClaw Gateway adapter (frozen scope)
+└── coder/      # aquaman-coder - coding-agent adapter (Claude Code; Codex /
+                #   OpenCode / Cursor planned). NEW in v0.12.0.
 ```
+
+Cross-package import rules (codified in `docs/PACKAGES.md`):
+- plugin → proxy ✓, coder → proxy ✓
+- plugin ↔ coder ✗ (siblings stay independent)
+- proxy → plugin / coder ✗ (proxy must remain slim)
 
 ## OpenClaw Gateway Integration
 
@@ -103,6 +129,79 @@ The unscoped package name must match the manifest `id`.
 
 - **Correct:** `aquaman-plugin` (package name matches manifest id `"aquaman-plugin"`)
 - **Wrong:** `aquaman-openclaw` (name `aquaman-openclaw` ≠ manifest id `"aquaman-plugin"`)
+
+## aquaman-coder / Claude Code Integration (v0.12.0+)
+
+The `aquaman-coder` package extends aquaman to AI coding agents. v0.12.0 ships the Claude Code adapter; Codex / OpenCode / Cursor adapters are planned for v0.13.0+.
+
+**Wire shape (Claude Code):**
+
+```
+~/.claude/settings.json        ──hooks──>   aquaman-coder hook   <──stdio──   Claude Code
+                                                  │
+                                                  ▼
+~/.aquaman/projects.yaml  ──>  match cwd  ──>  rewrite Bash cmd via updatedInput
+                                                  │
+                                                  ▼
+                                          aquaman-coder exec --
+                                                  │
+                                                  ▼
+                                          BrokerClient ──>  proxy /broker/resolve  ──>  vault
+                                                  │
+                                                  ▼
+                                          inject env + redact stdout/stderr
+```
+
+**Key files** (`packages/coder/src/`):
+- `projects.ts` — `~/.aquaman/projects.yaml` resolver. Each project owns paths + an env map keyed by `aquaman://service/key` references. Longest-prefix match wins; symlinks (macOS `/var` → `/private/var`) handled via realpath on both sides.
+- `broker-client.ts` — UDS HTTP client for `POST /broker/resolve` and `GET /_health`. Clean error mapping for ENOENT / ECONNREFUSED.
+- `adapters/claude-code/hook.ts` — Real Claude Code hook protocol (verified against https://code.claude.com/docs/en/hooks). **PreToolUse** rewrites Bash `command` via `updatedInput.command` to wrap with `aquaman-coder exec --` (since hooks have no env-injection API). **PostToolUse** warns via `additionalContext` when the redactor detects secrets in tool output. Exit 2 routes through stderr per docs.
+- `adapters/claude-code/setup.ts` — Writes `~/.claude/settings.json` atomically (mode 0o600, parent dir 0o700). Idempotent via substring-match on the hook command.
+- `cli/index.ts` — Commander-based CLI: `setup <agent>`, `project list/add/remove`, `get <ref>`, `exec <cmd...>`, `hook`, `doctor`.
+
+**Critical hook-protocol gotcha:** Earlier drafts of the adapter used fabricated fields (`additionalEnvVars` for PreToolUse env injection, `updatedToolOutput` for PostToolUse rewriting). These do not exist — Claude Code silently ignores them. The real protocol only supports `permissionDecision` / `permissionDecisionReason` / `updatedInput` / `additionalContext` for PreToolUse and `additionalContext` for PostToolUse. When extending, **verify against the live Claude Code docs**, not training-data memory.
+
+**Project map example** (`~/.aquaman/projects.yaml`):
+
+```yaml
+version: 1
+projects:
+  my-app:
+    paths:
+      - ~/code/my-app
+    env:
+      ANTHROPIC_API_KEY: aquaman://anthropic/api_key
+      GITHUB_TOKEN: aquaman://github/token
+      DATABASE_URL: aquaman://supabase/db_url
+```
+
+When Claude Code runs `Bash` in `~/code/my-app/anything`, the hook rewrites `command: "X"` → `command: "aquaman-coder exec -- sh -c 'X'"`. The wrapper calls the broker per env var, injects the real values into the subprocess only, and pipes stdout/stderr through the redactor so secret-shaped strings never reach the agent transcript.
+
+**End-to-end setup:**
+
+```bash
+# 1. Install aquaman-proxy (vault + daemon) and aquaman-coder (adapter)
+npm install -g aquaman-proxy aquaman-coder
+
+# 2. Store credentials in your chosen backend
+aquaman setup           # writes ~/.aquaman/config.yaml, picks backend
+aquaman credentials add anthropic api_key sk-ant-...
+aquaman credentials add github token ghp_...
+
+# 3. Start the proxy daemon
+aquaman daemon &
+
+# 4. Declare a project
+aquaman-coder project add my-app --path ~/code/my-app \
+  --env ANTHROPIC_API_KEY=aquaman://anthropic/api_key \
+  --env GITHUB_TOKEN=aquaman://github/token
+
+# 5. Wire Claude Code hooks
+aquaman-coder setup claude-code
+
+# 6. Verify
+aquaman-coder doctor
+```
 
 ## Known Issues & Fixes
 
@@ -355,7 +454,7 @@ clawhub package publish packages/plugin \
 
 ## Version Bumps
 
-Both packages are pinned to exact versions of each other and must be bumped together:
+All packages are pinned to exact versions of each other and must be bumped together:
 
 | File | Fields to update |
 |------|-----------------|
@@ -363,9 +462,12 @@ Both packages are pinned to exact versions of each other and must be bumped toge
 | `packages/proxy/package.json` | `version` |
 | `packages/plugin/package.json` | `version`, `dependencies.aquaman-proxy` (exact pin), `openclaw.compat`/`build` fields as needed |
 | `packages/plugin/openclaw.plugin.json` | `version` |
+| `packages/coder/package.json` | `version`, `dependencies.aquaman-proxy` (exact pin) |
 | `docker/Dockerfile` | `aquaman-proxy@<version>` in `npm install` |
 
-All `version` fields, the cross-package dependency pin, and the Docker install pin must match the new version.
+All `version` fields, the cross-package dependency pins, and the Docker install pin must match the new version.
+
+**Latent bug fixed in v0.12.0:** `packages/proxy/package.json`'s `clean` script previously only removed `dist/` but not `tsconfig.tsbuildinfo`. Stale buildinfo tricked `tsc -b` into a no-op rebuild during publish, producing empty tarballs. v0.12.0 now removes both, and `prepublishOnly` runs `npm run clean && npm run build` for both proxy and plugin (matching coder's pattern).
 
 ## Credential Backends
 

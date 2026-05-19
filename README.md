@@ -8,9 +8,9 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-API key protection for OpenClaw — credentials stay in your vault, never in the agent's memory. 🔱🦞
+API key protection for AI agents — credentials stay in your vault, never in the agent's memory. 🔱🦞
 
-You bought a brand new Mac Mini, set up OpenClaw, and now you're staring at your `~/.openclaw/openclaw.json` wondering why your Anthropic API key is sitting there in plaintext. You read the articles. You know what happens when an agent gets prompt-injected. We get it.
+You set up Claude Code (or OpenClaw, or Codex), and now you're staring at a `.env` file with your Anthropic key, GitHub token, and database URL sitting there in plaintext. You read the articles. You know what happens when an agent gets prompt-injected. We get it.
 
 Aquaman fixes this with three layers of defense:
 
@@ -18,9 +18,16 @@ Aquaman fixes this with three layers of defense:
 2. **Request policies** — Per-service rules control *which endpoints* an agent can call. Block admin APIs, prevent deletions, allow drafts but deny sends. Denied requests never get real credentials.
 3. **Tamper-evident audit** — Every credential use is logged with SHA-256 hash chains. You can prove what was accessed and detect tampering after the fact.
 
-No SDK changes required. The proxy is transparent — your agent talks to `aquaman.local`, the proxy injects auth and forwards to the real API.
+Two integration paths:
+
+- **OpenClaw Gateway** via `aquaman-plugin` — LLM providers + 25 builtin channels (Telegram, Slack, Discord, Twilio, ...) across 6 auth modes. Transparent: your agent talks to `aquaman.local`, the proxy injects auth and forwards.
+- **AI coding agents** via `aquaman-coder` (v0.12.0+) — Claude Code today; Codex / OpenCode / Cursor planned. Per-tool-call credential materialization: `aquaman://anthropic/api_key` references in `~/.aquaman/projects.yaml` get resolved from the vault only when an agent-invoked Bash command runs.
+
+**Compliance posture** (v0.12.0+): runnable conformance suite for MITRE ATLAS v5.3 + NIST SP 800-53 Rev 5, plus alignment notes for CISA/Five-Eyes "Careful Adoption of Agentic AI Services" (April 2026), CSA MAESTRO, and OWASP Top 10 for Agentic Applications. Run `aquaman compliance check` for a JSON evidence report. See `docs/compliance/`.
 
 ## Quick Start
+
+### OpenClaw
 
 ```bash
 openclaw plugins install aquaman-plugin   # 1. install plugin + proxy
@@ -33,6 +40,22 @@ Troubleshooting: `openclaw aquaman doctor`
 > **Using npm?** `npm install -g aquaman-proxy && aquaman setup` does
 > the same thing — installs the proxy CLI, stores your keys, and installs
 > the plugin. Use this if you prefer managing packages with npm.
+
+### Claude Code (v0.12.0+)
+
+```bash
+npm install -g aquaman-proxy aquaman-coder      # 1. install daemon + adapter
+aquaman setup                                    # 2. pick a vault backend, store keys
+aquaman daemon &                                 # 3. start the proxy
+
+aquaman-coder project add my-app --path ~/code/my-app \
+  --env ANTHROPIC_API_KEY=aquaman://anthropic/api_key \
+  --env GITHUB_TOKEN=aquaman://github/token       # 4. declare a project
+aquaman-coder setup claude-code                   # 5. wire Claude Code hooks
+aquaman-coder doctor                              # 6. verify
+```
+
+Now when Claude Code runs a Bash tool in `~/code/my-app`, aquaman rewrites the command to wrap it under `aquaman-coder exec`, which resolves credentials per-call from your vault and redacts secrets from stdout/stderr before they reach the agent transcript. Codex / OpenCode / Cursor adapters are planned for v0.13.0+.
 
 ### Docker
 
