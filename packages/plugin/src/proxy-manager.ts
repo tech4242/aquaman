@@ -6,6 +6,42 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+
+/**
+ * Curated env passed to the spawned aquaman proxy process.
+ *
+ * Replaces wholesale `...process.env` forwarding (ClawScan ASI05/ASI03
+ * v0.11.4 finding: the spawn snippet exposed every parent-process env var
+ * to the proxy). v0.11.5 narrows to an explicit allowlist plus the
+ * `AQUAMAN_*` / `VAULT_*` / `BW_*` prefix families that the proxy and its
+ * vault backends actually need.
+ *
+ * Notably NOT forwarded: ANTHROPIC_API_KEY, OPENAI_API_KEY, AWS_ACCESS_KEY_ID,
+ * GH_TOKEN, etc. — anything outside this allowlist stays in the parent process.
+ */
+const PROXY_ENV_ALLOWLIST = new Set<string>([
+  // Process basics
+  'HOME', 'PATH', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR',
+  // Locale
+  'LANG', 'LC_ALL', 'LC_CTYPE', 'LC_MESSAGES',
+  // Node
+  'NODE_ENV', 'NODE_PATH',
+]);
+
+const PROXY_ENV_PREFIXES = ['AQUAMAN_', 'VAULT_', 'BW_'];
+
+function pickProxyEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (
+      PROXY_ENV_ALLOWLIST.has(key) ||
+      PROXY_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))
+    ) {
+      env[key] = value;
+    }
+  }
+  return env;
+}
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -61,7 +97,7 @@ export function execAquamanProxyCli(
 
     const proc = spawn(binary, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: process.env,
+      env: pickProxyEnv(),
     });
 
     let stdout = '';
@@ -101,7 +137,7 @@ export function execAquamanProxyInteractive(
 
     const proc = spawn(binary, args, {
       stdio: 'inherit',
-      env: process.env,
+      env: pickProxyEnv(),
     });
 
     proc.on('error', reject);
@@ -178,11 +214,13 @@ export class ProxyManager {
       // Build arguments — UDS is the default, no --port needed
       const args = ['plugin-mode'];
 
-      // Spawn proxy process
+      // Spawn proxy process. Env starts from a curated allowlist (see
+      // pickProxyEnv) rather than `...process.env`, then layers the
+      // explicit AQUAMAN_* config keys on top.
       this.process = spawn(binaryPath, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
-          ...process.env,
+          ...pickProxyEnv(),
           // Pass config through environment
           AQUAMAN_BACKEND: config.backend,
           AQUAMAN_VAULT_ADDRESS: config.vaultAddress,

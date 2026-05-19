@@ -260,6 +260,83 @@ describe('AuditLogger', () => {
     });
   });
 
+  describe('auto-rotation by size (v0.11.5)', () => {
+    it('auto-rotates when current.jsonl crosses maxLogSizeBytes', async () => {
+      const rotateDir = path.join(os.tmpdir(), `aquaman-rotate-${Date.now()}`);
+      fs.mkdirSync(rotateDir, { recursive: true });
+
+      // 200-byte threshold ensures a couple of entries crosses it
+      const rotateLogger = createAuditLogger({
+        logDir: rotateDir,
+        enabled: true,
+        maxLogSizeBytes: 200,
+        maxArchives: 10,
+      });
+      await rotateLogger.initialize();
+
+      // Write enough entries to exceed 200 bytes
+      for (let i = 0; i < 5; i++) {
+        await rotateLogger.logToolCall(`s${i}`, `a${i}`, 'tool', { param: 'value' });
+      }
+
+      const archiveDir = path.join(rotateDir, 'archive');
+      const archives = fs.readdirSync(archiveDir).filter((n) => n.endsWith('.jsonl'));
+      expect(archives.length).toBeGreaterThanOrEqual(1);
+
+      fs.rmSync(rotateDir, { recursive: true });
+    });
+
+    it('does NOT auto-rotate when maxLogSizeBytes is 0', async () => {
+      const noRotateDir = path.join(os.tmpdir(), `aquaman-norotate-${Date.now()}`);
+      fs.mkdirSync(noRotateDir, { recursive: true });
+
+      const noRotateLogger = createAuditLogger({
+        logDir: noRotateDir,
+        enabled: true,
+        maxLogSizeBytes: 0,
+      });
+      await noRotateLogger.initialize();
+
+      for (let i = 0; i < 20; i++) {
+        await noRotateLogger.logToolCall(`s${i}`, `a${i}`, 'tool', { p: 'v' });
+      }
+
+      const archiveDir = path.join(noRotateDir, 'archive');
+      const archives = fs.existsSync(archiveDir)
+        ? fs.readdirSync(archiveDir).filter((n) => n.endsWith('.jsonl'))
+        : [];
+      expect(archives.length).toBe(0);
+
+      fs.rmSync(noRotateDir, { recursive: true });
+    });
+
+    it('prunes old archives beyond maxArchives', async () => {
+      const pruneDir = path.join(os.tmpdir(), `aquaman-prune-${Date.now()}`);
+      fs.mkdirSync(pruneDir, { recursive: true });
+
+      const pruneLogger = createAuditLogger({
+        logDir: pruneDir,
+        enabled: true,
+        maxLogSizeBytes: 100, // small threshold to force frequent rotation
+        maxArchives: 3,
+      });
+      await pruneLogger.initialize();
+
+      // Write enough entries to trigger many rotations
+      for (let i = 0; i < 30; i++) {
+        await pruneLogger.logToolCall(`s${i}`, `a${i}`, 'tool', { p: 'v'.repeat(20) });
+        // Tiny pause so archive filenames (timestamp-based) differ
+        await new Promise((r) => setTimeout(r, 5));
+      }
+
+      const archiveDir = path.join(pruneDir, 'archive');
+      const archives = fs.readdirSync(archiveDir).filter((n) => n.endsWith('.jsonl'));
+      expect(archives.length).toBeLessThanOrEqual(3);
+
+      fs.rmSync(pruneDir, { recursive: true });
+    });
+  });
+
   describe('param redaction', () => {
     it('should redact sensitive keys in logToolCall params', async () => {
       const entry = await logger.logToolCall('s1', 'a1', 'test', {
