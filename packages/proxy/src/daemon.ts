@@ -135,6 +135,16 @@ export class CredentialProxy {
       return;
     }
 
+    // Broker endpoint — resolves a vault-stored credential and returns it
+    // with a short-lived expiry hint. Used by aquaman-coder hooks (v0.12.0+)
+    // to materialize credentials on-demand for one tool call, then discard.
+    // The expires_at field is a hint for the consumer, not a server-side
+    // expiration (the value isn't cached daemon-side beyond the call).
+    if ((url === '/broker/resolve' || url === '/broker/resolve/') && req.method === 'POST') {
+      await this.handleBrokerResolve(req, res, requestId);
+      return;
+    }
+
     // Parse service from path: /anthropic/v1/messages -> anthropic
     const pathParts = url.split('/').filter(p => p);
     const service = pathParts[0];
@@ -380,6 +390,149 @@ export class CredentialProxy {
     if (this.options.onRequest) {
       this.options.onRequest(info);
     }
+  }
+
+  /**
+   * Broker endpoint handler. Resolves a vault-stored credential and returns
+   * it with an expiry hint so the consumer (typically an aquaman-coder hook)
+   * can scrub it after the indicated TTL. The daemon does not cache the
+   * value beyond this single response — every call re-reads from the vault.
+   *
+   * Request body (JSON):
+   *   { "service": "aws", "key": "secret_access_key", "ttl_seconds": 60 }
+   *
+   * Responses:
+   *   200 → { "value": "...", "expires_at": "ISO-8601 UTC" }
+   *   400 → { "error": "...", "fix": "..." }       (malformed body)
+   *   404 → { "error": "...", "fix": "..." }       (credential not found)
+   *   500 → { "error": "...", "fix": "..." }       (vault backend failed)
+   *
+   * The expires_at field is advisory; the consumer is expected to honor it.
+   * v0.12.0+ — used by the aquaman-coder hook adapters to materialize
+   * credentials per tool call without writing .env files to disk.
+   */
+  private async handleBrokerResolve(
+    req: IncomingMessage,
+    res: ServerResponse,
+    requestId: string
+  ): Promise<void> {
+    res.setHeader('Content-Type', 'application/json');
+
+    // Read request body
+    let bodyBuf = '';
+    for await (const chunk of req) {
+      bodyBuf += (chunk as Buffer).toString('utf-8');
+      if (bodyBuf.length > 4096) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: 'Broker request body too large', fix: 'Keep broker requests under 4 KB' }));
+        return;
+      }
+    }
+
+    let body: { service?: unknown; key?: unknown; ttl_seconds?: unknown };
+    try {
+      body = JSON.parse(bodyBuf);
+    } catch {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ error: 'Broker request body is not valid JSON', fix: 'POST a JSON body with { service, key, ttl_seconds }' }));
+      return;
+    }
+
+    const service = body.service;
+    const key = body.key;
+    const ttlInput = body.ttl_seconds;
+
+    if (typeof service !== 'string' || !service) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ error: 'Broker request missing required string field: service', fix: 'Include { service: "<name>" } in the JSON body' }));
+      return;
+    }
+    if (typeof key !== 'string' || !key) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ error: 'Broker request missing required string field: key', fix: 'Include { key: "<name>" } in the JSON body' }));
+      return;
+    }
+    if (!SAFE_SERVICE_NAME.test(service)) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ error: `Invalid service name: ${JSON.stringify(service)}`, fix: 'Service names must match /^[a-z0-9][a-z0-9._-]*$/' }));
+      return;
+    }
+    // Key name validation: alphanumeric, dots, hyphens, underscores. Allows
+    // common patterns like "api_key", "secret_access_key", "bot_token".
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(key)) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ error: `Invalid key name: ${JSON.stringify(key)}`, fix: 'Key names must match /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/' }));
+      return;
+    }
+
+    // TTL defaults to 60 seconds; clamp to [1, 3600].
+    let ttlSeconds = 60;
+    if (ttlInput !== undefined) {
+      if (typeof ttlInput !== 'number' || !Number.isFinite(ttlInput) || ttlInput < 1 || ttlInput > 3600) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: 'Invalid ttl_seconds (must be a number 1..3600)', fix: 'Omit ttl_seconds to use the 60-second default' }));
+        return;
+      }
+      ttlSeconds = Math.floor(ttlInput);
+    }
+
+    // Fetch from vault
+    let value: string | null;
+    try {
+      value = await this.options.store.get(service, key);
+    } catch (err) {
+      res.statusCode = 500;
+      const message = err instanceof Error ? err.message : String(err);
+      res.end(JSON.stringify({
+        error: `Vault backend error resolving ${service}/${key}: ${message}`,
+        fix: 'Check that the configured backend (keychain, 1password, vault, etc.) is accessible. Run: aquaman doctor'
+      }));
+      this.emitRequest({
+        id: requestId,
+        service,
+        method: 'BROKER',
+        path: `/broker/resolve`,
+        timestamp: new Date(),
+        authenticated: false,
+        statusCode: 500,
+        error: message,
+      });
+      return;
+    }
+
+    if (value === null) {
+      res.statusCode = 404;
+      res.end(JSON.stringify({
+        error: `No credential found for ${service}/${key}`,
+        fix: `Run: aquaman credentials add ${service} ${key}`
+      }));
+      this.emitRequest({
+        id: requestId,
+        service,
+        method: 'BROKER',
+        path: `/broker/resolve`,
+        timestamp: new Date(),
+        authenticated: false,
+        statusCode: 404,
+      });
+      return;
+    }
+
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+    res.statusCode = 200;
+    res.end(JSON.stringify({ value, expires_at: expiresAt }));
+
+    // Audit: broker call resolved (value not logged — only service/key
+    // metadata, matching the rest of the audit log's content discipline).
+    this.emitRequest({
+      id: requestId,
+      service,
+      method: 'BROKER',
+      path: `/broker/resolve`,
+      timestamp: new Date(),
+      authenticated: true,
+      statusCode: 200,
+    });
   }
 
   async stop(): Promise<void> {
