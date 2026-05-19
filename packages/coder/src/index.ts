@@ -8,14 +8,43 @@
  * via the `/broker/resolve` UDS endpoint, and ships per-agent hook adapters
  * + setup commands.
  *
- * v0.12.0-pre skeleton — implementation lands in subsequent commits:
- *   - src/broker/   broker client (talks to aquaman-proxy daemon)
- *   - src/projects/ ~/.aquaman/projects.yaml resolver
- *   - src/redactor/ secret-pattern redactor (AWS, GitHub, Stripe, ...)
- *   - src/adapters/claude-code/  hook handler + setup writer
- *   - src/cli/      `aquaman-coder` CLI entry point
- *
  * See docs/PACKAGES.md for the package boundary policy.
  */
 
 export const VERSION = '0.12.0-pre.0';
+
+export {
+  type ProjectConfig,
+  type ProjectsFile,
+  defaultProjectsPath,
+  loadProjects,
+  saveProjects,
+  findProjectForCwd,
+  parseRef,
+} from './projects.js';
+
+export {
+  type BrokerResolveOptions,
+  type BrokerResolveResult,
+  type BrokerClientOptions,
+  BrokerClient,
+  defaultSocketPath,
+} from './broker-client.js';
+
+export {
+  type HookEvent,
+  type HookDecision,
+  type HookContext,
+  handlePreToolUse,
+  handlePostToolUse,
+  runHookFromStdin,
+} from './adapters/claude-code/hook.js';
+
+export {
+  type ClaudeSettings,
+  type SetupOptions,
+  type SetupResult,
+  defaultSettingsPath,
+  installClaudeCodeHooks,
+  uninstallClaudeCodeHooks,
+} from './adapters/claude-code/setup.js';
