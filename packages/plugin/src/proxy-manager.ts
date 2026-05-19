@@ -30,17 +30,17 @@ const PROXY_ENV_ALLOWLIST = new Set<string>([
 
 const PROXY_ENV_PREFIXES = ['AQUAMAN_', 'VAULT_', 'BW_'];
 
-function pickProxyEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(process.env)) {
+export function pickProxyEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
     if (
       PROXY_ENV_ALLOWLIST.has(key) ||
       PROXY_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))
     ) {
-      env[key] = value;
+      out[key] = value;
     }
   }
-  return env;
+  return out;
 }
 import * as path from 'node:path';
 import * as fs from 'node:fs';
