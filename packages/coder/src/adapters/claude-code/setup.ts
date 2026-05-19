@@ -42,7 +42,7 @@ export function installClaudeCodeHooks(opts: SetupOptions = {}): SetupResult {
 
   const dir = path.dirname(settingsPath);
   if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
 
   let before: ClaudeSettings | null = null;
@@ -61,8 +61,10 @@ export function installClaudeCodeHooks(opts: SetupOptions = {}): SetupResult {
 
   for (const event of ['PreToolUse', 'PostToolUse']) {
     const list = settings.hooks[event] ?? [];
+    // Match by substring so wrapper-script variants like
+    // "/path/to/wrap aquaman-coder hook --debug" still count as installed.
     const alreadyInstalled = list.some((entry) =>
-      entry.hooks?.some((h) => h.command === hookCommand)
+      entry.hooks?.some((h) => h.command?.includes('aquaman-coder hook'))
     );
     if (alreadyInstalled) continue;
 
@@ -105,7 +107,7 @@ export function uninstallClaudeCodeHooks(opts: SetupOptions = {}): SetupResult {
       settings.hooks[event] = settings.hooks[event]
         .map((entry) => ({
           ...entry,
-          hooks: entry.hooks.filter((h) => h.command !== hookCommand),
+          hooks: entry.hooks.filter((h) => !h.command?.includes('aquaman-coder hook')),
         }))
         .filter((entry) => entry.hooks.length > 0);
       if (settings.hooks[event].length === 0) {

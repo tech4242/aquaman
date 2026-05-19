@@ -27,7 +27,11 @@ export interface ProjectsFile {
   projects: Record<string, ProjectConfig>;
 }
 
-const AQUAMAN_REF = /^aquaman:\/\/([a-z0-9][a-z0-9._-]*)\/([a-z0-9][a-z0-9._-]*)$/;
+// Service must be lowercase (matches the daemon's SAFE_SERVICE_NAME).
+// Key allows uppercase to match the daemon's broader SAFE_KEY_NAME so
+// vault entries like `aws/SECRET_ACCESS_KEY` can be referenced.
+const AQUAMAN_REF = /^aquaman:\/\/([a-z0-9][a-z0-9._-]*)\/([a-zA-Z0-9][a-zA-Z0-9._-]*)$/;
+const POSIX_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function defaultProjectsPath(): string {
   return path.join(os.homedir(), '.aquaman', 'projects.yaml');
@@ -68,6 +72,12 @@ export function loadProjects(projectsPath: string = defaultProjectsPath()): Proj
       continue;
     }
     for (const [envKey, ref] of Object.entries(cfg.env)) {
+      if (!POSIX_ENV_NAME.test(envKey)) {
+        throw new Error(
+          `Project "${name}" has invalid env name "${envKey}". ` +
+          `POSIX env names must match /^[A-Za-z_][A-Za-z0-9_]*$/`
+        );
+      }
       if (typeof ref !== 'string' || !AQUAMAN_REF.test(ref)) {
         throw new Error(
           `Project "${name}" env ${envKey} has invalid reference: "${ref}". ` +

@@ -157,10 +157,11 @@ program
 
 program
   .command('exec <cmd> [args...]')
-  .description('Run a command with the matching project env injected')
+  .description('Run a command with project env injected and stdout/stderr redacted')
   .passThroughOptions()
   .allowUnknownOption()
-  .action(async (cmd: string, args: string[]) => {
+  .option('--raw', 'Disable stdout/stderr redaction', false)
+  .action(async (cmd: string, args: string[], opts: { raw?: boolean }) => {
     const cwd = process.cwd();
     const projects = loadProjects();
     const match = findProjectForCwd(cwd, projects);
@@ -184,7 +185,21 @@ program
       }
     }
 
-    const child = spawn(cmd, args, { env, stdio: 'inherit' });
+    const stdio = opts.raw ? 'inherit' : ['inherit', 'pipe', 'pipe'] as const;
+    const child = spawn(cmd, args, { env, stdio: stdio as any });
+
+    if (!opts.raw) {
+      const { redact } = await import('aquaman-proxy');
+      const pipeRedacted = (src: NodeJS.ReadableStream, dst: NodeJS.WritableStream) => {
+        src.setEncoding('utf-8');
+        src.on('data', (chunk: string) => {
+          dst.write(redact(chunk).output);
+        });
+      };
+      if (child.stdout) pipeRedacted(child.stdout, process.stdout);
+      if (child.stderr) pipeRedacted(child.stderr, process.stderr);
+    }
+
     child.on('exit', (code) => process.exit(code ?? 0));
     child.on('error', (err) => {
       console.error(`Failed to spawn "${cmd}": ${err.message}`);

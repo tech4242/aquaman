@@ -1,25 +1,28 @@
 /**
  * Claude Code hook handler.
  *
- * Claude Code's hook contract:
+ * Claude Code's hook protocol (verified against https://code.claude.com/docs/en/hooks):
  *   - The hook receives a JSON event on stdin.
- *   - It responds with a JSON decision on stdout.
- *   - Exit code 2 blocks the action.
+ *   - Structured decisions: write JSON to stdout, exit 0.
+ *   - Blocking errors: write a message to stderr, exit 2.
  *
- * We handle two event types in v0.12.0:
+ * PreToolUse hookSpecificOutput supports `permissionDecision`,
+ * `permissionDecisionReason`, `updatedInput`, and `additionalContext`.
+ * There is NO env-injection API on PreToolUse — to scope credentials
+ * to a single tool call we rewrite the Bash command itself via
+ * `updatedInput.command` to invoke it under `aquaman-coder exec`,
+ * which runs the broker resolve + redaction pipeline server-side.
  *
- *   PreToolUse: for Bash tool calls we resolve any aquaman:// env
- *     references for the matching project and emit
- *     `{ hookSpecificOutput: { hookEventName: "PreToolUse",
- *        additionalEnvVars: {...} } }`
- *     so Claude Code injects them just for that one invocation. No
- *     persistent shell state.
- *
- *   PostToolUse: we redact tool output via the aquaman-core redactor
- *     so any secrets accidentally leaked by the tool are scrubbed
- *     before they enter the model's context.
+ * PostToolUse hookSpecificOutput only supports `additionalContext` and
+ * cannot mutate the tool output (the tool has already run). When the
+ * redactor finds secrets we emit a warning notice via additionalContext
+ * — the actual scrubbing must happen inside `aquaman-coder exec` itself
+ * so leaked secrets never reach the model.
  */
 
+// Note: imported from `aquaman-proxy` (which re-exports from its
+// merged core/). There is no separate `aquaman-core` npm package since
+// v0.7.0; the vitest alias resolves the same path for tests.
 import { redact } from 'aquaman-proxy';
 import { findProjectForCwd, loadProjects, parseRef } from '../../projects.js';
 import { BrokerClient } from '../../broker-client.js';
@@ -28,7 +31,7 @@ export interface HookEvent {
   hook_event_name?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
-  tool_output?: unknown;
+  tool_response?: unknown;
   cwd?: string;
 }
 
@@ -43,8 +46,22 @@ export interface HookContext {
   broker?: BrokerClient;
   /** Override projects.yaml path for testing. */
   projectsPath?: string;
+  /**
+   * Wrapper command prefix injected into Bash commands. Default
+   * `aquaman-coder exec --` — change in tests to assert the rewrite.
+   */
+  wrapperPrefix?: string;
 }
 
+const DEFAULT_WRAPPER = 'aquaman-coder exec --';
+const AQUAMAN_WRAPPER_MARK = 'aquaman-coder exec';
+
+/**
+ * If the project map has env bindings AND this is a Bash tool call AND
+ * the command isn't already wrapped, rewrite it to run under the
+ * `aquaman-coder exec` wrapper. The wrapper resolves env via the broker
+ * and pipes stdout/stderr through the redactor.
+ */
 export async function handlePreToolUse(
   event: HookEvent,
   ctx: HookContext = {}
@@ -56,69 +73,84 @@ export async function handlePreToolUse(
   const match = findProjectForCwd(cwd, projects);
   if (!match) return null;
 
-  const broker = ctx.broker ?? new BrokerClient();
-  const additionalEnvVars: Record<string, string> = {};
+  // No env bindings → nothing for the wrapper to inject; skip.
+  if (Object.keys(match.config.env).length === 0) return null;
 
-  for (const [envName, ref] of Object.entries(match.config.env)) {
-    const parsed = parseRef(ref);
-    if (!parsed) continue;
-    try {
-      const result = await broker.resolve({
-        service: parsed.service,
-        key: parsed.key,
-        ttlSeconds: 60,
-      });
-      additionalEnvVars[envName] = result.value;
-    } catch (err) {
-      // Surface the error to Claude Code as a blocking reason — better to
-      // fail loud than silently run a command that the user expected to
-      // have credentials.
-      return {
-        decision: 'block',
-        reason: `aquaman: failed to resolve ${envName} (${ref}): ${(err as Error).message}`,
-      };
-    }
+  const command = String((event.tool_input as any)?.command ?? '');
+  if (!command) return null;
+
+  // Avoid wrapping ourselves recursively.
+  if (command.includes(AQUAMAN_WRAPPER_MARK)) return null;
+
+  // Quick health check on the broker — if the proxy isn't running, deny
+  // loudly so the user knows the credentials won't be available.
+  const broker = ctx.broker ?? new BrokerClient();
+  try {
+    await broker.health();
+  } catch (err) {
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason:
+          `aquaman: proxy not reachable (${(err as Error).message}). ` +
+          `Start it with: aquaman daemon`,
+      },
+    };
   }
 
-  if (Object.keys(additionalEnvVars).length === 0) return null;
+  const wrapper = ctx.wrapperPrefix ?? DEFAULT_WRAPPER;
+  const wrapped = `${wrapper} sh -c ${shellQuote(command)}`;
 
   return {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
-      additionalEnvVars,
+      permissionDecision: 'allow',
+      updatedInput: {
+        ...(event.tool_input as Record<string, unknown>),
+        command: wrapped,
+      },
+      additionalContext:
+        `aquaman: wrapped command under \`${wrapper}\` so credentials ` +
+        `(${Object.keys(match.config.env).join(', ')}) are injected ` +
+        `from the vault only for the duration of this command.`,
     },
   };
 }
 
+/**
+ * Inspect tool output for leaked secrets. Cannot rewrite — the tool has
+ * already run — but we surface a warning to Claude via additionalContext.
+ * Pair with `aquaman-coder exec`'s stdout/stderr redactor for real
+ * prevention.
+ */
 export function handlePostToolUse(event: HookEvent): HookDecision | null {
-  if (event.tool_output === undefined || event.tool_output === null) return null;
+  const out = (event as any).tool_response ?? (event as any).tool_output;
+  if (out === undefined || out === null) return null;
 
-  // Walk the output and redact strings. Returns a modified body that
-  // Claude Code splices back in if `hookSpecificOutput.updatedToolOutput`
-  // is set (post-tool-use is currently advisory-only in Claude Code <1.0
-  // but we emit the same shape forward-compatibly).
-  const text = typeof event.tool_output === 'string'
-    ? event.tool_output
-    : JSON.stringify(event.tool_output);
-  const { output, findings } = redact(text);
-
+  const text = typeof out === 'string' ? out : JSON.stringify(out);
+  const { findings } = redact(text);
   if (findings.length === 0) return null;
 
+  const summary = findings.map((f) => `${f.kind}×${f.count}`).join(', ');
   return {
     hookSpecificOutput: {
       hookEventName: 'PostToolUse',
-      updatedToolOutput: output,
-      aquamanFindings: findings,
+      additionalContext:
+        `aquaman: tool output contained secret patterns (${summary}). ` +
+        `These were detected after the fact — to scrub before output ` +
+        `reaches the model, ensure agent-invoked commands route through ` +
+        `\`aquaman-coder exec\`.`,
     },
   };
 }
 
 /**
  * Stdio entry point: read JSON from stdin, dispatch by hook_event_name,
- * write decision to stdout. Exits 2 to block.
+ * write decision to stdout (exit 0) or error to stderr (exit 2).
  */
 export async function runHookFromStdin(
-  argv: string[],
+  _argv: string[],
   ctx: HookContext = {}
 ): Promise<number> {
   let stdin = '';
@@ -131,25 +163,35 @@ export async function runHookFromStdin(
     event = JSON.parse(stdin);
   } catch (err) {
     process.stderr.write(`aquaman-coder: malformed hook input: ${(err as Error).message}\n`);
-    return 1;
+    return 2;
   }
 
   let decision: HookDecision | null = null;
-  switch (event.hook_event_name) {
-    case 'PreToolUse':
-      decision = await handlePreToolUse(event, ctx);
-      break;
-    case 'PostToolUse':
-      decision = handlePostToolUse(event);
-      break;
-    default:
-      // No-op for unknown events — let Claude Code proceed.
-      return 0;
+  try {
+    switch (event.hook_event_name) {
+      case 'PreToolUse':
+        decision = await handlePreToolUse(event, ctx);
+        break;
+      case 'PostToolUse':
+        decision = handlePostToolUse(event);
+        break;
+      default:
+        return 0;
+    }
+  } catch (err) {
+    process.stderr.write(`aquaman-coder: hook failed: ${(err as Error).message}\n`);
+    return 2;
   }
 
   if (!decision) return 0;
-
   process.stdout.write(JSON.stringify(decision));
-  if (decision.decision === 'block') return 2;
   return 0;
+}
+
+/**
+ * POSIX single-quote-safe shell escape. Single quotes inside become
+ * `'\''` per the standard idiom.
+ */
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
 }

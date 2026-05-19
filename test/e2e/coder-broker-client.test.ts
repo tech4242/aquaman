@@ -61,7 +61,7 @@ describe('aquaman-coder broker-client E2E', () => {
     ).rejects.toThrow();
   });
 
-  it('handlePreToolUse end-to-end: Bash + project + broker', async () => {
+  it('handlePreToolUse end-to-end: rewrites Bash to wrap with aquaman-coder exec', async () => {
     const projectDir = fs.mkdtempSync(path.join(tmpDir, 'app-'));
     const projectsPath = path.join(tmpDir, 'projects.yaml');
     fs.writeFileSync(projectsPath, `projects:
@@ -73,13 +73,14 @@ describe('aquaman-coder broker-client E2E', () => {
 `);
     const client = new BrokerClient({ socketPath });
     const result = await handlePreToolUse(
-      { tool_name: 'Bash', cwd: projectDir },
+      { tool_name: 'Bash', tool_input: { command: 'curl https://api.github.com' }, cwd: projectDir },
       { broker: client, projectsPath }
     );
-    expect(result?.hookSpecificOutput).toBeDefined();
-    const env = (result!.hookSpecificOutput as any).additionalEnvVars;
-    expect(env.ANTHROPIC_API_KEY).toBe('sk-ant-coder-e2e');
-    expect(env.GITHUB_TOKEN).toBe('ghp_coder_e2e_token');
+    const out = result?.hookSpecificOutput as any;
+    expect(out.permissionDecision).toBe('allow');
+    expect(out.updatedInput.command).toContain('aquaman-coder exec --');
+    expect(out.updatedInput.command).toContain('curl https://api.github.com');
+    expect(out.additionalContext).toContain('ANTHROPIC_API_KEY');
   });
 
   it('broker error surfaces as a clean message when proxy is down', async () => {
