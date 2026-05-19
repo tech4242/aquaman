@@ -47,7 +47,10 @@ describe('ATLAS AML.T0055 — Unsecured Credentials', () => {
       },
       body: JSON.stringify({ model: 'claude-sonnet-4', max_tokens: 5, messages: [] }),
     });
-    // Reaches upstream (will be 401 from real Anthropic) — proves placeholder accepted
+    // Proxy accepted the placeholder and didn't reject as unknown service (404)
+    // or policy-denied (403). The proxy substituted the real vault credential
+    // before attempting the upstream connection — the upstream result depends
+    // on network state (CI may be offline) and isn't asserted here.
     expect(res.status).not.toBe(404);
     expect(res.status).not.toBe(403);
   });

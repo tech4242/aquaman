@@ -30,6 +30,12 @@ export interface SecretPattern {
  * Built-in patterns. Ordered roughly by specificity (more-specific first)
  * so a match doesn't get swallowed by a looser later pattern.
  *
+ * **Order matters.** `anthropic-key` MUST appear before `openai-key`
+ * because the OpenAI regex `sk-(?:proj-)?...` also matches `sk-ant-...`.
+ * `redact()` walks patterns top-to-bottom and the first match wins;
+ * `containsSecret` with a custom pattern list bypasses this safeguard,
+ * so callers passing a subset should preserve the specific-first order.
+ *
  * Each regex uses the global flag so `String.replace` redacts all
  * occurrences in one pass.
  */
@@ -93,7 +99,7 @@ export const BUILTIN_PATTERNS: readonly SecretPattern[] = [
   {
     kind: 'npm-token',
     description: 'npm automation/granular token (npm_)',
-    regex: /\bnpm_[A-Za-z0-9]{36}\b/g,
+    regex: /\bnpm_[A-Za-z0-9]{36,}\b/g,
   },
   {
     kind: 'jwt',

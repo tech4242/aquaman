@@ -1837,10 +1837,14 @@ const compliance = program.command('compliance').description('Compliance conform
 
 compliance
   .command('check')
-  .description('Run the conformance suite and emit an evidence report')
+  .description('Run the conformance suite and emit an evidence report (source-repo only — requires tests/compliance/)')
   .option('--json', 'Emit JSON evidence report to stdout', false)
   .option('--framework <name>', 'Limit to a framework: atlas | nist | all', 'all')
   .action(async (opts: { json?: boolean; framework: string }) => {
+    // Note: `tests/compliance/` is intentionally NOT included in the
+    // published npm tarball — running `compliance check` requires a
+    // checkout of the source repo. The JSON evidence report we generate
+    // here is meant for CI / audit pipelines, not end users.
     const { spawnSync } = await import('node:child_process');
     const framework = (opts.framework || 'all').toLowerCase();
 

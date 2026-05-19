@@ -57,9 +57,10 @@ describe('ATLAS AML.T0062 — Exfiltration via AI Agent Tool Invocation', () => 
       },
       body: JSON.stringify({ model: 'x', max_tokens: 1, messages: [] }),
     });
-    // Reaches upstream (proxy substituted credentials with vault value).
-    // Reaching upstream proves the proxy didn't blindly forward the attacker
-    // headers — Anthropic would 401 on a bogus combo only if our injection ran.
+    // Proxy didn't return 403 (policy passed) and didn't refuse outright.
+    // The proxy's header substitution path ran — attacker-controlled
+    // Authorization/x-api-key were stripped before egress. The upstream
+    // result depends on network state and isn't asserted here.
     expect(res.status).not.toBe(403);
   });
 
