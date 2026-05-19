@@ -31,7 +31,7 @@ CSA's own MAESTRO commentary explicitly endorses the **ephemeral credential brok
 | **L2 Data Operations** | Vault backends + secret-pattern redactor (incoming + outgoing data sanitization). |
 | **L3 Agent Framework** | HTTP interceptor strips `Authorization` and `X-API-Key` headers before routing — credentials don't leak from agent SDKs that preset them. |
 | **L4 Deployment Infrastructure** | UDS-only socket, file-mode access control, no network exposure. |
-| **L5 Evaluation & Observability** | Hash-chained audit log; `aquaman compliance check` JSON evidence report. |
+| **L5 Evaluation & Observability** | Hash-chained audit log; runnable conformance tests at `test/compliance/`. |
 | **L6 Security & Compliance** | This document set: MITRE ATLAS + NIST SP 800-53 mappings + this guidance alignment. |
 | **L7 Agent Ecosystem** | Per-agent adapters (OpenClaw shipping; Claude Code via `aquaman-coder` in v0.12.0; Codex / OpenCode / Cursor coming) — the same vault, audit, and policy engine across every supported agent. |
 

@@ -23,7 +23,7 @@ Two integration paths:
 - **OpenClaw Gateway** via `aquaman-plugin` — LLM providers + 25 builtin channels (Telegram, Slack, Discord, Twilio, ...) across 6 auth modes. Transparent: your agent talks to `aquaman.local`, the proxy injects auth and forwards.
 - **AI coding agents** via `aquaman-coder` (v0.12.0+) — Claude Code today; Codex / OpenCode / Cursor planned. Per-tool-call credential materialization: `aquaman://anthropic/api_key` references in `~/.aquaman/projects.yaml` get resolved from the vault only when an agent-invoked Bash command runs.
 
-**Compliance posture** (v0.12.0+): runnable conformance suite for MITRE ATLAS v5.3 + NIST SP 800-53 Rev 5, plus alignment notes for CISA/Five-Eyes "Careful Adoption of Agentic AI Services" (April 2026), CSA MAESTRO, and OWASP Top 10 for Agentic Applications. Run `aquaman compliance check` for a JSON evidence report. See `docs/compliance/`.
+**Compliance posture** (v0.12.0+): runnable conformance tests under `test/compliance/` mapped to MITRE ATLAS v5.3 + NIST SP 800-53 Rev 5, plus alignment notes for CISA/Five-Eyes "Careful Adoption of Agentic AI Services" (April 2026), CSA MAESTRO, and OWASP Top 10 for Agentic Applications. See `docs/compliance/`.
 
 ## Quick Start
 

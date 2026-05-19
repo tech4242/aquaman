@@ -1,4 +1,4 @@
-v0.12.0 adds an aquaman-coder sibling package for AI coding agents (Claude Code shipping; Codex / OpenCode / Cursor planned). The OpenClaw plugin scope is unchanged from v0.11.5 — same proxy, same vault backends, same audit and policy engine. The new `aquaman compliance check` CLI exposes a runnable conformance suite mapped to MITRE ATLAS v5.3 + NIST SP 800-53 Rev 5 controls with a JSON evidence report for CI / audit pipelines.
+v0.12.0 adds an aquaman-coder sibling package for AI coding agents (Claude Code shipping; Codex / OpenCode / Cursor planned). The OpenClaw plugin scope is unchanged from v0.11.5 — same proxy, same vault backends, same audit and policy engine. The repo now also ships a runnable conformance suite under `test/compliance/` mapped to MITRE ATLAS v5.3 + NIST SP 800-53 Rev 5 controls (run via `npm test` or `vitest run test/compliance/`).
 
 The aquaman-proxy binary is bundled as an exact-pinned npm dependency, published by the same author (tech4242), and the plugin warns at startup if the running proxy version disagrees with its own.
 

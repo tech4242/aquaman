@@ -13,7 +13,7 @@ Aquaman is a monorepo with three packages. Each has a sharp, named role. We keep
 - Service registry (builtin service definitions) — `src/service-registry.ts`
 - Request policy engine — `src/request-policy.ts`
 - Broker endpoint (`POST /broker/resolve`, v0.12.0+) — `src/broker/`
-- Base CLI: `init`, `daemon`, `status`, `doctor`, `credentials`, `audit`, `policy`, `migrate`, `compliance check` — `src/cli/`
+- Base CLI: `init`, `daemon`, `status`, `doctor`, `credentials`, `audit`, `policy`, `migrate` — `src/cli/`
 
 **Does not know about:** OpenClaw, Claude Code, Codex, OpenCode, Cursor, or any other specific agent / runtime. If a feature only makes sense for one ecosystem, **it does not belong here**.
 

@@ -4,7 +4,7 @@ Aquaman maps to **MITRE ATLAS v5.3 (Adversarial Threat Landscape for Artificial-
 
 Below: each ATLAS technique aquaman addresses, the aquaman feature that mitigates it, and the runnable test that proves the mitigation holds.
 
-Run all ATLAS conformance tests with `aquaman compliance check` (emits a JSON evidence report) or `vitest run test/compliance/atlas/`.
+Run all ATLAS conformance tests with `vitest run test/compliance/atlas/` (or just `npm test`, which runs the whole suite).
 
 | Technique | Title | Aquaman mitigation | Test |
 |---|---|---|---|
@@ -29,4 +29,4 @@ Run all ATLAS conformance tests with `aquaman compliance check` (emits a JSON ev
 
 - ATLAS Matrix: https://atlas.mitre.org/matrices/ATLAS
 - ATLAS Technique IDs cited above are stable across v5.x releases.
-- Run `aquaman compliance check --json` for a machine-readable evidence report keyed by technique ID.
+- For a machine-readable evidence report keyed by technique ID, run `vitest run test/compliance/atlas/ --reporter=json`.

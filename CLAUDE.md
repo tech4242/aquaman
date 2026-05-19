@@ -23,7 +23,7 @@ Aquaman ships runnable conformance tests mapped to:
 - **CSA MAESTRO** — layered alignment narrative
 - **OWASP Top 10 for Agentic Apps** — ASI02, ASI03 alignment
 
-Run `aquaman compliance check` (human output) or `aquaman compliance check --json` (machine-readable evidence report keyed by control ID). Source: `docs/compliance/{atlas-mapping,nist-800-53,agentic-ai-guidance}.md`. The conformance tests are **source-repo only** — they're not bundled in the published npm tarball; they're for CI / audit pipelines that check out the repo.
+The conformance tests live under `test/compliance/` and run as part of `npm test`. They're **source-repo only** — not bundled in the published npm tarball. Each test file is named for the control it exercises (e.g. `t0055-unsecured-credentials.test.ts`, `au-10-tamper-evident.test.ts`). The mapping doc set lives at `docs/compliance/{atlas-mapping,nist-800-53,agentic-ai-guidance}.md`.
 
 ## Architecture Decision: Isolation vs Detection
 
@@ -333,7 +333,7 @@ npm test            # All tests
 npm run test:unit
 npm run test:e2e
 
-npx tsx packages/proxy/src/cli/index.ts compliance check   # ATLAS + NIST conformance (13 controls)
+npx vitest run test/compliance/   # ATLAS + NIST conformance suite
 ```
 
 Manual smoke-test recipes for the OpenClaw plugin install path, channel auth modes (header / url-path / basic / oauth), policy enforcement, and the publish pipeline live in `OPERATIONS.md` (gitignored maintainer doc — see "Maintainer resources" below).
