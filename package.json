@@ -22,9 +22,7 @@
     "lint:fix": "oxlint src test packages --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage --fix",
     "typecheck": "tsc -b packages/proxy packages/plugin packages/coder",
     "start": "node packages/proxy/dist/cli/index.js",
-    "dev": "tsx watch packages/proxy/src/cli/index.ts",
-    "docker:build": "docker build -t aquaman -f docker/Dockerfile docker/",
-    "docker:run": "docker run --rm -it aquaman"
+    "dev": "tsx watch packages/proxy/src/cli/index.ts"
   },
   "keywords": [
     "aquaman",

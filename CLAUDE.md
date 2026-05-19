@@ -246,13 +246,6 @@ Builtin service definitions (anthropic, openai, telegram, etc.) cannot be overri
 - `override()` still works — only used programmatically in tests (requires code-level access)
 - `ServiceRegistry.isBuiltinService(name)` checks whether a name is protected
 
-### Docker Single-Container Architecture
-
-- Single `docker/Dockerfile` — multi-stage build (builder + runtime)
-- Proxy listens on UDS inside the container (`~/.aquaman/proxy.sock`)
-- No multi-container networking required — proxy and Gateway run in the same container
-- Socket file permissions (`chmod 0o600`) provide access control
-
 ## CLI: `aquaman setup`
 
 All-in-one guided onboarding wizard. Replaces 6 manual steps with one command:
@@ -386,10 +379,6 @@ Manual smoke-test recipes for the OpenClaw plugin install path, channel auth mod
 | `test/e2e/cli-doctor.test.ts` | `aquaman doctor` E2E tests |
 | `test/unit/daemon-errors.test.ts` | Actionable error message unit tests |
 | `test/helpers/temp-env.ts` | Reusable temp environment helper for CLI tests |
-| `docker/Dockerfile` | Single-container Docker build (builder + runtime) |
-| `docker/openclaw-config.json` | Plugin config for Docker OpenClaw container |
-| `docker/auth-profiles.json` | Placeholder auth profiles for Docker |
-| `docker/.env.example` | Template for Docker env var configuration |
 
 ## Roadmap
 

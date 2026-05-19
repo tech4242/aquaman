@@ -57,17 +57,6 @@ aquaman-coder doctor                              # 6. verify
 
 Now when Claude Code runs a Bash tool in `~/code/my-app`, aquaman rewrites the command to wrap it under `aquaman-coder exec`, which resolves credentials per-call from your vault and redacts secrets from stdout/stderr before they reach the agent transcript. Codex / OpenCode / Cursor adapters are planned for v0.13.0+.
 
-### Docker
-
-Single-image deployment — same UDS architecture, containerized.
-
-```bash
-git clone https://github.com/tech4242/aquaman.git && cd aquaman
-cp docker/.env.example docker/.env
-# Edit docker/.env — pick a backend and set credentials
-npm run docker:build && npm run docker:run
-```
-
 ## How It Works
 
 ```
