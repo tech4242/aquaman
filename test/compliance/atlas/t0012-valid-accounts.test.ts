@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createCredentialProxy, type CredentialProxy, type PolicyConfig } from 'aquaman-proxy';
 import { MemoryStore } from 'aquaman-core';
-import { tmpSocketPath, cleanupSocket, udsFetch } from '../../../test/helpers/uds-proxy.js';
+import { tmpSocketPath, cleanupSocket, udsFetch } from '../../helpers/uds-proxy.js';
 
 describe('ATLAS AML.T0012 — Valid Accounts', () => {
   let proxy: CredentialProxy;

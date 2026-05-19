@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createCredentialProxy, type CredentialProxy, type PolicyConfig, type RequestInfo } from 'aquaman-proxy';
 import { MemoryStore } from 'aquaman-core';
-import { tmpSocketPath, cleanupSocket, udsFetch } from '../../../test/helpers/uds-proxy.js';
+import { tmpSocketPath, cleanupSocket, udsFetch } from '../../helpers/uds-proxy.js';
 
 describe('ATLAS AML.T0062 — Exfiltration via AI Agent Tool Invocation', () => {
   let proxy: CredentialProxy;

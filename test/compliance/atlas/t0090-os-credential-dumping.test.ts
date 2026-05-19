@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import { createCredentialProxy, type CredentialProxy } from 'aquaman-proxy';
 import { MemoryStore } from 'aquaman-core';
-import { tmpSocketPath, cleanupSocket } from '../../../test/helpers/uds-proxy.js';
+import { tmpSocketPath, cleanupSocket } from '../../helpers/uds-proxy.js';
 
 describe('ATLAS AML.T0090 — OS Credential Dumping', () => {
   let proxy: CredentialProxy;

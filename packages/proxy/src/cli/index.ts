@@ -1837,11 +1837,11 @@ const compliance = program.command('compliance').description('Compliance conform
 
 compliance
   .command('check')
-  .description('Run the conformance suite and emit an evidence report (source-repo only — requires tests/compliance/)')
+  .description('Run the conformance suite and emit an evidence report (source-repo only — requires test/compliance/)')
   .option('--json', 'Emit JSON evidence report to stdout', false)
   .option('--framework <name>', 'Limit to a framework: atlas | nist | all', 'all')
   .action(async (opts: { json?: boolean; framework: string }) => {
-    // Note: `tests/compliance/` is intentionally NOT included in the
+    // Note: `test/compliance/` is intentionally NOT included in the
     // published npm tarball — running `compliance check` requires a
     // checkout of the source repo. The JSON evidence report we generate
     // here is meant for CI / audit pipelines, not end users.
@@ -1857,16 +1857,16 @@ compliance
     ];
     let repoRoot = process.cwd();
     for (const c of repoCandidates) {
-      if (fs.existsSync(path.join(c, 'vitest.config.ts')) && fs.existsSync(path.join(c, 'tests/compliance'))) {
+      if (fs.existsSync(path.join(c, 'vitest.config.ts')) && fs.existsSync(path.join(c, 'test/compliance'))) {
         repoRoot = c;
         break;
       }
     }
 
     const filter =
-      framework === 'atlas' ? 'tests/compliance/atlas/'
-        : framework === 'nist' ? 'tests/compliance/nist/'
-        : 'tests/compliance/';
+      framework === 'atlas' ? 'test/compliance/atlas/'
+        : framework === 'nist' ? 'test/compliance/nist/'
+        : 'test/compliance/';
 
     const result = spawnSync('npx', ['vitest', 'run', filter, '--reporter=json'], {
       cwd: repoRoot,
@@ -1920,7 +1920,7 @@ compliance
           evidence[id] = {
             status: failed === 0 ? 'pass' : 'fail',
             framework: mapping.framework,
-            file: `tests/compliance/${mapping.framework}/${base}`,
+            file: `test/compliance/${mapping.framework}/${base}`,
             passed,
             failed,
             tests: titles,

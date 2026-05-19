@@ -8,7 +8,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-API key protection for AI agents — credentials stay in your vault, never in the agent's memory. 🔱🦞
+API key protection for AI agents — credentials stay in your vault, never in the agent's memory.
 
 You set up Claude Code (or OpenClaw, or Codex), and now you're staring at a `.env` file with your Anthropic key, GitHub token, and database URL sitting there in plaintext. You read the articles. You know what happens when an agent gets prompt-injected. We get it.
 

@@ -17,8 +17,8 @@ Two integration paths as of v0.12.0:
 
 Aquaman ships runnable conformance tests mapped to:
 
-- **MITRE ATLAS** v5.3 — techniques AML.T0055, T0012, T0062, T0090 (`tests/compliance/atlas/`)
-- **NIST SP 800-53 Rev 5** — IA-5, AC-3, AC-6, AU-2/9/10, SC-12/28, SI-10 (`tests/compliance/nist/`)
+- **MITRE ATLAS** v5.3 — techniques AML.T0055, T0012, T0062, T0090 (`test/compliance/atlas/`)
+- **NIST SP 800-53 Rev 5** — IA-5, AC-3, AC-6, AU-2/9/10, SC-12/28, SI-10 (`test/compliance/nist/`)
 - **CISA/Five-Eyes** *Careful Adoption of Agentic AI Services* (April 2026) — alignment narrative
 - **CSA MAESTRO** — layered alignment narrative
 - **OWASP Top 10 for Agentic Apps** — ASI02, ASI03 alignment
