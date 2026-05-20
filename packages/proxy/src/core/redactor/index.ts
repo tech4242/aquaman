@@ -108,6 +108,13 @@ export const BUILTIN_PATTERNS: readonly SecretPattern[] = [
     regex: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
   },
   {
+    kind: 'atlassian-token',
+    description: 'Atlassian API token (ATATT3xF prefix)',
+    // Real tokens are ~190 chars total; require at least 100 trailing chars to
+    // avoid matching the bare 8-char sentinel and benign occurrences of the prefix.
+    regex: /\bATATT3xF[A-Za-z0-9_=\-+/]{100,}\b/g,
+  },
+  {
     kind: 'bearer-token',
     description: 'Authorization header Bearer token',
     regex: /\b(?:Authorization|authorization)\s*:\s*Bearer\s+[A-Za-z0-9._\-+/=]{16,}/g,
@@ -118,6 +125,38 @@ export const BUILTIN_PATTERNS: readonly SecretPattern[] = [
     regex: /\baquaman-proxy-managed\b/g,
   },
 ];
+
+/**
+ * Build SecretPatterns that match the given exact string values literally
+ * (any regex metacharacters in the values are escaped). Designed for the
+ * "I just resolved these values from the vault and I'm about to spawn a
+ * subprocess with them in its env — strip them out of stdout/stderr no
+ * matter what shape they happen to have" use case.
+ *
+ * Returns patterns tagged `injected-value`. Prepend them to BUILTIN_PATTERNS
+ * so the value-based match wins over any generic shape match (the kind tag
+ * in the audit trail then correctly says "this is one of our injected
+ * values" rather than misattributing it to a provider shape).
+ *
+ * Empty or whitespace-only values are skipped — otherwise the regex would
+ * match between every character and redact the entire input.
+ */
+export function buildValuePatterns(values: readonly string[]): SecretPattern[] {
+  const patterns: SecretPattern[] = [];
+  for (const value of values) {
+    if (!value || value.trim().length === 0) continue;
+    patterns.push({
+      kind: 'injected-value',
+      description: 'aquaman-injected env value (resolved from vault at runtime)',
+      regex: new RegExp(escapeForRegex(value), 'g'),
+    });
+  }
+  return patterns;
+}
+
+function escapeForRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /**
  * Redact every match of every pattern in `patterns` from `input`.

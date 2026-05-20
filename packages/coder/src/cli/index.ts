@@ -173,12 +173,14 @@ program
 
     const broker = new BrokerClient();
     const env: Record<string, string> = { ...process.env as Record<string, string> };
+    const injectedValues: string[] = [];
     for (const [envName, ref] of Object.entries(match.config.env)) {
       const parsed = parseRef(ref);
       if (!parsed) continue;
       try {
         const result = await broker.resolve({ service: parsed.service, key: parsed.key, ttlSeconds: 60 });
         env[envName] = result.value;
+        injectedValues.push(result.value);
       } catch (err) {
         console.error(`aquaman: failed to resolve ${envName}: ${(err as Error).message}`);
         process.exit(1);
@@ -189,11 +191,17 @@ program
     const child = spawn(cmd, args, { env, stdio: stdio as any });
 
     if (!opts.raw) {
-      const { redact } = await import('aquaman-proxy');
+      // Value-based redaction: prepend patterns built from the exact strings
+      // we just injected so they're stripped from child stdout/stderr no
+      // matter what shape they happen to have. Generic BUILTIN_PATTERNS still
+      // run after as defense-in-depth for any secrets the child surfaces that
+      // we did NOT inject (hardcoded tokens, env vars leaked from parent, ...).
+      const { redact, buildValuePatterns, BUILTIN_PATTERNS } = await import('aquaman-proxy');
+      const patterns = [...buildValuePatterns(injectedValues), ...BUILTIN_PATTERNS];
       const pipeRedacted = (src: NodeJS.ReadableStream, dst: NodeJS.WritableStream) => {
         src.setEncoding('utf-8');
         src.on('data', (chunk: string) => {
-          dst.write(redact(chunk).output);
+          dst.write(redact(chunk, patterns).output);
         });
       };
       if (child.stdout) pipeRedacted(child.stdout, process.stdout);

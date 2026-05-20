@@ -52,7 +52,8 @@ export {
   BUILTIN_PATTERNS,
   redact,
   redactDeep,
-  containsSecret
+  containsSecret,
+  buildValuePatterns
 } from './redactor/index.js';
 
 // Utils

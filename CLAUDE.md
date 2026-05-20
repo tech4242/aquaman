@@ -175,7 +175,7 @@ projects:
       DATABASE_URL: aquaman://supabase/db_url
 ```
 
-When Claude Code runs `Bash` in `~/code/my-app/anything`, the hook rewrites `command: "X"` → `command: "aquaman-coder exec -- sh -c 'X'"`. The wrapper calls the broker per env var, injects the real values into the subprocess only, and pipes stdout/stderr through the redactor so secret-shaped strings never reach the agent transcript.
+When Claude Code runs `Bash` in `~/code/my-app/anything`, the hook rewrites `command: "X"` → `command: "aquaman-coder exec -- sh -c 'X'"`. The wrapper calls the broker per env var, injects the real values into the subprocess only, and pipes stdout/stderr through the redactor. The redactor prepends a `buildValuePatterns()` entry for each injected value (so the actual resolved strings get scrubbed verbatim, regardless of shape — Atlassian, Notion, internal-API, anything) and then runs BUILTIN_PATTERNS as defense-in-depth for secrets the child surfaces that weren't injected by aquaman.
 
 **End-to-end setup:**
 

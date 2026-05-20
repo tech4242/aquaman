@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { redact, redactDeep, containsSecret, BUILTIN_PATTERNS } from 'aquaman-core';
+import { redact, redactDeep, containsSecret, BUILTIN_PATTERNS, buildValuePatterns } from 'aquaman-core';
 
 describe('redact (single string)', () => {
   describe('Anthropic API key', () => {
@@ -204,6 +204,77 @@ describe('redact (single string)', () => {
       redact(input);
       expect(input).toBe(before);
     });
+  });
+});
+
+describe('Atlassian API token', () => {
+  // Atlassian API tokens have a documented prefix; pattern is defense-in-depth
+  // for tokens not injected through aquaman (e.g., hardcoded in code).
+  // Real tokens start with the literal 8-char sentinel "ATATT3xF" and run
+  // ~190 chars total.
+  it('redacts ATATT3xF-prefixed tokens', () => {
+    const sample = 'CONFLUENCE_TOKEN=ATATT3xF' + 'A'.repeat(180) + '=ABCD1234';
+    const { output, findings } = redact(sample);
+    expect(output).toContain('[REDACTED:atlassian-token]');
+    expect(output).not.toContain('ATATT3xF');
+    expect(findings.find((f) => f.kind === 'atlassian-token')?.count).toBe(1);
+  });
+
+  it('does not match a bare ATATT3xF without the rest', () => {
+    const { findings } = redact('ATATT3xF');  // too short
+    expect(findings.find((f) => f.kind === 'atlassian-token')).toBeUndefined();
+  });
+});
+
+describe('buildValuePatterns', () => {
+  it('produces one pattern per non-empty value', () => {
+    const patterns = buildValuePatterns(['hello', 'world', '']);
+    expect(patterns).toHaveLength(2);
+    for (const p of patterns) {
+      expect(p.kind).toBe('injected-value');
+      expect(p.regex.flags).toContain('g');
+    }
+  });
+
+  it('redacts a value that has NO recognizable shape (the whole point)', () => {
+    // Dummy value that doesn't match ANY BUILTIN pattern. Without value-based
+    // redaction this would leak through.
+    const value = 'dummy-xyz-12345-no-shape';
+    const patterns = [...buildValuePatterns([value]), ...BUILTIN_PATTERNS];
+    const { output, findings } = redact(`leaked: ${value}`, patterns);
+    expect(output).toBe('leaked: [REDACTED:injected-value]');
+    expect(findings.find((f) => f.kind === 'injected-value')?.count).toBe(1);
+  });
+
+  it('escapes regex metacharacters so values with . * + ? etc. still match literally', () => {
+    const value = 'a.b*c+d?e(f)g[h]i$j^k|l\\m/n';
+    const patterns = buildValuePatterns([value]);
+    const { output } = redact(`x ${value} y`, patterns);
+    expect(output).toBe('x [REDACTED:injected-value] y');
+  });
+
+  it('redacts every occurrence in one pass (global flag)', () => {
+    const value = 'sekret';
+    const patterns = buildValuePatterns([value]);
+    const { output, findings } = redact(`${value}-then-${value}-and-${value}`, patterns);
+    expect(output).toBe('[REDACTED:injected-value]-then-[REDACTED:injected-value]-and-[REDACTED:injected-value]');
+    expect(findings[0].count).toBe(3);
+  });
+
+  it('value patterns run before BUILTIN_PATTERNS so the kind tag stays "injected-value"', () => {
+    // A value that ALSO happens to match a builtin pattern. The caller-supplied
+    // pattern should win because we prepend it.
+    const value = 'sk-ant-' + 'X'.repeat(40);
+    const patterns = [...buildValuePatterns([value]), ...BUILTIN_PATTERNS];
+    const { output, findings } = redact(`leaked: ${value}`, patterns);
+    expect(output).toBe('leaked: [REDACTED:injected-value]');
+    expect(findings.find((f) => f.kind === 'anthropic-key')).toBeUndefined();
+  });
+
+  it('skips empty and whitespace-only values to avoid matching everything', () => {
+    expect(buildValuePatterns([])).toHaveLength(0);
+    expect(buildValuePatterns([''])).toHaveLength(0);
+    expect(buildValuePatterns(['   '])).toHaveLength(0);
   });
 });
 

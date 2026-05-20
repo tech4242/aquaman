@@ -73,10 +73,26 @@ aquaman coder setup claude-code                    # 5. wire Claude Code hooks
 aquaman doctor                                     # 6. verify — should show both vault + coder green
 ```
 
+**See it for yourself (the 30-second aha):** restart Claude Code, open a new session inside `~/code/my-app`, and ask the agent to run:
+
+```
+printenv | grep ANTHROPIC_API_KEY
+```
+
+You'll see this in the transcript:
+
+```
+ANTHROPIC_API_KEY=[REDACTED:injected-value]
+
+⏺ ANTHROPIC_API_KEY is set and available (injected via aquaman vault). 
+```
+
+The *child* process saw the real key (your tests, builds, MCP servers, import scripts — anything that actually needs it works). The *agent* — the thing that decides what code to run on your machine — never sees the value, and so neither does the conversation history, neither does the model provider's logs, neither does anyone who later screenshots your terminal.
+
 When Claude Code runs a Bash tool in `~/code/my-app`, aquaman's hook rewrites the command via `updatedInput.command` to wrap it under `aquaman-coder exec`. That wrapper:
 
 - Resolves each `aquaman://service/key` reference via the broker (`POST /broker/resolve` over UDS) — credentials are materialized for one command, not for the agent's lifetime.
-- Pipes stdout/stderr through the redactor so secret-shaped strings (sk-ant-, ghp_, sk_live_, AKIA…, JWTs, PEM blocks, etc.) never reach the agent transcript.
+- Pipes stdout/stderr through a redactor that prepends a value-based pattern for each resolved value: **whatever string was injected gets redacted, regardless of shape** (Atlassian tokens, Notion secrets, internal-API keys — none of them need to match a known provider format). Generic shape-based patterns (sk-ant-, ghp_, sk_live_, AKIA…, JWTs, PEM blocks, ATATT3xF…) still run after as defense-in-depth for secrets the child surfaces that we did NOT inject.
 - Cleans up when the command exits.
 
 ## How It Works
@@ -122,7 +138,7 @@ The agent only ever sees a sentinel hostname (`aquaman.local`) or a placeholder 
 | **Request policies** | Method + path rules per service, enforced before credential injection | Agent can reach Anthropic but not its admin API; can draft emails but not send them |
 | **Audit trail** | SHA-256 hash-chained logs of every credential use | Post-incident forensics, tamper detection, compliance evidence |
 | **Per-tool-call broker (coder)** | `aquaman-coder exec` materializes creds for one command at a time | Credentials don't sprawl across the agent's shell environment |
-| **Output redaction (coder)** | `aquaman-coder exec` pipes stdout/stderr through pattern redactor | Secrets in tool output don't leak into agent transcripts |
+| **Output redaction (coder)** | `aquaman-coder exec` pipes stdout/stderr through a redactor that scrubs each value it just injected verbatim — plus generic provider patterns as a fallback | Even arbitrary, shape-less credentials never reach the agent transcript |
 
 Detailed model — per-integration specifics (HTTP interceptor scope, auth profiles, scanner findings, ClawScan publisher note) — lives in [`packages/plugin/README.md`](packages/plugin/README.md) and [`packages/coder/README.md`](packages/coder/README.md).
 

@@ -90,3 +90,89 @@ describe('aquaman-coder broker-client E2E', () => {
       .rejects.toThrow(/Cannot reach aquaman proxy/);
   });
 });
+
+/**
+ * E2E: spawning `aquaman-coder exec` against a real proxy must redact the
+ * resolved value from the child's stdout EVEN IF the value has no
+ * recognizable shape (i.e., wouldn't trip any BUILTIN_PATTERN).
+ *
+ * This is the test that would have failed before the value-based redaction
+ * fix — and is the smoke-test version of what we run from OPERATIONS.md.
+ */
+describe('aquaman-coder exec — value-based redaction E2E', () => {
+  let proxy: CredentialProxy;
+  let store: MemoryStore;
+  let tmpHome: string;
+  let projectDir: string;
+  let socketPathLocal: string;
+
+  // The whole point: a string with no provider prefix, no length match for any
+  // BUILTIN_PATTERN. If this leaks to stdout, our value-based redaction failed.
+  const DUMMY_VALUE = 'dummy-no-shape-value-12345-arbitrary';
+
+  beforeEach(async () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-coder-exec-'));
+    tmpHome = path.join(tmpRoot, 'home');
+    projectDir = path.join(tmpRoot, 'project');
+    fs.mkdirSync(path.join(tmpHome, '.aquaman'), { recursive: true });
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    socketPathLocal = path.join(tmpHome, '.aquaman', 'proxy.sock');
+    store = new MemoryStore();
+    await store.set('dummysvc', 'token', DUMMY_VALUE);
+
+    proxy = createCredentialProxy({
+      socketPath: socketPathLocal,
+      store,
+      allowedServices: ['dummysvc'],
+    });
+    await proxy.start();
+
+    fs.writeFileSync(
+      path.join(tmpHome, '.aquaman', 'projects.yaml'),
+      `version: 1
+projects:
+  testproj:
+    paths: ["${projectDir}"]
+    env:
+      TESTKEY: aquaman://dummysvc/token
+`
+    );
+  });
+
+  afterEach(async () => {
+    if (proxy?.isRunning()) await proxy.stop();
+    store?.clear();
+    try { fs.rmSync(path.dirname(tmpHome), { recursive: true, force: true }); } catch { /* */ }
+  });
+
+  it('strips the injected value from stdout even when no builtin pattern would match it', async () => {
+    const { spawn } = await import('node:child_process');
+    const coderCli = path.resolve('packages/coder/src/cli/index.ts');
+
+    const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve) => {
+      const proc = spawn(
+        'npx',
+        ['tsx', coderCli, 'exec', '--', 'sh', '-c', 'printf "[%s]" "$TESTKEY"'],
+        {
+          stdio: ['pipe', 'pipe', 'pipe'],
+          cwd: projectDir,
+          env: { ...process.env, HOME: tmpHome },
+        }
+      );
+      let stdout = '';
+      let stderr = '';
+      proc.stdout!.on('data', (d) => { stdout += d.toString(); });
+      proc.stderr!.on('data', (d) => { stderr += d.toString(); });
+      proc.on('exit', (code) => resolve({ stdout, stderr, code }));
+    });
+
+    expect(result.code).toBe(0);
+    // The CHILD process must have actually seen the value (env injection works).
+    // But the value MUST NOT appear in stdout (redaction works).
+    expect(result.stdout).not.toContain(DUMMY_VALUE);
+    expect(result.stdout).toContain('[REDACTED:injected-value]');
+    // Brackets prove the value was non-empty when the child printed it.
+    expect(result.stdout).toBe('[[REDACTED:injected-value]]');
+  }, 30_000);
+});
