@@ -10,7 +10,7 @@
  * - Custom service registry: YAML-based service config
  */
 
-import { Command } from 'commander';
+import { Command, Help } from 'commander';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
@@ -140,14 +140,17 @@ program
           return arg.required ? `<${n}>` : `[${n}]`;
         })
         .join(' ');
-      return aqua(cmd.name()) + (cmd.options.length ? ' [options]' : '') + (args ? ' ' + args : '');
+      // Command names render in default color; only section headings
+      // (rendered by our custom formatHelp below) get the aqua treatment.
+      return cmd.name() + (cmd.options.length ? ' [options]' : '') + (args ? ' ' + args : '');
     },
     // Custom grouped help layout for the root program. Subcommand helps
     // (e.g. `aquaman openclaw --help`) use Commander's default formatter.
     formatHelp(cmd, helper) {
       // Only customize the ROOT command's help. Nested subcommands keep the
-      // default layout \u2014 they're already focused on one namespace.
-      if (cmd !== program) return helper.formatHelp(cmd, helper);
+      // default layout \u2014 call the un-overridden formatter directly to avoid
+      // recursing into this override.
+      if (cmd !== program) return Help.prototype.formatHelp.call(helper, cmd, helper);
 
       const lines: string[] = [];
       lines.push('');
@@ -171,7 +174,7 @@ program
       const all = helper.visibleCommands(cmd);
       const byName = new Map(all.map((c) => [c.name(), c]));
       const renderRow = (term: string, desc: string) =>
-        `  ${aqua(term).padEnd(38)}  ${desc}`;
+        `  ${term.padEnd(30)}  ${desc}`;
       const renderCmd = (c: any) => renderRow(c.name(), c.description() || '');
 
       // --- Vault & core (agent-agnostic) ---
