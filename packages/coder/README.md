@@ -31,7 +31,27 @@ aquaman coder setup claude-code              # install hook in ~/.claude/setting
 aquaman coder doctor                         # verify
 ```
 
-Now when Claude Code runs a Bash tool in `~/code/my-app`, aquaman wraps the command, injects the declared env vars from your vault for that one invocation, and redacts secrets from stdout/stderr.
+**See it for yourself (the 30-second aha):** restart Claude Code, open a new session inside `~/code/my-app`, and ask the agent to run:
+
+```
+printenv | grep ANTHROPIC_API_KEY
+```
+
+You'll see this in the transcript:
+
+```
+ANTHROPIC_API_KEY=[REDACTED:injected-value]
+
+⏺ ANTHROPIC_API_KEY is set and available (injected via aquaman vault). 
+```
+
+The *child* process saw the real key (your tests, builds, MCP servers, import scripts — anything that actually needs it works). The *agent* — the thing that decides what code to run on your machine — never sees the value, and so neither does the conversation history, neither does the model provider's logs, neither does anyone who later screenshots your terminal.
+
+When Claude Code runs a Bash tool in `~/code/my-app`, aquaman's hook rewrites the command via `updatedInput.command` to wrap it under `aquaman-coder exec`. That wrapper:
+
+- Resolves each `aquaman://service/key` reference via the broker (`POST /broker/resolve` over UDS) — credentials are materialized for one command, not for the agent's lifetime.
+- Pipes stdout/stderr through a redactor that prepends a value-based pattern for each resolved value: **whatever string was injected gets redacted, regardless of shape** (Atlassian tokens, Notion secrets, internal-API keys — none of them need to match a known provider format). Generic shape-based patterns (sk-ant-, ghp_, sk_live_, AKIA…, JWTs, PEM blocks, ATATT3xF…) still run after as defense-in-depth for secrets the child surfaces that we did NOT inject.
+- Cleans up when the command exits.
 
 ## CLI surface
 
