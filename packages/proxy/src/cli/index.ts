@@ -132,7 +132,6 @@ program
   .name('aquaman')
   .description('Credential isolation for AI agents \u2014 vault for the proxy core, OpenClaw plugin path, coding-agent adapter path')
   .version(VERSION)
-  .addHelpText('before', `\n\u{1F531}\u{1F99E} Aquaman ${aqua(VERSION)} \u2014 Credential isolation for AI agents\n`)
   .configureHelp({
     subcommandTerm(cmd) {
       const args = cmd.registeredArguments
@@ -142,6 +141,98 @@ program
         })
         .join(' ');
       return aqua(cmd.name()) + (cmd.options.length ? ' [options]' : '') + (args ? ' ' + args : '');
+    },
+    // Custom grouped help layout for the root program. Subcommand helps
+    // (e.g. `aquaman openclaw --help`) use Commander's default formatter.
+    formatHelp(cmd, helper) {
+      // Only customize the ROOT command's help. Nested subcommands keep the
+      // default layout \u2014 they're already focused on one namespace.
+      if (cmd !== program) return helper.formatHelp(cmd, helper);
+
+      const lines: string[] = [];
+      lines.push('');
+      lines.push(`  \u{1F531} ${aqua('Aquaman')} ${VERSION} \u2014 Credential isolation for AI agents`);
+      lines.push('');
+      lines.push(`Usage: ${helper.commandUsage(cmd)}`);
+      lines.push('');
+      lines.push(cmd.description());
+      lines.push('');
+
+      // Options
+      const opts = helper.visibleOptions(cmd);
+      if (opts.length) {
+        lines.push('Options:');
+        for (const opt of opts) {
+          lines.push(`  ${helper.optionTerm(opt).padEnd(20)}  ${helper.optionDescription(opt)}`);
+        }
+        lines.push('');
+      }
+
+      const all = helper.visibleCommands(cmd);
+      const byName = new Map(all.map((c) => [c.name(), c]));
+      const renderRow = (term: string, desc: string) =>
+        `  ${aqua(term).padEnd(38)}  ${desc}`;
+      const renderCmd = (c: any) => renderRow(c.name(), c.description() || '');
+
+      // --- Vault & core (agent-agnostic) ---
+      lines.push(aqua('Vault & core (agent-agnostic)'));
+      const vaultCore = ['setup', 'doctor', 'status', 'daemon', 'stop', 'init'];
+      for (const name of vaultCore) {
+        const c = byName.get(name);
+        if (c) lines.push(renderCmd(c));
+      }
+      lines.push('');
+      lines.push(aqua('Vault management'));
+      for (const name of ['credentials', 'audit', 'services', 'policy']) {
+        const c = byName.get(name);
+        if (c) lines.push(renderCmd(c));
+      }
+      lines.push('');
+
+      // --- OpenClaw namespace (nested) ---
+      const oc = byName.get('openclaw');
+      if (oc) {
+        lines.push(aqua('OpenClaw Gateway integration'));
+        // Ordered for readability (setup/doctor/status first, then lifecycle).
+        const ocOrder = ['setup', 'doctor', 'status', 'start', 'configure', 'migrate'];
+        const ocSubs = helper.visibleCommands(oc).filter((s: any) => s.name() !== 'help');
+        const ocSorted = [
+          ...ocOrder.map((n) => ocSubs.find((s: any) => s.name() === n)).filter(Boolean),
+          ...ocSubs.filter((s: any) => !ocOrder.includes(s.name())),
+        ];
+        for (const sub of ocSorted) {
+          lines.push(renderRow(`openclaw ${sub!.name()}`, sub!.description() || ''));
+        }
+        lines.push('');
+      }
+
+      // --- Coder namespace (shim \u2014 list documented subcommands) ---
+      if (byName.has('coder')) {
+        lines.push(aqua('AI coding-agent integration (Claude Code today)'));
+        const coderSubs: Array<[string, string]> = [
+          ['coder setup <agent>', 'Install hooks for an agent (claude-code today)'],
+          ['coder doctor', 'Deep diagnostic \u2014 projects, broker, per-project vault'],
+          ['coder status', 'Configured projects + hook wiring + broker activity'],
+          ['coder project list/add/remove', 'Manage ~/.aquaman/projects.yaml'],
+          ['coder get <ref>', 'Resolve an aquaman://service/key reference'],
+          ['coder exec <cmd>', 'Run command with project env injected + output redacted'],
+        ];
+        for (const [term, desc] of coderSubs) {
+          lines.push(renderRow(term, desc));
+        }
+        lines.push(`  ${'(delegates to the aquaman-coder binary; install: npm install -g aquaman-coder)'}`);
+        lines.push('');
+      }
+
+      // --- Other ---
+      const helpCmd = byName.get('help');
+      if (helpCmd) {
+        lines.push(aqua('Other'));
+        lines.push(renderCmd(helpCmd));
+        lines.push('');
+      }
+
+      return lines.join('\n');
     }
   });
 
@@ -187,7 +278,7 @@ program
     let issues = 0;
 
     console.log('');
-    console.log(`  \u{1F531}\u{1F99E} Aquaman ${VERSION} \u2014 health check`);
+    console.log(`  \u{1F531} Aquaman ${VERSION} \u2014 health check`);
     console.log('');
     console.log(`  ${aqua('Vault')}`);
 
@@ -300,16 +391,14 @@ program
   .description('Proxy daemon status overview')
   .action(async () => {
     const config = loadConfig();
-    console.log('aquaman status\n');
-    console.log('Configuration:');
-    console.log(`  Config dir: ${getConfigDir()}`);
-    console.log(`  Backend:    ${config.credentials.backend}`);
-    console.log(`  Socket:     ${path.join(getConfigDir(), 'proxy.sock')}`);
-    console.log(`  Audit:      ${config.audit.enabled ? 'enabled' : 'disabled'}`);
-    console.log('\nProxied services:');
-    for (const svc of config.credentials.proxiedServices) console.log(`  - ${svc}`);
 
+    console.log('');
+    console.log(`  \u{1F531} ${aqua('Aquaman')} ${VERSION} — status`);
+    console.log('');
+
+    // Proxy state (probe socket first — the headline number)
     const sockPath = path.join(getConfigDir(), 'proxy.sock');
+    let proxyLine = `  ${aqua('Proxy:')} not running`;
     try {
       const body = await new Promise<string>((resolve, reject) => {
         const req = http.request({ socketPath: sockPath, path: '/_health', method: 'GET' }, (res) => {
@@ -321,12 +410,26 @@ program
         req.end();
       });
       const health = JSON.parse(body);
-      console.log(`\nProxy: running (v${health.version}, uptime ${Math.floor(health.uptime ?? 0)}s)`);
-    } catch {
-      console.log('\nProxy: not running');
-    }
+      proxyLine = `  ${aqua('Proxy:')} running  (v${health.version}, uptime ${Math.floor(health.uptime ?? 0)}s)`;
+    } catch { /* not running */ }
+    console.log(proxyLine);
 
-    console.log('\nFor agent-specific status: aquaman openclaw status / aquaman coder status');
+    // Configuration
+    console.log('');
+    console.log(`  ${aqua('Configuration')}`);
+    console.log(`    Config dir:  ${getConfigDir()}`);
+    console.log(`    Backend:     ${config.credentials.backend}`);
+    console.log(`    Socket:      ${sockPath}`);
+    console.log(`    Audit:       ${config.audit.enabled ? 'enabled' : 'disabled'}`);
+
+    // Proxied services
+    console.log('');
+    console.log(`  ${aqua('Proxied services')}  (${config.credentials.proxiedServices.length})`);
+    for (const svc of config.credentials.proxiedServices) console.log(`    - ${svc}`);
+
+    console.log('');
+    console.log(`  For deeper views: ${aqua('aquaman openclaw status')} / ${aqua('aquaman coder status')}`);
+    console.log('');
   });
 
 // ---------------- Shared helper: vault-only setup ----------------
@@ -1386,7 +1489,7 @@ openclaw
     let issues = 0;
 
     console.log('');
-    console.log(`  \u{1F531}\u{1F99E} Aquaman ${VERSION} \u2014 Welcome to the doctor\u2019s office.`);
+    console.log(`  \u{1F531} Aquaman ${VERSION} \u2014 Welcome to the doctor\u2019s office.`);
     console.log('');
 
     // 1. Config file
@@ -2183,7 +2286,7 @@ openclaw
         process.exit(1);
       }
 
-      console.log(`\n  \u{1F531}\u{1F99E} Aquaman ${aqua(VERSION)} \u2014 Time to put your secrets somewhere safe.\n`);
+      console.log(`\n  \u{1F531} Aquaman ${aqua(VERSION)} \u2014 Time to put your secrets somewhere safe.\n`);
       console.log('  Scanning for plaintext credentials...\n');
 
       const openclawStateDir = process.env['OPENCLAW_STATE_DIR'] || path.join(os.homedir(), '.openclaw');
