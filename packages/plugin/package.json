@@ -9,7 +9,9 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "openclaw": {
-    "extensions": ["./dist/index.js"],
+    "extensions": [
+      "./dist/index.js"
+    ],
     "compat": {
       "pluginApi": ">=2026.5.7",
       "minGatewayVersion": "2026.5.7"
@@ -39,8 +41,8 @@
   "author": "tech4242",
   "license": "MIT",
   "dependencies": {
-    "undici": "^7.0.0",
-    "aquaman-proxy": "0.12.0"
+    "aquaman-proxy": "0.12.0",
+    "undici": "^7.25.0"
   },
   "peerDependencies": {
     "openclaw": ">=2026.5.7"
@@ -49,7 +51,12 @@
     "@types/node": "^20.10.0",
     "typescript": "^5.3.0"
   },
-  "files": ["dist", "openclaw.plugin.json", "LICENSE", "README.md"],
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "LICENSE",
+    "README.md"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/tech4242/aquaman.git",

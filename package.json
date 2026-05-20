@@ -51,6 +51,11 @@
     "typescript": "^5.3.0",
     "vitest": "^1.2.0"
   },
+  "overrides": {
+    "kdbxweb": {
+      "@xmldom/xmldom": "0.8.13"
+    }
+  },
   "engines": {
     "node": ">=18.0.0"
   }
