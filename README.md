@@ -25,12 +25,14 @@ Aquaman ships as three coordinated npm packages, sharing one vault + one daemon.
 | Package | What it does | When to install |
 |---|---|---|
 | **[`aquaman-proxy`](packages/proxy/)** | Core: vault, daemon, audit, policy, CLI. The piece everyone needs. | Always. |
-| **[`aquaman-plugin`](packages/plugin/)** | OpenClaw Gateway adapter. Spawns the proxy on Gateway startup; intercepts channel traffic; 25 builtin services across 6 auth modes. | If you run an OpenClaw Gateway. |
+| **[`aquaman-plugin`](packages/plugin/)** | OpenClaw Gateway adapter. Spawns the proxy on Gateway startup; intercepts channel traffic; 25 builtin services across 6 auth modes. | If you run an OpenClaw Gateway. Also available at https://clawhub.ai/plugins/aquaman-plugin |
 | **[`aquaman-coder`](packages/coder/)** | AI coding-agent adapter. Project-scoped `aquaman://service/key` references resolved per Bash tool call. | If you use Claude Code (today) — Codex / OpenCode / Cursor planned. |
 
 A single `aquaman` CLI surfaces all three: top-level commands for vault and audit, `aquaman openclaw ...` for the OpenClaw integration, `aquaman coder ...` for the coding-agent integration (delegates to `aquaman-coder` under the hood).
 
-## Quick Start — three paths
+## Quick Start
+
+`aquaman help`, `aquaman doctor` are your friends.
 
 ### 1. Vault only (just the proxy + your secrets)
 
@@ -76,38 +78,6 @@ When Claude Code runs a Bash tool in `~/code/my-app`, aquaman's hook rewrites th
 - Resolves each `aquaman://service/key` reference via the broker (`POST /broker/resolve` over UDS) — credentials are materialized for one command, not for the agent's lifetime.
 - Pipes stdout/stderr through the redactor so secret-shaped strings (sk-ant-, ghp_, sk_live_, AKIA…, JWTs, PEM blocks, etc.) never reach the agent transcript.
 - Cleans up when the command exits.
-
-Codex / OpenCode / Cursor adapters are planned for v0.13.0+.
-
-## CLI shape
-
-```
-aquaman                       # vault overview
-├── setup                     # vault-only wizard (backend + creds)
-├── doctor                    # overview with persona-aware soft upsells
-├── status                    # proxy daemon overview
-├── daemon / stop / init
-├── credentials add/list/delete/guide
-├── audit tail/verify/rotate
-├── services list/validate
-├── policy list/test
-│
-├── openclaw                  # OpenClaw Gateway integration
-│   ├── setup                 # full bundle: vault + plugin + auth-profiles
-│   ├── doctor                # deep diagnostic
-│   ├── status                # plugin lifecycle, sentinel env vars
-│   ├── start                 # spawn proxy + launch openclaw
-│   ├── configure / migrate   # one-shot ops
-│
-└── coder                     # AI coding-agent integration (delegates to aquaman-coder)
-    ├── setup <agent>         # install hooks for that agent (claude-code today)
-    ├── doctor                # deep diagnostic (projects + broker + per-project vault)
-    ├── status                # projects, hook wiring, recent broker activity
-    ├── project list/add/remove
-    ├── get / exec / hook
-```
-
-Triplet pattern at every level: `setup` / `doctor` / `status` show one-line overviews at the top level, deep details under each namespace.
 
 ## How It Works
 
@@ -155,6 +125,16 @@ The agent only ever sees a sentinel hostname (`aquaman.local`) or a placeholder 
 | **Output redaction (coder)** | `aquaman-coder exec` pipes stdout/stderr through pattern redactor | Secrets in tool output don't leak into agent transcripts |
 
 Detailed model — per-integration specifics (HTTP interceptor scope, auth profiles, scanner findings, ClawScan publisher note) — lives in [`packages/plugin/README.md`](packages/plugin/README.md) and [`packages/coder/README.md`](packages/coder/README.md).
+
+### Compliance posture
+
+Aquaman ships runnable conformance tests under `test/compliance/` mapped to:
+
+- **MITRE ATLAS** v5.3 — techniques AML.T0055, T0012, T0062, T0090 (`test/compliance/atlas/`)
+- **NIST SP 800-53 Rev 5** — IA-5, AC-3, AC-6, AU-2/9/10, SC-12/28, SI-10 (`test/compliance/nist/`)
+
+Plus alignment narratives for CISA/Five-Eyes "Careful Adoption of Agentic AI Services" (April 2026), CSA MAESTRO, and OWASP Top 10 for Agentic Applications. The tests run as part of `npm test`. See [`docs/compliance/`](docs/compliance/) for the mappings.
+
 
 ## Request Policies
 
@@ -214,15 +194,6 @@ policy:
 `aquaman setup` auto-detects a sensible default (macOS → `keychain`; Linux → `keychain` if libsecret, else `systemd-creds` if systemd ≥ 256, else `encrypted-file`).
 
 `encrypted-file` is a last-resort for headless Linux/CI environments without a native keyring. For better security on Linux, install `libsecret-1-dev` (GNOME Keyring), use `systemd-creds` (TPM2 binding), or use 1Password/Vault.
-
-## Compliance posture
-
-Aquaman ships runnable conformance tests under `test/compliance/` mapped to:
-
-- **MITRE ATLAS** v5.3 — techniques AML.T0055, T0012, T0062, T0090 (`test/compliance/atlas/`)
-- **NIST SP 800-53 Rev 5** — IA-5, AC-3, AC-6, AU-2/9/10, SC-12/28, SI-10 (`test/compliance/nist/`)
-
-Plus alignment narratives for CISA/Five-Eyes "Careful Adoption of Agentic AI Services" (April 2026), CSA MAESTRO, and OWASP Top 10 for Agentic Applications. The tests run as part of `npm test`. See [`docs/compliance/`](docs/compliance/) for the mappings.
 
 ## Development
 

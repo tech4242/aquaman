@@ -40,47 +40,7 @@ aquaman daemon &        # start the proxy on ~/.aquaman/proxy.sock
 
 ## CLI
 
-The `aquaman` binary surfaces three command surfaces:
-
-### Top-level (vault, agent-agnostic)
-
-| Command | Description |
-|---|---|
-| `aquaman setup` | Vault-only wizard — backend + credentials. For full OpenClaw bundle: `aquaman openclaw setup`. |
-| `aquaman doctor` | Overview health check (vault + integration summaries with soft upsells) |
-| `aquaman status` | Proxy daemon overview |
-| `aquaman daemon` | Run the proxy in foreground |
-| `aquaman stop` | Stop a running daemon |
-| `aquaman init` | Low-level config bootstrap (called by `setup`) |
-| `aquaman credentials add <svc> <key>` | Store a credential |
-| `aquaman credentials list` / `delete` / `guide` | Vault CRUD + setup help |
-| `aquaman audit tail` / `verify` / `rotate` | Audit log management |
-| `aquaman services list` / `validate` | Service registry inspection |
-| `aquaman policy list` / `test <svc> <method> <path>` | Policy inspection + dry-run |
-
-### `aquaman openclaw …` (OpenClaw Gateway integration)
-
-| Command | Description |
-|---|---|
-| `aquaman openclaw setup` | Full OpenClaw bundle: vault wizard + plugin install + auth-profiles.json |
-| `aquaman openclaw doctor` | Deep diagnostic for the OpenClaw integration |
-| `aquaman openclaw status` | Plugin lifecycle, sentinel env vars |
-| `aquaman openclaw start` | Spawn proxy + launch OpenClaw |
-| `aquaman openclaw configure` | Generate env vars for OpenClaw |
-| `aquaman openclaw migrate` | Move plaintext credentials from `~/.openclaw/openclaw.json` into the vault |
-
-### `aquaman coder …` (AI coding-agent integration)
-
-Delegates to the [`aquaman-coder`](../coder) binary; install it separately. The proxy never imports coder code (see [`docs/PACKAGES.md`](../../docs/PACKAGES.md)).
-
-| Command | Description |
-|---|---|
-| `aquaman coder setup <agent>` | Install hooks for an agent (`claude-code` today) |
-| `aquaman coder doctor` | Deep diagnostic for the coder integration |
-| `aquaman coder status` | Projects, hook wiring, broker connectivity |
-| `aquaman coder project list/add/remove` | `~/.aquaman/projects.yaml` CRUD |
-| `aquaman coder get <ref>` | Resolve an `aquaman://service/key` reference |
-| `aquaman coder exec <cmd>` | Run a command with project env injected + output redacted |
+`aquaman help`, `aquaman doctor` are your friends.
 
 ## 25 Builtin Services
 
