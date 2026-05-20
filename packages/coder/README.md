@@ -47,6 +47,15 @@ ANTHROPIC_API_KEY=[REDACTED:injected-value]
 
 The *child* process saw the real key (your tests, builds, MCP servers, import scripts — anything that actually needs it works). The *agent* — the thing that decides what code to run on your machine — never sees the value, and so neither does the conversation history, neither does the model provider's logs, neither does anyone who later screenshots your terminal.
 
+**Use it from your own terminal too.** The same wrapper works without the agent — just `cd` into a covered project and prefix your command:
+
+```bash
+cd ~/code/
+aquaman-coder exec -- python app/scripts/import.py
+```
+
+Same env injection, same redaction on stdout/stderr. Drop it into Makefile targets, shell aliases, or CI runners — anywhere you'd otherwise reach for a `.env` file.
+
 When Claude Code runs a Bash tool in `~/code/my-app`, aquaman's hook rewrites the command via `updatedInput.command` to wrap it under `aquaman-coder exec`. That wrapper:
 
 - Resolves each `aquaman://service/key` reference via the broker (`POST /broker/resolve` over UDS) — credentials are materialized for one command, not for the agent's lifetime.
