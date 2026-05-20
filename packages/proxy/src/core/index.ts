@@ -24,6 +24,8 @@ export {
   type OnePasswordStoreOptions,
   OnePasswordStore,
   createOnePasswordStore,
+  isItemNotFoundError,
+  writeTemplateAndRun,
   type VaultStoreOptions,
   VaultStore,
   createVaultStore,

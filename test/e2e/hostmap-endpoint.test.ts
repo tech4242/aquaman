@@ -202,10 +202,15 @@ describe('plugin-mode hostMap in startup JSON', () => {
 
   // Flaky: plugin-mode spawn sometimes exits before producing output
   it.skip('startup JSON includes hostMap with builtin patterns', async () => {
+    // Even though this test is currently it.skip, isolate the config dir
+    // so re-enabling it doesn't trigger a 1Password biometric prompt for
+    // developers whose ~/.aquaman/config.yaml uses the 1password backend.
+    const { createTempEnv } = await import('../helpers/temp-env.js');
+    const isolated = createTempEnv({ withConfig: true });
     const connectionInfo = await new Promise<any>((resolve, reject) => {
       const proc = spawn('npx', ['tsx', CLI_PATH, 'openclaw', 'plugin-mode'], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env },
+        env: { ...process.env, ...isolated.env },
       });
       child = proc;
 

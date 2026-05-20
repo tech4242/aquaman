@@ -1963,40 +1963,67 @@ credentials
       process.exit(1);
     }
 
-    // Read value from stdin
-    console.log(`Enter value for ${service}/${key} (input hidden):`);
+    // Two stdin paths:
+    //   - TTY (interactive shell): per-character raw-mode read so the value
+    //     never echoes. Submit on Enter, backspace on DEL/^H.
+    //   - Pipe (scripts / CI / migrations): read all stdin into one buffer.
+    //     Strip exactly ONE trailing newline so `printf x | ...` and
+    //     `echo x | ...` both round-trip to `x` without mangling embedded
+    //     newlines in PEM keys or JSON blobs.
+    const value: string = process.stdin.isTTY
+      ? await readTtyHiddenInput(`Enter value for ${service}/${key} (input hidden):`)
+      : await readAllStdin();
 
-    const readline = await import('node:readline');
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout
-    });
-
-    // Disable echo
-    if (process.stdin.isTTY) {
-      process.stdin.setRawMode(true);
+    if (value.length === 0) {
+      console.error('Empty credential value rejected. Pipe a value or type one.');
+      process.exit(1);
     }
 
-    let value = '';
-    process.stdin.on('data', (data) => {
-      const char = data.toString();
-      if (char === '\n' || char === '\r') {
-        process.stdin.setRawMode(false);
-        rl.close();
-        storeCredential();
-      } else if (char === '\x7f' || char === '\b') {
-        value = value.slice(0, -1);
-      } else {
-        value += char;
-      }
-    });
-
-    async function storeCredential() {
-      console.log('');
-      await store!.set(service, key, value.trim());
-      console.log(`Credential stored: ${service}/${key}`);
-    }
+    await store!.set(service, key, value);
+    console.log(`Credential stored: ${service}/${key}`);
   });
+
+async function readAllStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk as Buffer);
+  }
+  const raw = Buffer.concat(chunks).toString('utf-8');
+  // Strip a single trailing \n (and the optional \r before it for CRLF).
+  return raw.endsWith('\n') ? raw.replace(/\r?\n$/, '') : raw;
+}
+
+async function readTtyHiddenInput(prompt: string): Promise<string> {
+  console.log(prompt);
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.setEncoding('utf-8');
+
+  return new Promise((resolve) => {
+    let value = '';
+    const onData = (chunk: string) => {
+      for (const char of chunk) {
+        if (char === '\n' || char === '\r') {
+          process.stdin.setRawMode(false);
+          process.stdin.pause();
+          process.stdin.off('data', onData);
+          console.log('');
+          resolve(value);
+          return;
+        }
+        if (char === '\x7f' || char === '\b') {
+          value = value.slice(0, -1);
+        } else if (char === '\x03') {  // Ctrl-C
+          process.stdin.setRawMode(false);
+          process.exit(130);
+        } else {
+          value += char;
+        }
+      }
+    };
+    process.stdin.on('data', onData);
+  });
+}
 
 credentials
   .command('list')
@@ -2121,7 +2148,10 @@ credentials
             console.log(`  vault kv put secret/aquaman/${name}/${key} credential="YOUR_KEY"`);
             break;
           case '1password':
-            console.log(`  op item create --vault aquaman --category "API Credential" --title aquaman-${name}-${key} credential="YOUR_KEY"`);
+            // Prefer aquaman's own CLI — it pipes the value via a 0o600 temp
+            // template file, never exposing the secret on argv or in op's
+            // /proc/<pid>/cmdline.
+            console.log(`  aquaman credentials add ${name} ${key}`);
             break;
           default:
             console.log(`  aquaman credentials add ${name} ${key}`);

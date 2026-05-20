@@ -4,6 +4,9 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, unlinkSync, rmdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { CredentialStore } from '../store.js';
 
 export interface OnePasswordStoreOptions {
@@ -16,6 +19,30 @@ const ITEM_PREFIX = 'aquaman';
 
 // Metadata key validation: must start with letter, only alphanum/underscore/hyphen
 const SAFE_METADATA_KEY = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+
+// The `op` CLI reports missing items with a few different phrasings depending
+// on version. Match all of them so get/delete/list return cleanly instead of
+// throwing.
+export function isItemNotFoundError(message: string): boolean {
+  return message.includes('not found')
+    || message.includes("isn't an item")
+    || message.includes('no item');
+}
+
+// Writes `template` to a 0o600 file inside a freshly-made 0o700 tempdir and
+// invokes `fn` with the path. Unlinks the file and rmdir's the directory
+// after `fn` returns or throws, so the JSON template never lingers on disk.
+export function writeTemplateAndRun<T>(template: string, fn: (path: string) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), 'aquaman-op-'));
+  const file = join(dir, 'template.json');
+  writeFileSync(file, template, { mode: 0o600 });
+  try {
+    return fn(file);
+  } finally {
+    try { unlinkSync(file); } catch { /* best-effort */ }
+    try { rmdirSync(dir); } catch { /* best-effort */ }
+  }
+}
 
 export class OnePasswordStore implements CredentialStore {
   private vault: string;
@@ -119,8 +146,9 @@ export class OnePasswordStore implements CredentialStore {
       const parsed = JSON.parse(result);
       return parsed.value || null;
     } catch (error) {
-      // Item not found is not an error
-      if (error instanceof Error && error.message.includes('not found')) {
+      // Item not found is not an error. The `op` CLI uses different phrasings
+      // depending on version / locale, so we match all known variants.
+      if (error instanceof Error && isItemNotFoundError(error.message)) {
         return null;
       }
       throw error;
@@ -133,39 +161,48 @@ export class OnePasswordStore implements CredentialStore {
     const itemName = this.getItemName(service, key);
     const tags = [ITEM_PREFIX, service];
 
-    // Check if item already exists
-    const existing = await this.get(service, key);
-
-    if (existing !== null) {
-      // Update existing item — pipe credential via stdin to avoid /proc/cmdline exposure
-      this.runOp([
-        'item', 'edit', itemName,
-        '--vault', this.vault,
-        'credential=-'
-      ], value);
-    } else {
-      // Create new item — pipe credential via stdin to avoid /proc/cmdline exposure
-      const createArgs = [
-        'item', 'create',
-        '--category', 'API Credential',
-        '--vault', this.vault,
-        '--title', itemName,
-        'credential=-',
-        '--tags', tags.join(',')
-      ];
-
-      // Add metadata as fields (sanitize keys to prevent CLI injection)
-      if (metadata) {
-        for (const [k, v] of Object.entries(metadata)) {
-          if (!SAFE_METADATA_KEY.test(k)) {
-            throw new Error(`Invalid metadata key "${k}": must match /^[a-zA-Z][a-zA-Z0-9_-]*$/`);
-          }
-          createArgs.push(`${k}=${v}`);
+    if (metadata) {
+      for (const k of Object.keys(metadata)) {
+        if (!SAFE_METADATA_KEY.test(k)) {
+          throw new Error(`Invalid metadata key "${k}": must match /^[a-zA-Z][a-zA-Z0-9_-]*$/`);
         }
       }
-
-      this.runOp(createArgs, value);
     }
+
+    const existing = await this.get(service, key);
+    const fields: Array<Record<string, string>> = [
+      { id: 'credential', type: 'CONCEALED', value }
+    ];
+    if (metadata) {
+      for (const [k, v] of Object.entries(metadata)) {
+        fields.push({ id: k, type: 'STRING', value: v });
+      }
+    }
+
+    // The `op` CLI's stdin path for JSON templates (`op item create -`) is
+    // unreliable when invoked via Node child_process (op parses argv before
+    // the spawn pipe flushes, then errors with "provide the item category").
+    // The only Node-spawn-safe way to set field values without leaking them
+    // on argv (visible via /proc/<pid>/cmdline on Linux) is to write the
+    // template to a 0o600 file in a 0o700 mkdtemp dir, then pass --template.
+    const template = existing !== null
+      ? JSON.stringify({ fields })
+      : JSON.stringify({
+          title: itemName,
+          category: 'API_CREDENTIAL',
+          tags,
+          fields
+        });
+
+    writeTemplateAndRun(template, (tmplPath) => {
+      if (existing !== null) {
+        this.runOp(['item', 'edit', itemName, '--vault', this.vault, '--template', tmplPath]);
+      } else {
+        // When --template provides the category in JSON, do NOT pass --category
+        // on the CLI — op rejects it as a duplicate.
+        this.runOp(['item', 'create', '--vault', this.vault, '--template', tmplPath]);
+      }
+    });
   }
 
   async delete(service: string, key: string): Promise<boolean> {
@@ -178,7 +215,7 @@ export class OnePasswordStore implements CredentialStore {
       ]);
       return true;
     } catch (error) {
-      if (error instanceof Error && error.message.includes('not found')) {
+      if (error instanceof Error && isItemNotFoundError(error.message)) {
         return false;
       }
       throw error;
@@ -210,8 +247,8 @@ export class OnePasswordStore implements CredentialStore {
 
       return credentials;
     } catch (error) {
-      // Vault might not exist yet
-      if (error instanceof Error && error.message.includes('not found')) {
+      // Vault or no items matching tag — both surface as "not found"-style.
+      if (error instanceof Error && isItemNotFoundError(error.message)) {
         return [];
       }
       throw error;

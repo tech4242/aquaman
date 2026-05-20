@@ -195,7 +195,9 @@ export class AquamanPlugin {
   private setEnvVar(key: string, value: string): void {
     process.env[key] = value;
     this.environmentVariables[key] = value;
-    console.log(`[aquaman] Set ${key}=${value}`);
+    // Never log the value — even though every current caller passes a
+    // sentinel URL, a future caller could pass a secret and inherit the leak.
+    console.log(`[aquaman] Set ${key}`);
   }
 
   /**

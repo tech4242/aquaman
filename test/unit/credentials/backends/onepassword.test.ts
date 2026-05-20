@@ -12,6 +12,65 @@ vi.mock('node:child_process', () => ({
   spawnSync: vi.fn()
 }));
 
+describe('writeTemplateAndRun', () => {
+  it('writes the template to a 0o600 file in a fresh dir, then unlinks on success', async () => {
+    const { existsSync, statSync } = await import('node:fs');
+    const { writeTemplateAndRun } = await import('aquaman-core');
+    let observedPath: string | undefined;
+    let observedContent: string | undefined;
+    let observedMode: number | undefined;
+
+    const result = writeTemplateAndRun('{"hello":"world"}', (path) => {
+      observedPath = path;
+      observedContent = (require('node:fs') as typeof import('node:fs')).readFileSync(path, 'utf-8');
+      observedMode = statSync(path).mode & 0o777;
+      return 'fn-return';
+    });
+
+    expect(result).toBe('fn-return');
+    expect(observedContent).toBe('{"hello":"world"}');
+    expect(observedMode).toBe(0o600);
+    expect(observedPath).toMatch(/aquaman-op-/);
+    // File AND its parent dir must be gone after.
+    expect(existsSync(observedPath!)).toBe(false);
+  });
+
+  it('unlinks the file even if the callback throws', async () => {
+    const { existsSync } = await import('node:fs');
+    const { writeTemplateAndRun } = await import('aquaman-core');
+    let observedPath: string | undefined;
+
+    expect(() => writeTemplateAndRun('{}', (path) => {
+      observedPath = path;
+      throw new Error('boom');
+    })).toThrow(/boom/);
+
+    expect(observedPath).toBeDefined();
+    expect(existsSync(observedPath!)).toBe(false);
+  });
+});
+
+describe('isItemNotFoundError', () => {
+  it.each([
+    'item "foo" not found in vault',
+    "[ERROR] \"aquaman-svc-key\" isn't an item in the \"aquaman_claude_code\" vault.",
+    '[ERROR] no item with that name',
+  ])('returns true for: %s', async (msg) => {
+    const { isItemNotFoundError } = await import('aquaman-core');
+    expect(isItemNotFoundError(msg)).toBe(true);
+  });
+
+  it.each([
+    'connection refused',
+    'unauthorized',
+    'invalid vault',
+    'biometric prompt timed out',
+  ])('returns false for: %s', async (msg) => {
+    const { isItemNotFoundError } = await import('aquaman-core');
+    expect(isItemNotFoundError(msg)).toBe(false);
+  });
+});
+
 describe('OnePasswordStore', () => {
   const mockSpawnSync = vi.mocked(spawnSync);
 
@@ -116,25 +175,19 @@ describe('OnePasswordStore', () => {
       expect(store.getVault()).toBe('custom-vault');
     });
 
-    it('stores credential with correct item name', async () => {
-      let capturedArgs: string[] = [];
+    it('stores credential with correct item title (in template JSON)', async () => {
+      const { readFileSync, existsSync } = await import('node:fs');
+      let templateContent: string | undefined;
 
       mockSpawnSync.mockImplementation((command, args) => {
-        if (command === 'which') {
-          return { status: 0, stdout: '/usr/local/bin/op\n', stderr: '', pid: 1, signal: null, output: [] };
-        }
-        if (args?.[0] === 'account') {
-          return { status: 0, stdout: '{}', stderr: '', pid: 2, signal: null, output: [] };
-        }
-        if (args?.[0] === 'vault' && args?.[1] === 'get') {
-          return { status: 0, stdout: '{}', stderr: '', pid: 3, signal: null, output: [] };
-        }
-        if (args?.[0] === 'item' && args?.[1] === 'get') {
-          // Item not found - triggers create
-          return { status: 1, stdout: '', stderr: 'not found', pid: 4, signal: null, output: [] };
-        }
+        if (command === 'which') return { status: 0, stdout: '/usr/local/bin/op\n', stderr: '', pid: 1, signal: null, output: [] };
+        if (args?.[0] === 'account') return { status: 0, stdout: '{}', stderr: '', pid: 2, signal: null, output: [] };
+        if (args?.[0] === 'vault' && args?.[1] === 'get') return { status: 0, stdout: '{}', stderr: '', pid: 3, signal: null, output: [] };
+        if (args?.[0] === 'item' && args?.[1] === 'get') return { status: 1, stdout: '', stderr: 'not found', pid: 4, signal: null, output: [] };
         if (args?.[0] === 'item' && args?.[1] === 'create') {
-          capturedArgs = args as string[];
+          const tmplIdx = (args as string[]).indexOf('--template');
+          const tmplPath = (args as string[])[tmplIdx + 1];
+          if (existsSync(tmplPath)) templateContent = readFileSync(tmplPath, 'utf-8');
           return { status: 0, stdout: '{}', stderr: '', pid: 5, signal: null, output: [] };
         }
         return { status: 0, stdout: '{}', stderr: '', pid: 6, signal: null, output: [] };
@@ -145,30 +198,32 @@ describe('OnePasswordStore', () => {
 
       await store.set('anthropic', 'api_key', 'test-value');
 
-      expect(capturedArgs).toContain('--title');
-      expect(capturedArgs).toContain('aquaman-anthropic-api_key');
+      expect(templateContent).toBeDefined();
+      const parsed = JSON.parse(templateContent!);
+      expect(parsed.title).toBe('aquaman-anthropic-api_key');
     });
 
-    it('pipes credential via stdin on create (not in argv)', async () => {
+    it('writes credential to a temp template file and passes --template to op (create)', async () => {
+      const { readFileSync, existsSync, statSync } = await import('node:fs');
       let capturedArgs: string[] = [];
-      let capturedInput: string | undefined;
+      let templateContent: string | undefined;
+      let templateMode: number | undefined;
 
-      mockSpawnSync.mockImplementation((command, args, options) => {
-        if (command === 'which') {
-          return { status: 0, stdout: '/usr/local/bin/op\n', stderr: '', pid: 1, signal: null, output: [] };
-        }
-        if (args?.[0] === 'account') {
-          return { status: 0, stdout: '{}', stderr: '', pid: 2, signal: null, output: [] };
-        }
-        if (args?.[0] === 'vault' && args?.[1] === 'get') {
-          return { status: 0, stdout: '{}', stderr: '', pid: 3, signal: null, output: [] };
-        }
-        if (args?.[0] === 'item' && args?.[1] === 'get') {
-          return { status: 1, stdout: '', stderr: 'not found', pid: 4, signal: null, output: [] };
-        }
+      mockSpawnSync.mockImplementation((command, args) => {
+        if (command === 'which') return { status: 0, stdout: '/usr/local/bin/op\n', stderr: '', pid: 1, signal: null, output: [] };
+        if (args?.[0] === 'account') return { status: 0, stdout: '{}', stderr: '', pid: 2, signal: null, output: [] };
+        if (args?.[0] === 'vault' && args?.[1] === 'get') return { status: 0, stdout: '{}', stderr: '', pid: 3, signal: null, output: [] };
+        if (args?.[0] === 'item' && args?.[1] === 'get') return { status: 1, stdout: '', stderr: "isn't an item in the", pid: 4, signal: null, output: [] };
         if (args?.[0] === 'item' && args?.[1] === 'create') {
           capturedArgs = args as string[];
-          capturedInput = (options as any)?.input;
+          // The real `op` reads the template file at this point — so do we,
+          // before the OnePasswordStore unlinks it after we return.
+          const tmplIdx = (args as string[]).indexOf('--template');
+          const tmplPath = (args as string[])[tmplIdx + 1];
+          if (existsSync(tmplPath)) {
+            templateContent = readFileSync(tmplPath, 'utf-8');
+            templateMode = statSync(tmplPath).mode & 0o777;
+          }
           return { status: 0, stdout: '{}', stderr: '', pid: 5, signal: null, output: [] };
         }
         return { status: 0, stdout: '{}', stderr: '', pid: 6, signal: null, output: [] };
@@ -180,42 +235,42 @@ describe('OnePasswordStore', () => {
 
       await store.set('anthropic', 'api_key', secretValue);
 
-      // credential=- means "read from stdin"
-      expect(capturedArgs).toContain('credential=-');
-      // Credential must NOT appear in argv
-      expect(capturedArgs.join(' ')).not.toContain(secretValue);
-      // Credential must be piped via stdin
-      expect(capturedInput).toBe(secretValue);
+      expect(capturedArgs).toContain('--template');
+      expect(capturedArgs).not.toContain('--category');  // category lives in JSON
+      expect(capturedArgs.join(' ')).not.toContain(secretValue);  // never in argv
+      expect(templateContent).toBeDefined();
+      expect(templateMode).toBe(0o600);
+
+      const parsed = JSON.parse(templateContent!);
+      expect(parsed.category).toBe('API_CREDENTIAL');
+      expect(parsed.title).toBe('aquaman-anthropic-api_key');
+      const credField = parsed.fields.find((f: any) => f.id === 'credential');
+      expect(credField.type).toBe('CONCEALED');
+      expect(credField.value).toBe(secretValue);
+
+      // File must be cleaned up after the call returns.
+      const tmplIdx = capturedArgs.indexOf('--template');
+      const tmplPath = capturedArgs[tmplIdx + 1];
+      expect(existsSync(tmplPath)).toBe(false);
     });
 
-    it('pipes credential via stdin on edit (not in argv)', async () => {
+    it('writes credential to a temp template file and passes --template to op (edit)', async () => {
+      const { readFileSync, existsSync } = await import('node:fs');
       let capturedEditArgs: string[] = [];
-      let capturedEditInput: string | undefined;
+      let templateContent: string | undefined;
 
-      mockSpawnSync.mockImplementation((command, args, options) => {
-        if (command === 'which') {
-          return { status: 0, stdout: '/usr/local/bin/op\n', stderr: '', pid: 1, signal: null, output: [] };
-        }
-        if (args?.[0] === 'account') {
-          return { status: 0, stdout: '{}', stderr: '', pid: 2, signal: null, output: [] };
-        }
-        if (args?.[0] === 'vault' && args?.[1] === 'get') {
-          return { status: 0, stdout: '{}', stderr: '', pid: 3, signal: null, output: [] };
-        }
+      mockSpawnSync.mockImplementation((command, args) => {
+        if (command === 'which') return { status: 0, stdout: '/usr/local/bin/op\n', stderr: '', pid: 1, signal: null, output: [] };
+        if (args?.[0] === 'account') return { status: 0, stdout: '{}', stderr: '', pid: 2, signal: null, output: [] };
+        if (args?.[0] === 'vault' && args?.[1] === 'get') return { status: 0, stdout: '{}', stderr: '', pid: 3, signal: null, output: [] };
         if (args?.[0] === 'item' && args?.[1] === 'get') {
-          // Item exists — triggers edit path
-          return {
-            status: 0,
-            stdout: JSON.stringify({ value: 'old-value' }),
-            stderr: '',
-            pid: 4,
-            signal: null,
-            output: []
-          };
+          return { status: 0, stdout: JSON.stringify({ value: 'old-value' }), stderr: '', pid: 4, signal: null, output: [] };
         }
         if (args?.[0] === 'item' && args?.[1] === 'edit') {
           capturedEditArgs = args as string[];
-          capturedEditInput = (options as any)?.input;
+          const tmplIdx = (args as string[]).indexOf('--template');
+          const tmplPath = (args as string[])[tmplIdx + 1];
+          if (existsSync(tmplPath)) templateContent = readFileSync(tmplPath, 'utf-8');
           return { status: 0, stdout: '{}', stderr: '', pid: 5, signal: null, output: [] };
         }
         return { status: 0, stdout: '{}', stderr: '', pid: 6, signal: null, output: [] };
@@ -227,12 +282,43 @@ describe('OnePasswordStore', () => {
 
       await store.set('anthropic', 'api_key', secretValue);
 
-      // credential=- means "read from stdin"
-      expect(capturedEditArgs).toContain('credential=-');
-      // Credential must NOT appear in argv
+      expect(capturedEditArgs).toContain('--template');
       expect(capturedEditArgs.join(' ')).not.toContain(secretValue);
-      // Credential must be piped via stdin
-      expect(capturedEditInput).toBe(secretValue);
+      expect(templateContent).toBeDefined();
+
+      const parsed = JSON.parse(templateContent!);
+      const credField = parsed.fields.find((f: any) => f.id === 'credential');
+      expect(credField.value).toBe(secretValue);
+
+      // edit JSON omits title/category — they're already set on the item.
+      expect(parsed.title).toBeUndefined();
+      expect(parsed.category).toBeUndefined();
+    });
+
+    it('unlinks the temp template file even when op fails', async () => {
+      const { existsSync } = await import('node:fs');
+      let observedTmplPath: string | undefined;
+
+      mockSpawnSync.mockImplementation((command, args) => {
+        if (command === 'which') return { status: 0, stdout: '/usr/local/bin/op\n', stderr: '', pid: 1, signal: null, output: [] };
+        if (args?.[0] === 'account') return { status: 0, stdout: '{}', stderr: '', pid: 2, signal: null, output: [] };
+        if (args?.[0] === 'vault' && args?.[1] === 'get') return { status: 0, stdout: '{}', stderr: '', pid: 3, signal: null, output: [] };
+        if (args?.[0] === 'item' && args?.[1] === 'get') return { status: 1, stdout: '', stderr: 'no item', pid: 4, signal: null, output: [] };
+        if (args?.[0] === 'item' && args?.[1] === 'create') {
+          const tmplIdx = (args as string[]).indexOf('--template');
+          observedTmplPath = (args as string[])[tmplIdx + 1];
+          return { status: 1, stdout: '', stderr: 'op exploded', pid: 5, signal: null, output: [] };
+        }
+        return { status: 0, stdout: '{}', stderr: '', pid: 6, signal: null, output: [] };
+      });
+
+      const { OnePasswordStore } = await import('aquaman-core');
+      const store = new OnePasswordStore();
+
+      await expect(store.set('anthropic', 'api_key', 'val')).rejects.toThrow(/op exploded/);
+
+      expect(observedTmplPath).toBeDefined();
+      expect(existsSync(observedTmplPath!)).toBe(false);
     });
 
     it('retrieves credential by service/key', async () => {
@@ -263,16 +349,16 @@ describe('OnePasswordStore', () => {
       expect(value).toBe('retrieved-secret');
     });
 
-    it('returns null for missing credentials', async () => {
+    it.each([
+      ['not found', 'old phrasing'],
+      ["isn't an item in the \"vault\" vault", 'modern phrasing'],
+      ['no item with that name', 'short-form phrasing']
+    ])('returns null when op says %s (%s)', async (stderr) => {
       mockSpawnSync.mockImplementation((command, args) => {
-        if (command === 'which') {
-          return { status: 0, stdout: '/usr/local/bin/op\n', stderr: '', pid: 1, signal: null, output: [] };
-        }
-        if (args?.[0] === 'account') {
-          return { status: 0, stdout: '{}', stderr: '', pid: 2, signal: null, output: [] };
-        }
+        if (command === 'which') return { status: 0, stdout: '/usr/local/bin/op\n', stderr: '', pid: 1, signal: null, output: [] };
+        if (args?.[0] === 'account') return { status: 0, stdout: '{}', stderr: '', pid: 2, signal: null, output: [] };
         if (args?.[0] === 'item' && args?.[1] === 'get') {
-          return { status: 1, stdout: '', stderr: 'not found', pid: 3, signal: null, output: [] };
+          return { status: 1, stdout: '', stderr, pid: 3, signal: null, output: [] };
         }
         return { status: 0, stdout: '{}', stderr: '', pid: 4, signal: null, output: [] };
       });
@@ -282,6 +368,22 @@ describe('OnePasswordStore', () => {
 
       const value = await store.get('nonexistent', 'key');
       expect(value).toBeNull();
+    });
+
+    it('still throws on unrelated op errors', async () => {
+      mockSpawnSync.mockImplementation((command, args) => {
+        if (command === 'which') return { status: 0, stdout: '/usr/local/bin/op\n', stderr: '', pid: 1, signal: null, output: [] };
+        if (args?.[0] === 'account') return { status: 0, stdout: '{}', stderr: '', pid: 2, signal: null, output: [] };
+        if (args?.[0] === 'item' && args?.[1] === 'get') {
+          return { status: 1, stdout: '', stderr: 'connection refused', pid: 3, signal: null, output: [] };
+        }
+        return { status: 0, stdout: '{}', stderr: '', pid: 4, signal: null, output: [] };
+      });
+
+      const { OnePasswordStore } = await import('aquaman-core');
+      const store = new OnePasswordStore();
+
+      await expect(store.get('whatever', 'key')).rejects.toThrow(/connection refused/);
     });
 
     it('lists credentials with tag filter', async () => {
