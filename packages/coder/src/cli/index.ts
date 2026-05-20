@@ -221,20 +221,25 @@ program
 
 program
   .command('doctor')
-  .description('Diagnostic checks')
+  .description('Deep diagnostic for the coder integration (projects, broker, hooks, per-project vault checks)')
   .action(async () => {
-    const checks: Array<{ name: string; ok: boolean; detail?: string }> = [];
+    const checks: Array<{ name: string; ok: boolean; detail?: string; fix?: string }> = [];
 
+    // 1. projects.yaml exists
     const projectsPath = defaultProjectsPath();
+    const projectsOk = fs.existsSync(projectsPath);
     checks.push({
       name: 'projects.yaml',
-      ok: fs.existsSync(projectsPath),
+      ok: projectsOk,
       detail: projectsPath,
+      fix: projectsOk ? undefined : 'aquaman-coder project add <name> --path <dir> --env NAME=aquaman://service/key',
     });
 
-    if (checks[0].ok) {
+    // 2. projects.yaml parses
+    let projects: ReturnType<typeof loadProjects> | null = null;
+    if (projectsOk) {
       try {
-        const projects = loadProjects();
+        projects = loadProjects();
         const count = Object.keys(projects.projects).length;
         checks.push({ name: 'projects parsed', ok: true, detail: `${count} project(s)` });
       } catch (err) {
@@ -242,37 +247,130 @@ program
       }
     }
 
+    // 3. Proxy running on socket
     const socketPath = defaultSocketPath();
     const broker = new BrokerClient({ socketPath, timeoutMs: 2000 });
+    let brokerOk = false;
     try {
       const health = await broker.health();
       checks.push({ name: 'proxy running', ok: true, detail: `version ${health.version ?? '?'}` });
+      brokerOk = true;
     } catch (err) {
-      checks.push({ name: 'proxy running', ok: false, detail: (err as Error).message });
+      checks.push({
+        name: 'proxy running',
+        ok: false,
+        detail: (err as Error).message,
+        fix: 'aquaman daemon &',
+      });
     }
 
+    // 4. Per-project: every declared aquaman:// ref resolves
+    if (brokerOk && projects) {
+      for (const [name, cfg] of Object.entries(projects.projects)) {
+        for (const [envName, ref] of Object.entries(cfg.env)) {
+          const parsed = parseRef(ref);
+          if (!parsed) {
+            checks.push({ name: `project ${name}: env ${envName}`, ok: false, detail: `bad ref "${ref}"` });
+            continue;
+          }
+          try {
+            await broker.resolve({ service: parsed.service, key: parsed.key, ttlSeconds: 1 });
+            checks.push({ name: `project ${name}: ${envName}`, ok: true, detail: ref });
+          } catch (err) {
+            checks.push({
+              name: `project ${name}: ${envName}`,
+              ok: false,
+              detail: `${ref} — ${(err as Error).message}`,
+              fix: `aquaman credentials add ${parsed.service} ${parsed.key}`,
+            });
+          }
+        }
+      }
+    }
+
+    // 5. Claude Code hooks installed (match both legacy and current command form)
     const settingsPath = defaultSettingsPath();
     if (fs.existsSync(settingsPath)) {
       const raw = fs.readFileSync(settingsPath, 'utf-8');
-      const installed = raw.includes('aquaman-coder hook');
+      const installed = raw.includes('aquaman-coder hook') || raw.includes('aquaman coder hook');
       checks.push({
         name: 'Claude Code hooks',
         ok: installed,
-        detail: installed ? settingsPath : `not configured (run: aquaman-coder setup claude-code)`,
+        detail: installed ? settingsPath : 'not configured',
+        fix: installed ? undefined : 'aquaman coder setup claude-code',
       });
     } else {
       checks.push({
         name: 'Claude Code hooks',
         ok: false,
         detail: `${settingsPath} does not exist`,
+        fix: 'aquaman coder setup claude-code',
       });
     }
 
+    // Render
+    console.log('\n  aquaman-coder doctor\n');
     for (const c of checks) {
-      console.log(`  ${c.ok ? 'OK' : 'FAIL'} ${c.name}${c.detail ? '  ' + c.detail : ''}`);
+      const mark = c.ok ? '✓' : '✗';
+      console.log(`  ${mark} ${c.name}${c.detail ? '  ' + c.detail : ''}`);
+      if (!c.ok && c.fix) console.log(`      → ${c.fix}`);
     }
     const fail = checks.some((c) => !c.ok);
+    console.log('');
     process.exit(fail ? 1 : 0);
+  });
+
+// ---------------- status ----------------
+
+program
+  .command('status')
+  .description('Show coder configuration and recent broker activity')
+  .action(async () => {
+    console.log('\n  aquaman-coder status\n');
+
+    // Projects
+    const projectsPath = defaultProjectsPath();
+    if (!fs.existsSync(projectsPath)) {
+      console.log('  Projects: none configured');
+      console.log(`  Add one: aquaman coder project add <name>\n`);
+    } else {
+      try {
+        const projects = loadProjects();
+        const names = Object.keys(projects.projects);
+        console.log(`  Projects: ${names.length} configured (${projectsPath})`);
+        for (const name of names) {
+          const cfg = projects.projects[name];
+          const envCount = Object.keys(cfg.env).length;
+          console.log(`    - ${name}: ${cfg.paths.length} path(s), ${envCount} env binding(s)`);
+        }
+      } catch (err) {
+        console.log(`  Projects: invalid (${(err as Error).message})`);
+      }
+    }
+
+    // Claude Code hooks
+    const settingsPath = defaultSettingsPath();
+    console.log('');
+    if (fs.existsSync(settingsPath)) {
+      const raw = fs.readFileSync(settingsPath, 'utf-8');
+      const installed = raw.includes('aquaman-coder hook') || raw.includes('aquaman coder hook');
+      console.log(`  Claude Code hooks: ${installed ? 'installed' : 'not configured'}`);
+      console.log(`    ${settingsPath}`);
+    } else {
+      console.log('  Claude Code hooks: not configured (settings.json missing)');
+    }
+
+    // Broker connectivity
+    console.log('');
+    const socketPath = defaultSocketPath();
+    const broker = new BrokerClient({ socketPath, timeoutMs: 2000 });
+    try {
+      const health = await broker.health();
+      console.log(`  Broker: reachable (proxy v${health.version ?? '?'})`);
+    } catch (err) {
+      console.log(`  Broker: unreachable (${(err as Error).message})`);
+    }
+    console.log('');
   });
 
 // ---------------- helpers ----------------

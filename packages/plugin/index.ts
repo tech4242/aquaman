@@ -272,8 +272,8 @@ function getStatus(services: string[]) {
     socketPath: socketPath || getDefaultSocketPath(),
     services,
     httpInterceptorActive: httpInterceptor?.isActive() ?? false,
-    ...(cliInstalled ? {} : { fix: "Run: npm install -g aquaman-proxy && aquaman setup" }),
-    ...(!cliInstalled ? {} : proxyManager === null ? { fix: "Run: aquaman setup (or: openclaw aquaman setup)" } : {}),
+    ...(cliInstalled ? {} : { fix: "Run: npm install -g aquaman-proxy && aquaman openclaw setup" }),
+    ...(!cliInstalled ? {} : proxyManager === null ? { fix: "Run: aquaman openclaw setup" } : {}),
     environmentVariables: Object.fromEntries(
       services.map((s) => {
         const key =
@@ -398,7 +398,7 @@ const plugin: OpenClawPluginDefinition = {
         "aquaman proxy not found. Install with: npm install -g aquaman-proxy"
       );
       api.logger.warn(
-        "Then run: aquaman setup"
+        "Then run: aquaman openclaw setup"
       );
       // DO NOT call configureEnvironment() — sentinel URLs without a proxy
       // would break all API calls (connection refused to non-existent socket)
@@ -513,10 +513,10 @@ const plugin: OpenClawPluginDefinition = {
             .description("Run the setup wizard (stores keys, configures backend)")
             .action(async () => {
               try {
-                const exitCode = await execAquamanProxyInteractive(['setup']);
+                const exitCode = await execAquamanProxyInteractive(['openclaw', 'setup']);
                 if (exitCode !== 0) process.exitCode = exitCode;
               } catch {
-                console.log("\n  Run in your terminal:\n    aquaman setup\n");
+                console.log("\n  Run in your terminal:\n    aquaman openclaw setup\n");
               }
             });
 
@@ -525,7 +525,7 @@ const plugin: OpenClawPluginDefinition = {
             .description("Diagnose issues with actionable fixes")
             .action(async () => {
               try {
-                const result = await execAquamanProxyCli(['doctor']);
+                const result = await execAquamanProxyCli(['openclaw', 'doctor']);
                 process.stdout.write(result.stdout);
                 if (result.stderr) process.stderr.write(result.stderr);
                 if (result.exitCode !== 0) process.exitCode = result.exitCode;

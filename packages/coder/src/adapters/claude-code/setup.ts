@@ -34,11 +34,12 @@ export interface SetupResult {
 
 /**
  * Ensure ~/.claude/settings.json has PreToolUse + PostToolUse hooks
- * pointing at `aquaman-coder hook`.
+ * pointing at `aquaman coder hook` (the canonical unified-CLI form;
+ * the `aquaman` binary's `coder` shim execs `aquaman-coder` under the hood).
  */
 export function installClaudeCodeHooks(opts: SetupOptions = {}): SetupResult {
   const settingsPath = opts.settingsPath ?? defaultSettingsPath();
-  const hookCommand = opts.hookCommand ?? 'aquaman-coder hook';
+  const hookCommand = opts.hookCommand ?? 'aquaman coder hook';
 
   const dir = path.dirname(settingsPath);
   if (!fs.existsSync(dir)) {
@@ -62,9 +63,14 @@ export function installClaudeCodeHooks(opts: SetupOptions = {}): SetupResult {
   for (const event of ['PreToolUse', 'PostToolUse']) {
     const list = settings.hooks[event] ?? [];
     // Match by substring so wrapper-script variants like
-    // "/path/to/wrap aquaman-coder hook --debug" still count as installed.
+    // "/path/to/wrap aquaman coder hook --debug" still count as installed.
+    // Also matches the legacy `aquaman-coder hook` form so v0.11.x installs
+    // don't get a duplicate appended on upgrade.
     const alreadyInstalled = list.some((entry) =>
-      entry.hooks?.some((h) => h.command?.includes('aquaman-coder hook'))
+      entry.hooks?.some((h) =>
+        h.command?.includes('aquaman coder hook') ||
+        h.command?.includes('aquaman-coder hook')
+      )
     );
     if (alreadyInstalled) continue;
 
@@ -88,11 +94,12 @@ export function installClaudeCodeHooks(opts: SetupOptions = {}): SetupResult {
 }
 
 /**
- * Remove aquaman-coder hooks from settings.json.
+ * Remove aquaman coder hooks from settings.json (matches both legacy
+ * `aquaman-coder hook` and canonical `aquaman coder hook` forms).
  */
 export function uninstallClaudeCodeHooks(opts: SetupOptions = {}): SetupResult {
   const settingsPath = opts.settingsPath ?? defaultSettingsPath();
-  const hookCommand = opts.hookCommand ?? 'aquaman-coder hook';
+  const hookCommand = opts.hookCommand ?? 'aquaman coder hook';
 
   if (!fs.existsSync(settingsPath)) {
     return { path: settingsPath, changed: false, before: null, after: {} };
@@ -107,7 +114,10 @@ export function uninstallClaudeCodeHooks(opts: SetupOptions = {}): SetupResult {
       settings.hooks[event] = settings.hooks[event]
         .map((entry) => ({
           ...entry,
-          hooks: entry.hooks.filter((h) => !h.command?.includes('aquaman-coder hook')),
+          hooks: entry.hooks.filter((h) =>
+            !h.command?.includes('aquaman coder hook') &&
+            !h.command?.includes('aquaman-coder hook')
+          ),
         }))
         .filter((entry) => entry.hooks.length > 0);
       if (settings.hooks[event].length === 0) {

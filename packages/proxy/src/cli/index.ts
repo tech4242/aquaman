@@ -130,9 +130,9 @@ const program = new Command();
 
 program
   .name('aquaman')
-  .description('Credential isolation layer for OpenClaw - keeps API keys outside the agent process')
+  .description('Credential isolation for AI agents \u2014 vault for the proxy core, OpenClaw plugin path, coding-agent adapter path')
   .version(VERSION)
-  .addHelpText('before', `\n\u{1F531}\u{1F99E} Aquaman ${aqua(VERSION)} \u2014 Credential isolation for OpenClaw\n`)
+  .addHelpText('before', `\n\u{1F531}\u{1F99E} Aquaman ${aqua(VERSION)} \u2014 Credential isolation for AI agents\n`)
   .configureHelp({
     subcommandTerm(cmd) {
       const args = cmd.registeredArguments
@@ -145,8 +145,319 @@ program
     }
   });
 
-// Start command - launches credential proxy + OpenClaw
+// ============================================================================
+// Top-level commands (vault-only, agent-agnostic)
+// ============================================================================
+//
+// `aquaman setup`, `aquaman doctor`, `aquaman status` cover the proxy + vault
+// surface only. For full bundles, use the namespaced versions:
+//   aquaman openclaw setup    full OpenClaw bundle
+//   aquaman coder setup ...   coding-agent adapter
+// ============================================================================
+
+// aquaman setup \u2014 vault-only minimal setup wizard.
 program
+  .command('setup')
+  .description('Vault-only setup wizard \u2014 backend + credentials (use `aquaman openclaw setup` or `aquaman coder setup` for full bundles)')
+  .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, keepassxc, 1password, vault, systemd-creds, bitwarden)')
+  .option('--no-policy', 'Skip request policy preset configuration')
+  .option('--non-interactive', 'Use environment variables instead of prompts (for CI)')
+  .action(async (options) => {
+    await runVaultSetup({
+      backend: options.backend,
+      policy: options.policy !== false,
+      nonInteractive: !!options.nonInteractive,
+    });
+    console.log('');
+    console.log('  Next steps:');
+    console.log('    \u2022 OpenClaw Gateway user?   ' + aqua('aquaman openclaw setup'));
+    console.log('    \u2022 Claude Code / Codex / etc?  ' + aqua('aquaman coder setup claude-code') + ' (requires aquaman-coder)');
+    console.log('');
+  });
+
+// aquaman doctor \u2014 overview with persona-aware soft upsells.
+program
+  .command('doctor')
+  .description('Overview health check (vault + integration summaries with soft upsells)')
+  .action(async () => {
+    const os = await import('node:os');
+    const configDir = getConfigDir();
+    const configPath = path.join(configDir, 'config.yaml');
+    const openclawStateDir = process.env['OPENCLAW_STATE_DIR'] || path.join(os.homedir(), '.openclaw');
+    let issues = 0;
+
+    console.log('');
+    console.log(`  \u{1F531}\u{1F99E} Aquaman ${VERSION} \u2014 health check`);
+    console.log('');
+    console.log(`  ${aqua('Vault')}`);
+
+    // Vault \u2014 config file
+    if (!fs.existsSync(configPath)) {
+      console.log(`    \u2717 Config missing (${configPath})`);
+      console.log('      \u2192 Run: aquaman setup');
+      issues++;
+    } else {
+      // Vault \u2014 backend + creds
+      try {
+        const config = loadConfig();
+        const store = await createCredentialStore({
+          backend: config.credentials.backend,
+          encryptionPassword: config.credentials.encryptionPassword,
+          vaultAddress: config.credentials.vaultAddress,
+          vaultToken: config.credentials.vaultToken,
+          onePasswordVault: config.credentials.onePasswordVault,
+          onePasswordAccount: config.credentials.onePasswordAccount,
+          keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
+          keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
+          bitwardenFolder: config.credentials.bitwardenFolder,
+          bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
+          bitwardenCollectionId: config.credentials.bitwardenCollectionId
+        });
+        const creds = await store.list();
+        console.log(`    \u2713 ${config.credentials.backend} backend (${creds.length} credential${creds.length !== 1 ? 's' : ''})`);
+      } catch (err) {
+        console.log(`    \u2717 Backend not accessible: ${(err as Error).message}`);
+        console.log('      \u2192 Run: aquaman setup');
+        issues++;
+      }
+
+      // Vault \u2014 proxy running
+      const sockPath = path.join(configDir, 'proxy.sock');
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const req = http.request({ socketPath: sockPath, path: '/_health', method: 'GET' }, (res) => {
+            res.resume();
+            res.on('end', () => res.statusCode === 200 ? resolve() : reject(new Error(`HTTP ${res.statusCode}`)));
+          });
+          req.on('error', reject);
+          req.end();
+        });
+        console.log(`    \u2713 Proxy running on socket`);
+      } catch {
+        console.log(`    \u2717 Proxy not running`);
+        console.log('      \u2192 Run: aquaman daemon &');
+        issues++;
+      }
+    }
+
+    // OpenClaw integration
+    let openclawDetected = false;
+    try {
+      const { execSync } = await import('node:child_process');
+      execSync('which openclaw', { stdio: 'pipe' });
+      openclawDetected = true;
+    } catch { /* */ }
+    if (!openclawDetected) openclawDetected = fs.existsSync(openclawStateDir);
+
+    console.log('');
+    console.log(`  ${aqua('OpenClaw integration')}`);
+    if (!openclawDetected) {
+      console.log(`    \u2022 not detected (skipping \u2014 only relevant if you run an OpenClaw Gateway)`);
+    } else {
+      const pluginInstalled = fs.existsSync(path.join(openclawStateDir, 'extensions', 'aquaman-plugin'));
+      if (pluginInstalled) {
+        console.log(`    \u2713 plugin installed   (deep: ${aqua('aquaman openclaw doctor')})`);
+      } else {
+        console.log(`    \u2717 plugin not installed`);
+        console.log('      \u2192 Run: aquaman openclaw setup');
+        issues++;
+      }
+    }
+
+    // Coder integration
+    const projectsYaml = path.join(configDir, 'projects.yaml');
+    const claudeSettings = path.join(os.homedir(), '.claude', 'settings.json');
+    let coderConfigured = fs.existsSync(projectsYaml);
+    if (!coderConfigured && fs.existsSync(claudeSettings)) {
+      try {
+        const raw = fs.readFileSync(claudeSettings, 'utf-8');
+        coderConfigured = raw.includes('aquaman-coder hook') || raw.includes('aquaman coder hook');
+      } catch { /* */ }
+    }
+    console.log('');
+    console.log(`  ${aqua('Coder integration')}`);
+    if (coderConfigured) {
+      console.log(`    \u2713 configured   (deep: ${aqua('aquaman coder doctor')})`);
+    } else {
+      console.log(`    \u2022 not configured`);
+      console.log(`      Your coding agents (Claude Code, Codex, \u2026) could use the same`);
+      console.log(`      vault protection. Install: ${aqua('npm install -g aquaman-coder')}`);
+    }
+
+    console.log('');
+    if (issues === 0) {
+      console.log('  All baseline checks passed.');
+    } else {
+      console.log(`  ${issues} issue${issues > 1 ? 's' : ''} found in baseline. Fix above and re-run.`);
+    }
+    console.log('');
+    process.exitCode = issues > 0 ? 1 : 0;
+  });
+
+// aquaman status \u2014 proxy overview.
+program
+  .command('status')
+  .description('Proxy daemon status overview')
+  .action(async () => {
+    const config = loadConfig();
+    console.log('aquaman status\n');
+    console.log('Configuration:');
+    console.log(`  Config dir: ${getConfigDir()}`);
+    console.log(`  Backend:    ${config.credentials.backend}`);
+    console.log(`  Socket:     ${path.join(getConfigDir(), 'proxy.sock')}`);
+    console.log(`  Audit:      ${config.audit.enabled ? 'enabled' : 'disabled'}`);
+    console.log('\nProxied services:');
+    for (const svc of config.credentials.proxiedServices) console.log(`  - ${svc}`);
+
+    const sockPath = path.join(getConfigDir(), 'proxy.sock');
+    try {
+      const body = await new Promise<string>((resolve, reject) => {
+        const req = http.request({ socketPath: sockPath, path: '/_health', method: 'GET' }, (res) => {
+          let buf = '';
+          res.on('data', (c) => { buf += c; });
+          res.on('end', () => resolve(buf));
+        });
+        req.on('error', reject);
+        req.end();
+      });
+      const health = JSON.parse(body);
+      console.log(`\nProxy: running (v${health.version}, uptime ${Math.floor(health.uptime ?? 0)}s)`);
+    } catch {
+      console.log('\nProxy: not running');
+    }
+
+    console.log('\nFor agent-specific status: aquaman openclaw status / aquaman coder status');
+  });
+
+// ---------------- Shared helper: vault-only setup ----------------
+async function runVaultSetup(opts: { backend?: string; policy: boolean; nonInteractive: boolean; quiet?: boolean }):
+  Promise<{ store: import('../core/index.js').CredentialStore; storedServices: string[]; backend: string }> {
+  const os = await import('node:os');
+  const configDir = getConfigDir();
+  const configPath = path.join(configDir, 'config.yaml');
+
+  if (!opts.quiet) console.log('\n  \u{1F531} Vault setup\n');
+
+  // Backend detection
+  const platform = os.platform();
+  let backend = opts.backend;
+  if (!backend) {
+    if (platform === 'darwin') {
+      backend = 'keychain';
+    } else {
+      try {
+        const { execSync } = await import('node:child_process');
+        execSync('pkg-config --exists libsecret-1', { stdio: 'pipe' });
+        backend = 'keychain';
+      } catch {
+        const { isSystemdCredsAvailable } = await import('../core/credentials/backends/systemd-creds.js');
+        backend = isSystemdCredsAvailable() ? 'systemd-creds' : 'encrypted-file';
+      }
+    }
+  }
+  const validBackends = ['keychain', 'encrypted-file', 'keepassxc', '1password', 'vault', 'systemd-creds', 'bitwarden'];
+  if (!validBackends.includes(backend)) {
+    console.error(`  Invalid backend: ${backend}. Valid: ${validBackends.join(', ')}`);
+    process.exit(1);
+  }
+
+  if (!opts.quiet) {
+    const platformLabel = platform === 'darwin' ? 'macOS' : platform === 'linux' ? 'Linux' : platform;
+    console.log(`  Platform: ${platformLabel}`);
+    console.log(`  Backend:  ${backend}\n`);
+  }
+
+  ensureConfigDir();
+  let config = getDefaultConfig();
+  if (fs.existsSync(configPath)) {
+    config = loadConfig();
+  }
+  config.credentials.backend = backend as any;
+  fs.writeFileSync(configPath, yamlStringify(config), { encoding: 'utf-8', mode: 0o600 });
+
+  const auditDir = path.join(configDir, 'audit');
+  fs.mkdirSync(auditDir, { recursive: true, mode: 0o700 });
+
+  let store: import('../core/index.js').CredentialStore;
+  try {
+    store = await createCredentialStore({
+      backend: config.credentials.backend,
+      encryptionPassword: config.credentials.encryptionPassword || process.env['AQUAMAN_ENCRYPTION_PASSWORD'] || process.env['AQUAMAN_KEEPASS_PASSWORD'],
+      vaultAddress: config.credentials.vaultAddress || process.env['VAULT_ADDR'],
+      vaultToken: config.credentials.vaultToken || process.env['VAULT_TOKEN'],
+      onePasswordVault: config.credentials.onePasswordVault,
+      onePasswordAccount: config.credentials.onePasswordAccount,
+      keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
+      keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
+      bitwardenFolder: config.credentials.bitwardenFolder,
+      bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
+      bitwardenCollectionId: config.credentials.bitwardenCollectionId
+    });
+  } catch (err) {
+    console.error(`  Failed to initialize ${backend}: ${err instanceof Error ? err.message : err}`);
+    process.exit(1);
+  }
+
+  const storedServices: string[] = [];
+  if (opts.nonInteractive) {
+    const anth = process.env['ANTHROPIC_API_KEY'];
+    if (anth) { await store.set('anthropic', 'api_key', anth); storedServices.push('anthropic'); console.log('  \u2713 Stored anthropic/api_key'); }
+    const op = process.env['OPENAI_API_KEY'];
+    if (op) { await store.set('openai', 'api_key', op); storedServices.push('openai'); console.log('  \u2713 Stored openai/api_key'); }
+  } else {
+    const readline = await import('node:readline');
+    const promptSecret = (prompt: string): Promise<string> => new Promise((resolve) => {
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      if (process.stdin.isTTY) {
+        process.stdout.write(prompt);
+        const stdin = process.stdin;
+        stdin.setRawMode(true);
+        stdin.resume();
+        let input = '';
+        const onData = (data: Buffer) => {
+          const char = data.toString();
+          if (char === '\n' || char === '\r') {
+            stdin.setRawMode(false); stdin.removeListener('data', onData); stdin.pause(); rl.close();
+            process.stdout.write('\n'); resolve(input.trim());
+          } else if (char === '\x7f' || char === '\b') { input = input.slice(0, -1); }
+          else if (char === '\x03') { stdin.setRawMode(false); process.exit(0); }
+          else { input += char; }
+        };
+        stdin.on('data', onData);
+      } else {
+        rl.question(prompt, (a) => { rl.close(); resolve(a.trim()); });
+      }
+    });
+    const anth = await promptSecret('  ? Anthropic API key (or Enter to skip): ');
+    if (anth) { await store.set('anthropic', 'api_key', anth); storedServices.push('anthropic'); console.log('    \u2713 anthropic/api_key\n'); }
+    const op = await promptSecret('  ? OpenAI API key (or Enter to skip): ');
+    if (op) { await store.set('openai', 'api_key', op); storedServices.push('openai'); console.log('    \u2713 openai/api_key\n'); }
+  }
+
+  if (opts.policy && storedServices.length > 0) {
+    const presets = getDefaultPolicyPresets();
+    const policyToApply: Record<string, any> = {};
+    for (const svc of storedServices) {
+      if (presets[svc]) policyToApply[svc] = presets[svc];
+    }
+    if (Object.keys(policyToApply).length > 0) {
+      config.policy = policyToApply;
+      saveConfig(config);
+      if (!opts.quiet) console.log('  \u2713 Default policy presets applied.\n');
+    }
+  }
+
+  return { store, storedServices, backend: backend as string };
+}
+
+// OpenClaw integration namespace \u2014 full bundle setup, deep doctor/status,
+// migration tools, and the (hidden) plugin-mode entry the plugin spawns.
+const openclaw = program
+  .command('openclaw')
+  .description('OpenClaw Gateway integration (full setup, deep diagnostics, migration)');
+
+// openclaw start \u2014 launches credential proxy + OpenClaw
+openclaw
   .command('start')
   .description('Start credential proxy and launch OpenClaw')
   .option('-w, --workspace <path>', 'Workspace directory for OpenClaw')
@@ -431,9 +742,9 @@ program
   });
 
 // Plugin mode command - for use when managed by OpenClaw plugin
-program
-  .command('plugin-mode')
-  .description('Run in plugin mode (managed by OpenClaw plugin)')
+openclaw
+  .command('plugin-mode', { hidden: true })
+  .description('Run in plugin mode (invoked by OpenClaw plugin, not by humans)')
   .action(async () => {
     const config = loadConfig();
     const socketPath = path.join(getConfigDir(), 'proxy.sock');
@@ -520,8 +831,8 @@ program
     process.on('SIGTERM', shutdown);
   });
 
-// Configure command - write OpenClaw environment configuration
-program
+// openclaw configure — write OpenClaw environment configuration
+openclaw
   .command('configure')
   .description('Generate environment configuration for OpenClaw')
   .option('--method <method>', 'Output method: env, dotenv, shell-rc', 'env')
@@ -591,11 +902,13 @@ program
   });
 
 // Setup command - all-in-one guided onboarding
-program
+// openclaw setup — full OpenClaw bundle: vault wizard + plugin install +
+// openclaw.json wiring + auth-profiles.json + optional auto-migration.
+openclaw
   .command('setup')
-  .description('All-in-one setup wizard — creates config, stores credentials, installs plugin')
+  .description('Full setup for OpenClaw — vault + plugin + auth profiles + (optional) auto-migrate')
   .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, keepassxc, 1password, vault, systemd-creds, bitwarden)')
-  .option('--no-openclaw', 'Skip OpenClaw plugin installation')
+  .option('--no-openclaw', 'Skip OpenClaw plugin installation step (run vault setup only)')
   .option('--no-policy', 'Skip request policy preset configuration')
   .option('--non-interactive', 'Use environment variables instead of prompts (for CI)')
   .action(async (options) => {
@@ -1059,10 +1372,12 @@ program
     console.log('');
   });
 
-// Doctor command - diagnostic tool
-program
+// openclaw doctor — deep diagnostic for the OpenClaw integration. Includes
+// the agent-agnostic vault/audit/policy checks too so a single command gives
+// the OpenClaw operator the full picture.
+openclaw
   .command('doctor')
-  .description('Check aquaman configuration and diagnose issues')
+  .description('Deep diagnostic for the OpenClaw integration (vault + plugin + auth profiles)')
   .action(async () => {
     const os = await import('node:os');
     const configDir = getConfigDir();
@@ -1397,7 +1712,7 @@ program
           for (const c of unmigrated) {
             console.log(`    ${c.service}/${c.key} \u2190 ${c.source}`);
           }
-          console.log('    \u2192 Run: aquaman migrate openclaw --auto');
+          console.log('    \u2192 Run: aquaman openclaw migrate --auto');
           issues++;
         }
 
@@ -1833,10 +2148,8 @@ policy
   });
 
 // Migration commands
-const migrate = program.command('migrate').description('Migrate credentials from other sources');
-
-migrate
-  .command('openclaw')
+openclaw
+  .command('migrate')
   .description('Migrate channel credentials from openclaw.json into aquaman')
   .option('-c, --config <path>', 'Path to openclaw.json')
   .option('--dry-run', 'Show what would be migrated without writing')
@@ -2274,9 +2587,10 @@ migrate
   });
 
 // Status command
-program
+// openclaw status — deep status for the OpenClaw integration.
+openclaw
   .command('status')
-  .description('Show aquaman status')
+  .description('OpenClaw-specific status (plugin lifecycle, sentinel env vars)')
   .action(async () => {
     const config = loadConfig();
 
@@ -2361,6 +2675,50 @@ function formatEntry(entry: any): string {
       return JSON.stringify(entry.data).slice(0, 80);
   }
 }
+
+// ---------------- coder namespace (shim → aquaman-coder bin) ----------------
+//
+// The `aquaman coder *` namespace presents a unified user-facing surface for
+// the coding-agent adapter. The actual implementation lives in the separate
+// `aquaman-coder` package (see packages/coder/). This shim execs that binary
+// with the remaining argv, so the proxy CLI never imports coder code — the
+// `proxy → coder ✗` boundary in docs/PACKAGES.md stays intact.
+//
+// If aquaman-coder isn't installed, we print a clear install hint.
+
+// Intercept `aquaman coder ...` BEFORE Commander parses it, so the catch-all
+// behavior is exact: every token after `coder` flows through to the
+// aquaman-coder binary verbatim, including --flags Commander would otherwise
+// interpret as unknown options.
+//
+// Only intercept when `coder` is the first command token (argv[2]). This
+// avoids false positives like `aquaman policy test coder/api /foo` where
+// `coder` appears as a positional argument elsewhere.
+if (process.argv[2] === 'coder') {
+  const subArgs = process.argv.slice(3);
+  const { spawnSync } = await import('node:child_process');
+  const result = spawnSync('aquaman-coder', subArgs, { stdio: 'inherit' });
+  if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') {
+    console.error('aquaman-coder is not installed.');
+    console.error('Install it with: npm install -g aquaman-coder');
+    process.exit(127);
+  }
+  if (result.error) {
+    console.error(`Failed to run aquaman-coder: ${result.error.message}`);
+    process.exit(1);
+  }
+  process.exit(result.status ?? 0);
+}
+
+// Register the `coder` namespace so it shows up in `aquaman --help`.
+// Its action is unreachable (the intercept above bypasses Commander entirely),
+// but documentation matters.
+program
+  .command('coder')
+  .description('AI coding-agent integration (delegates to `aquaman-coder`)')
+  .allowUnknownOption()
+  .helpOption(false)
+  .action(() => { /* unreachable — handled by intercept */ });
 
 // Show help when run without arguments (like openclaw does)
 if (process.argv.length <= 2) {

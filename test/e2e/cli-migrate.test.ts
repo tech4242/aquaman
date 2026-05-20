@@ -19,7 +19,7 @@ function runMigrate(
   tempEnv: TempEnv
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   return new Promise((resolve) => {
-    const proc = spawn('npx', ['tsx', CLI_PATH, 'migrate', 'openclaw', '--auto', ...args], {
+    const proc = spawn('npx', ['tsx', CLI_PATH, 'openclaw', 'migrate', '--auto', ...args], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,

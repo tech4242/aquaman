@@ -203,7 +203,7 @@ describe('plugin-mode hostMap in startup JSON', () => {
   // Flaky: plugin-mode spawn sometimes exits before producing output
   it.skip('startup JSON includes hostMap with builtin patterns', async () => {
     const connectionInfo = await new Promise<any>((resolve, reject) => {
-      const proc = spawn('npx', ['tsx', CLI_PATH, 'plugin-mode'], {
+      const proc = spawn('npx', ['tsx', CLI_PATH, 'openclaw', 'plugin-mode'], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env },
       });

@@ -72,7 +72,7 @@ The plugin (`packages/plugin/`) integrates with the OpenClaw Gateway's plugin SD
 2. On load: reads `services` from `api.pluginConfig` (defaults to `["anthropic", "openai"]`)
 3. On load: auto-generates `auth-profiles.json` with placeholder keys if missing
 4. On load: sets `ANTHROPIC_BASE_URL=http://aquaman.local/anthropic`, `OPENAI_BASE_URL=http://aquaman.local/openai` (sentinel hostname routed to UDS)
-5. Via `registerService('aquaman-proxy')`: spawns `aquaman plugin-mode` via `ProxyManager` (from `src/proxy-manager.ts`) — proxy listens on UDS (`~/.aquaman/proxy.sock`)
+5. Via `registerService('aquaman-proxy')`: spawns `aquaman openclaw plugin-mode` via `ProxyManager` (from `src/proxy-manager.ts`) — proxy listens on UDS (`~/.aquaman/proxy.sock`). (v0.12.0+ moved this under the `openclaw` namespace; earlier versions used `aquaman plugin-mode`.)
 6. Via `registerService('aquaman-proxy')`: activates `globalThis.fetch` interceptor to redirect channel API traffic through proxy
 7. Via `registerService('aquaman-proxy')` stop: deactivates interceptor, stops proxy via `ProxyManager`
 8. Registers `/aquaman-status` command (human-facing), `aquaman_status` tool (agent-facing), and `/aquaman` CLI commands
@@ -184,7 +184,7 @@ When Claude Code runs `Bash` in `~/code/my-app/anything`, the hook rewrites `com
 npm install -g aquaman-proxy aquaman-coder
 
 # 2. Store credentials in your chosen backend
-aquaman setup           # writes ~/.aquaman/config.yaml, picks backend
+aquaman setup           # vault-only wizard (writes ~/.aquaman/config.yaml, picks backend)
 aquaman credentials add anthropic api_key sk-ant-...
 aquaman credentials add github token ghp_...
 
@@ -192,15 +192,16 @@ aquaman credentials add github token ghp_...
 aquaman daemon &
 
 # 4. Declare a project
-aquaman-coder project add my-app --path ~/code/my-app \
+aquaman coder project add my-app --path ~/code/my-app \
   --env ANTHROPIC_API_KEY=aquaman://anthropic/api_key \
   --env GITHUB_TOKEN=aquaman://github/token
 
 # 5. Wire Claude Code hooks
-aquaman-coder setup claude-code
+aquaman coder setup claude-code
 
 # 6. Verify
-aquaman-coder doctor
+aquaman doctor          # overview — should show vault + coder both green
+aquaman coder doctor    # deep diagnostic for the coder integration
 ```
 
 ## Architecture Notes
@@ -246,45 +247,71 @@ Builtin service definitions (anthropic, openai, telegram, etc.) cannot be overri
 - `override()` still works — only used programmatically in tests (requires code-level access)
 - `ServiceRegistry.isBuiltinService(name)` checks whether a name is protected
 
-## CLI: `aquaman setup`
+## CLI shape (v0.12.0+)
 
-All-in-one guided onboarding wizard. Replaces 6 manual steps with one command:
+The `aquaman` binary exposes commands at three levels:
 
-```bash
-aquaman setup                           # Interactive — prompts for API keys
-aquaman setup --non-interactive         # Uses env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY)
-aquaman setup --backend encrypted-file  # Override auto-detected backend
-aquaman setup --no-openclaw             # Skip plugin installation
-```
-
-**What it does:**
-1. Detects platform → picks default backend (macOS=keychain, Linux=keychain if libsecret, else systemd-creds if available, else encrypted-file)
-2. Runs `init` internally (creates `~/.aquaman/`, config.yaml, audit dir)
-3. Prompts for Anthropic + OpenAI API keys (interactive) or reads from env vars (non-interactive)
-4. Detects OpenClaw (`~/.openclaw/` or `which openclaw`)
-5. If OpenClaw found: installs plugin, writes openclaw.json, generates auth-profiles.json
-6. Prints success message
-
-**Non-interactive env vars:** `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AQUAMAN_ENCRYPTION_PASSWORD`, `AQUAMAN_KEEPASS_PASSWORD`, `VAULT_ADDR`, `VAULT_TOKEN`, `BW_SESSION`
-
-## CLI: `aquaman doctor`
-
-Diagnostic tool that checks configuration and prints fixes:
+**Top-level (vault-only, agent-agnostic):**
 
 ```bash
-aquaman doctor    # Exit code 0 = all pass, 1 = issues found
+aquaman setup        # vault wizard — backend + creds only
+aquaman doctor       # overview health check with persona-aware soft upsells
+aquaman status       # proxy daemon overview
+aquaman daemon       # run proxy in foreground
+aquaman stop         # stop the daemon
+aquaman init         # low-level config bootstrap
+
+aquaman credentials add/list/delete/guide
+aquaman audit tail/verify/rotate
+aquaman services list/validate
+aquaman policy list/test
 ```
 
-**Checks:**
-1. `~/.aquaman/config.yaml` exists
-2. Backend accessible
-3. Credentials stored (count and names)
-4. Proxy running on socket (`/_health` via UDS)
-5. OpenClaw detected
-6. Plugin installed in extensions dir
-7. `openclaw.json` has aquaman-plugin entry
-8. `auth-profiles.json` exists
-9. Unmigrated plaintext credentials (cross-references against secure store — already-migrated show "Cleanup needed" instead of "Unmigrated")
+**`aquaman openclaw …` (OpenClaw Gateway integration):**
+
+```bash
+aquaman openclaw setup       # full bundle: vault + plugin + auth-profiles.json
+aquaman openclaw doctor      # deep diagnostic for the OpenClaw integration
+aquaman openclaw status      # plugin lifecycle + sentinel env vars
+aquaman openclaw start       # spawn proxy + launch OpenClaw
+aquaman openclaw configure   # generate env vars for OpenClaw
+aquaman openclaw migrate     # migrate plaintext credentials from openclaw.json
+# aquaman openclaw plugin-mode is hidden — invoked by the plugin's ProxyManager only
+```
+
+**`aquaman coder …` (AI coding-agent integration; delegates to `aquaman-coder` binary):**
+
+```bash
+aquaman coder setup <agent>   # install hooks (claude-code today; codex/opencode/cursor planned)
+aquaman coder doctor          # deep diagnostic — projects + broker + per-project vault checks
+aquaman coder status          # configured projects + hook wiring + broker activity
+aquaman coder project list/add/remove
+aquaman coder get <ref>       # one-shot resolve of an aquaman://service/key ref
+aquaman coder exec <cmd>      # run a command with project env injected + output redacted
+# aquaman coder hook is hidden — invoked by Claude Code via stdio
+```
+
+The triplet pattern (`setup` / `doctor` / `status`) appears at all three levels: top-level shows overview, namespaced versions show deep details.
+
+### Setup wizard (`aquaman setup` vs `aquaman openclaw setup`)
+
+| Command | What it does |
+|---|---|
+| `aquaman setup` | Vault only — detects platform, picks default backend, prompts for Anthropic + OpenAI keys, applies policy presets. |
+| `aquaman openclaw setup` | Vault setup *plus* installs the OpenClaw plugin into `~/.openclaw/extensions/aquaman-plugin/`, writes/merges `~/.openclaw/openclaw.json`, generates `auth-profiles.json` placeholder, optionally auto-migrates plaintext credentials. |
+| `aquaman coder setup claude-code` | Writes the Claude Code hook entry into `~/.claude/settings.json` (atomic, mode `0o600`). Idempotent. Vault must already be configured. |
+
+**Common flags (all setup forms):** `--backend <backend>`, `--non-interactive` (for CI; reads from env vars `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AQUAMAN_ENCRYPTION_PASSWORD`, `AQUAMAN_KEEPASS_PASSWORD`, `VAULT_ADDR`, `VAULT_TOKEN`, `BW_SESSION`), `--no-policy` (skip preset configuration).
+
+### Doctor (persona-aware)
+
+| Command | What it shows |
+|---|---|
+| `aquaman doctor` | Three-section overview: Vault (config + backend + proxy + creds count), OpenClaw integration (one-line if detected; neutral skip if not), Coder integration (one-line if configured; soft upsell suggesting `npm install -g aquaman-coder` if not). |
+| `aquaman openclaw doctor` | Deep OpenClaw diagnostic — plugin installed + version match, openclaw.json plugin entry, plugins.allow trust list, auth-profiles.json, unmigrated plaintext credentials. |
+| `aquaman coder doctor` | Deep coder diagnostic — projects.yaml exists and parses, broker reachable, each project's declared `aquaman://service/key` refs resolve through the vault, Claude Code hooks installed. |
+
+Exit code: 0 if all green, 1 if any check failed.
 
 ## Auto auth-profiles Generation
 
@@ -294,7 +321,7 @@ The plugin (`packages/plugin/index.ts`) auto-generates `~/.openclaw/agents/main/
 
 - **Proxy 401 (credential not found):** Returns JSON `{ "error": "...", "fix": "Run: aquaman credentials add <service> <key>" }`
 - **Plugin: proxy start failure:** Checks for stale socket file at `~/.aquaman/proxy.sock`
-- **Plugin: CLI not found:** Suggests `npm install -g aquaman-proxy` then `aquaman setup`
+- **Plugin: CLI not found:** Suggests `npm install -g aquaman-proxy` then `aquaman openclaw setup`
 
 ## Development Commands
 
@@ -324,7 +351,7 @@ Since the Gateway runs on Unix-like systems, backend choice depends on deploymen
 | `systemd-creds` | Linux (systemd ≥ 256) | TPM2-backed, no root needed, no master password |
 | `bitwarden` | Any (via `bw` CLI) | Bitwarden users |
 
-Backend selection is auto-detected by `aquaman setup` (macOS → keychain; Linux → keychain if libsecret, else systemd-creds if systemd ≥ 256, else encrypted-file). Maintainer-level details of each backend (file layout, encryption flow, in-memory caching) are in `OPERATIONS.md`.
+Backend selection is auto-detected by `aquaman setup` and `aquaman openclaw setup` (macOS → keychain; Linux → keychain if libsecret, else systemd-creds if systemd ≥ 256, else encrypted-file). Maintainer-level details of each backend (file layout, encryption flow, in-memory caching) are in `OPERATIONS.md`.
 
 ## Testing
 

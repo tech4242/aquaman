@@ -17,7 +17,7 @@ Aquaman is a monorepo with three packages. Each has a sharp, named role. We keep
 
 **Does not know about:** OpenClaw, Claude Code, Codex, OpenCode, Cursor, or any other specific agent / runtime. If a feature only makes sense for one ecosystem, **it does not belong here**.
 
-**Transitional exception (v0.12.0):** OpenClaw-aware helpers in `src/openclaw/` and the OpenClaw-aware branches in the proxy CLI (`start`, `configure`, `plugin-mode`, `openclaw` subcommand) are inherited from the v0.11.x architecture. They get carved out into `packages/plugin` over the course of v0.12.0 commits, not all at once. **No new agent-aware code is added to proxy under any circumstances.**
+**Transitional exception (v0.12.0):** OpenClaw-aware helpers in `src/openclaw/` and the OpenClaw-aware branches in the proxy CLI (the `aquaman openclaw` namespace — `setup`, `doctor`, `status`, `start`, `configure`, `migrate`, `plugin-mode`) are inherited from the v0.11.x architecture. The carve-out into `packages/plugin` is a v0.13.0+ refactor. The `aquaman coder` namespace is a **shim** that execs the `aquaman-coder` binary, not an import — so the boundary holds. **No new agent-aware code is imported into proxy under any circumstances.**
 
 ## packages/plugin — `aquaman-plugin` on npm + ClawHub
 

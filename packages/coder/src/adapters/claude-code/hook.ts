@@ -53,8 +53,13 @@ export interface HookContext {
   wrapperPrefix?: string;
 }
 
+// Default wrapper uses the direct binary form (`aquaman-coder exec`) rather
+// than the unified-CLI form (`aquaman coder exec`) to skip the shim's
+// process-spawn overhead on every Bash tool call. Both forms work; the
+// rewrite check below matches either so manually-wrapped commands aren't
+// double-wrapped.
 const DEFAULT_WRAPPER = 'aquaman-coder exec --';
-const AQUAMAN_WRAPPER_MARK = 'aquaman-coder exec';
+const AQUAMAN_WRAPPER_MARKS = ['aquaman-coder exec', 'aquaman coder exec'];
 
 /**
  * If the project map has env bindings AND this is a Bash tool call AND
@@ -80,7 +85,7 @@ export async function handlePreToolUse(
   if (!command) return null;
 
   // Avoid wrapping ourselves recursively.
-  if (command.includes(AQUAMAN_WRAPPER_MARK)) return null;
+  if (AQUAMAN_WRAPPER_MARKS.some((m) => command.includes(m))) return null;
 
   // Quick health check on the broker — if the proxy isn't running, deny
   // loudly so the user knows the credentials won't be available.

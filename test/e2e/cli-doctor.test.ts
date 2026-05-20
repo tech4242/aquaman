@@ -17,7 +17,7 @@ function runDoctor(
   extraEnv: Record<string, string> = {}
 ): { stdout: string; stderr: string; exitCode: number | null } {
   try {
-    const stdout = execSync(`npx tsx ${CLI_PATH} doctor`, {
+    const stdout = execSync(`npx tsx ${CLI_PATH} openclaw doctor`, {
       encoding: 'utf-8',
       env: {
         ...process.env,

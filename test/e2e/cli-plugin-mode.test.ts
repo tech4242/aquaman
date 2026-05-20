@@ -48,7 +48,7 @@ describe('CLI plugin-mode E2E', () => {
     extraArgs: string[] = []
   ): Promise<{ connectionInfo: any; child: ChildProcess; stderr: string }> {
     return new Promise((resolve, reject) => {
-      const proc = spawn('npx', ['tsx', CLI_PATH, 'plugin-mode', ...extraArgs], {
+      const proc = spawn('npx', ['tsx', CLI_PATH, 'openclaw', 'plugin-mode', ...extraArgs], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env },
       });
@@ -190,7 +190,7 @@ describe('CLI plugin-mode E2E', () => {
     delete cleanEnv['VAULT_ADDR'];
     delete cleanEnv['VAULT_TOKEN'];
 
-    const proc = spawn('npx', ['tsx', CLI_PATH, 'plugin-mode'], {
+    const proc = spawn('npx', ['tsx', CLI_PATH, 'openclaw', 'plugin-mode'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...cleanEnv, AQUAMAN_CONFIG_DIR: tmpDir },
     });
@@ -247,7 +247,7 @@ describe('CLI plugin-mode E2E', () => {
       'utf-8'
     );
 
-    const proc = spawn('npx', ['tsx', CLI_PATH, 'plugin-mode'], {
+    const proc = spawn('npx', ['tsx', CLI_PATH, 'openclaw', 'plugin-mode'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,

@@ -27,8 +27,8 @@ describe('aquaman-coder / claude-code setup', () => {
     expect(fs.existsSync(settingsPath)).toBe(true);
 
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-    expect(settings.hooks.PreToolUse[0].hooks[0].command).toBe('aquaman-coder hook');
-    expect(settings.hooks.PostToolUse[0].hooks[0].command).toBe('aquaman-coder hook');
+    expect(settings.hooks.PreToolUse[0].hooks[0].command).toBe('aquaman coder hook');
+    expect(settings.hooks.PostToolUse[0].hooks[0].command).toBe('aquaman coder hook');
   });
 
   it('preserves unrelated settings keys', () => {

@@ -1,66 +1,86 @@
 # aquaman-proxy
 
-The proxy daemon and CLI for [aquaman](https://github.com/tech4242/aquaman) — API key protection for OpenClaw. Credentials stay in your vault, never in the agent's memory.
+The vault + daemon + audit core of [aquaman](https://github.com/tech4242/aquaman). API key protection for AI agents — credentials stay in your vault, never in the agent's memory.
+
+This is the **always-on piece**: every other aquaman package (`aquaman-plugin` for OpenClaw, `aquaman-coder` for AI coding agents) talks to it. If you only install one aquaman package, install this one.
 
 ```
-Agent / OpenClaw Gateway              Aquaman Proxy
-┌──────────────────────┐              ┌──────────────────────┐
-│                      │              │                      │
-│  ANTHROPIC_BASE_URL  │══ Unix ═════>│  Keychain / 1Pass /  │
-│  = aquaman.local     │   Domain     │  Vault / Encrypted   │
-│                      │<═ Socket ════│                      │
-│  fetch() interceptor │══ (UDS) ════>│  + Policy enforced   │
-│  redirects channel   │              │  + Auth injected:    │
-│  API traffic         │              │    header / url-path │
-│                      │              │    basic / oauth     │
-│                      │              │                      │
-│  No credentials.     │  ~/.aquaman/ │                      │
-│  No open ports.      │  proxy.sock  │                      │
-│  Nothing to steal.   │  (chmod 600) │                      │
-└──────────────────────┘              └───┬──────────┬───────┘
-                                         │          │
-                                         │          ▼
-                                         │  ~/.aquaman/audit/
-                                         │  (hash-chained log)
-                                         ▼
-                               api.anthropic.com
-                               api.mistral.ai
-                               api.telegram.org
-                               slack.com/api  ...
+Agent / OpenClaw / Coding Agent              Aquaman Proxy
+┌──────────────────────┐                     ┌──────────────────────┐
+│                      │                     │                      │
+│  ANTHROPIC_BASE_URL  │═══════ UDS ════════>│  Keychain / 1Pass /  │
+│  = aquaman.local     │                     │  Vault / Encrypted   │
+│                      │<══════════════════  │                      │
+│  fetch() interceptor │═══ broker:resolve ═>│  + Policy enforced   │
+│  redirects channel   │                     │  + Auth injected:    │
+│  API traffic         │                     │    header / url-path │
+│                      │  ~/.aquaman/        │    basic / oauth     │
+│  No credentials.     │  proxy.sock         │                      │
+│  No open ports.      │  (chmod 0o600)      │                      │
+│  Nothing to steal.   │                     │                      │
+└──────────────────────┘                     └───┬──────────┬───────┘
+                                                │          │
+                                                │          ▼
+                                                │  ~/.aquaman/audit/
+                                                │  (hash-chained log)
+                                                ▼
+                                      api.anthropic.com
+                                      api.mistral.ai
+                                      api.telegram.org
+                                      slack.com/api  …
 ```
 
-This package is the right side — a reverse proxy on a Unix domain socket that stores credentials in secure backends, enforces request policies, injects auth headers, and logs every access. The agent never sees a key.
-
-## Quick Start
+## Install
 
 ```bash
-npm install -g aquaman-proxy              # 1. install the proxy CLI
-aquaman setup                             # 2. store your API keys, install plugin
-openclaw                                  # 3. done — proxy starts automatically
+npm install -g aquaman-proxy
+aquaman setup           # backend wizard + store keys
+aquaman daemon &        # start the proxy on ~/.aquaman/proxy.sock
 ```
-
-> **Installed via ClawHub?** The proxy is already bundled with the plugin.
-> Run `openclaw aquaman setup` to store your keys.
-
-Troubleshooting: `aquaman doctor`
 
 ## CLI
 
+The `aquaman` binary surfaces three command surfaces:
+
+### Top-level (vault, agent-agnostic)
+
 | Command | Description |
-|---------|-------------|
-| `aquaman setup` | Guided onboarding (stores keys, installs plugin, applies policy defaults) |
-| `aquaman doctor` | Diagnose issues with actionable fixes |
+|---|---|
+| `aquaman setup` | Vault-only wizard — backend + credentials. For full OpenClaw bundle: `aquaman openclaw setup`. |
+| `aquaman doctor` | Overview health check (vault + integration summaries with soft upsells) |
+| `aquaman status` | Proxy daemon overview |
+| `aquaman daemon` | Run the proxy in foreground |
+| `aquaman stop` | Stop a running daemon |
+| `aquaman init` | Low-level config bootstrap (called by `setup`) |
 | `aquaman credentials add <svc> <key>` | Store a credential |
-| `aquaman credentials list` | List stored credentials |
-| `aquaman migrate openclaw --auto` | Migrate plaintext secrets to secure store |
-| `aquaman daemon` | Run proxy in foreground |
-| `aquaman start` | Start proxy + launch OpenClaw |
-| `aquaman stop` | Stop running proxy |
-| `aquaman status` | Show config and proxy status |
-| `aquaman policy list` | List configured policy rules |
-| `aquaman policy test <svc> <method> <path>` | Dry-run a request against policy rules |
-| `aquaman audit tail` | Recent audit entries |
-| `aquaman audit verify` | Verify hash chain integrity |
+| `aquaman credentials list` / `delete` / `guide` | Vault CRUD + setup help |
+| `aquaman audit tail` / `verify` / `rotate` | Audit log management |
+| `aquaman services list` / `validate` | Service registry inspection |
+| `aquaman policy list` / `test <svc> <method> <path>` | Policy inspection + dry-run |
+
+### `aquaman openclaw …` (OpenClaw Gateway integration)
+
+| Command | Description |
+|---|---|
+| `aquaman openclaw setup` | Full OpenClaw bundle: vault wizard + plugin install + auth-profiles.json |
+| `aquaman openclaw doctor` | Deep diagnostic for the OpenClaw integration |
+| `aquaman openclaw status` | Plugin lifecycle, sentinel env vars |
+| `aquaman openclaw start` | Spawn proxy + launch OpenClaw |
+| `aquaman openclaw configure` | Generate env vars for OpenClaw |
+| `aquaman openclaw migrate` | Move plaintext credentials from `~/.openclaw/openclaw.json` into the vault |
+
+### `aquaman coder …` (AI coding-agent integration)
+
+Delegates to the [`aquaman-coder`](../coder) binary; install it separately. The proxy never imports coder code (see [`docs/PACKAGES.md`](../../docs/PACKAGES.md)).
+
+| Command | Description |
+|---|---|
+| `aquaman coder setup <agent>` | Install hooks for an agent (`claude-code` today) |
+| `aquaman coder doctor` | Deep diagnostic for the coder integration |
+| `aquaman coder status` | Projects, hook wiring, broker connectivity |
+| `aquaman coder project list/add/remove` | `~/.aquaman/projects.yaml` CRUD |
+| `aquaman coder get <ref>` | Resolve an `aquaman://service/key` reference |
+| `aquaman coder exec <cmd>` | Run a command with project env injected + output redacted |
 
 ## 25 Builtin Services
 
@@ -75,18 +95,31 @@ Troubleshooting: `aquaman doctor`
 
 ## Security
 
-The proxy enforces four layers of protection:
+Four layers of protection:
 
-- **Process isolation** — credentials in a separate address space, connected via UDS (`chmod 600`)
+- **Process isolation** — credentials in a separate address space, connected via UDS (`chmod 0o600`)
 - **Service allowlisting** — `proxiedServices` controls which APIs the agent can reach
-- **Request policies** — method + path rules per service, checked *before* credential injection ([details](https://github.com/tech4242/aquaman#request-policies))
+- **Request policies** — method + path rules per service, checked *before* credential injection ([details in the root README](https://github.com/tech4242/aquaman#request-policies))
 - **Audit trail** — SHA-256 hash-chained logs of every credential use
 
-7 credential backends: Keychain, 1Password, Vault, Bitwarden, KeePassXC, systemd-creds, encrypted-file.
+7 credential backends: Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds, encrypted-file.
+
+## Broker endpoint (v0.12.0+)
+
+`POST /broker/resolve` over the UDS — used by `aquaman-coder` to materialize credentials per tool call. Body:
+
+```json
+{"service":"anthropic","key":"api_key","ttl_seconds":60}
+```
+
+Response: `{"value":"...","expires_at":"2026-05-20T12:34:56Z"}`. Validates service/key names against safe regexes; 4 KB body cap; policy is applied before resolution.
 
 ## Documentation
 
-See the [main README](https://github.com/tech4242/aquaman#readme) for the full security model, request policy config, Docker deployment, and architecture diagrams.
+- **[Root README](https://github.com/tech4242/aquaman#readme)** — value prop, three-path Quick Start, security model
+- **[`docs/PACKAGES.md`](../../docs/PACKAGES.md)** — package boundary policy
+- **[`docs/compliance/`](../../docs/compliance/)** — MITRE ATLAS + NIST SP 800-53 mappings
+- **[`CLAUDE.md`](../../CLAUDE.md)** — architecture notes
 
 ## License
 
