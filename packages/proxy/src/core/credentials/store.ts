@@ -338,8 +338,7 @@ export async function createCredentialStore(options: CredentialStoreOptions): Pr
       );
 
     case '1password': {
-      // Dynamically import to avoid loading if not used
-      const { OnePasswordStore } = require('./backends/onepassword.js');
+      const { OnePasswordStore } = await import('./backends/onepassword.js');
       return new OnePasswordStore({
         vault: options.onePasswordVault,
         account: options.onePasswordAccount
@@ -356,8 +355,7 @@ export async function createCredentialStore(options: CredentialStoreOptions): Pr
         options.vaultAddress = envAddress;
       }
 
-      // Dynamically import to avoid loading if not used
-      const { VaultStore } = require('./backends/vault.js');
+      const { VaultStore } = await import('./backends/vault.js');
       return new VaultStore({
         address: options.vaultAddress,
         token: options.vaultToken,

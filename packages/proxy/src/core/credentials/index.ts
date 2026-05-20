@@ -16,7 +16,9 @@ export {
 export {
   type OnePasswordStoreOptions,
   OnePasswordStore,
-  createOnePasswordStore
+  createOnePasswordStore,
+  isItemNotFoundError,
+  writeTemplateAndRun
 } from './backends/onepassword.js';
 
 export {

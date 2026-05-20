@@ -1,7 +1,7 @@
 {
   "name": "aquaman-proxy",
-  "version": "0.11.5",
-  "description": "API key protection proxy for OpenClaw — credentials stay in your vault, never in the agent's memory",
+  "version": "0.12.0",
+  "description": "API key protection for OpenClaw. Credentials stay in your vault, never in the agent's memory",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,8 +20,8 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "prepublishOnly": "npm run build",
-    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
     "typecheck": "tsc --noEmit",
     "start": "node dist/cli/index.js",
     "dev": "tsx watch src/cli/index.ts"

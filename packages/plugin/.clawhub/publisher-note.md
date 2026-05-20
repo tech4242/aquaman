@@ -1,4 +1,8 @@
+v0.12.0 adds an aquaman-coder sibling package for AI coding agents (Claude Code shipping; Codex / OpenCode / Cursor planned). The OpenClaw plugin scope is unchanged from v0.11.5 — same proxy, same vault backends, same audit and policy engine. The repo now also ships a runnable conformance suite under `test/compliance/` mapped to MITRE ATLAS v5.3 + NIST SP 800-53 Rev 5 controls (run via `npm test` or `vitest run test/compliance/`).
+
 The aquaman-proxy binary is bundled as an exact-pinned npm dependency, published by the same author (tech4242), and the plugin warns at startup if the running proxy version disagrees with its own.
+
+v0.12.0 also adds a daemon-side `chmod 0o600` of the UDS socket file at startup. Earlier releases relied on the listen-time umask which silently failed under some host configurations (e.g. test runners using worker threads); the explicit chmod is now a hard guarantee.
 
 The HttpInterceptor strips Authorization and X-API-Key headers from outgoing agent requests before routing them to the local proxy, so credentials never enter the agent process even if upstream SDKs preset them.
 

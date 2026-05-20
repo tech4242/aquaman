@@ -20,7 +20,7 @@ function runSetup(
   tempEnv: TempEnv
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   return new Promise((resolve) => {
-    const proc = spawn('npx', ['tsx', CLI_PATH, 'setup', '--non-interactive', ...args], {
+    const proc = spawn('npx', ['tsx', CLI_PATH, 'openclaw', 'setup', '--non-interactive', ...args], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,

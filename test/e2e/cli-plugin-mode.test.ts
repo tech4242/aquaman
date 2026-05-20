@@ -8,11 +8,12 @@
  * checking its startup output.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { tmpSocketPath, cleanupSocket, udsFetch } from '../helpers/uds-proxy.js';
+import { createTempEnv, type TempEnv } from '../helpers/temp-env.js';
 
 const CLI_PATH = path.resolve('packages/proxy/src/cli/index.ts');
 
@@ -21,6 +22,20 @@ const TEST_TIMEOUT = 30_000;
 
 describe('CLI plugin-mode E2E', () => {
   let child: ChildProcess | null = null;
+  let env: TempEnv;
+
+  beforeEach(() => {
+    // CRITICAL: every test must run with an isolated AQUAMAN_CONFIG_DIR.
+    // Otherwise the spawned CLI inherits the developer's real config — and
+    // if their backend is 1password/keychain, the daemon's createCredentialStore
+    // calls `op account get` / keychain access, triggering a Touch ID prompt
+    // mid-`npm test`.
+    env = createTempEnv({ withConfig: true });
+  });
+
+  afterEach(() => {
+    env?.cleanup();
+  });
 
   afterEach(async () => {
     if (child && !child.killed) {
@@ -48,9 +63,9 @@ describe('CLI plugin-mode E2E', () => {
     extraArgs: string[] = []
   ): Promise<{ connectionInfo: any; child: ChildProcess; stderr: string }> {
     return new Promise((resolve, reject) => {
-      const proc = spawn('npx', ['tsx', CLI_PATH, 'plugin-mode', ...extraArgs], {
+      const proc = spawn('npx', ['tsx', CLI_PATH, 'openclaw', 'plugin-mode', ...extraArgs], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env },
+        env: { ...process.env, ...env.env },
       });
       child = proc;
 
@@ -136,7 +151,7 @@ describe('CLI plugin-mode E2E', () => {
   it('credentials guide outputs setup commands', async () => {
     const proc = spawn('npx', ['tsx', CLI_PATH, 'credentials', 'guide', '--service', 'anthropic'], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env: { ...process.env, ...env.env },
     });
 
     let stdout = '';
@@ -190,7 +205,7 @@ describe('CLI plugin-mode E2E', () => {
     delete cleanEnv['VAULT_ADDR'];
     delete cleanEnv['VAULT_TOKEN'];
 
-    const proc = spawn('npx', ['tsx', CLI_PATH, 'plugin-mode'], {
+    const proc = spawn('npx', ['tsx', CLI_PATH, 'openclaw', 'plugin-mode'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...cleanEnv, AQUAMAN_CONFIG_DIR: tmpDir },
     });
@@ -247,7 +262,7 @@ describe('CLI plugin-mode E2E', () => {
       'utf-8'
     );
 
-    const proc = spawn('npx', ['tsx', CLI_PATH, 'plugin-mode'], {
+    const proc = spawn('npx', ['tsx', CLI_PATH, 'openclaw', 'plugin-mode'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,

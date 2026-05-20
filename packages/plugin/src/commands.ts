@@ -54,7 +54,7 @@ export async function statusCommand(ctx: CommandContext): Promise<CommandResult>
     lines.push('Proxy Status: Not running');
     if (!cliInstalled) {
       lines.push('');
-      lines.push('Setup: npm install -g aquaman-proxy && aquaman setup');
+      lines.push('Setup: npm install -g aquaman-proxy && aquaman openclaw setup');
     }
   }
 
@@ -100,7 +100,7 @@ export async function doctorCommand(_ctx: CommandContext): Promise<CommandResult
     const result = await execAquamanProxyCli(['doctor']);
     return { success: result.exitCode === 0, message: result.stdout || result.stderr };
   } catch (err: any) {
-    return { success: false, message: `Failed: ${err.message}\n\nRun in terminal: aquaman doctor` };
+    return { success: false, message: `Failed: ${err.message}\n\nRun in terminal: aquaman openclaw doctor` };
   }
 }
 
@@ -208,7 +208,7 @@ export async function executeCommand(
 
 CLI commands (via terminal or openclaw aquaman <cmd>):
 
-  openclaw aquaman setup           - Run the setup wizard
+  openclaw aquaman setup           - Run the OpenClaw setup wizard
   openclaw aquaman doctor          - Diagnose issues
   openclaw aquaman credentials list - List credentials
   openclaw aquaman credentials add  - Add a credential (interactive)

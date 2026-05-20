@@ -211,8 +211,9 @@ export class ProxyManager {
         return;
       }
 
-      // Build arguments — UDS is the default, no --port needed
-      const args = ['plugin-mode'];
+      // Build arguments — UDS is the default, no --port needed.
+      // v0.12.0+ moved this command under the `openclaw` namespace.
+      const args = ['openclaw', 'plugin-mode'];
 
       // Spawn proxy process. Env starts from a curated allowlist (see
       // pickProxyEnv) rather than `...process.env`, then layers the

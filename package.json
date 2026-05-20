@@ -1,16 +1,17 @@
 {
   "name": "aquaman",
-  "version": "0.11.5",
+  "version": "0.12.0",
   "private": true,
-  "description": "API key protection for OpenClaw — credentials stay in your vault, never in the agent's memory",
+  "description": "API key protection for OpenClaw. Credentials stay in your vault, never in the agent's memory",
   "type": "module",
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w aquaman-proxy -w aquaman-plugin",
+    "build": "npm run build -w aquaman-proxy -w aquaman-plugin -w aquaman-coder",
     "build:proxy": "npm run build -w aquaman-proxy",
     "build:plugin": "npm run build -w aquaman-plugin",
+    "build:coder": "npm run build -w aquaman-coder",
     "clean": "npm run clean --workspaces && rm -rf dist packages/*/tsconfig.tsbuildinfo",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -19,11 +20,9 @@
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "lint": "oxlint src test packages --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage",
     "lint:fix": "oxlint src test packages --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage --fix",
-    "typecheck": "tsc -b packages/proxy packages/plugin",
+    "typecheck": "tsc -b packages/proxy packages/plugin packages/coder",
     "start": "node packages/proxy/dist/cli/index.js",
-    "dev": "tsx watch packages/proxy/src/cli/index.ts",
-    "docker:build": "docker build -t aquaman -f docker/Dockerfile docker/",
-    "docker:run": "docker run --rm -it aquaman"
+    "dev": "tsx watch packages/proxy/src/cli/index.ts"
   },
   "keywords": [
     "aquaman",
@@ -51,6 +50,11 @@
     "tsx": "^4.7.0",
     "typescript": "^5.3.0",
     "vitest": "^1.2.0"
+  },
+  "overrides": {
+    "kdbxweb": {
+      "@xmldom/xmldom": "0.8.13"
+    }
   },
   "engines": {
     "node": ">=18.0.0"

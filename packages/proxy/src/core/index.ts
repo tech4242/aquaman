@@ -24,6 +24,8 @@ export {
   type OnePasswordStoreOptions,
   OnePasswordStore,
   createOnePasswordStore,
+  isItemNotFoundError,
+  writeTemplateAndRun,
   type VaultStoreOptions,
   VaultStore,
   createVaultStore,
@@ -43,6 +45,16 @@ export {
   createAuditLogger,
   redactSensitiveParams
 } from './audit/index.js';
+
+// Secret-pattern redactor (v0.12.0+)
+export {
+  type SecretPattern,
+  BUILTIN_PATTERNS,
+  redact,
+  redactDeep,
+  containsSecret,
+  buildValuePatterns
+} from './redactor/index.js';
 
 // Utils
 export {
