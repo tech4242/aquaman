@@ -6,6 +6,7 @@
 
 import { describe, it, expect, afterEach } from 'vitest';
 import { execSync } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { createTempEnv, type TempEnv } from '../helpers/temp-env.js';
 
@@ -113,15 +114,25 @@ describe('aquaman doctor E2E', () => {
       tempEnv = createTempEnv({
         withConfig: true,
         withPlugin: true,
-        withAuthProfiles: true,
       });
+      // OpenClaw >= 2026.6.5 reads provider auth profiles from
+      // openclaw-agent.sqlite, not auth-profiles.json (openclaw/openclaw#89102) —
+      // and `openclaw doctor --fix` archives the JSON after importing it. So a
+      // healthy install on those versions is SQLite-present, JSON-absent. Stage
+      // that. (On older OpenClaw the JSON would be required instead; the devDep
+      // pins >= 2026.6.6 so the SQLite path is what CI/local exercise.)
+      const agentDir = path.join(tempEnv.openclawDir, 'agents', 'main', 'agent');
+      mkdirSync(agentDir, { recursive: true });
+      writeFileSync(path.join(agentDir, 'openclaw-agent.sqlite'), '');
       const { stdout } = runDoctor(tempEnv);
 
       expect(stdout).toContain('Config exists');
       expect(stdout).toContain('Plugin installed');
       expect(stdout).toContain('Plugin configured');
       expect(stdout).toContain('plugins.allow trust list');
-      expect(stdout).toContain('Auth profiles exist');
+      // Pre-2026.6.5: "Auth profiles exist". 2026.6.5+: "Auth profiles (SQLite
+      // store present)". Either is a healthy state.
+      expect(stdout).toMatch(/Auth profiles.*(exist|SQLite store present)/);
     }, TEST_TIMEOUT);
   });
 

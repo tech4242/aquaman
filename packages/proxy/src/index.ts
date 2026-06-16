@@ -45,7 +45,9 @@ export {
   type OpenClawInfo,
   type LaunchOptions,
   OpenClawIntegration,
-  createOpenClawIntegration
+  createOpenClawIntegration,
+  parseCalendarVersion,
+  authProfilesAreSqliteOnly
 } from './openclaw/integration.js';
 
 // Request Policy

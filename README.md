@@ -155,7 +155,7 @@ Detailed model — per-integration specifics (HTTP interceptor scope, auth profi
 
 Aquaman ships runnable conformance tests under `test/compliance/` mapped to:
 
-- **MITRE ATLAS** v5.3 — techniques AML.T0055, T0012, T0062, T0090 (`test/compliance/atlas/`)
+- **MITRE ATLAS** v5.4.0 — techniques AML.T0055, T0012, T0062, T0090, T0098 (`test/compliance/atlas/`)
 - **NIST SP 800-53 Rev 5** — IA-5, AC-3, AC-6, AU-2/9/10, SC-12/28, SI-10 (`test/compliance/nist/`)
 
 Plus alignment narratives for CISA/Five-Eyes "Careful Adoption of Agentic AI Services" (April 2026), CSA MAESTRO, and OWASP Top 10 for Agentic Applications. The tests run as part of `npm test`. See [`docs/compliance/`](docs/compliance/) for the mappings.

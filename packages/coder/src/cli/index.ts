@@ -34,6 +34,13 @@ import {
   defaultSettingsPath,
 } from '../adapters/claude-code/setup.js';
 
+// ANSI color helpers — aquamarine theme. Mirrors packages/proxy/src/cli/index.ts
+// so `aquaman coder doctor` matches `aquaman openclaw doctor`.
+// Respects NO_COLOR (https://no-color.org/) and disables in piped output.
+const noColor = process.env['NO_COLOR'] !== undefined ||
+                (!process.stdout.isTTY && process.env['FORCE_COLOR'] === undefined);
+const aqua = (s: string) => noColor ? s : `\x1b[38;2;127;255;212m${s}\x1b[0m`;
+
 const program = new Command();
 program
   .name('aquaman-coder')
@@ -316,16 +323,24 @@ program
       });
     }
 
-    // Render
-    console.log('\n  aquaman-coder doctor\n');
+    // Render — matches `aquaman openclaw doctor` formatting.
+    console.log('');
+    console.log(`  \u{1F531} Aquaman ${VERSION} — Welcome to the doctor’s office.`);
+    console.log('');
     for (const c of checks) {
       const mark = c.ok ? '✓' : '✗';
-      console.log(`  ${mark} ${c.name}${c.detail ? '  ' + c.detail : ''}`);
-      if (!c.ok && c.fix) console.log(`      → ${c.fix}`);
+      console.log(`  ${mark} ${aqua(c.name)}${c.detail ? '  ' + c.detail : ''}`);
+      if (!c.ok && c.fix) console.log(`    → ${c.fix}`);
     }
-    const fail = checks.some((c) => !c.ok);
+    const issues = checks.filter((c) => !c.ok).length;
     console.log('');
-    process.exit(fail ? 1 : 0);
+    if (issues === 0) {
+      console.log('  All checks passed.');
+    } else {
+      console.log(`  ${issues} issue${issues > 1 ? 's' : ''} found. Fix the above and re-run \`aquaman coder doctor\`.`);
+    }
+    console.log('');
+    process.exit(issues > 0 ? 1 : 0);
   });
 
 // ---------------- status ----------------

@@ -321,6 +321,17 @@ function registerStatusTool(api: OpenClawPluginApi, services: string[]): void {
  * Auto-generate auth-profiles.json with placeholder keys for proxied services.
  * OpenClaw checks its auth store before making API calls — without a placeholder
  * key, requests are rejected before they ever reach the proxy.
+ *
+ * NOTE (OpenClaw >= 2026.6.5): the runtime read path for auth-profiles.json was
+ * removed in openclaw/openclaw#89102 — provider auth profiles now live in each
+ * agent's openclaw-agent.sqlite. We still write the JSON file (it remains the
+ * import source), but on those versions OpenClaw only ingests it via a one-shot
+ * `openclaw doctor --fix`, which then archives the file. `aquaman openclaw
+ * doctor` detects this and points the operator at the import step. We can't run
+ * that import from plugin load — the process-launching module is isolated to
+ * proxy-manager.ts to keep the OpenClaw security scanner clean. Holistic fix
+ * (SecretRef provider manifest) is tracked for the next plugin touch; see
+ * ROADMAP.md.
  */
 function ensureAuthProfiles(log: OpenClawPluginApi["logger"], services: string[]): void {
   const stateDir =

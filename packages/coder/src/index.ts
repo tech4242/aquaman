@@ -11,7 +11,7 @@
  * See docs/PACKAGES.md for the package boundary policy.
  */
 
-export const VERSION = '0.12.0';
+export const VERSION = '0.12.1';
 
 export {
   type ProjectConfig,

@@ -25,6 +25,35 @@ export interface LaunchOptions {
   inheritStdio?: boolean;
 }
 
+/** Parse an OpenClaw calendar version string (e.g. "2026.6.6") into a tuple. */
+export function parseCalendarVersion(
+  version: string | undefined | null
+): [number, number, number] | null {
+  if (!version) return null;
+  const m = version.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+/**
+ * OpenClaw >= 2026.6.5 stores provider auth profiles in each agent's
+ * `openclaw-agent.sqlite` and removed the runtime read path for
+ * `auth-profiles.json` (openclaw/openclaw#89102). A placeholder written to the
+ * JSON file at plugin load is therefore no longer picked up at request time —
+ * it must be imported into SQLite once via `openclaw doctor --fix`.
+ *
+ * Returns true when the given version is at or past that boundary. Unknown /
+ * unparseable versions return false (assume the legacy JSON path still works).
+ */
+export function authProfilesAreSqliteOnly(version: string | undefined | null): boolean {
+  const parts = parseCalendarVersion(version);
+  if (!parts) return false;
+  const [y, m, d] = parts;
+  if (y !== 2026) return y > 2026;
+  if (m !== 6) return m > 6;
+  return d >= 5;
+}
+
 export class OpenClawIntegration {
   private config: WrapperConfig;
   private services: ServiceConfig[];
