@@ -28,8 +28,16 @@ jobs:
         run: |
           npm ci --legacy-peer-deps --ignore-scripts
           npm rebuild keytar esbuild oxlint
-      - name: npm audit (block on high+)
-        run: npm audit --audit-level=high
+      # Block the build only on vulnerabilities in dependencies we actually
+      # ship (proxy/plugin/coder). Dev/test-only deps (vitest/vite/esbuild, the
+      # openclaw e2e harness and its bundled hono/protobufjs/tar) never reach a
+      # published tarball, and openclaw's transitive tree churns advisories we
+      # don't control — gating on them would wedge CI without protecting users.
+      - name: npm audit — block on high+ in shipped deps
+        run: npm audit --omit=dev --audit-level=high
+      # Surface dev-dependency advisories for awareness, without blocking.
+      - name: npm audit — dev deps (informational)
+        run: npm audit --audit-level=high || true
       - run: npm run lint
       - run: npm run typecheck
 
