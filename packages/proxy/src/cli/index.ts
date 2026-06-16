@@ -31,7 +31,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createCredentialProxy, type CredentialProxy } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
-import { createOpenClawIntegration } from '../openclaw/integration.js';
+import { createOpenClawIntegration, authProfilesAreSqliteOnly } from '../openclaw/integration.js';
 import { loadPolicyFromConfig, validatePolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 
@@ -1424,6 +1424,26 @@ openclaw
             fs.mkdirSync(profilesDir, { recursive: true, mode: 0o700 });
             fs.writeFileSync(profilesPath, JSON.stringify({ version: 1, profiles, order }, null, 2), { mode: 0o600 });
             console.log('  \u2713 Auth profiles generated at ' + profilesPath);
+
+            // OpenClaw >= 2026.6.5 reads provider auth profiles from each agent's
+            // openclaw-agent.sqlite, not auth-profiles.json (openclaw/openclaw#89102).
+            // The placeholder above must be imported into SQLite once with
+            // `openclaw doctor --fix`. We deliberately do NOT auto-run that here:
+            // it is OpenClaw's broad config-healing command \u2014 verified to take
+            // ~19s (gateway probes) and to rewrite openclaw.json (it reset our
+            // plugin entry to bundled defaults in testing). `aquaman openclaw
+            // doctor` detects the SQLite-only case and prints the import step so
+            // the operator runs it intentionally. Holistic fix (SecretRef
+            // provider manifest) is tracked for the next plugin touch.
+            let ocVersion: string | null = null;
+            try {
+              const { execSync } = await import('node:child_process');
+              ocVersion = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8', timeout: 5000 }).trim();
+            } catch { /* CLI not on PATH */ }
+            if (authProfilesAreSqliteOnly(ocVersion)) {
+              console.log('  \u2192 OpenClaw \u2265 2026.6.5 reads auth profiles from SQLite; import the placeholder once:');
+              console.log('      openclaw doctor --fix    (backs up openclaw.json first; see aquaman openclaw doctor)');
+            }
           }
         }
       } else {
@@ -1665,6 +1685,7 @@ openclaw
 
     // 6. OpenClaw detection
     let openclawDetected = false;
+    let openclawVersion: string | null = null;
     let cliFound = false;
     try {
       const { execSync } = await import('node:child_process');
@@ -1676,6 +1697,7 @@ openclaw
       try {
         const { execSync } = await import('node:child_process');
         const ver = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8', timeout: 5000 }).trim();
+        openclawVersion = ver;
         console.log(`  \u2713 ${aqua('OpenClaw')} installed (${ver})`);
       } catch {
         console.log(`  \u2713 ${aqua('OpenClaw')} installed`);
@@ -1752,9 +1774,28 @@ openclaw
         }
       }
 
-      // 9. Auth profiles exist
-      const profilesPath = path.join(openclawStateDir, 'agents', 'main', 'agent', 'auth-profiles.json');
-      if (fs.existsSync(profilesPath)) {
+      // 9. Auth profiles. OpenClaw >= 2026.6.5 reads provider auth profiles from
+      //    each agent's openclaw-agent.sqlite and no longer reads
+      //    auth-profiles.json at runtime (openclaw/openclaw#89102). On those
+      //    versions the placeholder the plugin writes to the JSON file must be
+      //    imported into SQLite once via `openclaw doctor --fix`.
+      const agentDir = path.join(openclawStateDir, 'agents', 'main', 'agent');
+      const profilesPath = path.join(agentDir, 'auth-profiles.json');
+      const sqlitePath = path.join(agentDir, 'openclaw-agent.sqlite');
+      if (authProfilesAreSqliteOnly(openclawVersion)) {
+        if (fs.existsSync(profilesPath)) {
+          console.log(`  \u2717 ${aqua('Auth profiles')} JSON present but ${openclawVersion} reads from SQLite`);
+          console.log('    \u2192 Import the placeholder once: openclaw doctor --fix  (backs up openclaw.json first)');
+          console.log('      (OpenClaw \u2265 2026.6.5 dropped the runtime auth-profiles.json read path \u2014 openclaw/openclaw#89102)');
+          issues++;
+        } else if (fs.existsSync(sqlitePath)) {
+          console.log(`  \u2713 ${aqua('Auth profiles')} (SQLite store present; OpenClaw \u2265 2026.6.5)`);
+        } else {
+          console.log(`  \u2717 ${aqua('Auth profiles')} missing (no SQLite store found)`);
+          console.log('    \u2192 Run: aquaman setup, then: openclaw doctor --fix');
+          issues++;
+        }
+      } else if (fs.existsSync(profilesPath)) {
         console.log(`  \u2713 ${aqua('Auth profiles')} exist`);
       } else {
         console.log(`  \u2717 ${aqua('Auth profiles')} missing`);

@@ -68,6 +68,7 @@ Aquaman keeps API credentials out of the agent process by running them in a sepa
 
 - On load the plugin writes `~/.openclaw/agents/<id>/agent/auth-profiles.json` with placeholder API-key entries for `anthropic` and `openai` so OpenClaw doesn't reject requests before they reach the proxy. The proxy strips the placeholder and injects the real credential.
 - The plugin never overwrites an existing `auth-profiles.json`. To suppress generation entirely, set `autoGenerateAuthProfiles: false` in the plugin config (v0.11.4+).
+- **OpenClaw ≥ 2026.6.5:** provider auth profiles moved into each agent's `openclaw-agent.sqlite` and the runtime read path for `auth-profiles.json` was removed ([openclaw/openclaw#89102](https://github.com/openclaw/openclaw/pull/89102)). The placeholder must be imported into SQLite once with `openclaw doctor --fix` (OpenClaw then archives the JSON file). Run `aquaman openclaw doctor` — it detects this and prints the exact remediation.
 
 **Audit log**
 

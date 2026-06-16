@@ -17,11 +17,11 @@ Two integration paths as of v0.12.0:
 
 Aquaman ships runnable conformance tests mapped to:
 
-- **MITRE ATLAS** v5.3 — techniques AML.T0055, T0012, T0062, T0090 (`test/compliance/atlas/`)
+- **MITRE ATLAS** v5.4.0 — techniques AML.T0055, T0012, T0062, T0090, T0098 (`test/compliance/atlas/`)
 - **NIST SP 800-53 Rev 5** — IA-5, AC-3, AC-6, AU-2/9/10, SC-12/28, SI-10 (`test/compliance/nist/`)
 - **CISA/Five-Eyes** *Careful Adoption of Agentic AI Services* (April 2026) — alignment narrative
 - **CSA MAESTRO** — layered alignment narrative
-- **OWASP Top 10 for Agentic Apps** — ASI02, ASI03 alignment
+- **OWASP Top 10 for Agentic Apps** (2026 list) — ASI02, ASI03, ASI04 alignment
 
 The conformance tests live under `test/compliance/` and run as part of `npm test`. They're **source-repo only** — not bundled in the published npm tarball. Each test file is named for the control it exercises (e.g. `t0055-unsecured-credentials.test.ts`, `au-10-tamper-evident.test.ts`). The mapping doc set lives at `docs/compliance/{atlas-mapping,nist-800-53,agentic-ai-guidance}.md`.
 
@@ -122,6 +122,8 @@ OpenClaw checks its own auth store (`~/.openclaw/agents/<id>/agent/auth-profiles
 ```
 
 **Auth resolution order:** auth-profiles.json → env vars → config file → error
+
+**⚠️ OpenClaw ≥ 2026.6.5 — auth profiles moved to SQLite (openclaw/openclaw#89102, shipped 2026.6.5):** the runtime read path for `auth-profiles.json` was removed; provider auth profiles now live in each agent's `openclaw-agent.sqlite`. The plugin still writes the JSON placeholder at load (it's the import source), but on these versions OpenClaw only ingests it via a one-shot `openclaw doctor --fix`, which then archives the file. `aquaman openclaw doctor` is version-aware (`authProfilesAreSqliteOnly()` in `src/openclaw/integration.ts`) and prints the import step. The plugin's `index.ts` cannot run the import itself — it must not import `child_process` (keeps the OpenClaw security scanner clean). **Holistic fix (SecretRef provider integration manifest, openclaw/openclaw#82326) is deferred to the next plugin touch — see ROADMAP.md.**
 
 ### Plugin ID Naming
 

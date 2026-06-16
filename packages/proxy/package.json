@@ -1,6 +1,6 @@
 {
   "name": "aquaman-proxy",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "API key protection for OpenClaw. Credentials stay in your vault, never in the agent's memory",
   "type": "module",
   "main": "dist/index.js",

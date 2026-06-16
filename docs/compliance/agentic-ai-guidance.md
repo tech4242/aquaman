@@ -39,12 +39,13 @@ CSA's own MAESTRO commentary explicitly endorses the **ephemeral credential brok
 
 > Source: https://genai.owasp.org/2025/12/09/owasp-top-10-for-agentic-applications-the-benchmark-for-agentic-security-in-the-age-of-autonomous-ai/
 
-Aquaman aligns with several ASI categories. **Note:** the canonical December 2025 OWASP GenAI list and an April 2026 secondary publication disagree on ASI04's exact label, so we map to ASI02 and ASI03 where the mapping is unambiguous.
+Aquaman aligns with several ASI categories. The canonical "OWASP Top 10 for Agentic Applications for 2026" (published 2025-12-09) is the stable reference; in it **ASI04 = Agentic Supply Chain Vulnerabilities**. We map to ASI02, ASI03, and ASI04 where the alignment is concrete.
 
 | ASI Category | Aquaman alignment |
 |---|---|
 | **ASI02** Tool Misuse | HTTP interceptor scope is operator-controlled via `services` config (v0.11.4+). Channels not in `services` keep their direct-to-upstream behavior — no over-broad redirect. |
 | **ASI03** Agent Identity & Privilege Abuse | `autoGenerateAuthProfiles: false` opt-out (v0.11.4+) for operators managing their own auth. Spawn env narrowed to an explicit allowlist (v0.11.5+) so the proxy process doesn't inherit arbitrary parent secrets. Broker endpoint (v0.12.0+) for per-call materialization. |
+| **ASI04** Agentic Supply Chain Vulnerabilities | Aquaman cross-pins its own packages exactly (no semver ranges between `aquaman-proxy` / `aquaman-plugin` / `aquaman-coder`); ClawScan + VirusTotal posture: Passed. Relevant to the 2026 npm-worm wave (Shai-Hulud / Miasma) that harvests AI-agent configs: credentials are never written into `~/.claude/settings.json` or agent config (only the hook command is), so a config-stealing worm finds no secrets there. **Gap:** aquaman does not detect tampering of its own hook entries yet — `aquaman doctor` hook-drift detection is tracked for a future release (see ROADMAP.md). |
 
 ## NIST CAISI — AI Agent Standards Initiative
 
@@ -52,7 +53,7 @@ Aquaman aligns with several ASI categories. **Note:** the canonical December 202
 >
 > Source: https://www.nist.gov/caisi/ai-agent-standards-initiative
 
-No published specification yet (as of 2026-05-19). We track for when the SP 800-53 overlay for AI agents lands — at which point this doc gains another mapping section.
+No published specification yet (as of 2026-06-16). The concrete deliverable in flight is **COSAiS — "SP 800-53 Control Overlays for Securing AI Systems"** (single-agent and multi-agent use cases), still in development. We track for when the overlay lands — at which point this doc gains another mapping section.
 
 ## What this is not
 
