@@ -62,13 +62,12 @@ describe('getHermesEnvPath', () => {
   });
 
   it('defaults to ~/.hermes/.env', () => {
-    delete process.env['HERMES_STATE_DIR'];
     delete process.env['HERMES_HOME'];
     expect(getHermesEnvPath('/home/me')).toBe(path.join('/home/me', '.hermes', '.env'));
   });
 
-  it('honors HERMES_STATE_DIR override', () => {
-    process.env['HERMES_STATE_DIR'] = '/custom/hermes';
+  it('honors the HERMES_HOME override (matches the Hermes CLI)', () => {
+    process.env['HERMES_HOME'] = '/custom/hermes';
     expect(getHermesEnvPath('/home/me')).toBe(path.join('/custom/hermes', '.env'));
   });
 });

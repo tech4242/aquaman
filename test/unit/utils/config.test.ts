@@ -189,5 +189,16 @@ describe('config utilities', () => {
       const stat = fs.statSync(configFile);
       expect(stat.mode & 0o777).toBe(0o600);
     });
+
+    it('saveConfig never persists the env-only encryptionPassword', () => {
+      tmpDir = path.join(os.tmpdir(), `aquaman-perm-test-${Date.now()}`);
+      process.env['AQUAMAN_CONFIG_DIR'] = tmpDir;
+      const cfg = getDefaultConfig();
+      cfg.credentials.encryptionPassword = 'super-secret-should-not-persist';
+      saveConfig(cfg);
+      const content = fs.readFileSync(path.join(tmpDir, 'config.yaml'), 'utf-8');
+      expect(content).not.toContain('super-secret-should-not-persist');
+      expect(content).not.toContain('encryptionPassword');
+    });
   });
 });

@@ -213,5 +213,11 @@ export function ensureConfigDir(): void {
 export function saveConfig(config: WrapperConfig): void {
   ensureConfigDir();
   const configPath = getConfigPath();
-  fs.writeFileSync(configPath, stringifyYaml(config), { encoding: 'utf-8', mode: 0o600 });
+  // Never persist the encryption password: it is env-only (AQUAMAN_ENCRYPTION_PASSWORD)
+  // and loadConfig() injects it into the in-memory config via applyEnvOverrides().
+  // Without this guard, any saveConfig(loadConfig()) round-trip (e.g. a setup
+  // command) would leak the password into config.yaml in plaintext.
+  const { encryptionPassword: _omit, ...credsToPersist } = config.credentials;
+  const sanitized: WrapperConfig = { ...config, credentials: credsToPersist };
+  fs.writeFileSync(configPath, stringifyYaml(sanitized), { encoding: 'utf-8', mode: 0o600 });
 }

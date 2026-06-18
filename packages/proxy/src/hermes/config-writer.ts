@@ -82,14 +82,13 @@ export function hermesWiredServices(services: string[]): string[] {
 }
 
 /**
- * Default path to the Hermes dotenv file (`~/.hermes/.env`). Honors a
- * HERMES_HOME / HERMES_STATE_DIR override if set, else falls back to ~/.hermes.
+ * Default path to the Hermes dotenv file (`~/.hermes/.env`). Honors the
+ * `HERMES_HOME` override — the same var the Hermes CLI itself uses to relocate
+ * its config dir (verified against `hermes config env-path`) — else falls back
+ * to `~/.hermes`.
  */
 export function getHermesEnvPath(homeDir: string): string {
-  const stateDir =
-    process.env['HERMES_STATE_DIR'] ||
-    process.env['HERMES_HOME'] ||
-    path.join(homeDir, '.hermes');
+  const stateDir = process.env['HERMES_HOME'] || path.join(homeDir, '.hermes');
   return path.join(stateDir, '.env');
 }
 
