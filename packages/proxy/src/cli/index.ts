@@ -166,7 +166,7 @@ const program = new Command();
 
 program
   .name('aquaman')
-  .description('Credential isolation for AI agents \u2014 vault for the proxy core, OpenClaw plugin path, coding-agent adapter path')
+  .description('Credential isolation for AI agents \u2014 vault for the proxy core, OpenClaw plugin path, coding-agent adapter path, Hermes loopback path')
   .version(VERSION)
   .configureHelp({
     subcommandTerm(cmd) {
@@ -266,7 +266,7 @@ program
       // --- Hermes namespace (nested) ---
       const hm = byName.get('hermes');
       if (hm) {
-        lines.push(aqua('Hermes (NousResearch) integration'));
+        lines.push(aqua('Hermes integration'));
         const hmOrder = ['setup', 'doctor', 'status', 'configure'];
         const hmSubs = helper.visibleCommands(hm).filter((s: any) => s.name() !== 'help');
         const hmSorted = [
@@ -428,6 +428,32 @@ program
       console.log(`    \u2022 not configured`);
       console.log(`      Your coding agents (Claude Code, Codex, \u2026) could use the same`);
       console.log(`      vault protection. Install: ${aqua('npm install -g aquaman-coder')}`);
+    }
+
+    // Hermes integration
+    const hermesStateDir = process.env['HERMES_HOME'] || path.join(os.homedir(), '.hermes');
+    let hermesDetected = false;
+    try {
+      const { execSync } = await import('node:child_process');
+      execSync('which hermes', { stdio: 'pipe' });
+      hermesDetected = true;
+    } catch { /* */ }
+    if (!hermesDetected) hermesDetected = fs.existsSync(hermesStateDir);
+
+    console.log('');
+    console.log(`  ${aqua('Hermes integration')}`);
+    if (!hermesDetected) {
+      console.log(`    \u2022 not detected (skipping \u2014 only relevant if you run the Hermes agent host)`);
+    } else {
+      let loopbackEnabled = false;
+      try { loopbackEnabled = loadConfig().loopback?.enabled === true; } catch { /* */ }
+      if (loopbackEnabled) {
+        console.log(`    \u2713 loopback listener enabled   (deep: ${aqua('aquaman hermes doctor')})`);
+      } else {
+        console.log(`    \u2022 not configured`);
+        console.log(`      Isolate Hermes' provider keys via an opt-in loopback listener.`);
+        console.log(`      Run: ${aqua('aquaman hermes setup')}`);
+      }
     }
 
     console.log('');
@@ -1022,10 +1048,10 @@ openclaw
     }
   });
 
-// ── aquaman hermes … — Hermes (NousResearch) integration via loopback listener ──
+// ── aquaman hermes … — Hermes integration via loopback listener ──
 const hermes = program
   .command('hermes')
-  .description('Hermes (NousResearch) integration via opt-in loopback listener');
+  .description('Hermes integration via opt-in loopback listener');
 
 /** Mask a loopback token for display: keep the prefix + last 4 chars. */
 function maskToken(token: string): string {

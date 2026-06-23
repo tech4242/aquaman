@@ -93,7 +93,7 @@ export interface OpenClawConfig {
 /**
  * Opt-in loopback TCP listener (v0.13.0+).
  *
- * Foreign-language agent hosts (Hermes — NousResearch, a Python host) build
+ * Foreign-language agent hosts (Hermes, a Python host) build
  * their own HTTP client internally and expose no transport/socket hook, so a
  * UDS-dialing dispatcher can't be injected. For those hosts the proxy exposes
  * a 127.0.0.1:<port> listener that honors the host's native base_url + api_key

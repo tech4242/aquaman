@@ -1,7 +1,7 @@
 /**
  * Hermes integration (v0.13.0+)
  *
- * Detects a local Hermes (NousResearch) install and wires it to the aquaman
+ * Detects a local Hermes install and wires it to the aquaman
  * loopback listener by writing provider base-URL + placeholder-key env vars
  * into `~/.hermes/.env`. Unlike the OpenClaw path there is no in-process
  * plugin doing fetch interception — Hermes is a foreign (Python) host, so the

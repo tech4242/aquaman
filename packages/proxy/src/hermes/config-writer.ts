@@ -1,7 +1,7 @@
 /**
  * Environment configuration generator for Hermes integration (v0.13.0+)
  *
- * Hermes (NousResearch) is a Python agent host that builds its own HTTP client
+ * Hermes is a Python agent host that builds its own HTTP client
  * internally and exposes no transport/socket hook — so the aquaman UDS proxy
  * can't be injected the way it is for OpenClaw. Instead the proxy runs an
  * opt-in loopback TCP listener and Hermes is pointed at it via the SAME

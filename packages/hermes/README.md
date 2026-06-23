@@ -1,7 +1,7 @@
 # aquaman-hermes
 
 Credential isolation for the [Hermes](https://github.com/NousResearch/hermes-agent)
-(NousResearch) agent host. API keys live in a secure backend (Keychain, 1Password,
+agent host. API keys live in a secure backend (Keychain, 1Password,
 HashiCorp Vault, Bitwarden, KeePassXC, encrypted-file, systemd-creds) and are injected
 by the **aquaman proxy** — they never enter the Hermes process.
 

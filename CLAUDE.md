@@ -8,7 +8,7 @@ Three integration paths as of v0.13.0:
 
 1. **OpenClaw Gateway** (`aquaman-plugin`) — original target. Covers LLM providers (Anthropic, OpenAI, Mistral, Hugging Face, xAI, Cloudflare AI Gateway, ElevenLabs) **and** OpenClaw channel credentials (Telegram, Slack, Discord, MS Teams, Matrix, LINE, Twitch, Twilio, etc.). 25 builtin services across 6 auth modes.
 2. **AI coding agents** (`aquaman-coder`, v0.12.0+) — Claude Code today; Codex / OpenCode / Cursor planned. Stops developers from putting plaintext `.env` files into projects just to make their coding agent work. Per-tool-call credential materialization via the `/broker/resolve` UDS endpoint.
-3. **Hermes agent host** (`aquaman-hermes`, v0.13.0+) — NousResearch's Hermes, the #2/co-leader agent host. Hermes is a foreign (Python) host that builds its own HTTP client and exposes no transport hook, so the UDS dispatcher can't be injected. Instead the proxy exposes an **opt-in, token-gated loopback TCP listener** (`127.0.0.1:<port>`, default-off) and Hermes is pointed at it via its native `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` env vars + a placeholder api_key (= the loopback token). LLM providers only (Anthropic, OpenAI) for now.
+3. **Hermes agent host** (`aquaman-hermes`, v0.13.0+) — Hermes, the #2/co-leader agent host. Hermes is a foreign (Python) host that builds its own HTTP client and exposes no transport hook, so the UDS dispatcher can't be injected. Instead the proxy exposes an **opt-in, token-gated loopback TCP listener** (`127.0.0.1:<port>`, default-off) and Hermes is pointed at it via its native `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` env vars + a placeholder api_key (= the loopback token). LLM providers only (Anthropic, OpenAI) for now.
 
 **Target platform:** Unix-like systems (Linux, macOS, WSL2). The OpenClaw Gateway runs as a systemd user service (Linux/WSL2) or LaunchAgent (macOS); the coding-agent path runs alongside the coder's own process.
 
@@ -216,7 +216,7 @@ aquaman coder doctor    # deep diagnostic for the coder integration
 
 ## Hermes Integration (v0.13.0+)
 
-Hermes (NousResearch) is a foreign **Python** agent host. It builds its own httpx
+Hermes is a foreign **Python** agent host. It builds its own httpx
 client internally from `(api_mode, base_url, api_key)` and exposes no transport /
 socket hook — so unlike the OpenClaw plugin there's no way to inject a UDS-dialing
 dispatcher. The integration is therefore **proxy-side**, not a code plugin: the proxy
