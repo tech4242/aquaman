@@ -1,0 +1,118 @@
+name: CD
+
+# Publishes aquaman to npm, PyPI, and ClawHub when a GitHub release is published.
+# A version gate runs first: every version field + inter-package dep pin must
+# equal the release tag, or nothing publishes.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  validate-version:
+    name: Validate versions match the release tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"          # v0.13.0 -> 0.13.0
+          echo "Release tag version: $TAG"
+          fail=0
+          assert() { # name, actual
+            if [ "$2" != "$TAG" ]; then echo "::error::$1 = '$2' (expected '$TAG')"; fail=1
+            else echo "ok  $1 = $2"; fi
+          }
+          assert "root package.json"          "$(jq -r .version package.json)"
+          assert "proxy package.json"         "$(jq -r .version packages/proxy/package.json)"
+          assert "plugin package.json"        "$(jq -r .version packages/plugin/package.json)"
+          assert "coder package.json"         "$(jq -r .version packages/coder/package.json)"
+          assert "openclaw.plugin.json"       "$(jq -r .version packages/plugin/openclaw.plugin.json)"
+          assert "plugin->aquaman-proxy dep"  "$(jq -r '.dependencies["aquaman-proxy"]' packages/plugin/package.json)"
+          assert "coder->aquaman-proxy dep"   "$(jq -r '.dependencies["aquaman-proxy"]' packages/coder/package.json)"
+          assert "pyproject.toml"             "$(python3 -c "import tomllib;print(tomllib.load(open('packages/hermes/pyproject.toml','rb'))['project']['version'])")"
+          if [ "$fail" = 1 ]; then echo "::error::version mismatch — aborting release"; exit 1; fi
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+
+  npm-publish:
+    name: Publish to npm (proxy -> plugin -> coder)
+    needs: validate-version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write            # npm provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
+      - run: |
+          npm ci --legacy-peer-deps --ignore-scripts
+          npm rebuild keytar esbuild oxlint
+      - run: npm run build
+      - run: npm test            # ship only what passes
+      # Order matters: proxy first — plugin & coder pin it at an exact version.
+      # Each publish runs its own prepublishOnly (clean && build), so dist is fresh.
+      - run: npm publish --workspace=aquaman-proxy --access public --provenance
+        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+      - run: npm publish --workspace=aquaman-plugin --access public --provenance
+        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+      - run: npm publish --workspace=aquaman-coder --access public --provenance
+        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+
+  pypi-publish:
+    name: Publish to PyPI (aquaman-hermes)
+    needs: validate-version
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write            # PyPI Trusted Publishing (no token needed)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Test before publish
+        working-directory: packages/hermes
+        run: uv run --with pytest python -m pytest tests/ -q
+      - name: Build sdist + wheel
+        working-directory: packages/hermes
+        run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/hermes/dist
+
+  clawhub-publish:
+    name: Publish to ClawHub (plugin only)
+    needs: [validate-version, npm-publish]   # plugin's aquaman-proxy dep must be on npm first
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
+      - run: |
+          npm ci --legacy-peer-deps --ignore-scripts
+          npm rebuild keytar esbuild oxlint
+      - run: npm run build                     # produce packages/plugin/dist for the bundle
+      - run: npm install -g clawhub@latest      # an old CLI gets rejected by the hardened server
+      - run: clawhub login --token "$CLAWHUB_TOKEN"
+        env: { CLAWHUB_TOKEN: "${{ secrets.CLAWHUB_TOKEN }}" }
+      - name: Validate (Plugin Inspector — must be PASS, 0 breakages)
+        run: clawhub package validate packages/plugin
+      - name: Publish
+        run: |
+          clawhub package publish packages/plugin \
+            --source-repo tech4242/aquaman \
+            --source-commit "${{ github.sha }}" \
+            --source-ref main \
+            --source-path packages/plugin
+      - name: Reminder — ClawScan is async
+        run: |
+          echo "Submitted. ClawScan runs server-side."
+          echo "Verify manually:  clawhub package moderation-status aquaman-plugin"

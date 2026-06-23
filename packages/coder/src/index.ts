@@ -11,7 +11,16 @@
  * See docs/PACKAGES.md for the package boundary policy.
  */
 
-export const VERSION = '0.12.1';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Single source of truth for the version: read package.json at load. Resolves
+// relative to this module (works in dev via tsx from src/ and built from dist/,
+// both one level under the package root). Mirrors aquaman-proxy's daemon.ts.
+const __pkgDir = path.dirname(fileURLToPath(import.meta.url));
+const pkgJson = JSON.parse(fs.readFileSync(path.resolve(__pkgDir, '../package.json'), 'utf-8'));
+export const VERSION: string = pkgJson.version;
 
 export {
   type ProjectConfig,

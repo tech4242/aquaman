@@ -250,7 +250,7 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
 
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
       expect(manifest.id).toBe('aquaman-plugin');
-      expect(manifest.name).toBe('Aquaman — API Key Protection');
+      expect(manifest.name).toBe('Aquaman: API Key Protection');
     });
 
     it('has compiled entry point at dist/index.js', () => {

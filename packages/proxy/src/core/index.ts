@@ -77,5 +77,7 @@ export {
   loadConfig,
   ensureConfigDir,
   saveConfig,
-  applyEnvOverrides
+  applyEnvOverrides,
+  generateLoopbackToken,
+  DEFAULT_LOOPBACK_PORT
 } from './utils/index.js';

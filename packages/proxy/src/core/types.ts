@@ -90,11 +90,38 @@ export interface OpenClawConfig {
   binaryPath?: string;
 }
 
+/**
+ * Opt-in loopback TCP listener (v0.13.0+).
+ *
+ * Foreign-language agent hosts (Hermes, a Python host) build
+ * their own HTTP client internally and expose no transport/socket hook, so a
+ * UDS-dialing dispatcher can't be injected. For those hosts the proxy exposes
+ * a 127.0.0.1:<port> listener that honors the host's native base_url + api_key
+ * convention. This is default-off and never reachable off-box; access control
+ * is the generated per-install token (the UDS path stays the default and keeps
+ * its 0o600 file-permission gate).
+ */
+export interface LoopbackConfig {
+  enabled: boolean;
+  port: number;
+  /** Generated at setup; required when enabled. Presented by the host as the provider api_key. */
+  token?: string;
+  /** Bind address — always loopback. Defaults to 127.0.0.1; never bind 0.0.0.0. */
+  host?: string;
+}
+
+export interface HermesConfig {
+  configMethod: 'env' | 'dotenv';
+  binaryPath?: string;
+}
+
 export interface WrapperConfig {
   credentials: CredentialsConfig;
   audit: AuditConfig;
   services: ServicesConfig;
   openclaw: OpenClawConfig;
+  loopback?: LoopbackConfig;
+  hermes?: HermesConfig;
   policy?: Record<string, { defaultAction: 'allow' | 'deny'; rules: Array<{ method: string; path: string; action: 'allow' | 'deny' }> }>;
 }
 
