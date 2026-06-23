@@ -1,6 +1,6 @@
 {
   "name": "aquaman-proxy",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "description": "API key protection for AI agents — bring your own vault; credentials never enter the agent's memory",
   "type": "module",
   "main": "dist/index.js",
