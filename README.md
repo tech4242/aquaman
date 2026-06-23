@@ -8,7 +8,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-API key protection for AI agents. Credentials stay in your vault, never in the agent's memory.
+API key protection for AI agents. Bring your own vault — credentials stay where you already keep them, never in the agent's memory.
 
 You set up Claude Code (or OpenClaw, or Codex), and now you're staring at a `.env` file with your Anthropic key, GitHub token, and database URL sitting there in plaintext. You read the articles. You know what happens when an agent gets prompt-injected. We get it.
 
@@ -130,7 +130,7 @@ Agent / OpenClaw / Coding Agent             Aquaman Proxy
                                      slack.com/api …
 ```
 
-1. **Store** — Credentials live in a vault backend (Keychain, 1Password, Vault, Bitwarden, encrypted file, KeePassXC, systemd-creds).
+1. **Store** — Credentials live in the vault backend you already run — no house vault (Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds, encrypted-file).
 2. **Policy** — Proxy checks method + path rules *before* touching credentials. Denied requests get a `403`, never real auth headers.
 3. **Inject** — Proxy looks up the credential and adds the auth header before forwarding. 25 builtin services, 4 auth modes (header, URL-path, HTTP Basic, OAuth).
 4. **Broker (coder path)** — `POST /broker/resolve` materializes a credential per tool call, scoped to a single command's env, then expires.
@@ -205,6 +205,8 @@ policy:
 - `aquaman policy list` / `aquaman policy test <svc> <method> <path>` for inspection / dry-runs.
 
 ## Credential Backends
+
+Bring your own vault — aquaman has no house store. Pick the backend you already run; secrets stay there, and the proxy reads them in place.
 
 | Backend | Best For | Setup |
 |---|---|---|

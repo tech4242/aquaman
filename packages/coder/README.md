@@ -10,6 +10,8 @@ Pair with [`aquaman-proxy`](../proxy) (the vault + daemon + audit core). Togethe
 2. **Redact secrets from tool output.** `aquaman-coder exec` pipes stdout/stderr through a pattern redactor before printing — secret-shaped strings (AWS, GitHub, Stripe, Slack, OpenAI, Anthropic, JWTs, PEM private keys) become `[REDACTED:kind]` before they enter the agent's transcript.
 3. **Stay isolated from the proxy.** `aquaman-coder` only talks to `aquaman-proxy` over `~/.aquaman/proxy.sock` (UDS, `chmod 0o600`) via the broker endpoint `POST /broker/resolve`. No shared memory, no network exposure.
 
+**Bring your own vault.** Aquaman has no house vault — it injects credentials from the secret store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds, or encrypted-file. No new store to adopt, no migration.
+
 ## Install
 
 ```bash

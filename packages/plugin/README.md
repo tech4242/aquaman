@@ -31,7 +31,7 @@ Agent / OpenClaw Gateway              Aquaman Proxy
 
 ## What it does
 
-1. **Secrets stay in your vault** — Keychain, 1Password, HashiCorp Vault, KeePassXC, systemd-creds, Bitwarden, or encrypted file.
+1. **Bring your own vault** — aquaman has no house vault; secrets stay in the store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds, or encrypted-file.
 2. **Agent gets a proxy URL** — requests route through `~/.aquaman/proxy.sock` (UDS, `chmod 0o600`); the proxy injects auth headers on the fly.
 3. **Dangerous endpoints blocked** — request policies deny admin APIs, prevent deletions, block sends — *before* credentials are even injected.
 4. **Tamper-evident audit log** — every credential use logged with SHA-256 hash chains.

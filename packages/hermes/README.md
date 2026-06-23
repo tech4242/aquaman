@@ -1,9 +1,10 @@
 # aquaman-hermes
 
 Credential isolation for the [Hermes](https://github.com/NousResearch/hermes-agent)
-agent host. API keys live in a secure backend (Keychain, 1Password,
-HashiCorp Vault, Bitwarden, KeePassXC, encrypted-file, systemd-creds) and are injected
-by the **aquaman proxy** — they never enter the Hermes process.
+agent host — using the vault you already have. API keys live in your existing
+backend (Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds,
+or encrypted-file) and are injected by the **aquaman proxy** — they never enter the
+Hermes process, and you never copy them into a new store.
 
 This is the optional, in-session "sugar" layer. The actual isolation is done by
 `aquaman-proxy`: it runs an opt-in loopback listener and Hermes is pointed at it via

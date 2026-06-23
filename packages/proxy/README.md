@@ -1,6 +1,6 @@
 # aquaman-proxy
 
-The vault + daemon + audit core of [aquaman](https://github.com/tech4242/aquaman). API key protection for AI agents — credentials stay in your vault, never in the agent's memory.
+The vault + daemon + audit core of [aquaman](https://github.com/tech4242/aquaman). API key protection for AI agents — bring your own vault; credentials stay where you already keep them, never in the agent's memory.
 
 This is the **always-on piece**: every other aquaman package (`aquaman-plugin` for OpenClaw, `aquaman-coder` for AI coding agents) talks to it. If you only install one aquaman package, install this one.
 
@@ -62,7 +62,7 @@ Four layers of protection:
 - **Request policies** — method + path rules per service, checked *before* credential injection ([details in the root README](https://github.com/tech4242/aquaman#request-policies))
 - **Audit trail** — SHA-256 hash-chained logs of every credential use
 
-7 credential backends: Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds, encrypted-file.
+**Bring your own vault.** Aquaman has no house vault — it injects credentials from the secret store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds, or encrypted-file. No new store to adopt, no migration.
 
 ## Broker endpoint (v0.12.0+)
 
