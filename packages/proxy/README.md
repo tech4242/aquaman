@@ -8,7 +8,7 @@ This is the **always-on piece**: every other aquaman package (`aquaman-plugin` f
 Agent / OpenClaw / Coding Agent              Aquaman Proxy
 ┌──────────────────────┐                     ┌──────────────────────┐
 │                      │                     │                      │
-│  ANTHROPIC_BASE_URL  │═══════ UDS ════════>│  Keychain / 1Pass /  │
+│  ANTHROPIC_BASE_URL  │════ UDS / HTTP ════>│  Keychain / 1Pass /  │
 │  = aquaman.local     │                     │  Vault / Encrypted   │
 │                      │<══════════════════  │                      │
 │  fetch() interceptor │═══ broker:resolve ═>│  + Policy enforced   │
