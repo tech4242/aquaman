@@ -492,8 +492,10 @@ Manual smoke-test recipes for the OpenClaw plugin install path, channel auth mod
 | `test/e2e/request-policy.test.ts` | Request policy enforcement E2E tests (403 responses, audit logging, backward compat) |
 | `test/unit/request-policy.test.ts` | Request policy unit tests (path matching, policy evaluation, validation, presets) |
 | `test/e2e/hermes-loopback.test.ts` | Loopback listener E2E (token gating, both provider shapes, isolation, UDS stays token-free) |
+| `test/compliance/loopback-listener.test.ts` | Loopback-path compliance (AC-3 token gate, ATLAS T0055/T0090 key isolation, AU-10 audited path) |
 | `test/unit/hermes/config-writer.test.ts` | Hermes env-writer unit tests (path mapping, HERMES_HOME, idempotent block) |
 | `packages/hermes/tests/test_plugin.py` | Python plugin unit tests (health probe, status text, register wiring) |
+| `packages/hermes/tests/test_compliance.py` | Python plugin compliance (ATLAS T0098 / NIST SI-10/AC-6 — status surface never leaks token/key; reads only `*_BASE_URL`) |
 | `test/e2e/keychain-proxy-flow.test.ts` | Real keychain backend E2E (macOS only) |
 | `test/e2e/cli-plugin-mode.test.ts` | CLI startup/output E2E tests |
 | `test/e2e/cli-setup.test.ts` | `aquaman setup` E2E tests |
