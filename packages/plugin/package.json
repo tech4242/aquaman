@@ -1,7 +1,7 @@
 {
   "name": "aquaman-plugin",
   "version": "0.13.0",
-  "description": "Protect API keys and secrets for OpenClaw — credentials stay in your vault, never in the agent's memory",
+  "description": "Protect API keys and secrets for OpenClaw. Credentials stay in your vault, never in the agent's memory",
   "type": "module",
   "scripts": {
     "build": "tsc -b",

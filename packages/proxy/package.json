@@ -1,7 +1,7 @@
 {
   "name": "aquaman-proxy",
   "version": "0.13.0",
-  "description": "API key protection for AI agents — bring your own vault; credentials never enter the agent's memory",
+  "description": "🔱 API key protection for AI agents. Bring your own vault. Credentials stay where you already keep them, never in the agent's memory.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

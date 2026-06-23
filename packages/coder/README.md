@@ -7,10 +7,10 @@ Pair with [`aquaman-proxy`](../proxy) (the vault + daemon + audit core). Togethe
 ## What it does
 
 1. **Inject vault-backed credentials per Bash tool call.** No `.env` files in your project. The agent runs `gh pr list` → the hook rewrites the command to wrap it under `aquaman-coder exec --` → that wrapper fetches `GH_TOKEN` from the vault, injects it into the subprocess env, runs, and exits. The agent's own process never sees the credential.
-2. **Redact secrets from tool output.** `aquaman-coder exec` pipes stdout/stderr through a pattern redactor before printing — secret-shaped strings (AWS, GitHub, Stripe, Slack, OpenAI, Anthropic, JWTs, PEM private keys) become `[REDACTED:kind]` before they enter the agent's transcript.
+2. **Redact secrets from tool output.** `aquaman-coder exec` pipes stdout/stderr through a pattern redactor before printing - secret-shaped strings (AWS, GitHub, Stripe, Slack, OpenAI, Anthropic, JWTs, PEM private keys) become `[REDACTED:kind]` before they enter the agent's transcript.
 3. **Stay isolated from the proxy.** `aquaman-coder` only talks to `aquaman-proxy` over `~/.aquaman/proxy.sock` (UDS, `chmod 0o600`) via the broker endpoint `POST /broker/resolve`. No shared memory, no network exposure.
 
-**Bring your own vault.** Aquaman has no house vault — it injects credentials from the secret store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds, or encrypted-file. No new store to adopt, no migration.
+**Bring your own vault.** Aquaman has no house vault. It injects credentials from the secret store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds, or encrypted-file. No new store to adopt, no migration.
 
 ## Install
 
@@ -18,7 +18,7 @@ Pair with [`aquaman-proxy`](../proxy) (the vault + daemon + audit core). Togethe
 npm install -g aquaman-proxy aquaman-coder
 ```
 
-Requires `aquaman-proxy` (same version) running as a daemon — start it once per machine session with `aquaman daemon &` (or have it managed by your shell's init).
+Requires `aquaman-proxy` (same version) running as a daemon. Start it once per machine session with `aquaman daemon &` (or have it managed by your shell's init).
 
 ## Quick Start (Claude Code)
 
@@ -47,21 +47,21 @@ ANTHROPIC_API_KEY=[REDACTED:injected-value]
 ⏺ ANTHROPIC_API_KEY is set and available (injected via aquaman vault). 
 ```
 
-The *child* process saw the real key (your tests, builds, MCP servers, import scripts — anything that actually needs it works). The *agent* — the thing that decides what code to run on your machine — never sees the value, and so neither does the conversation history, neither does the model provider's logs, neither does anyone who later screenshots your terminal.
+The *child* process saw the real key (your tests, builds, MCP servers, import scripts - anything that actually needs it works). The *agent* - the thing that decides what code to run on your machine - never sees the value, and so neither does the conversation history, neither does the model provider's logs, neither does anyone who later screenshots your terminal.
 
-**Use it from your own terminal too.** The same wrapper works without the agent — just `cd` into a covered project and prefix your command:
+**Use it from your own terminal too.** The same wrapper works without the agent. Just `cd` into a covered project and prefix your command:
 
 ```bash
 cd ~/code/
 aquaman-coder exec -- python app/scripts/import.py
 ```
 
-Same env injection, same redaction on stdout/stderr. Drop it into Makefile targets, shell aliases, or CI runners — anywhere you'd otherwise reach for a `.env` file.
+Same env injection, same redaction on stdout/stderr. Drop it into Makefile targets, shell aliases, or CI runners - anywhere you'd otherwise reach for a `.env` file.
 
 When Claude Code runs a Bash tool in `~/code/my-app`, aquaman's hook rewrites the command via `updatedInput.command` to wrap it under `aquaman-coder exec`. That wrapper:
 
-- Resolves each `aquaman://service/key` reference via the broker (`POST /broker/resolve` over UDS) — credentials are materialized for one command, not for the agent's lifetime.
-- Pipes stdout/stderr through a redactor that prepends a value-based pattern for each resolved value: **whatever string was injected gets redacted, regardless of shape** (Atlassian tokens, Notion secrets, internal-API keys — none of them need to match a known provider format). Generic shape-based patterns (sk-ant-, ghp_, sk_live_, AKIA…, JWTs, PEM blocks, ATATT3xF…) still run after as defense-in-depth for secrets the child surfaces that we did NOT inject.
+- Resolves each `aquaman://service/key` reference via the broker (`POST /broker/resolve` over UDS). Credentials are materialized for one command, not for the agent's lifetime.
+- Pipes stdout/stderr through a redactor that prepends a value-based pattern for each resolved value: **whatever string was injected gets redacted, regardless of shape** (Atlassian tokens, Notion secrets, internal-API keys - none of them need to match a known provider format). Generic shape-based patterns (sk-ant-, ghp_, sk_live_, AKIA…, JWTs, PEM blocks, ATATT3xF…) still run after as defense-in-depth for secrets the child surfaces that we did NOT inject.
 - Cleans up when the command exits.
 
 ## CLI surface
@@ -71,7 +71,7 @@ The unified CLI lives in `aquaman-proxy` and delegates `coder` subcommands here:
 ```
 aquaman coder
 ├── setup <agent>             Install hooks for an agent (claude-code today)
-├── doctor                    Deep diagnostic — projects, broker, per-project vault checks
+├── doctor                    Deep diagnostic - projects, broker, per-project vault checks
 ├── status                    Configured projects + hook wiring + broker connectivity
 ├── project list/add/remove   ~/.aquaman/projects.yaml CRUD
 ├── get <ref>                 Resolve an aquaman://service/key reference once
@@ -79,7 +79,7 @@ aquaman coder
 └── hook                      Stdio hook handler (invoked by Claude Code; not user-facing)
 ```
 
-The `aquaman-coder` binary works directly too — `aquaman coder X` ≡ `aquaman-coder X`. The unified form is the documented one; the standalone binary is what Claude Code's hook contract executes per tool call (faster, skips the shim).
+The `aquaman-coder` binary works directly too. `aquaman coder X` ≡ `aquaman-coder X`. The unified form is the documented one; the standalone binary is what Claude Code's hook contract executes per tool call (faster, skips the shim).
 
 ## Architecture
 
@@ -100,7 +100,7 @@ Claude Code / Codex / OpenCode / Cursor
 The hook uses Claude Code's real protocol (verified against the live docs):
 
 - **PreToolUse** on Bash: emits `{ hookSpecificOutput: { permissionDecision: "allow", updatedInput: { command: "aquaman-coder exec -- sh -c '...'" } } }`. Claude Code runs the rewritten command in its child shell; the wrapper does the broker resolve.
-- **PostToolUse**: emits `{ hookSpecificOutput: { additionalContext: "aquaman: tool output contained secret patterns…" } }` if the redactor finds secrets in the output. Note: PostToolUse can't *rewrite* output (the tool already ran) — real scrubbing happens inside `aquaman-coder exec`'s stdout pipeline. PostToolUse is purely an alert.
+- **PostToolUse**: emits `{ hookSpecificOutput: { additionalContext: "aquaman: tool output contained secret patterns…" } }` if the redactor finds secrets in the output. Note: PostToolUse can't *rewrite* output (the tool already ran). Real scrubbing happens inside `aquaman-coder exec`'s stdout pipeline. PostToolUse is purely an alert.
 
 See [`docs/PACKAGES.md`](../../docs/PACKAGES.md) for cross-package import rules.
 
@@ -134,4 +134,4 @@ The file is `chmod 0o600`. Both the service and key components are validated aga
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT - see [LICENSE](./LICENSE).

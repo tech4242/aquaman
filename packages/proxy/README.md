@@ -1,6 +1,6 @@
 # aquaman-proxy
 
-The vault + daemon + audit core of [aquaman](https://github.com/tech4242/aquaman). API key protection for AI agents — bring your own vault; credentials stay where you already keep them, never in the agent's memory.
+The vault + daemon + audit core of [aquaman](https://github.com/tech4242/aquaman). API key protection for AI agents. Bring your own vault. Credentials stay where you already keep them, never in the agent's memory.
 
 This is the **always-on piece**: every other aquaman package (`aquaman-plugin` for OpenClaw, `aquaman-coder` for AI coding agents) talks to it. If you only install one aquaman package, install this one.
 
@@ -57,16 +57,16 @@ aquaman daemon &        # start the proxy on ~/.aquaman/proxy.sock
 
 Four layers of protection:
 
-- **Process isolation** — credentials in a separate address space, connected via UDS (`chmod 0o600`)
-- **Service allowlisting** — `proxiedServices` controls which APIs the agent can reach
-- **Request policies** — method + path rules per service, checked *before* credential injection ([details in the root README](https://github.com/tech4242/aquaman#request-policies))
-- **Audit trail** — SHA-256 hash-chained logs of every credential use
+- **Process isolation**: credentials in a separate address space, connected via UDS (`chmod 0o600`)
+- **Service allowlisting**: `proxiedServices` controls which APIs the agent can reach
+- **Request policies**: method + path rules per service, checked *before* credential injection ([details in the root README](https://github.com/tech4242/aquaman#request-policies))
+- **Audit trail**: SHA-256 hash-chained logs of every credential use
 
-**Bring your own vault.** Aquaman has no house vault — it injects credentials from the secret store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds, or encrypted-file. No new store to adopt, no migration.
+**Bring your own vault.** Aquaman has no house vault. It injects credentials from the secret store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds, or encrypted-file. No new store to adopt, no migration.
 
 ## Broker endpoint (v0.12.0+)
 
-`POST /broker/resolve` over the UDS — used by `aquaman-coder` to materialize credentials per tool call. Body:
+`POST /broker/resolve` over the UDS - used by `aquaman-coder` to materialize credentials per tool call. Body:
 
 ```json
 {"service":"anthropic","key":"api_key","ttl_seconds":60}
@@ -76,10 +76,10 @@ Response: `{"value":"...","expires_at":"2026-05-20T12:34:56Z"}`. Validates servi
 
 ## Documentation
 
-- **[Root README](https://github.com/tech4242/aquaman#readme)** — value prop, three-path Quick Start, security model
-- **[`docs/PACKAGES.md`](../../docs/PACKAGES.md)** — package boundary policy
-- **[`docs/compliance/`](../../docs/compliance/)** — MITRE ATLAS + NIST SP 800-53 mappings
-- **[`CLAUDE.md`](../../CLAUDE.md)** — architecture notes
+- **[Root README](https://github.com/tech4242/aquaman#readme)**: value prop, three-path Quick Start, security model
+- **[`docs/PACKAGES.md`](../../docs/PACKAGES.md)**: package boundary policy
+- **[`docs/compliance/`](../../docs/compliance/)**: MITRE ATLAS + NIST SP 800-53 mappings
+- **[`CLAUDE.md`](../../CLAUDE.md)**: architecture notes
 
 ## License
 

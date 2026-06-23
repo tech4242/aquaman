@@ -1,9 +1,9 @@
 # aquaman-hermes
 
 Credential isolation for the [Hermes](https://github.com/NousResearch/hermes-agent)
-agent host — using the vault you already have. API keys live in your existing
+agent host - using the vault you already have. API keys live in your existing
 backend (Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds,
-or encrypted-file) and are injected by the **aquaman proxy** — they never enter the
+or encrypted-file) and are injected by the **aquaman proxy**. They never enter the
 Hermes process, and you never copy them into a new store.
 
 This is the optional, in-session "sugar" layer. The actual isolation is done by
@@ -12,9 +12,9 @@ its native `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` env vars (written to
 `~/.hermes/.env`) plus a placeholder api_key that the proxy strips and replaces with
 the real credential. This plugin adds:
 
-- **`/aquaman-status`** — slash command showing proxy reachability + wiring.
-- **`aquaman_status`** — an agent-facing tool with the same info.
-- **`on_session_start`** — a one-shot health probe that warns if the proxy is down.
+- **`/aquaman-status`**: slash command showing proxy reachability + wiring.
+- **`aquaman_status`**: an agent-facing tool with the same info.
+- **`on_session_start`**: a one-shot health probe that warns if the proxy is down.
 
 ## How it works
 
@@ -66,7 +66,7 @@ aquaman-hermes uninstall
 
 ## Notes
 
-- The plugin holds no credentials and makes no privileged calls — it only reads the
+- The plugin holds no credentials and makes no privileged calls. It only reads the
   provider base-URL env vars and probes the proxy's token-exempt `/_health` endpoint.
 - It depends only on the Python standard library.
 - Only LLM providers (Anthropic, OpenAI) are wired today. Channels/other providers are

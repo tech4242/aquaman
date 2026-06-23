@@ -378,9 +378,9 @@ function ensureAuthProfiles(log: OpenClawPluginApi["logger"], services: string[]
  */
 const plugin: OpenClawPluginDefinition = {
   id: 'aquaman-plugin',
-  name: 'Aquaman — API Key Protection',
+  name: 'Aquaman: API Key Protection',
   version: PLUGIN_VERSION,
-  description: 'API key protection for OpenClaw — credentials stay in your vault, never in the agent\'s memory',
+  description: 'API key protection for OpenClaw. Credentials stay in your vault, never in the agent\'s memory',
 
   register(api) {
     api.logger.info("Aquaman plugin loaded");
@@ -490,7 +490,7 @@ const plugin: OpenClawPluginDefinition = {
         ({ program }) => {
           const aquamanCmd = program
             .command("aquaman")
-            .description("Aquaman — API key protection");
+            .description("Aquaman: API key protection");
 
           aquamanCmd
             .command("status")
