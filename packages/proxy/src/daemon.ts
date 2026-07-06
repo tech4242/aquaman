@@ -370,6 +370,8 @@ export class CredentialProxy {
         // Strip existing auth header if we're injecting one
         if (serviceDef.authHeader && key.toLowerCase() === serviceDef.authHeader.toLowerCase()) continue;
         if (key.toLowerCase() === 'authorization') continue;
+        // Never forward the loopback access token to the upstream provider
+        if (key.toLowerCase() === 'x-aquaman-token') continue;
         if (value) {
           headers[key] = Array.isArray(value) ? value[0] : value;
         }

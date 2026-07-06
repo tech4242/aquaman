@@ -121,6 +121,19 @@ describe('Loopback listener — compliance (Hermes path)', () => {
       expect(last!.headers['x-api-key']).not.toBe(TOKEN);
     });
 
+    it('never forwards the loopback token to the upstream provider', async () => {
+      await fetch(`${baseUrl}/anthropic/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-aquaman-token': TOKEN },
+        body: JSON.stringify({ model: 'claude-3', messages: [] }),
+      });
+      const last = upstream.getLastRequest();
+      // The token is an aquaman access credential; leaking it upstream would
+      // hand the provider (and its request logs) the key to the local listener.
+      expect(last!.headers['x-aquaman-token']).toBeUndefined();
+      expect(JSON.stringify(last!.headers)).not.toContain(TOKEN);
+    });
+
     it('never returns the real key to the loopback client (header or body)', async () => {
       const res = await fetch(`${baseUrl}/anthropic/v1/messages`, {
         method: 'POST',

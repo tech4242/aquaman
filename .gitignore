@@ -51,3 +51,5 @@ __pycache__/
 .venv/
 packages/hermes/dist/
 .pytest_cache/
+.coverage
+.coverage.*

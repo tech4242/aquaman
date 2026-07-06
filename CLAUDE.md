@@ -260,7 +260,8 @@ arrives as the provider api_key Hermes sends (`x-api-key` for Anthropic,
   uses). Idempotent delimited block.
 - `packages/proxy/src/hermes/integration.ts` — detect Hermes, configure, write env.
 - `packages/proxy/src/core/types.ts` — `LoopbackConfig` (`enabled`/`port`/`token`/`host`)
-  + `HermesConfig`. Config defaults disabled; `AQUAMAN_LOOPBACK_*` env overrides.
+  + `HermesConfig`. Config defaults disabled; env overrides `AQUAMAN_LOOPBACK_ENABLED`/
+  `_PORT`/`_TOKEN` (no `_HOST` override — the bind stays loopback).
 - CLI: `aquaman hermes setup|doctor|status|configure`. `loadLoopbackOptions()` refuses to
   start an enabled-but-tokenless listener (an untokened loopback proxy would be open).
 

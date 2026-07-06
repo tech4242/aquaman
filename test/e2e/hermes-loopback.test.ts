@@ -132,7 +132,10 @@ describe('Loopback listener E2E (Hermes path)', () => {
         body: JSON.stringify({ model: 'claude-3', messages: [] }),
       });
       expect(res.status).toBe(200);
-      expect(upstream.getLastRequest()!.headers['x-api-key']).toBe(REAL_ANTHROPIC_KEY);
+      const last = upstream.getLastRequest();
+      expect(last!.headers['x-api-key']).toBe(REAL_ANTHROPIC_KEY);
+      // The loopback access token must never reach the upstream provider.
+      expect(last!.headers['x-aquaman-token']).toBeUndefined();
     });
   });
 
