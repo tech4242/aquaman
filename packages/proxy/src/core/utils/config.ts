@@ -21,6 +21,35 @@ const CONFIG_FILE = 'config.yaml';
 /** Default loopback TCP port for the opt-in Hermes listener. */
 export const DEFAULT_LOOPBACK_PORT = 8585;
 
+/** Default TTL for the daemon's in-memory credential cache (v0.13.1+). */
+export const DEFAULT_CACHE_TTL_SECONDS = 900;
+
+/**
+ * Backends where the cache defaults ON: every read has a per-access cost
+ * (1Password: a biometric prompt per `op` spawn in desktop-app mode;
+ * Bitwarden: ~1-2s `bw` spawn; Vault: an HTTP round-trip). The remaining
+ * backends are already fast (keychain) or cache internally for the daemon
+ * lifetime (keepassxc, systemd-creds, encrypted-file), so the default there
+ * is OFF — an explicit cacheTtlSeconds still applies to any backend.
+ */
+export const CACHED_BY_DEFAULT_BACKENDS: ReadonlyArray<WrapperConfig['credentials']['backend']> =
+  ['1password', 'bitwarden', 'vault'];
+
+/**
+ * Resolve the effective credential-cache TTL (seconds) for daemon contexts.
+ * Explicit credentials.cacheTtlSeconds always wins (0 = disabled); otherwise
+ * the backend-conditional default above.
+ */
+export function resolveCacheTtl(config: WrapperConfig): number {
+  const explicit = config.credentials.cacheTtlSeconds;
+  if (explicit !== undefined && Number.isFinite(explicit) && explicit >= 0) {
+    return Math.floor(explicit);
+  }
+  return CACHED_BY_DEFAULT_BACKENDS.includes(config.credentials.backend)
+    ? DEFAULT_CACHE_TTL_SECONDS
+    : 0;
+}
+
 /**
  * Generate an unguessable token for the loopback listener. Presented by the
  * agent host as the provider api_key; the proxy strips it and injects the real
@@ -142,6 +171,14 @@ export function applyEnvOverrides(config: WrapperConfig): WrapperConfig {
 
   if (env['AQUAMAN_BITWARDEN_COLLECTION_ID']) {
     config.credentials.bitwardenCollectionId = env['AQUAMAN_BITWARDEN_COLLECTION_ID'];
+  }
+
+  // Credential-cache TTL override (v0.13.1+). Integer seconds; 0 disables.
+  if (env['AQUAMAN_CACHE_TTL']) {
+    const t = Number(env['AQUAMAN_CACHE_TTL']);
+    if (Number.isInteger(t) && t >= 0) {
+      config.credentials.cacheTtlSeconds = t;
+    }
   }
 
   // Loopback listener overrides (opt-in Hermes path). Useful for CI /

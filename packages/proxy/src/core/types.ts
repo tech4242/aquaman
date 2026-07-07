@@ -56,6 +56,15 @@ export interface CredentialsConfig {
   backend: 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc' | 'systemd-creds' | 'bitwarden';
   proxiedServices: string[];
   encryptionPassword?: string;
+  /**
+   * TTL (seconds) for the daemon's in-memory credential cache (v0.13.1+).
+   * Unset → backend-conditional default via resolveCacheTtl(): 900 s for
+   * backends with per-access cost (1password, bitwarden, vault), 0 (disabled)
+   * for the rest. Explicit 0 disables for any backend; explicit >0 enables
+   * for any backend. Only long-lived daemon processes cache — one-shot CLI
+   * commands never do.
+   */
+  cacheTtlSeconds?: number;
   // 1Password options
   onePasswordVault?: string;
   onePasswordAccount?: string;

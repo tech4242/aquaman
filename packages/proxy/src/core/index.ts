@@ -21,6 +21,8 @@ export {
   MemoryStore,
   createCredentialStore,
   validatePasswordStrength,
+  CachingStore,
+  wrapWithCache,
   type OnePasswordStoreOptions,
   OnePasswordStore,
   createOnePasswordStore,
@@ -79,5 +81,8 @@ export {
   saveConfig,
   applyEnvOverrides,
   generateLoopbackToken,
-  DEFAULT_LOOPBACK_PORT
+  DEFAULT_LOOPBACK_PORT,
+  DEFAULT_CACHE_TTL_SECONDS,
+  CACHED_BY_DEFAULT_BACKENDS,
+  resolveCacheTtl
 } from './utils/index.js';

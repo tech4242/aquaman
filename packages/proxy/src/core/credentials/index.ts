@@ -14,6 +14,11 @@ export {
 } from './store.js';
 
 export {
+  CachingStore,
+  wrapWithCache
+} from './caching-store.js';
+
+export {
   type OnePasswordStoreOptions,
   OnePasswordStore,
   createOnePasswordStore,

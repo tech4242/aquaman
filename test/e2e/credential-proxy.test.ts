@@ -4,7 +4,10 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { CredentialProxy, createCredentialProxy } from 'aquaman-proxy';
-import { MemoryStore } from 'aquaman-core';
+import { MemoryStore, CachingStore } from 'aquaman-core';
+import { CountingStore } from '../helpers/counting-store.js';
+import { createMockUpstream } from '../helpers/mock-upstream.js';
+import { createServiceRegistry } from 'aquaman-proxy';
 import type { RequestInfo } from 'aquaman-proxy';
 import { tmpSocketPath, cleanupSocket, udsFetch } from '../helpers/uds-proxy.js';
 
@@ -235,4 +238,87 @@ describe('CredentialProxy E2E', () => {
       expect(requestLog[0].authenticated).toBe(false);
     });
   });
+});
+
+describe('CredentialProxy E2E — credential cache (v0.13.1+)', () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  async function startCachedProxy(ttlSeconds: number) {
+    const upstream = createMockUpstream();
+    await upstream.start(0);
+
+    const memory = new MemoryStore();
+    await memory.set('anthropic', 'api_key', 'sk-ant-cached-e2e');
+    const counting = new CountingStore(memory);
+    const cached = new CachingStore(counting, ttlSeconds);
+
+    const registry = createServiceRegistry();
+    registry.override('anthropic', { upstream: `http://127.0.0.1:${upstream.port}` });
+
+    const socketPath = tmpSocketPath();
+    const proxy = createCredentialProxy({
+      socketPath,
+      store: cached,
+      serviceRegistry: registry,
+      allowedServices: ['anthropic'],
+    });
+    await proxy.start();
+
+    const request = () => udsFetch(socketPath, '/anthropic/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-3', messages: [] }),
+    });
+
+    const cleanup = async () => {
+      await proxy.stop();
+      await upstream.stop();
+      memory.clear();
+      cleanupSocket(socketPath);
+    };
+
+    return { request, counting, memory, cached, upstream, cleanup };
+  }
+
+  it('serves a burst of proxied requests with a single backend fetch', async () => {
+    const ctx = await startCachedProxy(900);
+    try {
+      for (let i = 0; i < 5; i++) {
+        expect((await ctx.request()).status).toBe(200);
+      }
+      expect(ctx.counting.gets).toBe(1);
+      expect(ctx.upstream.getRequestCount()).toBe(5);
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  it('refetches from the backend after the TTL expires (real clock)', async () => {
+    const ctx = await startCachedProxy(1);
+    try {
+      await ctx.request();
+      await ctx.request();
+      expect(ctx.counting.gets).toBe(1);
+      await sleep(1100);
+      expect((await ctx.request()).status).toBe(200);
+      expect(ctx.counting.gets).toBe(2);
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  it('picks up an external rotation after expiry and injects the new key', async () => {
+    const ctx = await startCachedProxy(1);
+    try {
+      await ctx.request();
+      expect(ctx.upstream.getLastRequest()!.headers['x-api-key']).toBe('sk-ant-cached-e2e');
+      await ctx.memory.set('anthropic', 'api_key', 'sk-ant-rotated-e2e'); // rotated outside aquaman
+      await sleep(1100);
+      await ctx.request();
+      expect(ctx.upstream.getLastRequest()!.headers['x-api-key']).toBe('sk-ant-rotated-e2e');
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
 });

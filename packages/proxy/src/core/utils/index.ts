@@ -27,5 +27,8 @@ export {
   saveConfig,
   applyEnvOverrides,
   generateLoopbackToken,
-  DEFAULT_LOOPBACK_PORT
+  DEFAULT_LOOPBACK_PORT,
+  DEFAULT_CACHE_TTL_SECONDS,
+  CACHED_BY_DEFAULT_BACKENDS,
+  resolveCacheTtl
 } from './config.js';

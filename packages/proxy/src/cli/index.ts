@@ -26,6 +26,9 @@ import {
   saveConfig,
   generateLoopbackToken,
   DEFAULT_LOOPBACK_PORT,
+  wrapWithCache,
+  resolveCacheTtl,
+  type CredentialStoreOptions,
   type WrapperConfig
 } from '../core/index.js';
 
@@ -57,6 +60,49 @@ function validateCredName(label: string, value: string): void {
     console.error(`Invalid ${label}: "${value}". Allowed: lowercase alphanumeric, dots, hyphens, underscores.`);
     process.exit(1);
   }
+}
+
+/**
+ * Soft hint for 1Password users running in biometric/desktop-app mode: every
+ * `op` spawn prompts, which makes unattended agents unusable. The daemon cache
+ * (v0.13.1+) bounds it to one prompt per TTL per credential; a service account
+ * removes prompts entirely. Printed by `aquaman doctor` and deep doctors.
+ */
+function printOnePasswordModeHint(config: WrapperConfig, indent = '    '): void {
+  if (config.credentials.backend !== '1password') return;
+  if (process.env['OP_SERVICE_ACCOUNT_TOKEN'] || process.env['OP_CONNECT_HOST']) return;
+  const vault = config.credentials.onePasswordVault || 'aquaman';
+  const ttl = resolveCacheTtl(config);
+  const cacheNote = ttl > 0
+    ? `the daemon cache bounds this to one per ${Math.round(ttl / 60)} min per credential`
+    : 'and the credential cache is disabled (cacheTtlSeconds: 0)';
+  console.log(`${indent}• 1Password is in biometric/desktop-app mode — each vault read prompts (${cacheNote}).`);
+  console.log(`${indent}  For zero prompts, create a service account scoped to the "${vault}" vault (create the`);
+  console.log(`${indent}  vault + credentials as a human first, or grant write_items) and start the daemon with`);
+  console.log(`${indent}  OP_SERVICE_ACCOUNT_TOKEN. If OP_CONNECT_HOST/OP_CONNECT_TOKEN are set they take precedence.`);
+}
+
+/**
+ * Map config.credentials onto CredentialStoreOptions — the single source for
+ * every createCredentialStore() call in this CLI. Env fallbacks mirror
+ * applyEnvOverrides() (belt and braces for callers that build partial configs).
+ */
+function storeOptionsFromConfig(config: WrapperConfig): CredentialStoreOptions {
+  return {
+    backend: config.credentials.backend,
+    encryptionPassword: config.credentials.encryptionPassword || process.env['AQUAMAN_ENCRYPTION_PASSWORD'] || process.env['AQUAMAN_KEEPASS_PASSWORD'],
+    vaultAddress: config.credentials.vaultAddress || process.env['VAULT_ADDR'],
+    vaultToken: config.credentials.vaultToken || process.env['VAULT_TOKEN'],
+    vaultNamespace: config.credentials.vaultNamespace,
+    vaultMountPath: config.credentials.vaultMountPath,
+    onePasswordVault: config.credentials.onePasswordVault,
+    onePasswordAccount: config.credentials.onePasswordAccount,
+    keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
+    keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
+    bitwardenFolder: config.credentials.bitwardenFolder,
+    bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
+    bitwardenCollectionId: config.credentials.bitwardenCollectionId
+  };
 }
 
 /**
@@ -346,21 +392,10 @@ program
       // Vault \u2014 backend + creds
       try {
         const config = loadConfig();
-        const store = await createCredentialStore({
-          backend: config.credentials.backend,
-          encryptionPassword: config.credentials.encryptionPassword,
-          vaultAddress: config.credentials.vaultAddress,
-          vaultToken: config.credentials.vaultToken,
-          onePasswordVault: config.credentials.onePasswordVault,
-          onePasswordAccount: config.credentials.onePasswordAccount,
-          keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
-          keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
-          bitwardenFolder: config.credentials.bitwardenFolder,
-          bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
-          bitwardenCollectionId: config.credentials.bitwardenCollectionId
-        });
+        const store = await createCredentialStore(storeOptionsFromConfig(config));
         const creds = await store.list();
         console.log(`    \u2713 ${config.credentials.backend} backend (${creds.length} credential${creds.length !== 1 ? 's' : ''})`);
+        printOnePasswordModeHint(config);
       } catch (err) {
         console.log(`    \u2717 Backend not accessible: ${(err as Error).message}`);
         console.log('      \u2192 Run: aquaman setup');
@@ -564,19 +599,7 @@ async function runVaultSetup(opts: { backend?: string; policy: boolean; nonInter
 
   let store: import('../core/index.js').CredentialStore;
   try {
-    store = await createCredentialStore({
-      backend: config.credentials.backend,
-      encryptionPassword: config.credentials.encryptionPassword || process.env['AQUAMAN_ENCRYPTION_PASSWORD'] || process.env['AQUAMAN_KEEPASS_PASSWORD'],
-      vaultAddress: config.credentials.vaultAddress || process.env['VAULT_ADDR'],
-      vaultToken: config.credentials.vaultToken || process.env['VAULT_TOKEN'],
-      onePasswordVault: config.credentials.onePasswordVault,
-      onePasswordAccount: config.credentials.onePasswordAccount,
-      keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
-      keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
-      bitwardenFolder: config.credentials.bitwardenFolder,
-      bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
-      bitwardenCollectionId: config.credentials.bitwardenCollectionId
-    });
+    store = await createCredentialStore(storeOptionsFromConfig(config));
   } catch (err) {
     console.error(`  Failed to initialize ${backend}: ${err instanceof Error ? err.message : err}`);
     process.exit(1);
@@ -682,21 +705,7 @@ openclaw
     // Initialize credential store
     let credentialStore;
     try {
-      credentialStore = await createCredentialStore({
-        backend: config.credentials.backend,
-        encryptionPassword: config.credentials.encryptionPassword,
-        vaultAddress: config.credentials.vaultAddress,
-        vaultToken: config.credentials.vaultToken,
-        vaultNamespace: config.credentials.vaultNamespace,
-        vaultMountPath: config.credentials.vaultMountPath,
-        onePasswordVault: config.credentials.onePasswordVault,
-        onePasswordAccount: config.credentials.onePasswordAccount,
-        keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
-        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
-        bitwardenFolder: config.credentials.bitwardenFolder,
-        bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
-        bitwardenCollectionId: config.credentials.bitwardenCollectionId
-      });
+      credentialStore = wrapWithCache(await createCredentialStore(storeOptionsFromConfig(config)), resolveCacheTtl(config));
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
       console.error('Fix the backend configuration and retry. Run: aquaman doctor');
@@ -860,21 +869,7 @@ program
     // Initialize credential store
     let credentialStore;
     try {
-      credentialStore = await createCredentialStore({
-        backend: config.credentials.backend,
-        encryptionPassword: config.credentials.encryptionPassword,
-        vaultAddress: config.credentials.vaultAddress,
-        vaultToken: config.credentials.vaultToken,
-        vaultNamespace: config.credentials.vaultNamespace,
-        vaultMountPath: config.credentials.vaultMountPath,
-        onePasswordVault: config.credentials.onePasswordVault,
-        onePasswordAccount: config.credentials.onePasswordAccount,
-        keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
-        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
-        bitwardenFolder: config.credentials.bitwardenFolder,
-        bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
-        bitwardenCollectionId: config.credentials.bitwardenCollectionId
-      });
+      credentialStore = wrapWithCache(await createCredentialStore(storeOptionsFromConfig(config)), resolveCacheTtl(config));
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
       console.error('Fix the backend configuration and retry. Run: aquaman doctor');
@@ -938,21 +933,7 @@ openclaw
     // Initialize credential store
     let credentialStore;
     try {
-      credentialStore = await createCredentialStore({
-        backend: config.credentials.backend,
-        encryptionPassword: config.credentials.encryptionPassword,
-        vaultAddress: config.credentials.vaultAddress,
-        vaultToken: config.credentials.vaultToken,
-        vaultNamespace: config.credentials.vaultNamespace,
-        vaultMountPath: config.credentials.vaultMountPath,
-        onePasswordVault: config.credentials.onePasswordVault,
-        onePasswordAccount: config.credentials.onePasswordAccount,
-        keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
-        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
-        bitwardenFolder: config.credentials.bitwardenFolder,
-        bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
-        bitwardenCollectionId: config.credentials.bitwardenCollectionId
-      });
+      credentialStore = wrapWithCache(await createCredentialStore(storeOptionsFromConfig(config)), resolveCacheTtl(config));
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
       console.error('Fix the backend configuration and retry. Run: aquaman doctor');
@@ -1231,26 +1212,13 @@ hermes
       fail('No Hermes-supported services configured (anthropic, openai)');
     } else {
       try {
-        const store = await createCredentialStore({
-          backend: config.credentials.backend,
-          encryptionPassword: config.credentials.encryptionPassword,
-          vaultAddress: config.credentials.vaultAddress,
-          vaultToken: config.credentials.vaultToken,
-          vaultNamespace: config.credentials.vaultNamespace,
-          vaultMountPath: config.credentials.vaultMountPath,
-          onePasswordVault: config.credentials.onePasswordVault,
-          onePasswordAccount: config.credentials.onePasswordAccount,
-          keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
-          keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
-          bitwardenFolder: config.credentials.bitwardenFolder,
-          bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
-          bitwardenCollectionId: config.credentials.bitwardenCollectionId,
-        });
+        const store = await createCredentialStore(storeOptionsFromConfig(config));
         for (const svc of wired) {
           const val = await store.get(svc, 'api_key');
           if (val) pass(`Vault credential ${svc}/api_key resolves`);
           else fail(`No credential for ${svc}/api_key — run: aquaman credentials add ${svc} api_key`);
         }
+        printOnePasswordModeHint(config, '  ');
       } catch (err) {
         fail(`Vault backend "${config.credentials.backend}" failed: ${err instanceof Error ? err.message : err}`);
       }
@@ -1516,19 +1484,7 @@ openclaw
     // 3. Prompt for API keys (or read from env in non-interactive mode)
     let store;
     try {
-      store = await createCredentialStore({
-        backend: config.credentials.backend,
-        encryptionPassword: config.credentials.encryptionPassword || process.env['AQUAMAN_ENCRYPTION_PASSWORD'] || process.env['AQUAMAN_KEEPASS_PASSWORD'],
-        vaultAddress: config.credentials.vaultAddress || process.env['VAULT_ADDR'],
-        vaultToken: config.credentials.vaultToken || process.env['VAULT_TOKEN'],
-        onePasswordVault: config.credentials.onePasswordVault,
-        onePasswordAccount: config.credentials.onePasswordAccount,
-        keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
-        keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
-        bitwardenFolder: config.credentials.bitwardenFolder,
-        bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
-        bitwardenCollectionId: config.credentials.bitwardenCollectionId
-      });
+      store = await createCredentialStore(storeOptionsFromConfig(config));
     } catch (err) {
       console.error(`  Failed to initialize ${backend} credential store: ${err instanceof Error ? err.message : err}`);
       process.exit(1);
