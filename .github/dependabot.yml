@@ -14,8 +14,20 @@ updates:
     groups:
       minor-and-patch:
         update-types: ["minor", "patch"]
+      # Group SECURITY-update PRs too (separate from the version-update group).
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
     open-pull-requests-limit: 5
     ignore:
+      # MAJORS POLICY: no automatic semver-major PRs for npm. Majors in this
+      # tree always need human migration (vitest 1->4, oxlint 0.x->1.x) or must
+      # track the runtime we actually run (@types/node vs CI's Node version) —
+      # they are deliberate, scheduled chores. NOTE: this also suppresses
+      # security-update PRs that would require a major; the alert stays visible
+      # on the dashboard and the fix is the manual migration.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
       # Workspace-internal exact pins, managed by the release process (the CD
       # version gate asserts them) — dependabot must never touch these.
       - dependency-name: aquaman-proxy
@@ -37,9 +49,15 @@ updates:
       interval: weekly
       day: monday
 
-  # GitHub Actions pins in ci.yml / cd.yml / codeql.yml
+  # GitHub Actions pins in ci.yml / cd.yml / codeql.yml. Majors stay ALLOWED
+  # here (unlike npm): action major tags are runner-runtime migrations that
+  # GitHub deprecates on its own schedule — pins rot until CI breaks unprompted.
+  # One grouped weekly PR keeps them reviewable.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
       day: monday
+    groups:
+      actions:
+        patterns: ["*"]

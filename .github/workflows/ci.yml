@@ -90,7 +90,11 @@ jobs:
           npm ci --legacy-peer-deps --ignore-scripts
           npm rebuild keytar esbuild oxlint
       - run: npm run test:coverage
-      - uses: codecov/codecov-action@v5
+      - name: Upload coverage to Codecov
+        # Dependabot-triggered runs get no repo secrets, so the upload can only
+        # fail there — skip it (tests above still run and gate the PR).
+        if: github.actor != 'dependabot[bot]'
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage/lcov.info
