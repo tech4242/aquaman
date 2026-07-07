@@ -203,3 +203,14 @@ jobs:
           fi
 
           echo "Only expected findings: dangerous-exec on proxy-manager.ts, tools_reachable_permissive_policy (env advisory)"
+
+  e2e-hermes:
+    name: Hermes Python plugin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Run aquaman-hermes plugin tests
+        working-directory: packages/hermes
+        run: uv run --with pytest python -m pytest tests/ -q

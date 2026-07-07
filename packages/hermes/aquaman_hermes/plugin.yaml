@@ -1,0 +1,6 @@
+name: aquaman
+version: "0.13.0"
+description: "Credential isolation for Hermes. API keys live in a secure backend (Keychain, 1Password, Vault, Bitwarden, KeePassXC, encrypted-file, systemd-creds) and are injected by the aquaman proxy's loopback listener — they never enter the Hermes process. This plugin adds an /aquaman-status slash command, an aquaman_status tool, and an on_session_start health check; the isolation itself is done by the proxy + the ANTHROPIC_BASE_URL/OPENAI_BASE_URL env vars in ~/.hermes/.env."
+author: "tech4242"
+hooks:
+  - on_session_start

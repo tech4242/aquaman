@@ -43,3 +43,13 @@ OPERATIONS.md
 .claude
 # ClawHub Plugin Inspector output
 packages/plugin/reports/
+
+# Python (packages/hermes)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+packages/hermes/dist/
+.pytest_cache/
+.coverage
+.coverage.*

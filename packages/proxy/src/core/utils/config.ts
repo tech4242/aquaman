@@ -11,11 +11,24 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import * as crypto from 'node:crypto';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { WrapperConfig } from '../types.js';
 
 const DEFAULT_CONFIG_DIR = path.join(os.homedir(), '.aquaman');
 const CONFIG_FILE = 'config.yaml';
+
+/** Default loopback TCP port for the opt-in Hermes listener. */
+export const DEFAULT_LOOPBACK_PORT = 8585;
+
+/**
+ * Generate an unguessable token for the loopback listener. Presented by the
+ * agent host as the provider api_key; the proxy strips it and injects the real
+ * credential. Prefixed so it's recognizable in `~/.hermes/.env` and logs.
+ */
+export function generateLoopbackToken(): string {
+  return 'aqm_lb_' + crypto.randomBytes(24).toString('hex');
+}
 
 export function getConfigDir(): string {
   return process.env['AQUAMAN_CONFIG_DIR'] || DEFAULT_CONFIG_DIR;
@@ -52,6 +65,14 @@ export function getDefaultConfig(): WrapperConfig {
     openclaw: {
       autoLaunch: true,
       configMethod: 'env'
+    },
+    loopback: {
+      enabled: false,
+      port: DEFAULT_LOOPBACK_PORT,
+      host: '127.0.0.1'
+    },
+    hermes: {
+      configMethod: 'dotenv'
     }
   };
 }
@@ -123,6 +144,24 @@ export function applyEnvOverrides(config: WrapperConfig): WrapperConfig {
     config.credentials.bitwardenCollectionId = env['AQUAMAN_BITWARDEN_COLLECTION_ID'];
   }
 
+  // Loopback listener overrides (opt-in Hermes path). Useful for CI /
+  // non-interactive setup where the token is injected from the environment.
+  if (env['AQUAMAN_LOOPBACK_ENABLED']) {
+    config.loopback = config.loopback ?? { enabled: false, port: DEFAULT_LOOPBACK_PORT, host: '127.0.0.1' };
+    config.loopback.enabled = env['AQUAMAN_LOOPBACK_ENABLED'] === 'true';
+  }
+  if (env['AQUAMAN_LOOPBACK_PORT']) {
+    const p = Number(env['AQUAMAN_LOOPBACK_PORT']);
+    if (Number.isInteger(p) && p > 0 && p < 65536) {
+      config.loopback = config.loopback ?? { enabled: false, port: DEFAULT_LOOPBACK_PORT, host: '127.0.0.1' };
+      config.loopback.port = p;
+    }
+  }
+  if (env['AQUAMAN_LOOPBACK_TOKEN']) {
+    config.loopback = config.loopback ?? { enabled: false, port: DEFAULT_LOOPBACK_PORT, host: '127.0.0.1' };
+    config.loopback.token = env['AQUAMAN_LOOPBACK_TOKEN'];
+  }
+
   return config;
 }
 
@@ -154,6 +193,12 @@ function mergeConfig(
       ...base.openclaw,
       ...override.openclaw
     },
+    loopback: override.loopback !== undefined
+      ? { ...base.loopback, ...override.loopback } as WrapperConfig['loopback']
+      : base.loopback,
+    hermes: override.hermes !== undefined
+      ? { ...base.hermes, ...override.hermes } as WrapperConfig['hermes']
+      : base.hermes,
     policy: override.policy !== undefined ? { ...base.policy, ...override.policy } : base.policy
   };
 }
@@ -168,5 +213,11 @@ export function ensureConfigDir(): void {
 export function saveConfig(config: WrapperConfig): void {
   ensureConfigDir();
   const configPath = getConfigPath();
-  fs.writeFileSync(configPath, stringifyYaml(config), { encoding: 'utf-8', mode: 0o600 });
+  // Never persist the encryption password: it is env-only (AQUAMAN_ENCRYPTION_PASSWORD)
+  // and loadConfig() injects it into the in-memory config via applyEnvOverrides().
+  // Without this guard, any saveConfig(loadConfig()) round-trip (e.g. a setup
+  // command) would leak the password into config.yaml in plaintext.
+  const { encryptionPassword: _omit, ...credsToPersist } = config.credentials;
+  const sanitized: WrapperConfig = { ...config, credentials: credsToPersist };
+  fs.writeFileSync(configPath, stringifyYaml(sanitized), { encoding: 'utf-8', mode: 0o600 });
 }

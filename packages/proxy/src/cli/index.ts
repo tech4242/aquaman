@@ -24,6 +24,8 @@ import {
   createAuditLogger,
   createCredentialStore,
   saveConfig,
+  generateLoopbackToken,
+  DEFAULT_LOOPBACK_PORT,
   type WrapperConfig
 } from '../core/index.js';
 
@@ -32,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { createCredentialProxy, type CredentialProxy } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
 import { createOpenClawIntegration, authProfilesAreSqliteOnly } from '../openclaw/integration.js';
+import { createHermesIntegration, detectHermes } from '../hermes/integration.js';
 import { loadPolicyFromConfig, validatePolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 
@@ -54,6 +57,39 @@ function validateCredName(label: string, value: string): void {
     console.error(`Invalid ${label}: "${value}". Allowed: lowercase alphanumeric, dots, hyphens, underscores.`);
     process.exit(1);
   }
+}
+
+/**
+ * Build loopback listener options from config for the daemon. Returns undefined
+ * unless the loopback listener is explicitly enabled. If it's enabled but no
+ * token is configured we refuse to start the listener (an unauthenticated
+ * loopback proxy would be an open credential gateway for any local process) and
+ * print how to fix it — the UDS proxy still starts normally.
+ */
+function loadLoopbackOptions(config: WrapperConfig): { port: number; token: string; host?: string } | undefined {
+  const lb = config.loopback;
+  if (!lb?.enabled) return undefined;
+  if (!lb.token) {
+    console.error('Loopback listener is enabled but no token is set — refusing to start it (would be unauthenticated).');
+    console.error('Fix: run `aquaman hermes setup` to generate one, or set AQUAMAN_LOOPBACK_TOKEN.');
+    return undefined;
+  }
+  return { port: lb.port || DEFAULT_LOOPBACK_PORT, token: lb.token, host: lb.host || '127.0.0.1' };
+}
+
+/**
+ * Probe the loopback listener's /_health endpoint (no token required). Returns
+ * true if it responds 200 within a short timeout, false otherwise.
+ */
+function probeLoopbackHealth(host: string, port: number, timeoutMs = 1500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.get({ host, port, path: '/_health', timeout: timeoutMs }, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
 }
 
 // PID file management
@@ -130,7 +166,7 @@ const program = new Command();
 
 program
   .name('aquaman')
-  .description('Credential isolation for AI agents \u2014 vault for the proxy core, OpenClaw plugin path, coding-agent adapter path')
+  .description('Credential isolation for AI agents \u2014 vault for the proxy core, OpenClaw plugin path, coding-agent adapter path, Hermes loopback path')
   .version(VERSION)
   .configureHelp({
     subcommandTerm(cmd) {
@@ -224,6 +260,22 @@ program
           lines.push(renderRow(term, desc));
         }
         lines.push(`  ${'(delegates to the aquaman-coder binary; install: npm install -g aquaman-coder)'}`);
+        lines.push('');
+      }
+
+      // --- Hermes namespace (nested) ---
+      const hm = byName.get('hermes');
+      if (hm) {
+        lines.push(aqua('Hermes integration'));
+        const hmOrder = ['setup', 'doctor', 'status', 'configure'];
+        const hmSubs = helper.visibleCommands(hm).filter((s: any) => s.name() !== 'help');
+        const hmSorted = [
+          ...hmOrder.map((n) => hmSubs.find((s: any) => s.name() === n)).filter(Boolean),
+          ...hmSubs.filter((s: any) => !hmOrder.includes(s.name())),
+        ];
+        for (const sub of hmSorted) {
+          lines.push(renderRow(`hermes ${sub!.name()}`, sub!.description() || ''));
+        }
         lines.push('');
       }
 
@@ -376,6 +428,32 @@ program
       console.log(`    \u2022 not configured`);
       console.log(`      Your coding agents (Claude Code, Codex, \u2026) could use the same`);
       console.log(`      vault protection. Install: ${aqua('npm install -g aquaman-coder')}`);
+    }
+
+    // Hermes integration
+    const hermesStateDir = process.env['HERMES_HOME'] || path.join(os.homedir(), '.hermes');
+    let hermesDetected = false;
+    try {
+      const { execSync } = await import('node:child_process');
+      execSync('which hermes', { stdio: 'pipe' });
+      hermesDetected = true;
+    } catch { /* */ }
+    if (!hermesDetected) hermesDetected = fs.existsSync(hermesStateDir);
+
+    console.log('');
+    console.log(`  ${aqua('Hermes integration')}`);
+    if (!hermesDetected) {
+      console.log(`    \u2022 not detected (skipping \u2014 only relevant if you run the Hermes agent host)`);
+    } else {
+      let loopbackEnabled = false;
+      try { loopbackEnabled = loadConfig().loopback?.enabled === true; } catch { /* */ }
+      if (loopbackEnabled) {
+        console.log(`    \u2713 loopback listener enabled   (deep: ${aqua('aquaman hermes doctor')})`);
+      } else {
+        console.log(`    \u2022 not configured`);
+        console.log(`      Isolate Hermes' provider keys via an opt-in loopback listener.`);
+        console.log(`      Run: ${aqua('aquaman hermes setup')}`);
+      }
     }
 
     console.log('');
@@ -637,6 +715,7 @@ openclaw
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
       policyConfig,
+      loopback: loadLoopbackOptions(config),
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
@@ -813,6 +892,7 @@ program
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
       policyConfig: policyConfig2,
+      loopback: loadLoopbackOptions(config),
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
@@ -897,6 +977,7 @@ openclaw
       allowedServices: config.credentials.proxiedServices,
       serviceRegistry,
       policyConfig: policyConfig3,
+      loopback: loadLoopbackOptions(config),
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
@@ -964,6 +1045,255 @@ openclaw
     } else {
       const result = await integration.writeConfiguration(env);
       console.log(`Configuration written to: ${result}`);
+    }
+  });
+
+// ── aquaman hermes … — Hermes integration via loopback listener ──
+const hermes = program
+  .command('hermes')
+  .description('Hermes integration via opt-in loopback listener');
+
+/** Mask a loopback token for display: keep the prefix + last 4 chars. */
+function maskToken(token: string): string {
+  if (token.length <= 12) return '****';
+  return `${token.slice(0, 7)}…${token.slice(-4)}`;
+}
+
+// hermes setup — enable loopback listener, generate token, wire ~/.hermes/.env
+hermes
+  .command('setup')
+  .description('Enable the loopback listener, generate a token, and wire ~/.hermes/.env for Hermes')
+  .option('--port <port>', 'Loopback listener port')
+  .option('--dry-run', 'Show what would change without writing')
+  .option('--no-write', 'Configure the proxy but do not write ~/.hermes/.env')
+  .action(async (options) => {
+    const config = loadConfig();
+
+    // Resolve port: flag > existing config > default.
+    let port = config.loopback?.port || DEFAULT_LOOPBACK_PORT;
+    if (options.port) {
+      const p = Number(options.port);
+      if (!Number.isInteger(p) || p <= 0 || p >= 65536) {
+        console.error(`Invalid --port: ${options.port}`);
+        process.exit(1);
+      }
+      port = p;
+    }
+
+    const host = config.loopback?.host || '127.0.0.1';
+    const token = config.loopback?.token || generateLoopbackToken();
+
+    // Which services get wired (anthropic/openai today).
+    const integration = createHermesIntegration({
+      port, token, host,
+      services: config.credentials.proxiedServices,
+      config: config.hermes,
+    });
+    const wired = integration.wiredServices();
+    const env = integration.configureHermes();
+
+    if (wired.length === 0) {
+      console.log('No Hermes-supported services (anthropic, openai) are in your proxiedServices list.');
+      console.log('Add one with: aquaman credentials add anthropic api_key');
+    }
+
+    if (options.dryRun) {
+      console.log('Dry run — would apply this configuration:\n');
+      console.log(`  Loopback listener: http://${host}:${port}  (enabled)`);
+      console.log(`  Token:             ${maskToken(token)}`);
+      console.log(`  Wired services:    ${wired.join(', ') || '(none)'}`);
+      console.log(`  ~/.hermes/.env:    ${integration.envPath()}`);
+      console.log('\nEnv vars:');
+      console.log(integration.getEnvForDisplay());
+      return;
+    }
+
+    // Persist loopback config (enabled + port + token + host).
+    config.loopback = { enabled: true, port, host, token };
+    saveConfig(config);
+    console.log(`✓ Loopback listener enabled on http://${host}:${port} (saved to ${path.join(getConfigDir(), 'config.yaml')})`);
+
+    if (options.write !== false) {
+      const dest = integration.writeConfiguration(env);
+      console.log(`✓ Wrote Hermes env block to ${dest}`);
+    } else {
+      console.log('Skipped writing ~/.hermes/.env (--no-write). Env vars:');
+      console.log(integration.getEnvForDisplay());
+    }
+
+    const info = await detectHermes(config.hermes?.binaryPath || 'hermes');
+    console.log('');
+    if (info.installed) {
+      console.log(`✓ Hermes detected (v${info.version})`);
+    } else {
+      console.log('• Hermes CLI not found on PATH. Install: uv tool install hermes-agent');
+    }
+
+    console.log('\nNext steps:');
+    console.log(`  1. Add credentials:  ${aqua('aquaman credentials add anthropic api_key')}`);
+    console.log(`  2. Start the daemon: ${aqua('aquaman daemon')}`);
+    console.log(`  3. Verify:           ${aqua('aquaman hermes doctor')}`);
+  });
+
+// hermes status — loopback config + env file + Hermes detection (overview)
+hermes
+  .command('status')
+  .description('Show loopback listener config, ~/.hermes/.env wiring, and Hermes detection')
+  .action(async () => {
+    const config = loadConfig();
+    const lb = config.loopback;
+
+    console.log('Hermes integration status\n');
+    if (lb?.enabled) {
+      console.log(`  Loopback listener: ${aqua('enabled')}  http://${lb.host || '127.0.0.1'}:${lb.port || DEFAULT_LOOPBACK_PORT}`);
+      console.log(`  Token:             ${lb.token ? maskToken(lb.token) : aqua('MISSING — run: aquaman hermes setup')}`);
+    } else {
+      console.log(`  Loopback listener: disabled  (enable with: ${aqua('aquaman hermes setup')})`);
+    }
+
+    const integration = createHermesIntegration({
+      port: lb?.port || DEFAULT_LOOPBACK_PORT,
+      token: lb?.token || '',
+      host: lb?.host || '127.0.0.1',
+      services: config.credentials.proxiedServices,
+      config: config.hermes,
+    });
+    console.log(`  Wired services:    ${integration.wiredServices().join(', ') || '(none)'}`);
+
+    const envPath = integration.envPath();
+    let envWired = false;
+    try {
+      envWired = fs.existsSync(envPath) && fs.readFileSync(envPath, 'utf-8').includes('aquaman managed');
+    } catch { /* unreadable */ }
+    console.log(`  ~/.hermes/.env:    ${envWired ? aqua('wired') : 'not wired'}  (${envPath})`);
+
+    const info = await detectHermes(config.hermes?.binaryPath || 'hermes');
+    console.log(`  Hermes CLI:        ${info.installed ? aqua(`v${info.version}`) : 'not found'}`);
+
+    // Live liveness probe of the loopback listener (no token needed for _health).
+    if (lb?.enabled) {
+      const alive = await probeLoopbackHealth(lb.host || '127.0.0.1', lb.port || DEFAULT_LOOPBACK_PORT);
+      console.log(`  Listener:          ${alive ? aqua('responding') : 'not responding (is the daemon running?)'}`);
+    }
+  });
+
+// hermes doctor — deep diagnostic; exit 1 on any failure
+hermes
+  .command('doctor')
+  .description('Deep diagnostic — loopback config, listener reachability, env wiring, per-service vault credentials')
+  .action(async () => {
+    const config = loadConfig();
+    const lb = config.loopback;
+    let ok = true;
+    const fail = (msg: string) => { ok = false; console.log(`  ✗ ${msg}`); };
+    const pass = (msg: string) => console.log(`  ✓ ${msg}`);
+
+    console.log('Hermes integration diagnostic\n');
+
+    // 1. Loopback enabled + token present
+    if (!lb?.enabled) {
+      fail('Loopback listener is disabled — run: aquaman hermes setup');
+    } else {
+      pass(`Loopback listener enabled (http://${lb.host || '127.0.0.1'}:${lb.port || DEFAULT_LOOPBACK_PORT})`);
+      if (!lb.token) fail('Loopback token missing — run: aquaman hermes setup');
+      else pass('Loopback token configured');
+    }
+
+    // 2. Listener reachable
+    if (lb?.enabled) {
+      const alive = await probeLoopbackHealth(lb.host || '127.0.0.1', lb.port || DEFAULT_LOOPBACK_PORT);
+      if (alive) pass('Loopback listener responding to /_health');
+      else fail('Loopback listener not responding — start the daemon: aquaman daemon');
+    }
+
+    // 3. ~/.hermes/.env wired
+    const integration = createHermesIntegration({
+      port: lb?.port || DEFAULT_LOOPBACK_PORT,
+      token: lb?.token || '',
+      host: lb?.host || '127.0.0.1',
+      services: config.credentials.proxiedServices,
+      config: config.hermes,
+    });
+    const envPath = integration.envPath();
+    try {
+      if (fs.existsSync(envPath) && fs.readFileSync(envPath, 'utf-8').includes('aquaman managed')) {
+        pass(`~/.hermes/.env has the aquaman block (${envPath})`);
+      } else {
+        fail(`~/.hermes/.env not wired — run: aquaman hermes setup`);
+      }
+    } catch {
+      fail(`Could not read ${envPath}`);
+    }
+
+    // 4. Per-service vault credentials resolve
+    const wired = integration.wiredServices();
+    if (wired.length === 0) {
+      fail('No Hermes-supported services configured (anthropic, openai)');
+    } else {
+      try {
+        const store = await createCredentialStore({
+          backend: config.credentials.backend,
+          encryptionPassword: config.credentials.encryptionPassword,
+          vaultAddress: config.credentials.vaultAddress,
+          vaultToken: config.credentials.vaultToken,
+          vaultNamespace: config.credentials.vaultNamespace,
+          vaultMountPath: config.credentials.vaultMountPath,
+          onePasswordVault: config.credentials.onePasswordVault,
+          onePasswordAccount: config.credentials.onePasswordAccount,
+          keepassxcDatabasePath: config.credentials.keepassxcDatabasePath,
+          keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
+          bitwardenFolder: config.credentials.bitwardenFolder,
+          bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
+          bitwardenCollectionId: config.credentials.bitwardenCollectionId,
+        });
+        for (const svc of wired) {
+          const val = await store.get(svc, 'api_key');
+          if (val) pass(`Vault credential ${svc}/api_key resolves`);
+          else fail(`No credential for ${svc}/api_key — run: aquaman credentials add ${svc} api_key`);
+        }
+      } catch (err) {
+        fail(`Vault backend "${config.credentials.backend}" failed: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
+    // 5. Hermes installed
+    const info = await detectHermes(config.hermes?.binaryPath || 'hermes');
+    if (info.installed) pass(`Hermes CLI installed (v${info.version})`);
+    else console.log('  • Hermes CLI not found on PATH (install: uv tool install hermes-agent)');
+
+    console.log('');
+    console.log(ok ? aqua('All checks passed.') : 'Some checks failed — see above.');
+    process.exit(ok ? 0 : 1);
+  });
+
+// hermes configure — emit/write the Hermes env vars without touching daemon config
+hermes
+  .command('configure')
+  .description('Generate the Hermes env vars (base URLs + placeholder key) for ~/.hermes/.env')
+  .option('--method <method>', 'Output method: env (display) or dotenv (write ~/.hermes/.env)', 'env')
+  .option('--dry-run', 'Show configuration without writing')
+  .action(async (options) => {
+    const config = loadConfig();
+    const lb = config.loopback;
+    if (!lb?.token) {
+      console.error('No loopback token configured. Run `aquaman hermes setup` first.');
+      process.exit(1);
+    }
+    const integration = createHermesIntegration({
+      port: lb.port || DEFAULT_LOOPBACK_PORT,
+      token: lb.token,
+      host: lb.host || '127.0.0.1',
+      services: config.credentials.proxiedServices,
+      config: { configMethod: options.method === 'dotenv' ? 'dotenv' : 'env', binaryPath: config.hermes?.binaryPath },
+    });
+    const env = integration.configureHermes();
+
+    if (options.dryRun || options.method !== 'dotenv') {
+      console.log('Hermes env vars (add to ~/.hermes/.env):\n');
+      for (const [k, v] of Object.entries(env)) console.log(`${k}=${v}`);
+    } else {
+      const dest = integration.writeConfiguration(env);
+      console.log(`Configuration written to: ${dest}`);
     }
   });
 

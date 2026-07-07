@@ -4,14 +4,15 @@
 
 Credential isolation for **AI agents**. API keys, channel tokens, and `.env`-grade secrets never enter the agent's process — they're stored in secure backends (Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, encrypted-file, systemd-creds) and injected by a separate proxy.
 
-Two integration paths as of v0.12.0:
+Three integration paths as of v0.13.0:
 
 1. **OpenClaw Gateway** (`aquaman-plugin`) — original target. Covers LLM providers (Anthropic, OpenAI, Mistral, Hugging Face, xAI, Cloudflare AI Gateway, ElevenLabs) **and** OpenClaw channel credentials (Telegram, Slack, Discord, MS Teams, Matrix, LINE, Twitch, Twilio, etc.). 25 builtin services across 6 auth modes.
 2. **AI coding agents** (`aquaman-coder`, v0.12.0+) — Claude Code today; Codex / OpenCode / Cursor planned. Stops developers from putting plaintext `.env` files into projects just to make their coding agent work. Per-tool-call credential materialization via the `/broker/resolve` UDS endpoint.
+3. **Hermes agent host** (`aquaman-hermes`, v0.13.0+) — Hermes, the #2/co-leader agent host. Hermes is a foreign (Python) host that builds its own HTTP client and exposes no transport hook, so the UDS dispatcher can't be injected. Instead the proxy exposes an **opt-in, token-gated loopback TCP listener** (`127.0.0.1:<port>`, default-off) and Hermes is pointed at it via its native `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` env vars + a placeholder api_key (= the loopback token). LLM providers only (Anthropic, OpenAI) for now.
 
 **Target platform:** Unix-like systems (Linux, macOS, WSL2). The OpenClaw Gateway runs as a systemd user service (Linux/WSL2) or LaunchAgent (macOS); the coding-agent path runs alongside the coder's own process.
 
-**Published on npm** as `aquaman-proxy`, `aquaman-plugin`, and (v0.12.0+) `aquaman-coder`. Install OpenClaw plugin via `openclaw plugins install aquaman-plugin`; install the coding-agent adapter via `npm install -g aquaman-coder`. Also publishable to ClawHub for native plugin discoverability.
+**Published on npm** as `aquaman-proxy`, `aquaman-plugin`, and (v0.12.0+) `aquaman-coder`. Install OpenClaw plugin via `openclaw plugins install aquaman-plugin`; install the coding-agent adapter via `npm install -g aquaman-coder`. Also publishable to ClawHub for native plugin discoverability. The Hermes plugin (v0.13.0+) ships **on PyPI** as `aquaman-hermes` (`pip install aquaman-hermes`), outside the npm publish order.
 
 ## Compliance posture (v0.12.0+)
 
@@ -51,17 +52,24 @@ Agent Process                    Proxy Process (aquaman)
 ```
 packages/
 ├── proxy/      # aquaman-proxy - canonical core: daemon, broker, vault, audit,
-│               #   policy, CLI. The slim, "always present" package. Plugin and
-│               #   coder both depend on it; it never depends on them.
+│               #   policy, CLI. The slim, "always present" package. Plugin,
+│               #   coder, and the Hermes path all depend on it; it never
+│               #   depends on them. (The Hermes loopback listener + src/hermes/
+│               #   config-writer live HERE — the Python plugin is just sugar.)
 ├── plugin/     # aquaman-plugin - OpenClaw Gateway adapter (frozen scope)
-└── coder/      # aquaman-coder - coding-agent adapter (Claude Code; Codex /
-                #   OpenCode / Cursor planned). NEW in v0.12.0.
+├── coder/      # aquaman-coder - coding-agent adapter (Claude Code; Codex /
+│               #   OpenCode / Cursor planned). NEW in v0.12.0.
+└── hermes/     # aquaman-hermes - Hermes plugin (PYTHON, PyPI). Optional
+                #   in-session sugar (status command/tool + health hook). NEW
+                #   in v0.13.0. The isolation is done proxy-side, not here.
 ```
 
 Cross-package import rules (codified in `docs/PACKAGES.md`):
 - plugin → proxy ✓, coder → proxy ✓
 - plugin ↔ coder ✗ (siblings stay independent)
 - proxy → plugin / coder ✗ (proxy must remain slim)
+- hermes (Python) is decoupled: it talks to the proxy only over the loopback
+  HTTP wire contract (no code import in either direction; polyglot by design)
 
 ## OpenClaw Gateway Integration
 
@@ -206,6 +214,76 @@ aquaman doctor          # overview — should show vault + coder both green
 aquaman coder doctor    # deep diagnostic for the coder integration
 ```
 
+## Hermes Integration (v0.13.0+)
+
+Hermes is a foreign **Python** agent host. It builds its own httpx
+client internally from `(api_mode, base_url, api_key)` and exposes no transport /
+socket hook — so unlike the OpenClaw plugin there's no way to inject a UDS-dialing
+dispatcher. The integration is therefore **proxy-side**, not a code plugin: the proxy
+runs an opt-in loopback TCP listener and Hermes is pointed at it via env vars it
+already understands.
+
+**Wire shape:**
+
+```
+Hermes (Python host)                         aquaman-proxy
+┌──────────────────────────┐                 ┌──────────────────────────────┐
+│ ~/.hermes/.env:           │── HTTP/loopback│ 127.0.0.1:<port> listener      │
+│  ANTHROPIC_BASE_URL=       │   (token in     │  • token gate (constant-time) │
+│   http://127.0.0.1:8585/   │    x-api-key /  │  • strip placeholder          │
+│   anthropic                │    Authorization│  • inject real key from vault │
+│  ANTHROPIC_API_KEY=         │    Bearer)      │  • policy + hash-chain audit  │
+│   <loopback token>         │◀───────────────│  • forward to api.anthropic    │
+│ NO real credentials        │                 └──────────────────────────────┘
+└──────────────────────────┘                  (UDS listener stays default; the
+                                                loopback one is opt-in + default-off)
+```
+
+**Why loopback, not UDS** (partially reverses the v0.7.0 UDS-only decision, but only
+for foreign-language hosts): a UDS dispatcher can't be injected through any supported
+Hermes surface. Mitigations: loopback bind only (never 0.0.0.0); a generated per-install
+token required on every request; reuse of the existing request-policy + audit. The token
+arrives as the provider api_key Hermes sends (`x-api-key` for Anthropic,
+`Authorization: Bearer` for OpenAI) or an explicit `x-aquaman-token`.
+
+**Path mapping** (verified against Hermes `runtime_provider.py` / `anthropic_adapter.py`):
+- Anthropic → base_url `http://127.0.0.1:<port>/anthropic` (Hermes special-cases the
+  `/anthropic` suffix into `anthropic_messages` mode; SDK appends `/v1/messages`).
+- OpenAI → `http://127.0.0.1:<port>/openai/v1` (SDK appends `/chat/completions`). The
+  `openai` upstream is `https://api.openai.com` (no `/v1`), so there's no double-`/v1`.
+
+**Key files (proxy side, the real work):**
+- `packages/proxy/src/daemon.ts` — second `http.Server` on `127.0.0.1:<port>`, gated by
+  `isLoopbackTokenValid()` (constant-time). `/_health` exempt. UDS path unchanged.
+- `packages/proxy/src/hermes/config-writer.ts` — generates the `~/.hermes/.env` block
+  (base URLs + placeholder key). Honors `HERMES_HOME` (the var the Hermes CLI itself
+  uses). Idempotent delimited block.
+- `packages/proxy/src/hermes/integration.ts` — detect Hermes, configure, write env.
+- `packages/proxy/src/core/types.ts` — `LoopbackConfig` (`enabled`/`port`/`token`/`host`)
+  + `HermesConfig`. Config defaults disabled; env overrides `AQUAMAN_LOOPBACK_ENABLED`/
+  `_PORT`/`_TOKEN` (no `_HOST` override — the bind stays loopback).
+- CLI: `aquaman hermes setup|doctor|status|configure`. `loadLoopbackOptions()` refuses to
+  start an enabled-but-tokenless listener (an untokened loopback proxy would be open).
+
+**Python plugin (`packages/hermes/`, optional sugar):** `aquaman-hermes` on PyPI. A
+stdlib-only directory plugin (`plugin.yaml` + `register(ctx)`) installed into
+`$HERMES_HOME/plugins/aquaman/` via `aquaman-hermes install`, enabled with
+`hermes plugins enable aquaman`. Adds `/aquaman-status` slash command, `aquaman_status`
+tool, and an `on_session_start` health probe. Holds no credentials; isolation is entirely
+proxy-side. **Do NOT put isolation logic here.**
+
+**End-to-end setup:**
+
+```bash
+npm install -g aquaman-proxy
+aquaman setup
+aquaman credentials add anthropic api_key sk-ant-...
+aquaman hermes setup            # enable loopback listener, generate token, write ~/.hermes/.env
+aquaman daemon &                # start proxy (UDS + loopback)
+aquaman hermes doctor           # verify: listener + env wiring + vault creds + Hermes detected
+pip install aquaman-hermes && aquaman-hermes install && hermes plugins enable aquaman  # optional
+```
+
 ## Architecture Notes
 
 ### Proxy Request Flow
@@ -293,7 +371,16 @@ aquaman coder exec <cmd>      # run a command with project env injected + output
 # aquaman coder hook is hidden — invoked by Claude Code via stdio
 ```
 
-The triplet pattern (`setup` / `doctor` / `status`) appears at all three levels: top-level shows overview, namespaced versions show deep details.
+**`aquaman hermes …` (Hermes agent-host integration):**
+
+```bash
+aquaman hermes setup          # enable loopback listener + generate token + write ~/.hermes/.env
+aquaman hermes doctor         # deep diagnostic — loopback config + listener reachable + env wired + vault creds
+aquaman hermes status         # loopback config + token (masked) + env wiring + Hermes detection
+aquaman hermes configure      # emit/write the Hermes env vars without touching daemon config
+```
+
+The triplet pattern (`setup` / `doctor` / `status`) appears at all four levels: top-level shows overview, namespaced versions show deep details.
 
 ### Setup wizard (`aquaman setup` vs `aquaman openclaw setup`)
 
@@ -389,6 +476,9 @@ Manual smoke-test recipes for the OpenClaw plugin install path, channel auth mod
 | `packages/proxy/src/migration/openclaw-migrator.ts` | Migrates channel + plugin creds from openclaw.json to secure store |
 | `packages/proxy/src/openclaw/env-writer.ts` | Generates env vars for OpenClaw integration |
 | `packages/proxy/src/openclaw/integration.ts` | Detects and launches OpenClaw with env vars |
+| `packages/proxy/src/hermes/config-writer.ts` | Generates `~/.hermes/.env` block (loopback base URLs + placeholder key) |
+| `packages/proxy/src/hermes/integration.ts` | Detects Hermes, configures + writes its env |
+| `packages/hermes/aquaman_hermes/plugin.py` | Hermes Python plugin: register() + status command/tool + health hook |
 | `packages/plugin/index.ts` | OpenClaw plugin entry point (what Gateway loads) |
 | `packages/plugin/openclaw.plugin.json` | Plugin manifest + config schema |
 | `packages/plugin/src/plugin.ts` | Class-based plugin (standalone/test use) |
@@ -402,6 +492,11 @@ Manual smoke-test recipes for the OpenClaw plugin install path, channel auth mod
 | `test/e2e/oauth-credential-injection.test.ts` | OAuth flow E2E tests (mock token server) |
 | `test/e2e/request-policy.test.ts` | Request policy enforcement E2E tests (403 responses, audit logging, backward compat) |
 | `test/unit/request-policy.test.ts` | Request policy unit tests (path matching, policy evaluation, validation, presets) |
+| `test/e2e/hermes-loopback.test.ts` | Loopback listener E2E (token gating, both provider shapes, isolation, UDS stays token-free) |
+| `test/compliance/loopback-listener.test.ts` | Loopback-path compliance (AC-3 token gate, ATLAS T0055/T0090 key isolation, AU-10 audited path) |
+| `test/unit/hermes/config-writer.test.ts` | Hermes env-writer unit tests (path mapping, HERMES_HOME, idempotent block) |
+| `packages/hermes/tests/test_plugin.py` | Python plugin unit tests (health probe, status text, register wiring) |
+| `packages/hermes/tests/test_compliance.py` | Python plugin compliance (ATLAS T0098 / NIST SI-10/AC-6 — status surface never leaks token/key; reads only `*_BASE_URL`) |
 | `test/e2e/keychain-proxy-flow.test.ts` | Real keychain backend E2E (macOS only) |
 | `test/e2e/cli-plugin-mode.test.ts` | CLI startup/output E2E tests |
 | `test/e2e/cli-setup.test.ts` | `aquaman setup` E2E tests |

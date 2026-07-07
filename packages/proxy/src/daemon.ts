@@ -7,6 +7,7 @@ import * as http from 'node:http';
 import * as https from 'node:https';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { type CredentialStore, generateId } from './core/index.js';
@@ -16,6 +17,21 @@ import { matchPolicy, type PolicyConfig } from './request-policy.js';
 
 // Service name validation: lowercase alphanum, dots, hyphens, underscores
 const SAFE_SERVICE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
+
+/**
+ * Constant-time string comparison that doesn't leak length via an early
+ * return. timingSafeEqual requires equal-length buffers, so unequal lengths
+ * are compared against self (to burn comparable time) and then rejected.
+ */
+function timingSafeStrEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, 'utf-8');
+  const bb = Buffer.from(b, 'utf-8');
+  if (ab.length !== bb.length) {
+    crypto.timingSafeEqual(ab, ab);
+    return false;
+  }
+  return crypto.timingSafeEqual(ab, bb);
+}
 
 // Read version from package.json
 const __daemonFilename = fileURLToPath(import.meta.url);
@@ -31,6 +47,14 @@ export interface CredentialProxyOptions {
   serviceRegistry?: ServiceRegistry;
   requestTimeout?: number; // Upstream request timeout in ms, defaults to 30000 (30s)
   policyConfig?: PolicyConfig;
+  /**
+   * Opt-in loopback TCP listener for foreign-language agent hosts (Hermes)
+   * that can't dial a UDS. Default-off. When set, the proxy ALSO listens on
+   * `host:port` (host defaults to 127.0.0.1) and requires every request on
+   * that listener to present `token` — as `x-api-key`, `Authorization: Bearer`,
+   * or `x-aquaman-token`. Requests on the UDS are unaffected (file-perm gated).
+   */
+  loopback?: { port: number; token: string; host?: string };
 }
 
 export interface RequestInfo {
@@ -53,6 +77,7 @@ interface ServiceConfig {
 
 export class CredentialProxy {
   private server: http.Server | null = null;
+  private loopbackServer: http.Server | null = null;
   private options: CredentialProxyOptions;
   private running = false;
   private serviceRegistry: ServiceRegistry;
@@ -69,15 +94,15 @@ export class CredentialProxy {
       throw new Error('Credential proxy already running');
     }
 
-    const requestHandler = (req: IncomingMessage, res: ServerResponse) => {
-      this.handleRequest(req, res).catch(error => {
+    const handlerFor = (fromLoopback: boolean) => (req: IncomingMessage, res: ServerResponse) => {
+      this.handleRequest(req, res, fromLoopback).catch(error => {
         console.error('Proxy error:', error);
         res.statusCode = 500;
         res.end('Internal proxy error');
       });
     };
 
-    this.server = http.createServer(requestHandler);
+    this.server = http.createServer(handlerFor(false));
 
     // Clean up stale socket (atomic — no TOCTOU race)
     try { fs.unlinkSync(this.options.socketPath); } catch (e: any) {
@@ -90,7 +115,7 @@ export class CredentialProxy {
       fs.mkdirSync(socketDir, { recursive: true });
     }
 
-    return new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       // Set restrictive umask so the socket file is created owner-only.
       // process.umask() is unsupported in worker threads — guard with try/catch.
       let prevUmask: number | undefined;
@@ -112,11 +137,75 @@ export class CredentialProxy {
         reject(err);
       });
     });
+
+    // Opt-in loopback TCP listener (Hermes path). Token-gated; bound to
+    // loopback only. If it fails to bind, tear down the UDS server too so we
+    // don't leave a half-started proxy running.
+    if (this.options.loopback) {
+      const { port, host = '127.0.0.1' } = this.options.loopback;
+      this.loopbackServer = http.createServer(handlerFor(true));
+      try {
+        await new Promise<void>((resolve, reject) => {
+          this.loopbackServer!.on('error', reject);
+          this.loopbackServer!.listen(port, host, () => {
+            console.log(`Credential proxy loopback listening on http://${this.getLoopbackAddress()}`);
+            resolve();
+          });
+        });
+      } catch (err) {
+        this.loopbackServer = null;
+        await this.stop();
+        throw err;
+      }
+    }
   }
 
-  private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  /**
+   * Validate the per-request loopback token. The agent host presents it as the
+   * provider api_key, so it arrives in whatever header that provider's SDK uses
+   * (`x-api-key` for Anthropic, `Authorization: Bearer` for OpenAI), or as an
+   * explicit `x-aquaman-token`. Comparison is constant-time.
+   */
+  private isLoopbackTokenValid(req: IncomingMessage): boolean {
+    const expected = this.options.loopback?.token;
+    if (!expected) return false;
+
+    const candidates: string[] = [];
+    const header = (name: string): string | undefined => {
+      const v = req.headers[name];
+      return Array.isArray(v) ? v[0] : v;
+    };
+
+    const explicit = header('x-aquaman-token');
+    if (explicit) candidates.push(explicit);
+
+    const apiKey = header('x-api-key');
+    if (apiKey) candidates.push(apiKey);
+
+    const authz = header('authorization');
+    if (authz) {
+      candidates.push(authz.replace(/^Bearer\s+/i, ''));
+    }
+
+    return candidates.some(c => timingSafeStrEqual(c, expected));
+  }
+
+  private async handleRequest(req: IncomingMessage, res: ServerResponse, fromLoopback = false): Promise<void> {
     const requestId = generateId();
     const url = req.url || '/';
+
+    // Loopback listener is network-reachable (unlike the 0o600 UDS), so every
+    // request on it must present the loopback token. Health check is exempt so
+    // local tooling can probe liveness without the token.
+    if (fromLoopback && url !== '/_health' && url !== '/_health/' && !this.isLoopbackTokenValid(req)) {
+      res.setHeader('Content-Type', 'application/json');
+      res.statusCode = 401;
+      res.end(JSON.stringify({
+        error: 'Loopback request rejected: missing or invalid aquaman loopback token',
+        fix: 'Set the placeholder api_key in ~/.hermes/.env to the token from: aquaman hermes status'
+      }));
+      return;
+    }
 
     // Health check endpoint
     if (url === '/_health' || url === '/_health/') {
@@ -281,6 +370,8 @@ export class CredentialProxy {
         // Strip existing auth header if we're injecting one
         if (serviceDef.authHeader && key.toLowerCase() === serviceDef.authHeader.toLowerCase()) continue;
         if (key.toLowerCase() === 'authorization') continue;
+        // Never forward the loopback access token to the upstream provider
+        if (key.toLowerCase() === 'x-aquaman-token') continue;
         if (value) {
           headers[key] = Array.isArray(value) ? value[0] : value;
         }
@@ -540,11 +631,18 @@ export class CredentialProxy {
   }
 
   async stop(): Promise<void> {
+    const socketPath = this.options.socketPath;
+
+    // Close the loopback listener first (if any), then the UDS server.
+    if (this.loopbackServer) {
+      const lb = this.loopbackServer;
+      this.loopbackServer = null;
+      await new Promise<void>((resolve) => lb.close(() => resolve()));
+    }
+
     if (!this.running || !this.server) {
       return;
     }
-
-    const socketPath = this.options.socketPath;
 
     return new Promise((resolve, reject) => {
       this.server!.close((error) => {
@@ -567,6 +665,19 @@ export class CredentialProxy {
 
   getSocketPath(): string {
     return this.options.socketPath;
+  }
+
+  /**
+   * Returns the loopback bind address (host:port) if the listener is active,
+   * else null. Reports the actually-bound port (so `port: 0` resolves to the
+   * OS-assigned port) when available.
+   */
+  getLoopbackAddress(): string | null {
+    if (!this.loopbackServer || !this.options.loopback) return null;
+    const host = this.options.loopback.host ?? '127.0.0.1';
+    const addr = this.loopbackServer.address();
+    const port = addr && typeof addr === 'object' ? addr.port : this.options.loopback.port;
+    return `${host}:${port}`;
   }
 
   getServiceRegistry(): ServiceRegistry {

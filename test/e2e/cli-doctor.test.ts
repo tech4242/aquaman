@@ -202,4 +202,61 @@ describe('aquaman doctor E2E', () => {
       expect(exitCode).toBe(1);
     }, TEST_TIMEOUT);
   });
+
+  // The top-level `aquaman doctor` overview (distinct from `openclaw doctor`)
+  // prints a one-line summary per integration. HERMES_HOME is set to a temp
+  // dir so Hermes detection is deterministic regardless of whether the `hermes`
+  // CLI happens to be installed on the host running these tests.
+  describe('top-level overview — Hermes integration', () => {
+    function runTopDoctor(env: TempEnv, extraEnv: Record<string, string> = {}) {
+      try {
+        const stdout = execSync(`npx tsx ${CLI_PATH} doctor`, {
+          encoding: 'utf-8',
+          env: { ...process.env, ...env.env, ...extraEnv },
+          timeout: 20_000,
+        });
+        return { stdout, exitCode: 0 };
+      } catch (err: any) {
+        return { stdout: err.stdout || '', exitCode: err.status ?? 1 };
+      }
+    }
+
+    it('shows the setup hint when Hermes is detected but loopback is disabled', () => {
+      tempEnv = createTempEnv({ withConfig: true });
+      const hermesHome = path.join(tempEnv.aquamanDir, 'hermes-home');
+      mkdirSync(hermesHome, { recursive: true });
+
+      const { stdout } = runTopDoctor(tempEnv, { HERMES_HOME: hermesHome });
+
+      expect(stdout).toContain('Hermes integration');
+      expect(stdout).toContain('not configured');
+      expect(stdout).toContain('aquaman hermes setup');
+    }, TEST_TIMEOUT);
+
+    it('reports the loopback listener enabled when configured', () => {
+      tempEnv = createTempEnv({ withConfig: true });
+      const hermesHome = path.join(tempEnv.aquamanDir, 'hermes-home');
+      mkdirSync(hermesHome, { recursive: true });
+      // Enable the loopback listener in the staged config.
+      writeFileSync(
+        path.join(tempEnv.aquamanDir, 'config.yaml'),
+        [
+          'credentials:',
+          '  backend: encrypted-file',
+          'loopback:',
+          '  enabled: true',
+          '  port: 8585',
+          '  token: aqm_lb_test',
+          '',
+        ].join('\n'),
+        'utf-8'
+      );
+
+      const { stdout } = runTopDoctor(tempEnv, { HERMES_HOME: hermesHome });
+
+      expect(stdout).toContain('Hermes integration');
+      expect(stdout).toContain('loopback listener enabled');
+      expect(stdout).toContain('aquaman hermes doctor');
+    }, TEST_TIMEOUT);
+  });
 });

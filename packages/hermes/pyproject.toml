@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aquaman-hermes"
+version = "0.13.0"
+description = "Aquaman credential-isolation plugin for the Hermes agent host — points Hermes at the aquaman loopback proxy so API keys never enter the agent process."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "tech4242" }]
+keywords = ["hermes", "nousresearch", "aquaman", "credentials", "secrets", "proxy", "ai-agent"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Security",
+]
+# Stdlib only — no runtime dependencies. The plugin talks to the aquaman proxy
+# over plain HTTP on the loopback interface using urllib.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/tech4242/aquaman"
+Repository = "https://github.com/tech4242/aquaman"
+
+[project.scripts]
+aquaman-hermes = "aquaman_hermes.cli:main"
+
+# Discoverable as a Hermes entry-point plugin in addition to the directory-plugin
+# install path. The value points at the register(ctx) callable.
+[project.entry-points."hermes_agent.plugins"]
+aquaman = "aquaman_hermes.plugin:register"
+
+[tool.hatch.build.targets.wheel]
+packages = ["aquaman_hermes"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"aquaman_hermes/plugin.yaml" = "aquaman_hermes/plugin.yaml"

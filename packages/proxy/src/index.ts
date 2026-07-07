@@ -50,6 +50,25 @@ export {
   authProfilesAreSqliteOnly
 } from './openclaw/integration.js';
 
+// Hermes Integration (v0.13.0+)
+export {
+  type HermesEnvConfig,
+  HERMES_SUPPORTED_SERVICES,
+  generateHermesEnv,
+  hermesWiredServices,
+  getHermesEnvPath,
+  writeHermesEnv,
+  formatHermesEnvForDisplay
+} from './hermes/config-writer.js';
+
+export {
+  type HermesInfo,
+  type HermesIntegrationOptions,
+  HermesIntegration,
+  createHermesIntegration,
+  detectHermes
+} from './hermes/integration.js';
+
 // Request Policy
 export {
   type PolicyRule,
