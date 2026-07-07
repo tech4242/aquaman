@@ -89,7 +89,7 @@ export function loadConfig(): WrapperConfig {
       const content = fs.readFileSync(configPath, 'utf-8');
       const userConfig = parseYaml(content) as Partial<WrapperConfig>;
       config = mergeConfig(defaultConfig, userConfig);
-    } catch (error) {
+    } catch {
       console.error(`Warning: Failed to load config from ${configPath}, using defaults`);
       config = defaultConfig;
     }

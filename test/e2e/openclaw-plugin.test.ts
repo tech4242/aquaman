@@ -32,7 +32,7 @@ function isOpenClawInstalled(): boolean {
 // any runtime logs that a command emits.
 function runOpenClaw(args: string): string {
   const testBinDir = path.join(testStateDir, 'bin');
-  const { VITEST, ...env } = process.env;
+  const { VITEST: _vitest, ...env } = process.env;
   return execSync(`npx openclaw ${args} 2>&1`, {
     encoding: 'utf-8',
     env: {

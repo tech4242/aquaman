@@ -29,7 +29,7 @@ vi.mock('../src/proxy-manager.js', () => ({
     }),
     waitForReady: vi.fn().mockResolvedValue(undefined)
   })),
-  createProxyManager: vi.fn().mockImplementation((opts) => ({
+  createProxyManager: vi.fn().mockImplementation((_opts) => ({
     start: vi.fn().mockResolvedValue({
       ready: true,
       socketPath: '/tmp/aquaman-test/proxy.sock',

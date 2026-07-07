@@ -12,7 +12,7 @@ import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { tmpSocketPath, cleanupSocket, udsFetch } from '../helpers/uds-proxy.js';
+import { udsFetch } from '../helpers/uds-proxy.js';
 import { createTempEnv, type TempEnv } from '../helpers/temp-env.js';
 
 const CLI_PATH = path.resolve('packages/proxy/src/cli/index.ts');

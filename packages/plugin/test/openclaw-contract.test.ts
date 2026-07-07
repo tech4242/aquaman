@@ -140,7 +140,7 @@ describe('OpenClaw Plugin Contract', () => {
       const properties = ConfigSchema.properties;
 
       // Each property should have a type
-      for (const [key, value] of Object.entries(properties)) {
+      for (const [, value] of Object.entries(properties)) {
         expect(value).toHaveProperty('type');
       }
     });

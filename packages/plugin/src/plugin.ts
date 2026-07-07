@@ -7,7 +7,7 @@
  */
 
 import { type PluginConfig, mergeConfig, defaultConfig } from './config-schema.js';
-import { createProxyManager, type ProxyManager, type ProxyConnectionInfo } from './proxy-manager.js';
+import { createProxyManager, type ProxyManager } from './proxy-manager.js';
 import { executeCommand, type CommandContext, type CommandResult, getAvailableCommands, type PluginCommand } from './commands.js';
 import { HttpInterceptor, createHttpInterceptor } from './http-interceptor.js';
 

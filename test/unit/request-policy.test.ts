@@ -9,8 +9,7 @@ import {
   validatePolicyConfig,
   loadPolicyFromConfig,
   getDefaultPolicyPresets,
-  type PolicyConfig,
-  type ServicePolicy
+  type PolicyConfig
 } from 'aquaman-proxy';
 
 describe('matchPathPattern', () => {

@@ -44,7 +44,7 @@ function execFileAsync(
         resolve({ stdout: out, stderr: errOut });
       }
     });
-    if (input != null) {
+    if (input !== null && input !== undefined) {
       proc.stdin!.write(input);
       proc.stdin!.end();
     }

@@ -2,7 +2,7 @@
  * E2E tests for request-level policy enforcement through the full proxy stack.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { createCredentialProxy, type CredentialProxy, type PolicyConfig } from 'aquaman-proxy';
 import { MemoryStore } from 'aquaman-core';
 import type { RequestInfo } from 'aquaman-proxy';

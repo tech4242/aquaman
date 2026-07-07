@@ -338,7 +338,7 @@ export class AuditLogger {
         }
 
         previousHash = entry.hash;
-      } catch (parseError) {
+      } catch {
         errors.push(`Entry ${i}: failed to parse JSON`);
       }
     }

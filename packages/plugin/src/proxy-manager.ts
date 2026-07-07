@@ -44,7 +44,6 @@ export function pickProxyEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.Proce
 }
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import type { PluginConfig } from './config-schema.js';
 
