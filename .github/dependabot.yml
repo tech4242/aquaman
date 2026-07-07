@@ -1,8 +1,13 @@
 version: 2
 updates:
-  # npm workspace root (covers packages/proxy, plugin, coder via workspaces)
+  # npm workspaces monorepo: ONE entry, all manifests via `directories`.
+  # Single root package-lock.json — security updates were already covered by
+  # the lockfile; listing the workspace dirs makes VERSION updates reach the
+  # runtime deps declared in packages/*/package.json (the part "/" alone missed).
   - package-ecosystem: npm
-    directory: "/"
+    directories:
+      - "/"
+      - "/packages/*"
     schedule:
       interval: weekly
       day: monday
@@ -11,6 +16,9 @@ updates:
         update-types: ["minor", "patch"]
     open-pull-requests-limit: 5
     ignore:
+      # Workspace-internal exact pins, managed by the release process (the CD
+      # version gate asserts them) — dependabot must never touch these.
+      - dependency-name: aquaman-proxy
       # Dev-only transitives locked inside the `openclaw` devDependency (e2e
       # tests): openclaw@2026.6.6 exact-pins undici@8.3.0 and pulls its own
       # hono, so security bumps (undici 8.5.0, hono 4.12.25) are unresolvable
