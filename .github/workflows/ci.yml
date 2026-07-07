@@ -90,7 +90,7 @@ jobs:
           npm ci --legacy-peer-deps --ignore-scripts
           npm rebuild keytar esbuild oxlint
       - run: npm run test:coverage
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage/lcov.info
