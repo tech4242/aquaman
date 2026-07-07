@@ -38,6 +38,7 @@ import { createCredentialProxy } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
 import { createOpenClawIntegration, authProfilesAreSqliteOnly } from '../openclaw/integration.js';
 import { createHermesIntegration, detectHermes } from '../hermes/integration.js';
+import { managedScopeShadowedKeys, HERMES_MANAGED_ENV_PATH } from '../hermes/config-writer.js';
 import { loadPolicyFromConfig, validatePolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 
@@ -1148,6 +1149,11 @@ hermes
     } catch { /* unreadable */ }
     console.log(`  ~/.hermes/.env:    ${envWired ? aqua('wired') : 'not wired'}  (${envPath})`);
 
+    const shadowed = managedScopeShadowedKeys(integration.configureHermes());
+    if (shadowed.length > 0) {
+      console.log(`  Managed scope:     ⚠ ${HERMES_MANAGED_ENV_PATH} pins ${shadowed.join(', ')} — proxy bypassed for these keys`);
+    }
+
     const info = await detectHermes(config.hermes?.binaryPath || 'hermes');
     console.log(`  Hermes CLI:        ${info.installed ? aqua(`v${info.version}`) : 'not found'}`);
 
@@ -1204,6 +1210,16 @@ hermes
       }
     } catch {
       fail(`Could not read ${envPath}`);
+    }
+
+    // 3b. Hermes >=0.17 managed scope: /etc/hermes/.env overrides ~/.hermes/.env
+    {
+      const shadowed = managedScopeShadowedKeys(integration.configureHermes());
+      if (shadowed.length > 0) {
+        fail(`Hermes managed scope (${HERMES_MANAGED_ENV_PATH}) pins ${shadowed.join(', ')} — it overrides ~/.hermes/.env, so the proxy is BYPASSED for these keys. Remove them from the managed file or point them at the proxy.`);
+      } else {
+        pass('No managed-scope override of aquaman env vars');
+      }
     }
 
     // 4. Per-service vault credentials resolve

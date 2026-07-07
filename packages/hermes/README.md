@@ -71,3 +71,11 @@ aquaman-hermes uninstall
 - It depends only on the Python standard library.
 - Only LLM providers (Anthropic, OpenAI) are wired today. Channels/other providers are
   out of scope for the Hermes path (no base-URL lever to redirect them).
+- Hermes >=0.17 "managed scope": a root-owned `/etc/hermes/.env` overrides
+  `~/.hermes/.env` — if an admin pins the `ANTHROPIC_*`/`OPENAI_*` vars there, the
+  proxy is bypassed. `aquaman hermes doctor` detects and flags this.
+- With `gateway.multiplex_profiles` enabled (off by default), env is scoped per
+  profile — add the aquaman block to each profile's env file.
+- Hermes 0.18's cron exfil guard refuses cron jobs that pair a named provider with
+  an off-host `base_url` override; normal jobs inheriting the session runtime (the
+  env vars aquaman writes) are unaffected.

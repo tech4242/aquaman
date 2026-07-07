@@ -58,7 +58,9 @@ export {
   hermesWiredServices,
   getHermesEnvPath,
   writeHermesEnv,
-  formatHermesEnvForDisplay
+  formatHermesEnvForDisplay,
+  managedScopeShadowedKeys,
+  HERMES_MANAGED_ENV_PATH
 } from './hermes/config-writer.js';
 
 export {

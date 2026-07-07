@@ -129,6 +129,34 @@ export function writeHermesEnv(env: Record<string, string>, filePath: string): v
   fs.writeFileSync(filePath, merged, { mode: 0o600 });
 }
 
+/**
+ * Hermes >= 0.17 "managed scope": a root-owned /etc/hermes/.env is loaded LAST
+ * with override=true, beating both ~/.hermes/.env and shell exports. If an
+ * admin pins any of the env vars aquaman manages, the proxy is silently
+ * bypassed for those keys. Returns the managed keys that file shadows (empty
+ * when the file is absent/unreadable). `managedEnvPath` is parameterized for
+ * tests; production callers use the default.
+ */
+export const HERMES_MANAGED_ENV_PATH = '/etc/hermes/.env';
+
+export function managedScopeShadowedKeys(
+  ourEnv: Record<string, string>,
+  managedEnvPath: string = HERMES_MANAGED_ENV_PATH
+): string[] {
+  let content: string;
+  try {
+    content = fs.readFileSync(managedEnvPath, 'utf-8');
+  } catch {
+    return []; // absent or unreadable (non-root) — nothing to warn about
+  }
+  const pinned = new Set<string>();
+  for (const line of content.split('\n')) {
+    const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+    if (m) pinned.add(m[1]);
+  }
+  return Object.keys(ourEnv).filter((k) => pinned.has(k));
+}
+
 /** Format env vars for display (dry-run / export output). */
 export function formatHermesEnvForDisplay(env: Record<string, string>): string {
   return Object.entries(env)
