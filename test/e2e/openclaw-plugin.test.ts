@@ -7,6 +7,11 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execSync } from 'node:child_process';
+
+// Every test here shells out to `npx openclaw ...` (multi-second cold spawns).
+// Under vitest 4's forks pool + full-suite parallelism these regularly exceed
+// the 5s default and flake; scope a realistic timeout to this file only.
+vi.setConfig({ testTimeout: 30_000 });
 import { mkdtempSync, mkdirSync, cpSync, writeFileSync, rmSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
