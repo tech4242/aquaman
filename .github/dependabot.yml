@@ -31,6 +31,14 @@ updates:
       # Workspace-internal exact pins, managed by the release process (the CD
       # version gate asserts them) — dependabot must never touch these.
       - dependency-name: aquaman-proxy
+      # AGENT-HOST COMPAT DEPS ARE MANUAL. openclaw is CalVer — dependabot's
+      # minor/patch classification is meaningless, and "patch-looking" releases
+      # have broken us before (2026.3.23 SDK import removal, 2026.6.5
+      # auth-profiles SQLite move). Host support moves deliberately via the
+      # compat-watch process (CI pin bump + deep checks + ROADMAP notes), never
+      # via auto-bump. (Claude Code and Hermes have no npm dep — their compat
+      # is protocol-level and verified against live docs at release time.)
+      - dependency-name: openclaw
       # Dev-only transitives locked inside the `openclaw` devDependency (e2e
       # tests): openclaw@2026.6.6 exact-pins undici@8.3.0 and pulls its own
       # hono, so security bumps (undici 8.5.0, hono 4.12.25) are unresolvable
@@ -48,6 +56,10 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    ignore:
+      # Same agent-host policy as openclaw on the npm side: if hermes-agent is
+      # ever added as a test dep, its bumps are manual compat events.
+      - dependency-name: hermes-agent
 
   # GitHub Actions pins in ci.yml / cd.yml / codeql.yml. Majors stay ALLOWED
   # here (unlike npm): action major tags are runner-runtime migrations that
