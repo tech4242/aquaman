@@ -18,7 +18,7 @@ jobs:
     outputs:
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: check
         run: |
           set -euo pipefail
@@ -49,7 +49,7 @@ jobs:
       contents: read
       id-token: write            # npm provenance
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -76,7 +76,7 @@ jobs:
     permissions:
       id-token: write            # PyPI Trusted Publishing (no token needed)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
       - name: Test before publish
         working-directory: packages/hermes
@@ -93,7 +93,7 @@ jobs:
     needs: [validate-version, npm-publish]   # plugin's aquaman-proxy dep must be on npm first
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
