@@ -1,0 +1,26 @@
+version: 2
+updates:
+  # npm workspace root (covers packages/proxy, plugin, coder via workspaces)
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+    open-pull-requests-limit: 5
+
+  # Python plugin (packages/hermes — zero runtime deps, covers dev/build tooling)
+  - package-ecosystem: uv
+    directory: "/packages/hermes"
+    schedule:
+      interval: weekly
+      day: monday
+
+  # GitHub Actions pins in ci.yml / cd.yml / codeql.yml
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
