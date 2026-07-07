@@ -41,7 +41,7 @@
   "author": "tech4242",
   "license": "MIT",
   "devDependencies": {
-    "@types/node": "^20.10.0",
+    "@types/node": "^26.1.0",
     "@types/ws": "^8.5.10",
     "@vitest/coverage-v8": "^1.2.0",
     "ajv": "^8.17.0",
