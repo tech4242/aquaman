@@ -106,14 +106,59 @@ jobs:
         env: { CLAWHUB_TOKEN: "${{ secrets.CLAWHUB_TOKEN }}" }
       - name: Validate (Plugin Inspector — must be PASS, 0 breakages)
         run: clawhub package validate packages/plugin
-      - name: Publish
+      - name: Publish (async-aware)
         run: |
-          clawhub package publish packages/plugin \
+          set -uo pipefail
+          VERSION="${{ needs.validate-version.outputs.version }}"
+
+          live() {
+            curl -s https://clawhub.ai/api/v1/packages/aquaman-plugin \
+              | jq -r '.package.latestVersion // empty'
+          }
+
+          # Idempotency guard: a re-run after a ClawHub-side stall must not
+          # enqueue a duplicate publish attempt.
+          if [ "$(live)" = "$VERSION" ]; then
+            echo "aquaman-plugin@$VERSION already live on ClawHub — nothing to do."
+            exit 0
+          fi
+
+          out=$(clawhub package publish packages/plugin \
             --source-repo tech4242/aquaman \
             --source-commit "${{ github.sha }}" \
             --source-ref main \
-            --source-path packages/plugin
+            --source-path packages/plugin 2>&1) && status=0 || status=$?
+          echo "$out"
+
+          if [ "$status" -ne 0 ]; then
+            # ClawHub's staged prepublication (openclaw/clawhub#2979, deployed
+            # 2026-07-06) made publish ASYNC: the server accepts with
+            # {ok:true,status:"pending",attemptId:...} and creates the release
+            # later. clawhub CLI <= 0.23.1 cannot parse that SUCCESS response
+            # and exits nonzero with exactly this signature. Treat it as
+            # accepted and verify by polling; any other error is a real
+            # failure.
+            if ! grep -q "packageId: invalid value" <<<"$out"; then
+              exit "$status"
+            fi
+            echo "Accepted by ClawHub (async prepublication pending). Polling for the release..."
+          fi
+
+          # Prepublication worker runs ~every 45 min when healthy; poll 15 min
+          # and fail visibly if the release hasn't materialized — re-running
+          # this job later is safe (see idempotency guard above).
+          for i in $(seq 1 90); do
+            if [ "$(live)" = "$VERSION" ]; then
+              echo "aquaman-plugin@$VERSION is live on ClawHub."
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "::error::ClawHub has not created the $VERSION release yet — the attempt stays queued server-side. Re-run this job later (idempotent), and check: clawhub package moderation-status aquaman-plugin (context: openclaw/clawhub#2984)"
+          exit 1
       - name: Reminder — ClawScan is async
+        if: success()
         run: |
           echo "Submitted. ClawScan runs server-side."
           echo "Verify manually:  clawhub package moderation-status aquaman-plugin"
