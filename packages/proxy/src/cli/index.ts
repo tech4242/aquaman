@@ -31,7 +31,7 @@ import {
 
 import { fileURLToPath } from 'node:url';
 
-import { createCredentialProxy, type CredentialProxy } from '../daemon.js';
+import { createCredentialProxy } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
 import { createOpenClawIntegration, authProfilesAreSqliteOnly } from '../openclaw/integration.js';
 import { createHermesIntegration, detectHermes } from '../hermes/integration.js';
@@ -1439,7 +1439,7 @@ openclaw
             console.error(`  Check VAULT_ADDR (${vaultAddr}) and VAULT_TOKEN.`);
             process.exit(1);
           }
-        } catch (err) {
+        } catch {
           console.error(`  Cannot reach Vault at ${vaultAddr}.`);
           process.exit(1);
         }

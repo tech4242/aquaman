@@ -70,7 +70,7 @@ export class OnePasswordStore implements CredentialStore {
     // Check if signed in
     try {
       this.runOp(['account', 'get']);
-    } catch (error) {
+    } catch {
       throw new Error('Not signed in to 1Password. Run: op signin');
     }
   }

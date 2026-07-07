@@ -101,7 +101,6 @@ describe('OpenClawIntegration', () => {
       const env = { 'TEST_VAR': 'test_value' };
 
       // Mock process.cwd to return tempDir without actually changing directory
-      const originalCwd = process.cwd;
       vi.spyOn(process, 'cwd').mockReturnValue(tempDir);
 
       try {

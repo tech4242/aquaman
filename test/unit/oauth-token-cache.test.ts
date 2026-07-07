@@ -2,7 +2,7 @@
  * Unit tests for the OAuth client credentials token cache.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { OAuthTokenCache, createOAuthTokenCache } from '../../packages/proxy/src/oauth-token-cache.js';
 import { MemoryStore } from 'aquaman-core';
 import type { OAuthConfig } from 'aquaman-proxy';

@@ -81,20 +81,6 @@ import { loadHostMap, isProxyRunning, getProxyVersion } from "./src/proxy-health
  * Find an executable in PATH using filesystem checks (no shell execution).
  * Avoids execSync("which ...") which triggers dangerous-exec security audit flags.
  */
-function findInPath(name: string): string | null {
-  const pathEnv = process.env.PATH || "";
-  const dirs = pathEnv.split(path.delimiter);
-  for (const dir of dirs) {
-    const candidate = path.join(dir, name);
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch {
-      // Not found or not executable in this dir
-    }
-  }
-  return null;
-}
 
 // Read plugin version from package.json
 const pluginPkgPath = path.join(path.dirname(new URL(import.meta.url).pathname), 'package.json');

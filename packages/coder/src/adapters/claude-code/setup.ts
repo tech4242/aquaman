@@ -115,6 +115,7 @@ export function uninstallClaudeCodeHooks(opts: SetupOptions = {}): SetupResult {
         .map((entry) => ({
           ...entry,
           hooks: entry.hooks.filter((h) =>
+            !h.command?.includes(hookCommand) &&
             !h.command?.includes('aquaman coder hook') &&
             !h.command?.includes('aquaman-coder hook')
           ),

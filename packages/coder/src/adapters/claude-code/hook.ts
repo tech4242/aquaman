@@ -24,7 +24,7 @@
 // merged core/). There is no separate `aquaman-core` npm package since
 // v0.7.0; the vitest alias resolves the same path for tests.
 import { redact } from 'aquaman-proxy';
-import { findProjectForCwd, loadProjects, parseRef } from '../../projects.js';
+import { findProjectForCwd, loadProjects } from '../../projects.js';
 import { BrokerClient } from '../../broker-client.js';
 
 export interface HookEvent {
