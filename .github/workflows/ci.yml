@@ -210,7 +210,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
       - name: Run aquaman-hermes plugin tests
         working-directory: packages/hermes
         run: uv run --with pytest python -m pytest tests/ -q
