@@ -317,6 +317,15 @@ pip install aquaman-hermes && aquaman-hermes install && hermes plugins enable aq
 
 UDS socket file permissions (`chmod 0o600`) restrict proxy access to the owning user. No shared-secret token needed — only processes running as the same user can connect to the socket.
 
+### Credential caching (v0.13.1+)
+
+`CachingStore` (`packages/proxy/src/core/credentials/caching-store.ts`) is a TTL'd in-memory decorator over any `CredentialStore`, applied **only in daemon contexts** (the three `createCredentialProxy` sites in `cli/index.ts`, via `wrapWithCache(store, resolveCacheTtl(config))`). One-shot CLI commands never cache. Rationale: 1Password prompts biometrics per `op` spawn (making unattended agents unusable), Bitwarden spawns `bw` (~1–2 s), Vault does an HTTP round-trip — per request/broker-resolve without the cache.
+
+- **Default policy** (`resolveCacheTtl()` in `core/utils/config.ts`): ON at 900 s for `CACHED_BY_DEFAULT_BACKENDS` (`1password`, `bitwarden`, `vault`); OFF for the rest (keychain is fast; keepassxc/systemd-creds/encrypted-file already cache internally for the daemon lifetime — with no TTL, so the new cache is strictly tighter). Explicit `credentials.cacheTtlSeconds` (or `AQUAMAN_CACHE_TTL`) overrides for any backend; `0` disables.
+- **Semantics:** no negative caching (misses always hit the backend); `set`/`delete` write through and invalidate that key (rotation via aquaman is visible immediately; external rotation lands within TTL); `list`/`exists` pass through; errors propagate, never cached, and no stale value is served after expiry.
+- **Security invariants** (conformance-tested in `test/compliance/cache-residency.test.ts`): memory-only (the module imports nothing but the store type — no fs/net/child_process); audit stays per-request (cache hits still emit `onRequest` events); policy denial happens before the cache; the isolation boundary is unchanged — the cache extends how long values reside in the proxy process, where they already transit per request.
+- **1Password zero-prompt path:** `OP_SERVICE_ACCOUNT_TOKEN` (service account scoped to the `aquaman` vault) — `op` inherits the daemon's env, no code path needed. `aquaman doctor` and `aquaman hermes doctor` print the hint when the backend is `1password` in biometric mode (`printOnePasswordModeHint()` in `cli/index.ts`). `OP_CONNECT_HOST`/`OP_CONNECT_TOKEN` take precedence over the service-account token if both are set.
+
 ### Builtin Service Protection
 
 Builtin service definitions (anthropic, openai, telegram, etc.) cannot be overridden via `~/.aquaman/services.yaml` or `register()`. This prevents attackers from redirecting traffic + real credentials to malicious servers by poisoning the config file.
@@ -467,6 +476,7 @@ Manual smoke-test recipes for the OpenClaw plugin install path, channel auth mod
 |------|---------|
 | `packages/proxy/src/core/credentials/store.ts` | Backend abstraction (keychain, encrypted-file, memory) |
 | `packages/proxy/src/core/credentials/backends/` | 1Password, Vault, KeePassXC, systemd-creds, and Bitwarden backend implementations |
+| `packages/proxy/src/core/credentials/caching-store.ts` | TTL'd in-memory cache decorator (daemon-only; v0.13.1+) |
 | `packages/proxy/src/core/audit/logger.ts` | Hash-chained logging |
 | `packages/proxy/src/daemon.ts` | HTTP proxy server on UDS (header, url-path, basic, oauth auth modes) |
 | `packages/proxy/src/request-policy.ts` | Request-level policy enforcement (method+path rules, segment-based glob matching) |
@@ -494,6 +504,8 @@ Manual smoke-test recipes for the OpenClaw plugin install path, channel auth mod
 | `test/unit/request-policy.test.ts` | Request policy unit tests (path matching, policy evaluation, validation, presets) |
 | `test/e2e/hermes-loopback.test.ts` | Loopback listener E2E (token gating, both provider shapes, isolation, UDS stays token-free) |
 | `test/compliance/loopback-listener.test.ts` | Loopback-path compliance (AC-3 token gate, ATLAS T0055/T0090 key isolation, AU-10 audited path) |
+| `test/compliance/cache-residency.test.ts` | Credential-cache compliance (AU-2 audit parity, AC-3 deny-before-cache, SC-28 memory-only, T0055 isolation, IA-5 invalidation) |
+| `test/unit/credentials/caching-store.test.ts` | CachingStore unit tests (TTL, invalidation, no negative caching, error transparency) |
 | `test/unit/hermes/config-writer.test.ts` | Hermes env-writer unit tests (path mapping, HERMES_HOME, idempotent block) |
 | `packages/hermes/tests/test_plugin.py` | Python plugin unit tests (health probe, status text, register wiring) |
 | `packages/hermes/tests/test_compliance.py` | Python plugin compliance (ATLAS T0098 / NIST SI-10/AC-6 — status surface never leaks token/key; reads only `*_BASE_URL`) |

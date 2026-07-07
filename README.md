@@ -213,7 +213,7 @@ Bring your own vault - aquaman has no house store. Pick the backend you already 
 | `keychain` | Local dev on macOS (default) | Works out of the box |
 | `encrypted-file` | Linux, WSL2, CI/CD | AES-256-GCM, password-protected |
 | `keepassxc` | Existing KeePass users | Set `AQUAMAN_KEEPASS_PASSWORD` or key file |
-| `1password` | Team credential sharing | `brew install 1password-cli && op signin` |
+| `1password` | Team credential sharing | `brew install 1password-cli && op signin` — for unattended agents use a [service account](https://developer.1password.com/docs/service-accounts/) (`OP_SERVICE_ACCOUNT_TOKEN`) |
 | `vault` | Enterprise secrets management | Set `VAULT_ADDR` + `VAULT_TOKEN` |
 | `systemd-creds` | Linux with systemd ≥ 256 | TPM2-backed, no root required |
 | `bitwarden` | Bitwarden users | `bw login && export BW_SESSION=$(bw unlock --raw)` |
@@ -221,6 +221,12 @@ Bring your own vault - aquaman has no house store. Pick the backend you already 
 `aquaman setup` auto-detects a sensible default (macOS → `keychain`; Linux → `keychain` if libsecret, else `systemd-creds` if systemd ≥ 256, else `encrypted-file`).
 
 `encrypted-file` is a last-resort for headless Linux/CI environments without a native keyring. For better security on Linux, install `libsecret-1-dev` (GNOME Keyring), use `systemd-creds` (TPM2 binding), or use 1Password/Vault.
+
+### Credential caching (v0.13.1+)
+
+Backends with a per-access cost — `1password` (a biometric prompt per read in desktop-app mode), `bitwarden` (~1-2 s CLI spawn), `vault` (an HTTP round-trip) — are cached **in the daemon's memory** for 15 minutes by default, so a busy agent session unlocks the vault once per window instead of once per request. The other backends are already fast or cache internally, so caching is off for them by default. Tune with `credentials.cacheTtlSeconds` in `~/.aquaman/config.yaml` (or `AQUAMAN_CACHE_TTL`); `0` disables.
+
+The honest trade-off: a per-access biometric prompt is a user-presence check, and the cache removes per-access presence for the TTL window. For unattended agents that prompt never gets answered — it gets the vault abandoned for a plaintext `.env`, which is strictly worse. The cache does **not** move the isolation boundary: values live only in the proxy process (where they already transit on every request), are never written to disk, and are invalidated immediately when you rotate through `aquaman credentials add`. Writes always go to your vault. Conformance-tested in [`test/compliance/cache-residency.test.ts`](test/compliance/cache-residency.test.ts). For zero prompts with 1Password, use a service account scoped to the `aquaman` vault — `aquaman doctor` will point you there.
 
 ## Development
 

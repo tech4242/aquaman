@@ -13,7 +13,10 @@ import {
   ensureConfigDir,
   saveConfig,
   generateLoopbackToken,
-  DEFAULT_LOOPBACK_PORT
+  DEFAULT_LOOPBACK_PORT,
+  DEFAULT_CACHE_TTL_SECONDS,
+  CACHED_BY_DEFAULT_BACKENDS,
+  resolveCacheTtl
 } from 'aquaman-core';
 
 describe('config utilities', () => {
@@ -133,6 +136,75 @@ describe('config utilities', () => {
       process.env['AQUAMAN_LOOPBACK_PORT'] = '70000';
       const config = applyEnvOverrides(getDefaultConfig());
       expect(config.loopback?.port).toBe(DEFAULT_LOOPBACK_PORT);
+    });
+
+    it('should set cacheTtlSeconds from AQUAMAN_CACHE_TTL', () => {
+      process.env['AQUAMAN_CACHE_TTL'] = '300';
+      const config = applyEnvOverrides(getDefaultConfig());
+      expect(config.credentials.cacheTtlSeconds).toBe(300);
+    });
+
+    it('should accept AQUAMAN_CACHE_TTL=0 (explicit disable)', () => {
+      process.env['AQUAMAN_CACHE_TTL'] = '0';
+      const config = applyEnvOverrides(getDefaultConfig());
+      expect(config.credentials.cacheTtlSeconds).toBe(0);
+    });
+
+    it.each(['abc', '-5', '1.5', ''])('should ignore invalid AQUAMAN_CACHE_TTL %j', (raw) => {
+      process.env['AQUAMAN_CACHE_TTL'] = raw;
+      const config = applyEnvOverrides(getDefaultConfig());
+      expect(config.credentials.cacheTtlSeconds).toBeUndefined();
+    });
+
+    it('should leave cacheTtlSeconds unset when AQUAMAN_CACHE_TTL is absent', () => {
+      const config = applyEnvOverrides(getDefaultConfig());
+      expect(config.credentials.cacheTtlSeconds).toBeUndefined();
+    });
+  });
+
+  describe('resolveCacheTtl', () => {
+    const withBackend = (backend: any, cacheTtlSeconds?: number) => {
+      const config = getDefaultConfig();
+      config.credentials.backend = backend;
+      if (cacheTtlSeconds !== undefined) config.credentials.cacheTtlSeconds = cacheTtlSeconds;
+      return config;
+    };
+
+    it.each(['1password', 'bitwarden', 'vault'])('defaults ON (%s → 900s) for per-access-cost backends', (backend) => {
+      expect(resolveCacheTtl(withBackend(backend))).toBe(DEFAULT_CACHE_TTL_SECONDS);
+    });
+
+    it.each(['keychain', 'keepassxc', 'systemd-creds', 'encrypted-file'])('defaults OFF (%s → 0) for fast / internally-caching backends', (backend) => {
+      expect(resolveCacheTtl(withBackend(backend))).toBe(0);
+    });
+
+    it('CACHED_BY_DEFAULT_BACKENDS matches the documented trio', () => {
+      expect([...CACHED_BY_DEFAULT_BACKENDS].sort()).toEqual(['1password', 'bitwarden', 'vault']);
+    });
+
+    it('explicit cacheTtlSeconds: 0 disables even for a default-on backend', () => {
+      expect(resolveCacheTtl(withBackend('1password', 0))).toBe(0);
+    });
+
+    it('explicit cacheTtlSeconds enables for a default-off backend', () => {
+      expect(resolveCacheTtl(withBackend('keychain', 300))).toBe(300);
+    });
+
+    it('explicit cacheTtlSeconds overrides the default for a default-on backend', () => {
+      expect(resolveCacheTtl(withBackend('vault', 60))).toBe(60);
+    });
+
+    it('floors a fractional explicit TTL', () => {
+      expect(resolveCacheTtl(withBackend('keychain', 12.9))).toBe(12);
+    });
+
+    it('falls back to the backend default for a negative explicit TTL', () => {
+      expect(resolveCacheTtl(withBackend('1password', -1))).toBe(DEFAULT_CACHE_TTL_SECONDS);
+      expect(resolveCacheTtl(withBackend('keychain', -1))).toBe(0);
+    });
+
+    it('falls back to the backend default for a NaN explicit TTL', () => {
+      expect(resolveCacheTtl(withBackend('bitwarden', Number.NaN))).toBe(DEFAULT_CACHE_TTL_SECONDS);
     });
   });
 
