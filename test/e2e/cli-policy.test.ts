@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { writeFileSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { createTempEnv, type TempEnv } from '../helpers/temp-env.js';
@@ -16,7 +16,7 @@ function runCli(
   tempEnv: TempEnv,
 ): { stdout: string; stderr: string; exitCode: number | null } {
   try {
-    const stdout = execSync(`npx tsx ${CLI_PATH} ${args}`, {
+    const stdout = execFileSync('npx', ['tsx', CLI_PATH, ...args.split(' ')], {
       encoding: 'utf-8',
       env: {
         ...process.env,

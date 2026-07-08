@@ -29,6 +29,9 @@ export function parseCalendarVersion(
   version: string | undefined | null
 ): [number, number, number] | null {
   if (!version) return null;
+  // Length guard: the unanchored match below backtracks quadratically on long
+  // digit runs, and no real version string comes anywhere near this bound.
+  if (version.length > 64) return null;
   const m = version.match(/(\d+)\.(\d+)\.(\d+)/);
   if (!m) return null;
   return [Number(m[1]), Number(m[2]), Number(m[3])];
