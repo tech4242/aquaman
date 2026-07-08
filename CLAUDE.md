@@ -169,7 +169,7 @@ The `aquaman-coder` package extends aquaman to AI coding agents. v0.12.0 ships t
 - `adapters/claude-code/setup.ts` — Writes `~/.claude/settings.json` atomically (mode 0o600, parent dir 0o700). Idempotent via substring-match on the hook command.
 - `cli/index.ts` — Commander-based CLI: `setup <agent>`, `project list/add/remove`, `get <ref>`, `exec <cmd...>`, `hook`, `doctor`.
 
-**Critical hook-protocol gotcha:** Earlier drafts of the adapter used fabricated fields (`additionalEnvVars` for PreToolUse env injection, `updatedToolOutput` for PostToolUse rewriting). These do not exist — Claude Code silently ignores them. The real protocol only supports `permissionDecision` / `permissionDecisionReason` / `updatedInput` / `additionalContext` for PreToolUse and `additionalContext` for PostToolUse. When extending, **verify against the live Claude Code docs**, not training-data memory.
+**Critical hook-protocol notes (re-verified 2026-07-07 against live docs @ Claude Code 2.1.202):** Our contract (`permissionDecision` / `permissionDecisionReason` / `updatedInput` for PreToolUse; `additionalContext` for PostToolUse; exit-2 via stderr) is unchanged and fully supported. Two fields that did NOT exist when the adapter was written now DO (added ~2.1.170+): (1) **`PreToolUse.additionalEnvVars`** — env-var injection. **Deliberately NOT used for credentials**: hook stdout JSON would carry real values through Claude Code's process/memory, which is exactly what the broker + `exec`-wrapper isolation exists to avoid. (2) **`PostToolUse.updatedToolOutput`** — true output rewriting for all tools. Not adopted yet; tracked as a defense-in-depth feature (redact non-Bash tool outputs, e.g. Read/Grep surfacing on-disk secrets). When extending, **verify against the live Claude Code docs**, not training-data memory.
 
 **Project map example** (`~/.aquaman/projects.yaml`):
 
@@ -264,6 +264,8 @@ arrives as the provider api_key Hermes sends (`x-api-key` for Anthropic,
   `_PORT`/`_TOKEN` (no `_HOST` override — the bind stays loopback).
 - CLI: `aquaman hermes setup|doctor|status|configure`. `loadLoopbackOptions()` refuses to
   start an enabled-but-tokenless listener (an untokened loopback proxy would be open).
+
+**Hermes >=0.17/0.18 operational notes (verified 2026-07-07 vs hermes-agent 0.18.0):** the base-URL detection, plugin contract, `--version` format, and `HERMES_HOME`/`.env` loading are all compatible — no integration changes needed. Three additions to know: (1) **managed scope** — a root-owned `/etc/hermes/.env` overrides `~/.hermes/.env` AND shell exports; if it pins our env vars the proxy is silently bypassed (`aquaman hermes doctor`/`status` now detect this via `managedScopeShadowedKeys()`); (2) `gateway.multiplex_profiles` (off by default) scopes env per profile — multi-profile users need the aquaman block in each profile's env; (3) Hermes cron jobs pairing `provider: anthropic` with an explicit off-host `base_url` override are refused by its 0.18 exfil guard — jobs inheriting the session runtime (our env-var path) are unaffected.
 
 **Python plugin (`packages/hermes/`, optional sugar):** `aquaman-hermes` on PyPI. A
 stdlib-only directory plugin (`plugin.yaml` + `register(ctx)`) installed into

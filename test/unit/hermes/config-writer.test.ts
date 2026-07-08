@@ -7,6 +7,7 @@ import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
+  managedScopeShadowedKeys,
   generateHermesEnv,
   hermesWiredServices,
   getHermesEnvPath,
@@ -111,5 +112,57 @@ describe('writeHermesEnv', () => {
     expect(blockCount).toBe(1);
     expect(content).toContain('ANTHROPIC_API_KEY=tok2');
     expect(content).not.toContain('ANTHROPIC_API_KEY=tok1');
+  });
+});
+
+describe('managedScopeShadowedKeys (Hermes >=0.17 managed scope)', () => {
+  let dir: string;
+  const OUR_ENV = {
+    ANTHROPIC_BASE_URL: 'http://127.0.0.1:8585/anthropic',
+    ANTHROPIC_API_KEY: 'aqm_lb_token',
+    OPENAI_BASE_URL: 'http://127.0.0.1:8585/openai/v1',
+    OPENAI_API_KEY: 'aqm_lb_token',
+  };
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-managed-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const write = (content: string) => {
+    const p = path.join(dir, '.env');
+    fs.writeFileSync(p, content);
+    return p;
+  };
+
+  it('returns empty when the managed file does not exist', () => {
+    expect(managedScopeShadowedKeys(OUR_ENV, path.join(dir, 'missing.env'))).toEqual([]);
+  });
+
+  it('returns empty when the managed file pins unrelated keys', () => {
+    const p = write('SOME_OTHER_KEY=value\nHTTP_PROXY=http://proxy\n');
+    expect(managedScopeShadowedKeys(OUR_ENV, p)).toEqual([]);
+  });
+
+  it('detects a pinned key aquaman manages', () => {
+    const p = write('ANTHROPIC_API_KEY=sk-ant-direct\n');
+    expect(managedScopeShadowedKeys(OUR_ENV, p)).toEqual(['ANTHROPIC_API_KEY']);
+  });
+
+  it('detects multiple pinned keys, export-prefixed and indented lines included', () => {
+    const p = write('  export ANTHROPIC_BASE_URL=https://api.anthropic.com\nOPENAI_API_KEY = sk-openai\n');
+    expect(managedScopeShadowedKeys(OUR_ENV, p).sort()).toEqual(['ANTHROPIC_BASE_URL', 'OPENAI_API_KEY']);
+  });
+
+  it('ignores comments and non-assignment lines', () => {
+    const p = write('# ANTHROPIC_API_KEY=commented-out\nnot an assignment\n');
+    expect(managedScopeShadowedKeys(OUR_ENV, p)).toEqual([]);
+  });
+
+  it('returns empty for an unreadable path instead of throwing', () => {
+    expect(managedScopeShadowedKeys(OUR_ENV, path.join(dir, 'nodir', 'x.env'))).toEqual([]);
   });
 });

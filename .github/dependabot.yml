@@ -39,16 +39,6 @@ updates:
       # via auto-bump. (Claude Code and Hermes have no npm dep — their compat
       # is protocol-level and verified against live docs at release time.)
       - dependency-name: openclaw
-      # Dev-only transitives locked inside the `openclaw` devDependency (e2e
-      # tests): openclaw@2026.6.6 exact-pins undici@8.3.0 and pulls its own
-      # hono, so security bumps (undici 8.5.0, hono 4.12.25) are unresolvable
-      # from this repo — the update jobs fail red on every retry otherwise.
-      # Re-check on each openclaw CI bump and drop these when it unpins.
-      # NOTE: aquaman-plugin's RUNTIME undici is ^7.x — outside this ignore
-      # range, still fully covered by security updates.
-      - dependency-name: undici
-        versions: [">=8.0.0 <9.0.0"]
-      - dependency-name: hono
 
   # Python plugin (packages/hermes — zero runtime deps, covers dev/build tooling)
   - package-ecosystem: uv

@@ -100,7 +100,7 @@ Claude Code / Codex / OpenCode / Cursor
 The hook uses Claude Code's real protocol (verified against the live docs):
 
 - **PreToolUse** on Bash: emits `{ hookSpecificOutput: { permissionDecision: "allow", updatedInput: { command: "aquaman-coder exec -- sh -c '...'" } } }`. Claude Code runs the rewritten command in its child shell; the wrapper does the broker resolve.
-- **PostToolUse**: emits `{ hookSpecificOutput: { additionalContext: "aquaman: tool output contained secret patterns…" } }` if the redactor finds secrets in the output. Note: PostToolUse can't *rewrite* output (the tool already ran). Real scrubbing happens inside `aquaman-coder exec`'s stdout pipeline. PostToolUse is purely an alert.
+- **PostToolUse**: emits `{ hookSpecificOutput: { additionalContext: "aquaman: tool output contained secret patterns…" } }` if the redactor finds secrets in the output. Real scrubbing happens inside `aquaman-coder exec`'s stdout pipeline; the PostToolUse hook is an alert. (Claude Code ~2.1.170+ added `updatedToolOutput` for true output rewriting — planned as an additional redaction layer for non-Bash tools. It also added `PreToolUse.additionalEnvVars`, which we deliberately do NOT use for credentials: hook output transits the agent process, defeating the isolation.)
 
 See [`docs/PACKAGES.md`](../../docs/PACKAGES.md) for cross-package import rules.
 
