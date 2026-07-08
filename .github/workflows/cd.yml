@@ -19,11 +19,20 @@ jobs:
       version: ${{ steps.check.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
       - id: check
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME#v}"          # v0.13.0 -> 0.13.0
           echo "Release tag version: $TAG"
+          # Source of truth is the tag: stamp every version field from it, so a
+          # forgotten manual bump can't block or mis-version a release.
+          node scripts/set-version.mjs "$TAG"
+          # The asserts below now GUARD the setter — they only fail if a NEW
+          # version field was added to the repo without being added to
+          # scripts/set-version.mjs. (Kept intentionally — cheap insurance.)
           fail=0
           assert() { # name, actual
             if [ "$2" != "$TAG" ]; then echo "::error::$1 = '$2' (expected '$TAG')"; fail=1
@@ -58,6 +67,7 @@ jobs:
       - run: |
           npm ci --legacy-peer-deps --ignore-scripts
           npm rebuild keytar esbuild oxlint
+      - run: node scripts/set-version.mjs "${{ needs.validate-version.outputs.version }}"   # stamp versions from the tag
       - run: npm run build
       - run: npm test            # ship only what passes
       # Order matters: proxy first — plugin & coder pin it at an exact version.
@@ -78,9 +88,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
       - name: Test before publish
         working-directory: packages/hermes
         run: uv run --with pytest python -m pytest tests/ -q
+      - name: Stamp version from the release tag
+        run: node scripts/set-version.mjs "${{ needs.validate-version.outputs.version }}"
       - name: Build sdist + wheel
         working-directory: packages/hermes
         run: uv build
@@ -100,6 +115,7 @@ jobs:
       - run: |
           npm ci --legacy-peer-deps --ignore-scripts
           npm rebuild keytar esbuild oxlint
+      - run: node scripts/set-version.mjs "${{ needs.validate-version.outputs.version }}"   # stamp versions from the tag
       - run: npm run build                     # produce packages/plugin/dist for the bundle
       - run: npm install -g clawhub@latest      # an old CLI gets rejected by the hardened server
       - run: clawhub login --token "$CLAWHUB_TOKEN"
@@ -162,3 +178,43 @@ jobs:
         run: |
           echo "Submitted. ClawScan runs server-side."
           echo "Verify manually:  clawhub package moderation-status aquaman-plugin"
+
+  sync-versions:
+    name: Open PR to sync repo versions with the release
+    # Only needs the authoritative registries — a flaky/stuck ClawHub must not
+    # block syncing the repo. If the maintainer already bumped + committed
+    # before tagging, the stamp is a no-op and no PR is opened.
+    needs: [validate-version, npm-publish, pypi-publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # push the release-sync branch
+      pull-requests: write      # open the PR (no PAT needed — creating a PR
+                                # doesn't bypass branch protection; merging does)
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main             # base the bump on current main, not the tag
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Stamp versions from the release tag
+        run: node scripts/set-version.mjs "${{ needs.validate-version.outputs.version }}"
+      - name: Open sync PR (skips if repo is already in sync)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.validate-version.outputs.version }}"
+          if git diff --quiet; then
+            echo "main is already at $VERSION — nothing to sync."
+            exit 0
+          fi
+          BRANCH="release-sync/$VERSION"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git commit -am "release: sync versions to $VERSION"
+          git push -u origin "$BRANCH" --force-with-lease
+          gh pr create --base main --head "$BRANCH" \
+            --title "release: sync versions to $VERSION" \
+            --body "Automated post-publish sync: stamps all version fields to match the released tag \`v$VERSION\`. The published npm/PyPI artifacts already carry this version; merge to keep \`main\` in sync."
