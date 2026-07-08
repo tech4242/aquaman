@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aquaman-hermes"
-version = "0.13.0"
+version = "0.13.1"
 description = "Aquaman credential-isolation plugin for the Hermes agent host — points Hermes at the aquaman loopback proxy so API keys never enter the agent process."
 readme = "README.md"
 requires-python = ">=3.10"

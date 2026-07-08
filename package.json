@@ -1,6 +1,6 @@
 {
   "name": "aquaman",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "private": true,
   "description": "🔱 API key protection for AI agents. Bring your own vault. Credentials stay where you already keep them, never in the agent's memory.",
   "type": "module",
