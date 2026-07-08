@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { createTempEnv, type TempEnv } from '../helpers/temp-env.js';
@@ -18,7 +18,7 @@ function runDoctor(
   extraEnv: Record<string, string> = {}
 ): { stdout: string; stderr: string; exitCode: number | null } {
   try {
-    const stdout = execSync(`npx tsx ${CLI_PATH} openclaw doctor`, {
+    const stdout = execFileSync('npx', ['tsx', CLI_PATH, 'openclaw', 'doctor'], {
       encoding: 'utf-8',
       env: {
         ...process.env,
@@ -210,7 +210,7 @@ describe('aquaman doctor E2E', () => {
   describe('top-level overview — Hermes integration', () => {
     function runTopDoctor(env: TempEnv, extraEnv: Record<string, string> = {}) {
       try {
-        const stdout = execSync(`npx tsx ${CLI_PATH} doctor`, {
+        const stdout = execFileSync('npx', ['tsx', CLI_PATH, 'doctor'], {
           encoding: 'utf-8',
           env: { ...process.env, ...env.env, ...extraEnv },
           timeout: 20_000,

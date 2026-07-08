@@ -36,6 +36,12 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
+          # Tests exercise dummy credentials and spawn the CLI from repo-local
+          # paths by design; none of it ships in the published packages.
+          config: |
+            paths-ignore:
+              - test
+              - packages/hermes/tests
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v4
         with:
