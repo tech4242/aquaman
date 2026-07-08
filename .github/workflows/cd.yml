@@ -178,3 +178,43 @@ jobs:
         run: |
           echo "Submitted. ClawScan runs server-side."
           echo "Verify manually:  clawhub package moderation-status aquaman-plugin"
+
+  sync-versions:
+    name: Open PR to sync repo versions with the release
+    # Only needs the authoritative registries — a flaky/stuck ClawHub must not
+    # block syncing the repo. If the maintainer already bumped + committed
+    # before tagging, the stamp is a no-op and no PR is opened.
+    needs: [validate-version, npm-publish, pypi-publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # push the release-sync branch
+      pull-requests: write      # open the PR (no PAT needed — creating a PR
+                                # doesn't bypass branch protection; merging does)
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main             # base the bump on current main, not the tag
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Stamp versions from the release tag
+        run: node scripts/set-version.mjs "${{ needs.validate-version.outputs.version }}"
+      - name: Open sync PR (skips if repo is already in sync)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.validate-version.outputs.version }}"
+          if git diff --quiet; then
+            echo "main is already at $VERSION — nothing to sync."
+            exit 0
+          fi
+          BRANCH="release-sync/$VERSION"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git commit -am "release: sync versions to $VERSION"
+          git push -u origin "$BRANCH" --force-with-lease
+          gh pr create --base main --head "$BRANCH" \
+            --title "release: sync versions to $VERSION" \
+            --body "Automated post-publish sync: stamps all version fields to match the released tag \`v$VERSION\`. The published npm/PyPI artifacts already carry this version; merge to keep \`main\` in sync."
