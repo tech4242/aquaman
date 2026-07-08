@@ -8,9 +8,9 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-🔱 API key protection for AI agents. Bring your own vault. Credentials stay where you already keep them, never in the agent's memory.
+🔱 The only independent credential proxy for AI agents: bring-your-own-vault isolation & least-privilege request policies. Your keys stay where you already keep them, never in the agent's memory. Compatible with 1Password, keychain, keepassxc and many others.
 
-You set up Claude Code (or OpenClaw, or Codex, or Hermes), and now you're staring at a `.env` file with your Anthropic key, GitHub token, and database URL sitting there in plaintext. You read the articles. You know what happens when an agent gets prompt-injected. We get it.
+You set up Claude Code, OpenClaw, or Hermes, and now you're staring at `.env` files with your precious API keys sitting there in plaintext. You read the articles. You know what happens when an agent gets prompt-injected. We get it.
 
 Aquaman fixes this with three layers of defense:
 
@@ -20,15 +20,16 @@ Aquaman fixes this with three layers of defense:
 
 ## Pick your path
 
-Aquaman ships as three coordinated npm packages, sharing one vault + one daemon. Install only what you need:
+Aquaman ships as four coordinated packages, sharing one vault + one daemon. Install only what you need:
 
 | Package | What it does | When to install |
 |---|---|---|
 | **[`aquaman-proxy`](packages/proxy/)** | Core: vault, daemon, audit, policy, CLI. The piece everyone needs. | Always. |
-| **[`aquaman-plugin`](packages/plugin/)** | OpenClaw Gateway adapter. Spawns the proxy on Gateway startup; intercepts channel traffic; 25 builtin services across 6 auth modes. | If you run an OpenClaw Gateway. Also available at https://clawhub.ai/plugins/aquaman-plugin |
+| **[`aquaman-plugin`](packages/plugin/)** | OpenClaw Gateway adapter. Spawns the proxy on Gateway startup; intercepts channel traffic; 25 builtin services across 5 auth modes. | If you run an OpenClaw Gateway. Also available at https://clawhub.ai/plugins/aquaman-plugin |
 | **[`aquaman-coder`](packages/coder/)** | AI coding-agent adapter. Project-scoped `aquaman://service/key` references resolved per Bash tool call. | If you use Claude Code (today) - Codex / OpenCode / Cursor planned. |
+| **[`aquaman-hermes`](packages/hermes/)** | Hermes agent-host plugin (Python, on PyPI). Points Hermes at an opt-in, token-gated loopback listener via its native `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`; adds an in-session `/aquaman-status` command, tool, and health probe. Isolation is proxy-side; the plugin holds no credentials. | If you run the Hermes agent host. `pip install aquaman-hermes` |
 
-A single `aquaman` CLI surfaces all three: top-level commands for vault and audit, `aquaman openclaw ...` for the OpenClaw integration, `aquaman coder ...` for the coding-agent integration (delegates to `aquaman-coder` under the hood).
+A single `aquaman` CLI surfaces all four: top-level commands for vault and audit, `aquaman openclaw ...` for the OpenClaw integration, `aquaman coder ...` for the coding-agent integration (delegates to `aquaman-coder` under the hood) as well as `aquaman hermes ...` for the Hermes Python package.
 
 ## Quick Start
 
@@ -104,6 +105,30 @@ When Claude Code runs a Bash tool in `~/code/my-app`, aquaman's hook rewrites th
 - Pipes stdout/stderr through a redactor that prepends a value-based pattern for each resolved value: **whatever string was injected gets redacted, regardless of shape** (Atlassian tokens, Notion secrets, internal-API keys - none of them need to match a known provider format). Generic shape-based patterns (sk-ant-, ghp_, sk_live_, AKIA…, JWTs, PEM blocks, ATATT3xF…) still run after as defense-in-depth for secrets the child surfaces that we did NOT inject.
 - Cleans up when the command exits.
 
+### 4. Hermes (agent host)
+
+Hermes is a foreign (Python) host with no transport hook to inject, so isolation is done proxy-side: the proxy exposes an opt-in, token-gated loopback listener and Hermes is pointed at it through its own env vars.
+
+```bash
+npm install -g aquaman-proxy                       # 1. install daemon
+aquaman setup                                      # 2. vault wizard
+aquaman credentials add anthropic api_key sk-ant-... # 3. store a provider key
+
+aquaman hermes setup                               # 4. enable loopback + write ~/.hermes/.env
+aquaman daemon &                                   # 5. start the proxy (UDS + loopback)
+aquaman hermes doctor                              # 6. verify - listener + env + vault + Hermes
+```
+
+`aquaman hermes setup` enables the loopback listener, generates a per-install token, and writes an aquaman-managed block into `~/.hermes/.env` (honoring `HERMES_HOME`): the native `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` plus a placeholder api_key equal to the token. Hermes sends the token as its provider key; the proxy strips it, injects your real vault credential, and forwards upstream. LLM providers only (Anthropic, OpenAI) today.
+
+**Optional in-session sugar** - the Python plugin adds a `/aquaman-status` command, an `aquaman_status` tool, and a session-start health probe inside Hermes (holds no credentials):
+
+```bash
+pip install aquaman-hermes            # or: uv tool install aquaman-hermes
+aquaman-hermes install                # drops the plugin into ~/.hermes/plugins/aquaman/
+hermes plugins enable aquaman
+```
+
 ## How It Works
 
 ```
@@ -132,7 +157,7 @@ Agent / OpenClaw / Coding Agent             Aquaman Proxy
 
 1. **Store**: Credentials live in the vault backend you already run - no house vault (Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds, encrypted-file).
 2. **Policy**: Proxy checks method + path rules *before* touching credentials. Denied requests get a `403`, never real auth headers.
-3. **Inject**: Proxy looks up the credential and adds the auth header before forwarding. 25 builtin services, 4 auth modes (header, URL-path, HTTP Basic, OAuth).
+3. **Inject**: Proxy looks up the credential and adds the auth header before forwarding. 25 builtin services, 4 injecting auth modes (header, URL-path, HTTP Basic, OAuth); a 5th, `none`, is at-rest-only (proxy rejects traffic).
 4. **Broker (coder path)**: `POST /broker/resolve` materializes a credential per tool call, scoped to a single command's env, then expires.
 5. **Audit**: Every credential use is logged with SHA-256 hash chains.
 
@@ -227,18 +252,6 @@ Bring your own vault - aquaman has no house store. Pick the backend you already 
 Backends with a per-access cost — `1password` (a biometric prompt per read in desktop-app mode), `bitwarden` (~1-2 s CLI spawn), `vault` (an HTTP round-trip) — are cached **in the daemon's memory** for 15 minutes by default, so a busy agent session unlocks the vault once per window instead of once per request. The other backends are already fast or cache internally, so caching is off for them by default. Tune with `credentials.cacheTtlSeconds` in `~/.aquaman/config.yaml` (or `AQUAMAN_CACHE_TTL`); `0` disables.
 
 The honest trade-off: a per-access biometric prompt is a user-presence check, and the cache removes per-access presence for the TTL window. For unattended agents that prompt never gets answered — it gets the vault abandoned for a plaintext `.env`, which is strictly worse. The cache does **not** move the isolation boundary: values live only in the proxy process (where they already transit on every request), are never written to disk, and are invalidated immediately when you rotate through `aquaman credentials add`. Writes always go to your vault. Conformance-tested in [`test/compliance/cache-residency.test.ts`](test/compliance/cache-residency.test.ts). For zero prompts with 1Password, use a service account scoped to the `aquaman` vault — `aquaman doctor` will point you there.
-
-## Development
-
-```bash
-npm install
-npm run build                # all packages
-npm test                     # ~690 tests
-npm run typecheck
-npm run lint
-```
-
-See [`docs/PACKAGES.md`](docs/PACKAGES.md) for the cross-package import policy and [`CLAUDE.md`](CLAUDE.md) for architecture notes.
 
 ## License
 

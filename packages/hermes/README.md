@@ -20,14 +20,14 @@ the real credential. This plugin adds:
 
 ```
 Hermes process                         aquaman-proxy (separate process)
-┌───────────────────────┐              ┌──────────────────────────────┐
+┌────────────────────────┐             ┌────────────────────────────────┐
 │ ANTHROPIC_BASE_URL =   │── HTTP ────▶│ 127.0.0.1:8585 loopback        │
-│  http://127.0.0.1:8585 │  (loopback,  │  • validates loopback token    │
-│  /anthropic            │   token-     │  • injects real key from vault │
-│ ANTHROPIC_API_KEY =    │   gated)     │  • forwards to api.anthropic   │
+│  http://127.0.0.1:8585 │  (loopback, │  • validates loopback token    │
+│  /anthropic            │   token-    │  • injects real key from vault │
+│ ANTHROPIC_API_KEY =    │   gated)    │  • forwards to api.anthropic   │
 │  <loopback token>      │◀────────────│  • writes hash-chained audit   │
-│ NO real credentials    │              └──────────────────────────────┘
-└───────────────────────┘
+│ NO real credentials    │             └────────────────────────────────┘
+└────────────────────────┘
 ```
 
 ## Install

@@ -18,7 +18,7 @@ Agent / OpenClaw / Coding Agent              Aquaman Proxy
 │  No credentials.     │  proxy.sock         │                      │
 │  No open ports.      │  (chmod 0o600)      │                      │
 │  Nothing to steal.   │                     │                      │
-└──────────────────────┘                     └───┬──────────┬───────┘
+└──────────────────────┘                     └──┬──────────┬────────┘
                                                 │          │
                                                 │          ▼
                                                 │  ~/.aquaman/audit/

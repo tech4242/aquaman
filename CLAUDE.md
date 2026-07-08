@@ -6,7 +6,7 @@ Credential isolation for **AI agents**. API keys, channel tokens, and `.env`-gra
 
 Three integration paths as of v0.13.0:
 
-1. **OpenClaw Gateway** (`aquaman-plugin`) — original target. Covers LLM providers (Anthropic, OpenAI, Mistral, Hugging Face, xAI, Cloudflare AI Gateway, ElevenLabs) **and** OpenClaw channel credentials (Telegram, Slack, Discord, MS Teams, Matrix, LINE, Twitch, Twilio, etc.). 25 builtin services across 6 auth modes.
+1. **OpenClaw Gateway** (`aquaman-plugin`) — original target. Covers LLM providers (Anthropic, OpenAI, Mistral, Hugging Face, xAI, Cloudflare AI Gateway, ElevenLabs) **and** OpenClaw channel credentials (Telegram, Slack, Discord, MS Teams, Matrix, LINE, Twitch, Twilio, etc.). 25 builtin services across 5 auth modes.
 2. **AI coding agents** (`aquaman-coder`, v0.12.0+) — Claude Code today; Codex / OpenCode / Cursor planned. Stops developers from putting plaintext `.env` files into projects just to make their coding agent work. Per-tool-call credential materialization via the `/broker/resolve` UDS endpoint.
 3. **Hermes agent host** (`aquaman-hermes`, v0.13.0+) — Hermes, the #2/co-leader agent host. Hermes is a foreign (Python) host that builds its own HTTP client and exposes no transport hook, so the UDS dispatcher can't be injected. Instead the proxy exposes an **opt-in, token-gated loopback TCP listener** (`127.0.0.1:<port>`, default-off) and Hermes is pointed at it via its native `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` env vars + a placeholder api_key (= the loopback token). LLM providers only (Anthropic, OpenAI) for now.
 
