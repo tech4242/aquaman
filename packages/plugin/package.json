@@ -41,7 +41,7 @@
   "author": "tech4242",
   "license": "MIT",
   "dependencies": {
-    "@sinclair/typebox": "^0.34.49",
+    "@sinclair/typebox": "^0.34.52",
     "aquaman-proxy": "0.13.1",
     "undici": "^7.25.0"
   },
