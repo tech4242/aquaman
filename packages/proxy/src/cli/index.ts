@@ -37,6 +37,7 @@ import { fileURLToPath } from 'node:url';
 import { createCredentialProxy } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
 import { createOpenClawIntegration, authProfilesAreSqliteOnly } from '../openclaw/integration.js';
+import { supportsSecretRefIntegrations, wireSecretRefProviders, secretRefWiringStatus } from '../openclaw/secretref.js';
 import { createHermesIntegration, detectHermes } from '../hermes/integration.js';
 import { managedScopeShadowedKeys, HERMES_MANAGED_ENV_PATH } from '../hermes/config-writer.js';
 import { loadPolicyFromConfig, validatePolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
@@ -1693,25 +1694,57 @@ openclaw
             openclawConfig.plugins.allow.push('aquaman-plugin');
           }
 
+          const configuredServices = storedServices.length > 0 ? storedServices : ['anthropic', 'openai'];
           openclawConfig.plugins.entries['aquaman-plugin'] = {
             enabled: true,
             config: {
               backend,
-              services: storedServices.length > 0 ? storedServices : ['anthropic', 'openai'],
+              services: configuredServices,
             }
           };
+
+          // Detect the gateway version once \u2014 it gates the credential surface:
+          // SecretRef wiring (canonical, >= 2026.6.5) vs the legacy
+          // auth-profiles.json placeholder. AQUAMAN_OPENCLAW_VERSION overrides
+          // detection (tests + operators pinning behavior explicitly).
+          let ocVersion: string | null = process.env.AQUAMAN_OPENCLAW_VERSION || null;
+          if (!ocVersion) {
+            try {
+              const { execSync } = await import('node:child_process');
+              ocVersion = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8', timeout: 5000 }).trim();
+            } catch { /* CLI not on PATH */ }
+          }
+
+          // b2. SecretRef provider wiring (v0.14.0+, OpenClaw >= 2026.6.5).
+          // Config-level refs in openclaw.json are runtime-read on every
+          // version and survive OpenClaw's plaintext scrubs \u2014 no SQLite
+          // import step needed, unlike the legacy placeholder.
+          const secretRefSupported = supportsSecretRefIntegrations(ocVersion);
+          if (secretRefSupported) {
+            const wiring = wireSecretRefProviders(openclawConfig, configuredServices);
+            if (wiring.wiredProviders.length > 0) {
+              console.log(`  \u2713 SecretRef wiring for ${wiring.wiredProviders.join(', ')} (canonical credential surface)`);
+            }
+            const userKept = wiring.skippedProviders.filter(s => s === 'anthropic' || s === 'openai');
+            if (userKept.length > 0) {
+              console.log(`  \u2192 Left existing user-set apiKey untouched for: ${userKept.join(', ')}`);
+            }
+          }
 
           fs.writeFileSync(openclawJsonPath, JSON.stringify(openclawConfig, null, 2), 'utf-8');
           console.log('  \u2713 Plugin config written to ' + openclawJsonPath);
 
-          // c. Generate auth-profiles.json (only if missing)
+          // c. Generate auth-profiles.json (only if missing). With SecretRef
+          // wiring active this is a redundant legacy surface \u2014 skip it so
+          // `openclaw secrets audit` has no plaintext placeholder to flag.
           const profilesPath = path.join(openclawStateDir, 'agents', 'main', 'agent', 'auth-profiles.json');
-          if (!fs.existsSync(profilesPath)) {
+          if (secretRefSupported) {
+            console.log('  \u2192 Legacy auth-profiles.json placeholder skipped (SecretRef wiring replaces it)');
+          } else if (!fs.existsSync(profilesPath)) {
             const profiles: Record<string, any> = {};
             const order: Record<string, string[]> = {};
 
-            const profileServices = storedServices.length > 0 ? storedServices : ['anthropic', 'openai'];
-            for (const svc of profileServices) {
+            for (const svc of configuredServices) {
               if (svc === 'anthropic' || svc === 'openai') {
                 profiles[`${svc}:default`] = {
                   type: 'api_key',
@@ -1729,19 +1762,13 @@ openclaw
 
             // OpenClaw >= 2026.6.5 reads provider auth profiles from each agent's
             // openclaw-agent.sqlite, not auth-profiles.json (openclaw/openclaw#89102).
-            // The placeholder above must be imported into SQLite once with
-            // `openclaw doctor --fix`. We deliberately do NOT auto-run that here:
+            // On those versions the SecretRef branch above applies instead; this
+            // hint only fires when the version couldn't be detected (SecretRef
+            // gate returned false) but the runtime turns out to be >= 2026.6.5.
+            // We deliberately do NOT auto-run `openclaw doctor --fix` here:
             // it is OpenClaw's broad config-healing command \u2014 verified to take
             // ~19s (gateway probes) and to rewrite openclaw.json (it reset our
-            // plugin entry to bundled defaults in testing). `aquaman openclaw
-            // doctor` detects the SQLite-only case and prints the import step so
-            // the operator runs it intentionally. Holistic fix (SecretRef
-            // provider manifest) is tracked for the next plugin touch.
-            let ocVersion: string | null = null;
-            try {
-              const { execSync } = await import('node:child_process');
-              ocVersion = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8', timeout: 5000 }).trim();
-            } catch { /* CLI not on PATH */ }
+            // plugin entry to bundled defaults in testing).
             if (authProfilesAreSqliteOnly(ocVersion)) {
               console.log('  \u2192 OpenClaw \u2265 2026.6.5 reads auth profiles from SQLite; import the placeholder once:');
               console.log('      openclaw doctor --fix    (backs up openclaw.json first; see aquaman openclaw doctor)');
@@ -1985,9 +2012,10 @@ openclaw
       console.log('    \u2192 Run: aquaman setup (or add policy rules to ~/.aquaman/config.yaml)');
     }
 
-    // 6. OpenClaw detection
+    // 6. OpenClaw detection. AQUAMAN_OPENCLAW_VERSION overrides version
+    // detection (tests + operators pinning behavior explicitly).
     let openclawDetected = false;
-    let openclawVersion: string | null = null;
+    let openclawVersion: string | null = process.env.AQUAMAN_OPENCLAW_VERSION || null;
     let cliFound = false;
     try {
       const { execSync } = await import('node:child_process');
@@ -1998,7 +2026,8 @@ openclaw
     if (cliFound) {
       try {
         const { execSync } = await import('node:child_process');
-        const ver = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8', timeout: 5000 }).trim();
+        const ver = openclawVersion ??
+          execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8', timeout: 5000 }).trim();
         openclawVersion = ver;
         console.log(`  \u2713 ${aqua('OpenClaw')} installed (${ver})`);
       } catch {
@@ -2076,15 +2105,53 @@ openclaw
         }
       }
 
-      // 9. Auth profiles. OpenClaw >= 2026.6.5 reads provider auth profiles from
-      //    each agent's openclaw-agent.sqlite and no longer reads
-      //    auth-profiles.json at runtime (openclaw/openclaw#89102). On those
-      //    versions the placeholder the plugin writes to the JSON file must be
-      //    imported into SQLite once via `openclaw doctor --fix`.
+      // 8.5. SecretRef provider wiring (v0.14.0+, OpenClaw >= 2026.6.5) — the
+      //      canonical credential surface that replaces the placeholder
+      //      auth-profiles dance.
+      let secretRefFullyWired = false;
+      if (supportsSecretRefIntegrations(openclawVersion) && fs.existsSync(openclawJsonPath)) {
+        try {
+          const openclawConfig = JSON.parse(fs.readFileSync(openclawJsonPath, 'utf-8'));
+          const pluginServices: string[] =
+            openclawConfig.plugins?.entries?.['aquaman-plugin']?.config?.services ?? ['anthropic', 'openai'];
+          const status = secretRefWiringStatus(openclawConfig, pluginServices);
+          if (status.providerConfigured && status.missingProviders.length === 0) {
+            secretRefFullyWired = true;
+            console.log(`  ✓ ${aqua('SecretRef')} wiring active (${status.wiredProviders.join(', ') || 'no providers'})`);
+          } else if (status.providerConfigured) {
+            // Half-migrated: the provider block exists but some providers still
+            // lack refs — a real inconsistency, fail the check.
+            console.log(`  ✗ ${aqua('SecretRef')} wiring incomplete (providers not wired: ${status.missingProviders.join(', ')})`);
+            console.log('    → Run: aquaman openclaw setup   (completes the SecretRef wiring in openclaw.json)');
+            issues++;
+          } else {
+            // Legacy placeholder flow still functional — upgrade suggestion,
+            // not a failure. (OpenClaw's configure-flow scrubs treat the
+            // plaintext placeholder as residue; SecretRef wiring is immune.)
+            console.log(`  → ${aqua('SecretRef')} wiring available on this OpenClaw — run: aquaman openclaw setup`);
+            console.log('    (replaces the legacy plaintext placeholder, which OpenClaw now scrubs by default)');
+          }
+        } catch {
+          // openclaw.json invalid — already reported above
+        }
+      }
+
+      // 9. Auth profiles. With SecretRef wiring active this surface is
+      //    legacy/inert. Otherwise: OpenClaw >= 2026.6.5 reads provider auth
+      //    profiles from each agent's openclaw-agent.sqlite and no longer reads
+      //    auth-profiles.json at runtime (openclaw/openclaw#89102) — the
+      //    placeholder the plugin writes to the JSON file must be imported
+      //    into SQLite once via `openclaw doctor --fix`.
       const agentDir = path.join(openclawStateDir, 'agents', 'main', 'agent');
       const profilesPath = path.join(agentDir, 'auth-profiles.json');
       const sqlitePath = path.join(agentDir, 'openclaw-agent.sqlite');
-      if (authProfilesAreSqliteOnly(openclawVersion)) {
+      if (secretRefFullyWired) {
+        console.log(`  ✓ ${aqua('Auth profiles')} not needed (SecretRef wiring replaces the placeholder flow)`);
+        if (fs.existsSync(profilesPath)) {
+          console.log('    → Optional: the legacy auth-profiles.json placeholder is inert and may be deleted');
+          console.log('      (`openclaw secrets audit` flags its plaintext placeholder as PLAINTEXT_FOUND)');
+        }
+      } else if (authProfilesAreSqliteOnly(openclawVersion)) {
         if (fs.existsSync(profilesPath)) {
           console.log(`  \u2717 ${aqua('Auth profiles')} JSON present but ${openclawVersion} reads from SQLite`);
           console.log('    \u2192 Import the placeholder once: openclaw doctor --fix  (backs up openclaw.json first)');

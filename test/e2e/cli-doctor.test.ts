@@ -136,6 +136,67 @@ describe('aquaman doctor E2E', () => {
     }, TEST_TIMEOUT);
   });
 
+  describe('SecretRef wiring (v0.14.0+)', () => {
+    function writeOpenClawJson(env: TempEnv, config: Record<string, any>) {
+      writeFileSync(path.join(env.openclawDir, 'openclaw.json'), JSON.stringify(config, null, 2));
+    }
+    const PLUGIN_ENTRY = {
+      plugins: {
+        allow: ['aquaman-plugin'],
+        entries: { 'aquaman-plugin': { enabled: true, config: { services: ['anthropic', 'openai'] } } },
+      },
+    };
+    const FULL_WIRING = {
+      secrets: {
+        providers: {
+          aquaman: { source: 'exec', pluginIntegration: { pluginId: 'aquaman-plugin', integrationId: 'aquaman' } },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: { apiKey: { source: 'exec', provider: 'aquaman', id: 'anthropic/api_key' } },
+          openai: { apiKey: { source: 'exec', provider: 'aquaman', id: 'openai/api_key' } },
+        },
+      },
+    };
+
+    it('reports active wiring and marks auth profiles as not needed', () => {
+      tempEnv = createTempEnv({ withConfig: true, withPlugin: true });
+      writeOpenClawJson(tempEnv, { ...PLUGIN_ENTRY, ...FULL_WIRING });
+      const { stdout } = runDoctor(tempEnv, { AQUAMAN_OPENCLAW_VERSION: '2026.6.10' });
+
+      expect(stdout).toContain('SecretRef wiring active (anthropic, openai)');
+      expect(stdout).toContain('Auth profiles not needed');
+    }, TEST_TIMEOUT);
+
+    it('suggests (does not fail on) the upgrade when legacy flow is in place', () => {
+      tempEnv = createTempEnv({ withConfig: true, withPlugin: true });
+      writeOpenClawJson(tempEnv, PLUGIN_ENTRY);
+      const { stdout } = runDoctor(tempEnv, { AQUAMAN_OPENCLAW_VERSION: '2026.6.10' });
+
+      expect(stdout).toContain('SecretRef wiring available');
+      expect(stdout).toContain('aquaman openclaw setup');
+    }, TEST_TIMEOUT);
+
+    it('fails on a half-migrated wiring (provider block without refs)', () => {
+      tempEnv = createTempEnv({ withConfig: true, withPlugin: true });
+      writeOpenClawJson(tempEnv, { ...PLUGIN_ENTRY, secrets: FULL_WIRING.secrets });
+      const { stdout, exitCode } = runDoctor(tempEnv, { AQUAMAN_OPENCLAW_VERSION: '2026.6.10' });
+
+      expect(stdout).toContain('SecretRef wiring incomplete');
+      expect(stdout).toContain('providers not wired: anthropic, openai');
+      expect(exitCode).toBe(1);
+    }, TEST_TIMEOUT);
+
+    it('stays silent on gateways below the SecretRef floor', () => {
+      tempEnv = createTempEnv({ withConfig: true, withPlugin: true });
+      writeOpenClawJson(tempEnv, PLUGIN_ENTRY);
+      const { stdout } = runDoctor(tempEnv, { AQUAMAN_OPENCLAW_VERSION: '2026.5.12' });
+
+      expect(stdout).not.toContain('SecretRef');
+    }, TEST_TIMEOUT);
+  });
+
   describe('unmigrated credentials', () => {
     // Commented out: fails on CI (Node 22, macOS + Ubuntu) because the encrypted
     // store populated by a subprocess is not visible to the doctor subprocess.

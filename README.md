@@ -56,7 +56,7 @@ openclaw                                          # 3. done - proxy starts autom
 
 Troubleshooting: `openclaw aquaman doctor`.
 
-**Using npm directly?** `npm install -g aquaman-proxy && aquaman openclaw setup` does the same - installs the proxy CLI, stores your keys, installs the plugin into `~/.openclaw/extensions/aquaman-plugin/`, and writes the auth-profiles.json placeholder.
+**Using npm directly?** `npm install -g aquaman-proxy && aquaman openclaw setup` does the same - installs the proxy CLI, stores your keys, installs the plugin into `~/.openclaw/extensions/aquaman-plugin/`, and wires the credentials (SecretRef refs on OpenClaw ≥ 2026.6.5, the auth-profiles.json placeholder on older versions).
 
 The plugin's HTTP interceptor only redirects traffic for services in its `services` config (Anthropic + OpenAI by default). Add more under the plugin config in `openclaw.json` - supported channels include Slack, Discord, Telegram, MS Teams, Matrix, LINE, Twitch, Twilio, BlueBubbles, Mattermost, Nostr, Tlon, Feishu, Google Chat, ElevenLabs, xAI, Cloudflare AI Gateway, Mistral, Hugging Face, and more (25 total).
 
