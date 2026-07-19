@@ -116,6 +116,31 @@ jobs:
           npm ci --legacy-peer-deps --ignore-scripts
           npm rebuild keytar esbuild oxlint
       - run: node scripts/set-version.mjs "${{ needs.validate-version.outputs.version }}"   # stamp versions from the tag
+      - name: Pin npm install integrity into plugin metadata
+        # OpenClaw warns when openclaw.install.npmSpec/expectedIntegrity are
+        # missing from a ClawHub package. The npm publish job upstream of this
+        # one has already published the plugin tarball, so its dist.integrity
+        # is authoritative here. Best-effort: registry propagation can lag a
+        # tag push, and the metadata is advisory — never fail the publish on it.
+        run: |
+          export VERSION="${{ needs.validate-version.outputs.version }}"
+          export INTEGRITY=$(npm view "aquaman-plugin@$VERSION" dist.integrity 2>/dev/null || true)
+          if [ -n "$INTEGRITY" ]; then
+            node -e "
+              const fs = require('fs');
+              const p = 'packages/plugin/package.json';
+              const pkg = JSON.parse(fs.readFileSync(p, 'utf-8'));
+              pkg.openclaw = pkg.openclaw ?? {};
+              pkg.openclaw.install = {
+                npmSpec: 'aquaman-plugin@' + process.env.VERSION,
+                expectedIntegrity: process.env.INTEGRITY,
+              };
+              fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
+            "
+            echo "Pinned openclaw.install: aquaman-plugin@$VERSION ($INTEGRITY)"
+          else
+            echo "::warning::npm view aquaman-plugin@$VERSION dist.integrity returned nothing — publishing without integrity pin"
+          fi
       - run: npm run build                     # produce packages/plugin/dist for the bundle
       - run: npm install -g clawhub@latest      # an old CLI gets rejected by the hardened server
       - run: clawhub login --token "$CLAWHUB_TOKEN"
