@@ -154,22 +154,116 @@ describe('handlePostToolUse', () => {
     expect(result).toBeNull();
   });
 
-  it('emits additionalContext warning when secrets are found', () => {
+  it('rewrites string output via updatedToolOutput with secrets redacted', () => {
+    const token = 'ghp_' + 'a'.repeat(36);
     const result = handlePostToolUse({
-      tool_response: 'token=ghp_' + 'a'.repeat(36),
+      tool_response: `token=${token} rest-of-line`,
     });
     const out = result?.hookSpecificOutput as any;
     expect(out.hookEventName).toBe('PostToolUse');
-    expect(out.additionalContext).toContain('secret patterns');
+    expect(out.updatedToolOutput).toBe('token=[REDACTED:github-token] rest-of-line');
+    expect(out.updatedToolOutput).not.toContain(token);
     expect(out.additionalContext).toContain('github-token');
   });
 
-  it('handles JSON tool responses', () => {
+  it('deep-redacts structured tool responses preserving their shape', () => {
     const result = handlePostToolUse({
-      tool_response: { stdout: 'AWS_KEY=AKIAIOSFODNN7EXAMPLE\n' },
+      tool_response: {
+        stdout: 'AWS_KEY=AKIAIOSFODNN7EXAMPLE\n',
+        lines: ['clean', 'sk-ant-' + 'b'.repeat(40)],
+        exitCode: 0,
+      },
     });
-    expect(result).not.toBeNull();
     const out = result?.hookSpecificOutput as any;
     expect(out.additionalContext).toContain('aws-access-key-id');
+    expect(out.updatedToolOutput).toEqual({
+      stdout: 'AWS_KEY=[REDACTED:aws-access-key-id]\n',
+      lines: ['clean', '[REDACTED:anthropic-key]'],
+      exitCode: 0,
+    });
+  });
+
+  it('falls back to warning-only when output rewriting is disabled', () => {
+    const result = handlePostToolUse(
+      { tool_response: 'token=ghp_' + 'a'.repeat(36) },
+      { disableOutputRewrite: true }
+    );
+    const out = result?.hookSpecificOutput as any;
+    expect(out.hookEventName).toBe('PostToolUse');
+    expect(out.updatedToolOutput).toBeUndefined();
+    expect(out.additionalContext).toContain('secret patterns');
+    expect(out.additionalContext).toContain('aquaman-coder exec');
+  });
+});
+
+/**
+ * Claude Code 2.1.210 fixed exit-2 handling when a hook's stdout JSON
+ * fails schema validation — malformed hook output now surfaces instead
+ * of being silently ignored. Lock down that every decision we emit is
+ * strictly schema-shaped: known fields only, correct types, hookEventName
+ * matching the event.
+ */
+describe('hook output schema validity (Claude Code ≥2.1.210)', () => {
+  const PRE_FIELDS = new Set([
+    'hookEventName', 'permissionDecision', 'permissionDecisionReason',
+    'updatedInput', 'additionalContext',
+  ]);
+  const POST_FIELDS = new Set([
+    'hookEventName', 'additionalContext', 'updatedToolOutput',
+  ]);
+
+  it('PreToolUse decisions carry only documented hookSpecificOutput fields', async () => {
+    const cwdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-project-'));
+    const yaml = `projects:
+  my-app:
+    paths: ["${cwdDir}"]
+    env:
+      X: aquaman://anthropic/api_key
+`;
+    for (const healthy of [true, false]) {
+      const { ctx } = ctxWithProjects(yaml, new StubBroker({}, healthy));
+      const result = await handlePreToolUse({
+        tool_name: 'Bash',
+        tool_input: { command: 'echo hi' },
+        cwd: cwdDir,
+      }, ctx);
+      const out = result?.hookSpecificOutput as any;
+      expect(out).toBeDefined();
+      expect(out.hookEventName).toBe('PreToolUse');
+      for (const key of Object.keys(out)) {
+        expect(PRE_FIELDS.has(key), `unexpected PreToolUse field: ${key}`).toBe(true);
+      }
+      expect(['allow', 'deny', 'ask']).toContain(out.permissionDecision);
+      if (out.updatedInput !== undefined) {
+        expect(typeof out.updatedInput).toBe('object');
+        expect(typeof out.updatedInput.command).toBe('string');
+      }
+      fs.rmSync(path.dirname(ctx.projectsPath!), { recursive: true, force: true });
+    }
+    fs.rmSync(cwdDir, { recursive: true, force: true });
+  });
+
+  it('PostToolUse decisions carry only documented hookSpecificOutput fields', () => {
+    for (const ctx of [{}, { disableOutputRewrite: true }]) {
+      const result = handlePostToolUse(
+        { tool_response: 'sk-ant-' + 'c'.repeat(40) },
+        ctx
+      );
+      const out = result?.hookSpecificOutput as any;
+      expect(out.hookEventName).toBe('PostToolUse');
+      for (const key of Object.keys(out)) {
+        expect(POST_FIELDS.has(key), `unexpected PostToolUse field: ${key}`).toBe(true);
+      }
+      expect(typeof out.additionalContext).toBe('string');
+    }
+  });
+
+  it('decisions serialize to valid JSON round-trips (stdout contract)', () => {
+    const decision = handlePostToolUse({
+      tool_response: { nested: { key: 'xoxb-1234567890-abcdef' } },
+    });
+    const serialized = JSON.stringify(decision);
+    expect(() => JSON.parse(serialized)).not.toThrow();
+    expect(JSON.parse(serialized)).toEqual(decision);
   });
 });

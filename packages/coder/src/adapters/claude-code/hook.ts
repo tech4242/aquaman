@@ -13,17 +13,23 @@
  * `updatedInput.command` to invoke it under `aquaman-coder exec`,
  * which runs the broker resolve + redaction pipeline server-side.
  *
- * PostToolUse hookSpecificOutput only supports `additionalContext` and
- * cannot mutate the tool output (the tool has already run). When the
- * redactor finds secrets we emit a warning notice via additionalContext
- * — the actual scrubbing must happen inside `aquaman-coder exec` itself
- * so leaked secrets never reach the model.
+ * PostToolUse hookSpecificOutput supports `additionalContext` and — since
+ * Claude Code ~2.1.170 (verified stable through 2.1.215, 2026-07-19) —
+ * `updatedToolOutput`, which rewrites the tool output before it reaches
+ * the transcript. We run the redactor over every tool's output (Read /
+ * Grep / Glob surfacing on-disk secrets, unwrapped Bash, MCP tools) and
+ * rewrite in place. This is defense-in-depth on top of `aquaman-coder
+ * exec`'s stdout/stderr scrubbing: the exec wrapper knows the literal
+ * injected values (value-based redaction), the hook covers shape-based
+ * patterns for outputs that never passed through the wrapper. Set
+ * AQUAMAN_DISABLE_OUTPUT_REWRITE=1 to fall back to warning-only on
+ * pre-2.1.170 Claude Code versions that don't know the field.
  */
 
 // Note: imported from `aquaman-proxy` (which re-exports from its
 // merged core/). There is no separate `aquaman-core` npm package since
 // v0.7.0; the vitest alias resolves the same path for tests.
-import { redact } from 'aquaman-proxy';
+import { redact, redactDeep } from 'aquaman-proxy';
 import { findProjectForCwd, loadProjects } from '../../projects.js';
 import { BrokerClient } from '../../broker-client.js';
 
@@ -51,6 +57,12 @@ export interface HookContext {
    * `aquaman-coder exec --` — change in tests to assert the rewrite.
    */
   wrapperPrefix?: string;
+  /**
+   * Disable PostToolUse `updatedToolOutput` rewriting (fall back to the
+   * warning-only additionalContext behavior for Claude Code < 2.1.170).
+   * Defaults to the AQUAMAN_DISABLE_OUTPUT_REWRITE env var.
+   */
+  disableOutputRewrite?: boolean;
 }
 
 // Default wrapper uses the direct binary form (`aquaman-coder exec`) rather
@@ -124,28 +136,56 @@ export async function handlePreToolUse(
 }
 
 /**
- * Inspect tool output for leaked secrets. Cannot rewrite — the tool has
- * already run — but we surface a warning to Claude via additionalContext.
- * Pair with `aquaman-coder exec`'s stdout/stderr redactor for real
- * prevention.
+ * Inspect tool output for leaked secrets and rewrite it via
+ * `updatedToolOutput` (Claude Code ≥2.1.170) so redacted markers — not
+ * the secrets — reach the transcript. Applies to every tool: Read/Grep
+ * surfacing on-disk secrets, MCP tools, and Bash commands that didn't
+ * route through the exec wrapper. String outputs stay strings; structured
+ * outputs are deep-redacted with their shape preserved.
+ *
+ * With rewriting disabled (AQUAMAN_DISABLE_OUTPUT_REWRITE=1, for
+ * pre-2.1.170 hosts) this degrades to the historical warning-only
+ * additionalContext behavior.
  */
-export function handlePostToolUse(event: HookEvent): HookDecision | null {
+export function handlePostToolUse(
+  event: HookEvent,
+  ctx: HookContext = {}
+): HookDecision | null {
   const out = (event as any).tool_response ?? (event as any).tool_output;
   if (out === undefined || out === null) return null;
 
-  const text = typeof out === 'string' ? out : JSON.stringify(out);
-  const { findings } = redact(text);
+  const rewriteEnabled = !(
+    ctx.disableOutputRewrite ??
+    process.env.AQUAMAN_DISABLE_OUTPUT_REWRITE === '1'
+  );
+
+  const { output, findings } =
+    typeof out === 'string' ? redact(out) : redactDeep(out);
   if (findings.length === 0) return null;
 
   const summary = findings.map((f) => `${f.kind}×${f.count}`).join(', ');
+
+  if (!rewriteEnabled) {
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'PostToolUse',
+        additionalContext:
+          `aquaman: tool output contained secret patterns (${summary}). ` +
+          `These were detected after the fact — to scrub before output ` +
+          `reaches the model, ensure agent-invoked commands route through ` +
+          `\`aquaman-coder exec\`.`,
+      },
+    };
+  }
+
   return {
     hookSpecificOutput: {
       hookEventName: 'PostToolUse',
+      updatedToolOutput: output,
       additionalContext:
-        `aquaman: tool output contained secret patterns (${summary}). ` +
-        `These were detected after the fact — to scrub before output ` +
-        `reaches the model, ensure agent-invoked commands route through ` +
-        `\`aquaman-coder exec\`.`,
+        `aquaman: redacted secret patterns from this tool's output ` +
+        `(${summary}) before it reached the transcript. The underlying ` +
+        `data still exists at its source — treat it as sensitive.`,
     },
   };
 }
@@ -178,7 +218,7 @@ export async function runHookFromStdin(
         decision = await handlePreToolUse(event, ctx);
         break;
       case 'PostToolUse':
-        decision = handlePostToolUse(event);
+        decision = handlePostToolUse(event, ctx);
         break;
       default:
         return 0;
