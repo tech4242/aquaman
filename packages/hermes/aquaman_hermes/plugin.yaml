@@ -1,5 +1,5 @@
 name: aquaman
-version: "0.13.1"
+version: "0.14.0"
 description: "Credential isolation for Hermes. API keys live in a secure backend (Keychain, 1Password, Vault, Bitwarden, KeePassXC, encrypted-file, systemd-creds) and are injected by the aquaman proxy's loopback listener — they never enter the Hermes process. This plugin adds an /aquaman-status slash command, an aquaman_status tool, an on_session_start health check, and (Hermes >= 0.18.1) an `aquaman` secret source that resolves project/tool secrets (secrets.aquaman.env bindings like GITHUB_TOKEN: aquaman://github/token) from your vault via the proxy's token-gated broker. LLM provider keys stay on the loopback path (process-isolated); the secret source refuses to materialize them."
 author: "tech4242"
 hooks:
