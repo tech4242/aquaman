@@ -54,6 +54,13 @@ export function generateHermesEnv(config: HermesEnvConfig): Record<string, strin
   const base = `http://${host}:${config.port}`;
   const env: Record<string, string> = {};
 
+  // Always wire the loopback origin + token explicitly. The Hermes secret
+  // source (aquaman-hermes plugin, Hermes >= 0.18.1) reads these to resolve
+  // `aquaman://service/key` bindings via the token-gated /broker/resolve
+  // endpoint — independent of which providers are proxied below.
+  env['AQUAMAN_LOOPBACK_URL'] = base;
+  env['AQUAMAN_LOOPBACK_TOKEN'] = config.token;
+
   for (const service of config.services) {
     if (!SAFE_SERVICE_NAME.test(service)) continue;
 

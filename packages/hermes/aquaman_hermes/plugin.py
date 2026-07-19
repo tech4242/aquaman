@@ -6,10 +6,27 @@ Registers:
   * ``on_session_start`` hook — one-shot health probe; logs a warning if the
     aquaman loopback proxy isn't reachable (so a misconfigured session is
     obvious instead of silently falling back to direct provider calls).
+  * ``aquaman`` secret source (Hermes >= 0.18.1, feature-detected via
+    ``hasattr(ctx, "register_secret_source")``) — resolves explicit
+    ``ENV_VAR: aquaman://service/key`` bindings from ``secrets.aquaman.env``
+    in Hermes' config.yaml through the proxy's token-gated loopback
+    ``/broker/resolve`` endpoint.
 
-The plugin holds no credentials and makes no privileged calls. It only reads the
-provider base-URL env vars that aquaman wrote into ``~/.hermes/.env`` and probes
-the proxy's ``/_health`` endpoint (which is exempt from the loopback token).
+Security model split (deliberate — keep it this way):
+  * **LLM provider keys** (ANTHROPIC_API_KEY / OPENAI_API_KEY) flow through the
+    loopback *proxy* path: Hermes holds only a placeholder, the proxy injects
+    the real key upstream. Process-isolated. The secret source REFUSES to
+    resolve bindings for these vars so the isolation can't be accidentally
+    (or maliciously, via a poisoned config.yaml) downgraded.
+  * **Project/tool secrets** (GitHub tokens, DB URLs, ...) have no base-URL
+    lever in Hermes, so the secret source materializes them into Hermes'
+    process env at startup — same residency as any Hermes secret source
+    (this is NOT process isolation, and the docs say so), but backed by the
+    user's own vault with per-read hash-chained audit instead of a plaintext
+    ``.env`` line.
+
+The command/tool/hook surface holds no credentials. The secret source holds
+them only transiently while handing them to Hermes' orchestrator.
 """
 
 from __future__ import annotations
@@ -17,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import urllib.error
 import urllib.request
 from typing import Any, Dict, Optional, Tuple
@@ -123,6 +141,253 @@ def _on_session_start(**_: Any) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Secret source (Hermes >= 0.18.1 — agent.secret_sources contract, api v1)
+# ---------------------------------------------------------------------------
+
+# Same grammar as aquaman-coder's projects.yaml refs and the proxy's
+# SAFE_SERVICE_NAME / key validation in daemon.ts.
+_AQUAMAN_REF_RE = re.compile(
+    r"^aquaman://(?P<service>[a-z0-9][a-z0-9._-]*)/(?P<key>[a-zA-Z0-9][a-zA-Z0-9._-]*)$"
+)
+_DEFAULT_TOKEN_ENV = "AQUAMAN_LOOPBACK_TOKEN"
+_DEFAULT_LOOPBACK_URL = "http://127.0.0.1:8585"
+_DEFAULT_REQUEST_TIMEOUT = 5.0
+
+# LLM provider keys stay on the loopback-proxy path (placeholder in Hermes'
+# env, real key injected proxy-side — process isolation). The secret source
+# refuses to resolve bindings for them so a config.yaml edit can't silently
+# downgrade the isolation to env materialization.
+_PROXY_ISOLATED_VARS: Dict[str, str] = {
+    "ANTHROPIC_API_KEY": "ANTHROPIC_BASE_URL",
+    "OPENAI_API_KEY": "OPENAI_BASE_URL",
+}
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _wired_placeholder_vars() -> "frozenset[str]":
+    """Provider api-key vars currently wired as loopback placeholders.
+
+    A provider key var is a placeholder (not a real credential) exactly when
+    its base-URL var points at a loopback host — i.e. aquaman's proxy path is
+    active for that provider. Those vars must not be overwritten by ANY secret
+    source: a real key there would leak into Hermes' env AND break the
+    proxy's token gate (the placeholder IS the loopback token).
+    """
+    wired = set()
+    for key_var, url_var in _PROXY_ISOLATED_VARS.items():
+        parsed = urlparse(os.environ.get(url_var) or "")
+        if parsed.hostname in _LOOPBACK_HOSTS:
+            wired.add(key_var)
+    return frozenset(wired)
+
+
+def _scrub_secret_text(text: str, cfg: Optional[dict] = None) -> str:
+    """Remove the loopback token from text destined for Hermes' startup log.
+
+    Error/warning strings in a FetchResult are logged by Hermes at startup —
+    they must never carry the token, even when an unexpected exception message
+    embeds it (urllib errors can echo request headers).
+    """
+    names = {_DEFAULT_TOKEN_ENV}
+    if isinstance(cfg, dict) and cfg.get("token_env"):
+        names.add(str(cfg["token_env"]))
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            text = text.replace(value, "[REDACTED:loopback-token]")
+    return text
+
+
+def _broker_resolve_http(
+    origin: str, token: str, service: str, key: str, timeout: float
+) -> Tuple[Optional[str], Optional[str], Optional[int]]:
+    """POST /broker/resolve on the loopback listener.
+
+    Returns ``(value, error, http_status)`` — exactly one of value/error is
+    set. Module-level so tests can monkeypatch it. Never raises for HTTP-level
+    failures; lets URLError/timeout propagate for the caller to classify.
+    """
+    payload = json.dumps({"service": service, "key": key}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{origin}/broker/resolve",
+        data=payload,
+        headers={"content-type": "application/json", "x-aquaman-token": token},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (loopback only)
+            body = json.loads(resp.read().decode("utf-8"))
+            return body.get("value"), None, resp.status
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode("utf-8"))
+            message = detail.get("error") or f"HTTP {exc.code}"
+            if detail.get("fix"):
+                message += f" (fix: {detail['fix']})"
+        except Exception:
+            message = f"HTTP {exc.code}"
+        return None, message, exc.code
+
+
+def build_secret_source():
+    """Construct the ``aquaman`` SecretSource instance, or None.
+
+    Returns None when the host has no secret-source contract (Hermes <
+    0.18.1) or the import shape drifted — callers treat None as "sugar-only
+    mode", never an error.
+    """
+    try:
+        from agent.secret_sources.base import (  # type: ignore[import-not-found]
+            ErrorKind,
+            FetchResult,
+            SecretSource,
+            is_valid_env_name,
+        )
+    except Exception:
+        return None
+
+    class AquamanSource(SecretSource):
+        """Mapped source: explicit ENV_VAR → aquaman://service/key bindings.
+
+        Contract compliance (agent/secret_sources/base.py, api v1):
+        fetch() never raises, never prompts, never writes os.environ —
+        it returns what it WOULD contribute and the orchestrator applies.
+        No disk cache: the proxy is local and fast, and caching resolved
+        values to disk would defeat aquaman's residency posture.
+        """
+
+        api_version = 1
+        name = "aquaman"
+        label = "Aquaman Proxy"
+        shape = "mapped"
+        scheme = "aquaman"
+
+        def override_existing(self, cfg: dict) -> bool:
+            # Mirror the built-in 1Password source: an explicit
+            # VAR→aquaman:// binding is the strongest user intent there is.
+            return bool(isinstance(cfg, dict) and cfg.get("override_existing", True))
+
+        def protected_env_vars(self, cfg: dict):
+            token_env = _DEFAULT_TOKEN_ENV
+            if isinstance(cfg, dict):
+                token_env = str(cfg.get("token_env") or token_env)
+            return frozenset({token_env}) | _wired_placeholder_vars()
+
+        def fetch(self, cfg: dict, home_path) -> "FetchResult":
+            cfg = cfg if isinstance(cfg, dict) else {}
+            try:
+                result = self._fetch(cfg)
+            except Exception as exc:  # contract: never raise
+                result = FetchResult(
+                    error=f"aquaman source internal error: {exc}",
+                    error_kind=ErrorKind.INTERNAL,
+                )
+            # Startup-log hygiene: whatever we surface, the token stays out.
+            if result.error:
+                result.error = _scrub_secret_text(result.error, cfg)
+            result.warnings = [_scrub_secret_text(w, cfg) for w in result.warnings]
+            return result
+
+        def _fetch(self, cfg: dict) -> "FetchResult":
+            env_map = cfg.get("env")
+            if not isinstance(env_map, dict) or not env_map:
+                return FetchResult(
+                    error="no env bindings configured — add secrets.aquaman.env "
+                          "{ENV_VAR: aquaman://service/key} to config.yaml",
+                    error_kind=ErrorKind.NOT_CONFIGURED,
+                )
+
+            token_env = str(cfg.get("token_env") or _DEFAULT_TOKEN_ENV)
+            token = os.environ.get(token_env)
+            if not token:
+                return FetchResult(
+                    error=f"{token_env} is not set — run: aquaman hermes setup "
+                          "(writes the loopback token into ~/.hermes/.env)",
+                    error_kind=ErrorKind.NOT_CONFIGURED,
+                )
+
+            origin = str(
+                cfg.get("base_url")
+                or os.environ.get("AQUAMAN_LOOPBACK_URL")
+                or _loopback_origin()
+                or _DEFAULT_LOOPBACK_URL
+            ).rstrip("/")
+            timeout = float(cfg.get("request_timeout_seconds") or _DEFAULT_REQUEST_TIMEOUT)
+
+            secrets: Dict[str, str] = {}
+            warnings = []
+            for var, ref in sorted(env_map.items()):
+                var = str(var)
+                if not is_valid_env_name(var):
+                    warnings.append(f"invalid env var name {var!r} — skipped")
+                    continue
+                if var in _PROXY_ISOLATED_VARS:
+                    warnings.append(
+                        f"{var} is refused by the aquaman source: LLM provider keys "
+                        "stay process-isolated on the loopback proxy path (the "
+                        f"placeholder in ~/.hermes/.env). Remove the {var} binding "
+                        "from secrets.aquaman.env."
+                    )
+                    continue
+                match = _AQUAMAN_REF_RE.match(str(ref))
+                if not match:
+                    warnings.append(
+                        f"{var}: invalid ref {ref!r} (expected aquaman://service/key) — skipped"
+                    )
+                    continue
+
+                service, key = match.group("service"), match.group("key")
+                try:
+                    value, error, status = _broker_resolve_http(origin, token, service, key, timeout)
+                except urllib.error.URLError as exc:
+                    reason = getattr(exc, "reason", exc)
+                    if isinstance(reason, TimeoutError) or isinstance(exc, TimeoutError):
+                        return FetchResult(
+                            secrets=secrets, warnings=warnings,
+                            error=f"aquaman proxy timed out at {origin}",
+                            error_kind=ErrorKind.TIMEOUT,
+                        )
+                    # Proxy down means every remaining ref fails identically —
+                    # abort instead of warning N times.
+                    return FetchResult(
+                        secrets=secrets, warnings=warnings,
+                        error=f"aquaman proxy not reachable at {origin} ({reason}) — "
+                              "start it with: aquaman daemon",
+                        error_kind=ErrorKind.NETWORK,
+                    )
+                except TimeoutError:
+                    return FetchResult(
+                        secrets=secrets, warnings=warnings,
+                        error=f"aquaman proxy timed out at {origin}",
+                        error_kind=ErrorKind.TIMEOUT,
+                    )
+
+                if error is not None:
+                    if status in (401, 403):
+                        return FetchResult(
+                            secrets=secrets, warnings=warnings,
+                            error=f"aquaman loopback token rejected ({error}) — "
+                                  "re-run: aquaman hermes setup",
+                            error_kind=ErrorKind.AUTH_FAILED,
+                        )
+                    # 404 / 400 / 500 are per-ref problems: one bad ref never
+                    # sinks the rest (mirrors the built-in 1Password source).
+                    warnings.append(f"{var} ({service}/{key}): {error}")
+                    continue
+                if not value:
+                    warnings.append(
+                        f"{var} ({service}/{key}): resolved to an empty value — skipped "
+                        "(applying it would clobber a good .env/shell credential)"
+                    )
+                    continue
+                secrets[var] = value
+
+            return FetchResult(secrets=secrets, warnings=warnings)
+
+    return AquamanSource()
+
+
 _TOOL_SCHEMA = {
     "type": "object",
     "properties": {},
@@ -150,4 +415,18 @@ def register(ctx) -> None:
     except Exception as exc:  # pragma: no cover - tool registry API drift safety
         logger.debug("aquaman: tool registration skipped (%s)", exc)
     ctx.register_hook("on_session_start", _on_session_start)
+
+    # Hermes >= 0.18.1: register aquaman as a secret source for project/tool
+    # secrets. Feature-detected (hasattr is the documented probe); on older
+    # hosts the plugin stays sugar-only. Registration failures are logged and
+    # swallowed — the secret source must never break plugin load.
+    if hasattr(ctx, "register_secret_source"):
+        source = build_secret_source()
+        if source is not None:
+            try:
+                ctx.register_secret_source(source)
+                logger.debug("aquaman secret source registered")
+            except Exception as exc:  # pragma: no cover - registry API drift safety
+                logger.debug("aquaman: secret-source registration skipped (%s)", exc)
+
     logger.debug("aquaman plugin registered (command + tool + on_session_start)")
