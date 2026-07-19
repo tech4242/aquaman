@@ -1,6 +1,6 @@
 {
   "name": "aquaman-plugin",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "description": "Protect API keys and secrets for OpenClaw. Credentials stay in your vault, never in the agent's memory",
   "type": "module",
   "scripts": {
@@ -42,7 +42,7 @@
   "license": "MIT",
   "dependencies": {
     "@sinclair/typebox": "^0.34.52",
-    "aquaman-proxy": "0.13.1",
+    "aquaman-proxy": "0.14.0",
     "undici": "^7.25.0"
   },
   "peerDependencies": {
