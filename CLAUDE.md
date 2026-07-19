@@ -8,7 +8,7 @@ Three integration paths as of v0.13.0:
 
 1. **OpenClaw Gateway** (`aquaman-plugin`) — original target. Covers LLM providers (Anthropic, OpenAI, Mistral, Hugging Face, xAI, Cloudflare AI Gateway, ElevenLabs) **and** OpenClaw channel credentials (Telegram, Slack, Discord, MS Teams, Matrix, LINE, Twitch, Twilio, etc.). 25 builtin services across 5 auth modes.
 2. **AI coding agents** (`aquaman-coder`, v0.12.0+) — Claude Code today; Codex / OpenCode / Cursor planned. Stops developers from putting plaintext `.env` files into projects just to make their coding agent work. Per-tool-call credential materialization via the `/broker/resolve` UDS endpoint.
-3. **Hermes agent host** (`aquaman-hermes`, v0.13.0+) — Hermes, the #2/co-leader agent host. Hermes is a foreign (Python) host that builds its own HTTP client and exposes no transport hook, so the UDS dispatcher can't be injected. Instead the proxy exposes an **opt-in, token-gated loopback TCP listener** (`127.0.0.1:<port>`, default-off) and Hermes is pointed at it via its native `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` env vars + a placeholder api_key (= the loopback token). LLM providers only (Anthropic, OpenAI) for now.
+3. **Hermes agent host** (`aquaman-hermes`, v0.13.0+) — Hermes, the #2/co-leader agent host. Hermes is a foreign (Python) host that builds its own HTTP client and exposes no transport hook, so the UDS dispatcher can't be injected. Instead the proxy exposes an **opt-in, token-gated loopback TCP listener** (`127.0.0.1:<port>`, default-off) and Hermes is pointed at it via its native `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` env vars + a placeholder api_key (= the loopback token). LLM providers: Anthropic + OpenAI. v0.14.0 adds an `aquaman` **secret source** (Hermes ≥ 0.18.1 `ctx.register_secret_source` contract) for project/tool secrets — vault-resolved at startup via the loopback broker; LLM keys stay on the proxy path.
 
 **Target platform:** Unix-like systems (Linux, macOS, WSL2). The OpenClaw Gateway runs as a systemd user service (Linux/WSL2) or LaunchAgent (macOS); the coding-agent path runs alongside the coder's own process.
 
@@ -131,7 +131,18 @@ OpenClaw checks its own auth store (`~/.openclaw/agents/<id>/agent/auth-profiles
 
 **Auth resolution order:** auth-profiles.json → env vars → config file → error
 
-**⚠️ OpenClaw ≥ 2026.6.5 — auth profiles moved to SQLite (openclaw/openclaw#89102, shipped 2026.6.5):** the runtime read path for `auth-profiles.json` was removed; provider auth profiles now live in each agent's `openclaw-agent.sqlite`. The plugin still writes the JSON placeholder at load (it's the import source), but on these versions OpenClaw only ingests it via a one-shot `openclaw doctor --fix`, which then archives the file. `aquaman openclaw doctor` is version-aware (`authProfilesAreSqliteOnly()` in `src/openclaw/integration.ts`) and prints the import step. The plugin's `index.ts` cannot run the import itself — it must not import `child_process` (keeps the OpenClaw security scanner clean). **Holistic fix (SecretRef provider integration manifest, openclaw/openclaw#82326) is deferred to the next plugin touch — see ROADMAP.md.**
+**⚠️ OpenClaw ≥ 2026.6.5 — auth profiles moved to SQLite (openclaw/openclaw#89102, shipped 2026.6.5):** the runtime read path for `auth-profiles.json` was removed; provider auth profiles now live in each agent's `openclaw-agent.sqlite`. The plugin still writes the JSON placeholder at load (it's the import source), but on these versions OpenClaw only ingests it via a one-shot `openclaw doctor --fix`, which then archives the file. `aquaman openclaw doctor` is version-aware (`authProfilesAreSqliteOnly()` in `src/openclaw/integration.ts`) and prints the import step. The plugin's `index.ts` cannot run the import itself — it must not import `child_process` (keeps the OpenClaw security scanner clean). **This whole flow is LEGACY as of v0.14.0 — superseded by the SecretRef integration below on OpenClaw ≥ 2026.6.5; kept only for older gateways.**
+
+### SecretRef provider integration (v0.14.0+, OpenClaw ≥ 2026.6.5)
+
+OpenClaw's canonical credential surface is the **SecretRef** (upstream #82326, shipped 2026-05-29; docs call auth-profiles.json "not a runtime format" and the configure flow scrubs plaintext keys by default). Aquaman adopts it:
+
+- **Manifest** (`openclaw.plugin.json`): `secretProviderIntegrations.aquaman` declares an exec resolver — `command: "${node}"`, `args: ["./dist/secrets-resolver.mjs"]` — plus `nonSecretAuthMarkers: ["aquaman-proxy-managed"]` (effective for bundled-origin plugins only in 2026.6.x; declared for forward compat).
+- **Resolver** (`packages/plugin/secrets-resolver.mjs`, copied to `dist/` at build): speaks exec protocol v1 (request on stdin, `{protocolVersion:1,values:{...}}` on stdout) and returns the **static placeholder** for every id — no vault, no proxy, no env reads. The proxy strips whatever key the gateway presents and injects the real one upstream, so the SecretRef changes how the *placeholder* reaches the gateway, not the isolation boundary. Static-by-design: the gateway resolves its secrets snapshot eagerly at startup, possibly before `aquaman daemon` is up.
+- **Config wiring** (`packages/proxy/src/openclaw/secretref.ts`, applied by `aquaman openclaw setup`, version-gated via `supportsSecretRefIntegrations()` ≥ 2026.6.5; `AQUAMAN_OPENCLAW_VERSION` env overrides detection): writes `secrets.providers.aquaman = { source: "exec", pluginIntegration: { pluginId: "aquaman-plugin", integrationId: "aquaman" } }` and `models.providers.<svc>.apiKey = { source: "exec", provider: "aquaman", id: "<svc>/api_key" }` into `~/.openclaw/openclaw.json`. Config-level refs deliberately (not auth-profile keyRef): runtime-read on every version, no SQLite import step, and they survive OpenClaw's plaintext scrubs. Never clobbers a user-set apiKey; upgrades the legacy literal placeholder in place.
+- On SecretRef-wired installs, setup **skips** generating auth-profiles.json and the plugin's `ensureAuthProfiles()` skips too (`secretRefWiringPresent()` — a plain fs read of openclaw.json, no new imports for the scanner). `aquaman openclaw doctor` reports wiring state: active ✓ / half-migrated ✗ / available → (upgrade hint, not a failure).
+- **2026.7.1+ sentinels (#102009):** SecretRef-backed model creds appear as opaque `oc-sent-v1-...` sentinels everywhere except network egress. Never read credential values back from auth storage/introspection; health checks must not compare key values.
+- Trust gate: secret integrations only load from `bundled`/`global`-origin plugins — `~/.openclaw/extensions/` is `global`, so the standard install location qualifies; workspace-dir dev installs do NOT.
 
 ### Plugin ID Naming
 
@@ -169,7 +180,7 @@ The `aquaman-coder` package extends aquaman to AI coding agents. v0.12.0 ships t
 - `adapters/claude-code/setup.ts` — Writes `~/.claude/settings.json` atomically (mode 0o600, parent dir 0o700). Idempotent via substring-match on the hook command.
 - `cli/index.ts` — Commander-based CLI: `setup <agent>`, `project list/add/remove`, `get <ref>`, `exec <cmd...>`, `hook`, `doctor`.
 
-**Critical hook-protocol notes (re-verified 2026-07-07 against live docs @ Claude Code 2.1.202):** Our contract (`permissionDecision` / `permissionDecisionReason` / `updatedInput` for PreToolUse; `additionalContext` for PostToolUse; exit-2 via stderr) is unchanged and fully supported. Two fields that did NOT exist when the adapter was written now DO (added ~2.1.170+): (1) **`PreToolUse.additionalEnvVars`** — env-var injection. **Deliberately NOT used for credentials**: hook stdout JSON would carry real values through Claude Code's process/memory, which is exactly what the broker + `exec`-wrapper isolation exists to avoid. (2) **`PostToolUse.updatedToolOutput`** — true output rewriting for all tools. Not adopted yet; tracked as a defense-in-depth feature (redact non-Bash tool outputs, e.g. Read/Grep surfacing on-disk secrets). When extending, **verify against the live Claude Code docs**, not training-data memory.
+**Critical hook-protocol notes (re-verified 2026-07-19 against live docs @ Claude Code 2.1.215):** Our contract (`permissionDecision` / `permissionDecisionReason` / `updatedInput` for PreToolUse; `additionalContext` + `updatedToolOutput` for PostToolUse; exit-2 via stderr) is fully supported; no field changes 2.1.203–2.1.215. (1) **`PreToolUse.additionalEnvVars`** — env-var injection. **Deliberately NOT used for credentials**: hook stdout JSON would carry real values through Claude Code's process/memory, which is exactly what the broker + `exec`-wrapper isolation exists to avoid. (2) **`PostToolUse.updatedToolOutput` — ADOPTED in v0.14.0**: `handlePostToolUse` runs the redactor over every tool's output (string via `redact`, structured via `redactDeep`, shape preserved) and rewrites it before it reaches the transcript — covers Read/Grep surfacing on-disk secrets, MCP tools, and unwrapped Bash; the exec wrapper still owns value-based redaction of injected values. Opt-out `AQUAMAN_DISABLE_OUTPUT_REWRITE=1` (pre-2.1.170 hosts) degrades to the warning-only `additionalContext` behavior. (3) Claude Code 2.1.210 fixed exit-2 handling when hook stdout JSON fails schema validation — our hook output is locked down by schema-validity regression tests (`test/unit/coder-hook.test.ts`). When extending, **verify against the live Claude Code docs**, not training-data memory.
 
 **Project map example** (`~/.aquaman/projects.yaml`):
 
@@ -256,8 +267,9 @@ arrives as the provider api_key Hermes sends (`x-api-key` for Anthropic,
 - `packages/proxy/src/daemon.ts` — second `http.Server` on `127.0.0.1:<port>`, gated by
   `isLoopbackTokenValid()` (constant-time). `/_health` exempt. UDS path unchanged.
 - `packages/proxy/src/hermes/config-writer.ts` — generates the `~/.hermes/.env` block
-  (base URLs + placeholder key). Honors `HERMES_HOME` (the var the Hermes CLI itself
-  uses). Idempotent delimited block.
+  (base URLs + placeholder key; v0.14.0+ also always emits `AQUAMAN_LOOPBACK_URL` +
+  `AQUAMAN_LOOPBACK_TOKEN` for the secret source). Honors `HERMES_HOME` (the var the
+  Hermes CLI itself uses). Idempotent delimited block.
 - `packages/proxy/src/hermes/integration.ts` — detect Hermes, configure, write env.
 - `packages/proxy/src/core/types.ts` — `LoopbackConfig` (`enabled`/`port`/`token`/`host`)
   + `HermesConfig`. Config defaults disabled; env overrides `AQUAMAN_LOOPBACK_ENABLED`/
@@ -267,12 +279,33 @@ arrives as the provider api_key Hermes sends (`x-api-key` for Anthropic,
 
 **Hermes >=0.17/0.18 operational notes (verified 2026-07-07 vs hermes-agent 0.18.0):** the base-URL detection, plugin contract, `--version` format, and `HERMES_HOME`/`.env` loading are all compatible — no integration changes needed. Three additions to know: (1) **managed scope** — a root-owned `/etc/hermes/.env` overrides `~/.hermes/.env` AND shell exports; if it pins our env vars the proxy is silently bypassed (`aquaman hermes doctor`/`status` now detect this via `managedScopeShadowedKeys()`); (2) `gateway.multiplex_profiles` (off by default) scopes env per profile — multi-profile users need the aquaman block in each profile's env; (3) Hermes cron jobs pairing `provider: anthropic` with an explicit off-host `base_url` override are refused by its 0.18 exfil guard — jobs inheriting the session runtime (our env-var path) are unaffected.
 
-**Python plugin (`packages/hermes/`, optional sugar):** `aquaman-hermes` on PyPI. A
+**Python plugin (`packages/hermes/`):** `aquaman-hermes` on PyPI. A
 stdlib-only directory plugin (`plugin.yaml` + `register(ctx)`) installed into
 `$HERMES_HOME/plugins/aquaman/` via `aquaman-hermes install`, enabled with
 `hermes plugins enable aquaman`. Adds `/aquaman-status` slash command, `aquaman_status`
-tool, and an `on_session_start` health probe. Holds no credentials; isolation is entirely
-proxy-side. **Do NOT put isolation logic here.**
+tool, and an `on_session_start` health probe. The status/command/hook surface holds no
+credentials; LLM-key isolation is entirely proxy-side. **Do NOT put isolation logic here.**
+
+**Secret source (v0.14.0+, Hermes ≥ 0.18.1):** the plugin also registers an `aquaman`
+`SecretSource` via `ctx.register_secret_source()` (feature-detected with `hasattr`, so
+0.18.0 hosts stay sugar-only). Users bind project/tool secrets in Hermes' config.yaml —
+`secrets.aquaman.env: { GITHUB_TOKEN: aquaman://github/token }` — and the source resolves
+them at Hermes startup through the **token-gated loopback `POST /broker/resolve`**
+(token from `AQUAMAN_LOOPBACK_TOKEN`, written into the `~/.hermes/.env` managed block by
+`aquaman hermes setup` alongside `AQUAMAN_LOOPBACK_URL`). Design rules, all
+conformance-tested (`tests/test_secret_source.py`, `tests/test_compliance.py`):
+- **Two-tier security model, non-negotiable:** LLM provider keys (ANTHROPIC/OPENAI) are
+  REFUSED by the source — they stay on the loopback proxy path (process-isolated
+  placeholder). Project secrets materialize into Hermes' env (same residency as any
+  Hermes secret source — this is NOT process isolation and the docs say so), backed by
+  the user's vault with per-read hash-chained audit instead of a plaintext `.env` line.
+- Contract compliance (`agent/secret_sources/base.py` api v1): `fetch()` never raises,
+  never prompts, never writes `os.environ`; per-ref failures are warnings (one bad ref
+  never sinks the rest); proxy-down/timeout/auth failures are typed fatal errors; Hermes
+  always starts regardless. No disk cache (would defeat residency posture).
+- `protected_env_vars()` covers the token var + wired provider placeholders, so no other
+  secret source can overwrite the loopback wiring; `override_existing` defaults true.
+- Every surfaced error/warning string is scrubbed of the token (`_scrub_secret_text`).
 
 **End-to-end setup:**
 
@@ -488,6 +521,8 @@ Manual smoke-test recipes for the OpenClaw plugin install path, channel auth mod
 | `packages/proxy/src/migration/openclaw-migrator.ts` | Migrates channel + plugin creds from openclaw.json to secure store |
 | `packages/proxy/src/openclaw/env-writer.ts` | Generates env vars for OpenClaw integration |
 | `packages/proxy/src/openclaw/integration.ts` | Detects and launches OpenClaw with env vars |
+| `packages/proxy/src/openclaw/secretref.ts` | SecretRef wiring for openclaw.json (version gate, merge, doctor status; v0.14.0+) |
+| `packages/plugin/secrets-resolver.mjs` | SecretRef exec resolver (protocol v1, static placeholder; shipped as `dist/secrets-resolver.mjs`) |
 | `packages/proxy/src/hermes/config-writer.ts` | Generates `~/.hermes/.env` block (loopback base URLs + placeholder key) |
 | `packages/proxy/src/hermes/integration.ts` | Detects Hermes, configures + writes its env |
 | `packages/hermes/aquaman_hermes/plugin.py` | Hermes Python plugin: register() + status command/tool + health hook |
@@ -508,9 +543,11 @@ Manual smoke-test recipes for the OpenClaw plugin install path, channel auth mod
 | `test/compliance/loopback-listener.test.ts` | Loopback-path compliance (AC-3 token gate, ATLAS T0055/T0090 key isolation, AU-10 audited path) |
 | `test/compliance/cache-residency.test.ts` | Credential-cache compliance (AU-2 audit parity, AC-3 deny-before-cache, SC-28 memory-only, T0055 isolation, IA-5 invalidation) |
 | `test/unit/credentials/caching-store.test.ts` | CachingStore unit tests (TTL, invalidation, no negative caching, error transparency) |
-| `test/unit/hermes/config-writer.test.ts` | Hermes env-writer unit tests (path mapping, HERMES_HOME, idempotent block) |
+| `test/unit/hermes/config-writer.test.ts` | Hermes env-writer unit tests (path mapping, HERMES_HOME, idempotent block, loopback wiring vars) |
+| `test/unit/openclaw-secretref.test.ts` | SecretRef unit tests (version gate, wiring merge/idempotency, resolver exec-protocol spawn tests) |
 | `packages/hermes/tests/test_plugin.py` | Python plugin unit tests (health probe, status text, register wiring) |
-| `packages/hermes/tests/test_compliance.py` | Python plugin compliance (ATLAS T0098 / NIST SI-10/AC-6 — status surface never leaks token/key; reads only `*_BASE_URL`) |
+| `packages/hermes/tests/test_secret_source.py` | Secret source unit tests (fetch paths, error taxonomy, provider-key refusal, real-HTTP broker tests) |
+| `packages/hermes/tests/test_compliance.py` | Python plugin compliance (ATLAS T0098/T0055, NIST SI-10/AC-3/AC-6 — status + secret-source surfaces never leak token/values; isolation not downgradeable) |
 | `test/e2e/keychain-proxy-flow.test.ts` | Real keychain backend E2E (macOS only) |
 | `test/e2e/cli-plugin-mode.test.ts` | CLI startup/output E2E tests |
 | `test/e2e/cli-setup.test.ts` | `aquaman setup` E2E tests |
