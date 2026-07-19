@@ -31,7 +31,14 @@ describe('generateHermesEnv', () => {
 
   it('ignores unsupported services (channels/other providers)', () => {
     const env = generateHermesEnv({ ...opts, services: ['slack', 'telegram', 'github'] });
-    expect(Object.keys(env)).toHaveLength(0);
+    // Only the always-on loopback wiring remains — no provider vars.
+    expect(Object.keys(env).sort()).toEqual(['AQUAMAN_LOOPBACK_TOKEN', 'AQUAMAN_LOOPBACK_URL']);
+  });
+
+  it('always wires the loopback origin + token for the secret source (v0.14.0+)', () => {
+    const env = generateHermesEnv({ ...opts, services: ['anthropic'] });
+    expect(env['AQUAMAN_LOOPBACK_URL']).toBe('http://127.0.0.1:8585');
+    expect(env['AQUAMAN_LOOPBACK_TOKEN']).toBe('aqm_lb_tok');
   });
 
   it('honors a custom host', () => {

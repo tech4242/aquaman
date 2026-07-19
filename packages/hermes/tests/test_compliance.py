@@ -1,12 +1,13 @@
 """Compliance tests for the aquaman-hermes plugin (stdlib only).
 
-The plugin is a credential-free, in-session "sugar" layer: it reads the
-provider ``*_BASE_URL`` env vars aquaman wrote and probes ``/_health``. It holds
-no credentials and performs no isolation — that is entirely proxy-side. These
-tests therefore assert the controls that ARE applicable to such a layer: that it
-does not *undermine* the isolation the proxy enforces.
+The command/tool/hook surface is a credential-free, in-session "sugar" layer:
+it reads the provider ``*_BASE_URL`` env vars aquaman wrote and probes
+``/_health``. It holds no credentials and performs no isolation — that is
+entirely proxy-side. The secret source (Hermes >= 0.18.1) DOES transit
+credentials — from the token-gated broker to Hermes' orchestrator — so it gets
+its own control set below.
 
-Mapped controls:
+Mapped controls (status surface):
   - MITRE ATLAS AML.T0098 (AI Agent Tool Credential Harvesting): the agent-facing
     ``aquaman_status`` tool and ``/aquaman-status`` command must never surface the
     loopback token or any API-key value, even when both are present in the env.
@@ -15,6 +16,17 @@ Mapped controls:
     health probe targets the token-exempt ``/_health`` and transmits no credential.
   - NIST SP 800-53 AC-6 (Least Privilege): the plugin consults only ``*_BASE_URL``
     env vars, never ``*_API_KEY`` — it has no need for, and no access to, the key.
+
+Mapped controls (secret source):
+  - MITRE ATLAS AML.T0055 (Unsecured Credentials): the source refuses to
+    materialize LLM provider keys into Hermes' process env — a poisoned
+    config.yaml cannot downgrade the loopback isolation to env residency.
+  - NIST SP 800-53 AC-3 (Access Enforcement): every broker resolve carries the
+    loopback token; there is no unauthenticated resolve path.
+  - NIST SP 800-53 SI-10: error/warning strings handed to Hermes (which logs
+    them at startup) never contain the token or any resolved secret value.
+  - NIST SP 800-53 AC-6: protected_env_vars() prevents any other secret source
+    from overwriting the wiring vars (token + wired provider placeholders).
 """
 
 from __future__ import annotations
@@ -150,3 +162,87 @@ def test_si10_session_start_hook_does_not_log_the_token(monkeypatch, caplog):
     with caplog.at_level("DEBUG", logger="aquaman_hermes"):
         plugin._on_session_start()
     assert SECRET_TOKEN not in caplog.text
+
+
+# --- Secret source (Hermes >= 0.18.1) ----------------------------------------
+
+def _source_cfg(env):
+    return {"enabled": True, "env": env}
+
+
+def test_t0055_source_refuses_llm_provider_key_materialization(hermes_base, monkeypatch):
+    # A poisoned (or merely misguided) config.yaml binding ANTHROPIC_API_KEY /
+    # OPENAI_API_KEY through the source must NOT pull the real provider key
+    # into Hermes' process env — the loopback proxy path is the only route.
+    monkeypatch.setenv("AQUAMAN_LOOPBACK_TOKEN", SECRET_TOKEN)
+    real_key = "sk-ant-REAL-KEY-MUST-NOT-MATERIALIZE"
+    monkeypatch.setattr(
+        plugin, "_broker_resolve_http",
+        lambda origin, token, service, key, timeout: (real_key, None, 200),
+    )
+    source = plugin.build_secret_source()
+    result = source.fetch(_source_cfg({
+        "ANTHROPIC_API_KEY": "aquaman://anthropic/api_key",
+        "OPENAI_API_KEY": "aquaman://openai/api_key",
+    }), None)
+    assert result.ok
+    assert result.secrets == {}
+    assert real_key not in str(result.warnings)
+
+
+def test_ac3_every_resolve_carries_the_loopback_token(hermes_base, monkeypatch):
+    monkeypatch.setenv("AQUAMAN_LOOPBACK_TOKEN", SECRET_TOKEN)
+    seen_tokens = []
+
+    def record(origin, token, service, key, timeout):
+        seen_tokens.append(token)
+        return "value", None, 200
+
+    monkeypatch.setattr(plugin, "_broker_resolve_http", record)
+    source = plugin.build_secret_source()
+    result = source.fetch(_source_cfg({
+        "A": "aquaman://svc/one", "B": "aquaman://svc/two",
+    }), None)
+    assert result.ok
+    assert seen_tokens == [SECRET_TOKEN, SECRET_TOKEN]
+
+
+def test_si10_source_errors_and_warnings_never_contain_the_token(hermes_base, monkeypatch):
+    monkeypatch.setenv("AQUAMAN_LOOPBACK_TOKEN", SECRET_TOKEN)
+    scenarios = [
+        # auth rejected (401) — fatal error path
+        lambda o, t, s, k, tm: (None, "Loopback request rejected", 401),
+        # missing credential (404) — per-ref warning path
+        lambda o, t, s, k, tm: (None, "No credential found", 404),
+        # unexpected exception — INTERNAL path
+        lambda o, t, s, k, tm: (_ for _ in ()).throw(ValueError("boom " + t)),
+    ]
+    source = plugin.build_secret_source()
+    for stub in scenarios:
+        monkeypatch.setattr(plugin, "_broker_resolve_http", stub)
+        result = source.fetch(_source_cfg({"X": "aquaman://svc/key"}), None)
+        surfaced = " ".join([result.error or ""] + list(result.warnings))
+        assert SECRET_TOKEN not in surfaced
+
+
+def test_si10_source_warnings_never_contain_resolved_values(hermes_base, monkeypatch):
+    monkeypatch.setenv("AQUAMAN_LOOPBACK_TOKEN", SECRET_TOKEN)
+    secret_value = "ghp_RESOLVED_SECRET_VALUE"
+    monkeypatch.setattr(
+        plugin, "_broker_resolve_http",
+        lambda o, t, s, k, tm: (secret_value, None, 200),
+    )
+    source = plugin.build_secret_source()
+    result = source.fetch(_source_cfg({"GOOD": "aquaman://svc/key", "BAD REF": "junk"}), None)
+    assert result.secrets == {"GOOD": secret_value}
+    assert secret_value not in " ".join(result.warnings)
+
+
+def test_ac6_protected_vars_cover_token_and_wired_placeholders(hermes_base, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8585/anthropic")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:8585/openai/v1")
+    source = plugin.build_secret_source()
+    protected = source.protected_env_vars({})
+    # No other secret source may overwrite the loopback wiring: the token, and
+    # the provider placeholders that ARE the token on wired providers.
+    assert {"AQUAMAN_LOOPBACK_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"} <= protected

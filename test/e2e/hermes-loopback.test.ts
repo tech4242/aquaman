@@ -152,6 +152,55 @@ describe('Loopback listener E2E (Hermes path)', () => {
     });
   });
 
+  describe('broker over loopback (Hermes secret source, v0.14.0+)', () => {
+    it('resolves a credential with the token', async () => {
+      const res = await fetch(`${baseUrl}/broker/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-aquaman-token': TOKEN },
+        body: JSON.stringify({ service: 'anthropic', key: 'api_key' }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.value).toBe(REAL_ANTHROPIC_KEY);
+      expect(body.expires_at).toBeDefined();
+    });
+
+    it('rejects broker resolution without the token (401)', async () => {
+      const res = await fetch(`${baseUrl}/broker/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ service: 'anthropic', key: 'api_key' }),
+      });
+      expect(res.status).toBe(401);
+      const body = await res.json();
+      expect(body.error).toContain('token');
+    });
+
+    it('returns 404 with an actionable fix for a missing credential', async () => {
+      const res = await fetch(`${baseUrl}/broker/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-aquaman-token': TOKEN },
+        body: JSON.stringify({ service: 'github', key: 'token' }),
+      });
+      expect(res.status).toBe(404);
+      const body = await res.json();
+      expect(body.fix).toContain('aquaman credentials add github token');
+    });
+
+    it('audits loopback broker resolves like UDS ones', async () => {
+      requestLog.length = 0;
+      await fetch(`${baseUrl}/broker/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-aquaman-token': TOKEN },
+        body: JSON.stringify({ service: 'anthropic', key: 'api_key' }),
+      });
+      const brokerEvents = requestLog.filter((r) => r.method === 'BROKER');
+      expect(brokerEvents).toHaveLength(1);
+      expect(brokerEvents[0].service).toBe('anthropic');
+      expect(brokerEvents[0].statusCode).toBe(200);
+    });
+  });
+
   describe('UDS listener stays token-free', () => {
     it('serves UDS requests without a loopback token', async () => {
       const res = await udsFetch(socketPath, '/anthropic/v1/messages', {

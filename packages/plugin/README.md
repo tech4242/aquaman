@@ -46,7 +46,7 @@ openclaw                                          # 3. done - proxy starts autom
 
 The `aquaman-proxy` binary is bundled as an exact-pinned npm dependency - no separate download or install needed.
 
-> **Using npm directly?** `npm install -g aquaman-proxy && aquaman openclaw setup` does the same thing - installs the proxy CLI, stores your keys, installs the plugin into `~/.openclaw/extensions/aquaman-plugin/`, and writes the auth-profiles.json placeholder.
+> **Using npm directly?** `npm install -g aquaman-proxy && aquaman openclaw setup` does the same thing - installs the proxy CLI, stores your keys, installs the plugin into `~/.openclaw/extensions/aquaman-plugin/`, and wires the credentials (SecretRef refs on OpenClaw ≥ 2026.6.5, the auth-profiles.json placeholder on older versions).
 
 Troubleshooting: `openclaw aquaman doctor` (or `aquaman openclaw doctor` from a regular shell).
 
@@ -64,11 +64,16 @@ Aquaman keeps API credentials out of the agent process by running them in a sepa
 - Only services listed in the plugin's `services` config get their traffic redirected to the local proxy. As of v0.11.4, the interceptor filters its known-host map by your `services` list. Channels you didn't opt into keep talking to the upstream directly.
 - The interceptor uses a Unix Domain Socket (no TCP, no network exposure). UDS file permissions are `chmod 0o600`, enforced explicitly at proxy startup (v0.12.0+).
 
-**Auth profiles**
+**Credential wiring — SecretRef (v0.14.0+, OpenClaw ≥ 2026.6.5)**
 
-- On load the plugin writes `~/.openclaw/agents/<id>/agent/auth-profiles.json` with placeholder API-key entries for `anthropic` and `openai` so OpenClaw doesn't reject requests before they reach the proxy. The proxy strips the placeholder and injects the real credential.
+- On current OpenClaw, `aquaman openclaw setup` wires the plugin through OpenClaw's canonical **SecretRef** credential surface: the manifest declares an exec resolver (`secretProviderIntegrations.aquaman` → `dist/secrets-resolver.mjs`) and `openclaw.json` gets `models.providers.<svc>.apiKey` refs pointing at it. The resolver returns a static placeholder — real keys stay in your vault; the proxy strips the placeholder and injects the real credential per request.
+- No `openclaw doctor --fix` import step, and the wiring survives OpenClaw's plaintext-scrub flows (`openclaw secrets configure --apply`). `aquaman openclaw doctor` reports the wiring state and suggests the upgrade on legacy installs.
+
+**Auth profiles (legacy path, OpenClaw < 2026.6.5)**
+
+- On load the plugin writes `~/.openclaw/agents/<id>/agent/auth-profiles.json` with placeholder API-key entries for `anthropic` and `openai` so OpenClaw doesn't reject requests before they reach the proxy. The proxy strips the placeholder and injects the real credential. Skipped automatically when the SecretRef wiring is present.
 - The plugin never overwrites an existing `auth-profiles.json`. To suppress generation entirely, set `autoGenerateAuthProfiles: false` in the plugin config (v0.11.4+).
-- **OpenClaw ≥ 2026.6.5:** provider auth profiles moved into each agent's `openclaw-agent.sqlite` and the runtime read path for `auth-profiles.json` was removed ([openclaw/openclaw#89102](https://github.com/openclaw/openclaw/pull/89102)). The placeholder must be imported into SQLite once with `openclaw doctor --fix` (OpenClaw then archives the JSON file). Run `aquaman openclaw doctor`. It detects this and prints the exact remediation.
+- **OpenClaw ≥ 2026.6.5 without SecretRef wiring:** provider auth profiles moved into each agent's `openclaw-agent.sqlite` and the runtime read path for `auth-profiles.json` was removed ([openclaw/openclaw#89102](https://github.com/openclaw/openclaw/pull/89102)). The placeholder must be imported into SQLite once with `openclaw doctor --fix` — or better, re-run `aquaman openclaw setup` to get the SecretRef wiring. Run `aquaman openclaw doctor`; it detects the state and prints the exact remediation.
 
 **Audit log**
 

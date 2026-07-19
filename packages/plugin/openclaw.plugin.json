@@ -12,6 +12,18 @@
     "global:override": ["fetch"],
     "fs:write": ["~/.openclaw/agents/*/agent/auth-profiles.json"]
   },
+  "nonSecretAuthMarkers": ["aquaman-proxy-managed"],
+  "secretProviderIntegrations": {
+    "aquaman": {
+      "providerAlias": "aquaman",
+      "displayName": "Aquaman credential proxy",
+      "description": "Resolves provider credentials to the aquaman placeholder marker. Real keys stay in your vault; the aquaman proxy strips the placeholder and injects the real credential upstream — keys never enter the gateway process.",
+      "source": "exec",
+      "command": "${node}",
+      "args": ["./dist/secrets-resolver.mjs"],
+      "timeoutMs": 5000
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

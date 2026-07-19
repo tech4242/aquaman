@@ -267,3 +267,60 @@ describe('aquaman setup E2E', () => {
     }, TEST_TIMEOUT);
   });
 });
+
+/**
+ * SecretRef wiring branch (v0.14.0+): setup takes the canonical SecretRef
+ * path on gateways >= 2026.6.5 and the legacy auth-profiles placeholder
+ * below that. AQUAMAN_OPENCLAW_VERSION pins the detected version so both
+ * branches are deterministic regardless of what's installed (npx puts
+ * node_modules/.bin — with the real openclaw — first on PATH).
+ */
+describe('aquaman setup SecretRef wiring E2E', () => {
+  let tempEnv: TempEnv;
+
+  beforeEach(() => {
+    tempEnv = createTempEnv({ withOpenClaw: true });
+  });
+
+  afterEach(() => {
+    tempEnv.cleanup();
+  });
+
+  it('wires SecretRef providers and skips the legacy placeholder on >= 2026.6.5', async () => {
+    const { stdout, exitCode } = await runSetup([], { AQUAMAN_OPENCLAW_VERSION: '2026.6.10' }, tempEnv);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('SecretRef wiring for anthropic, openai');
+    expect(stdout).toContain('Legacy auth-profiles.json placeholder skipped');
+
+    const config = JSON.parse(readFileSync(path.join(tempEnv.openclawDir, 'openclaw.json'), 'utf-8'));
+    expect(config.secrets.providers.aquaman).toEqual({
+      source: 'exec',
+      pluginIntegration: { pluginId: 'aquaman-plugin', integrationId: 'aquaman' },
+    });
+    expect(config.models.providers.anthropic.apiKey).toEqual({
+      source: 'exec', provider: 'aquaman', id: 'anthropic/api_key',
+    });
+    expect(config.models.providers.openai.apiKey).toEqual({
+      source: 'exec', provider: 'aquaman', id: 'openai/api_key',
+    });
+
+    const profilesPath = path.join(tempEnv.openclawDir, 'agents', 'main', 'agent', 'auth-profiles.json');
+    expect(existsSync(profilesPath)).toBe(false);
+  }, TEST_TIMEOUT);
+
+  it('keeps the legacy placeholder flow on < 2026.6.5', async () => {
+    const { stdout, exitCode } = await runSetup([], { AQUAMAN_OPENCLAW_VERSION: '2026.5.12' }, tempEnv);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain('SecretRef wiring for');
+
+    const config = JSON.parse(readFileSync(path.join(tempEnv.openclawDir, 'openclaw.json'), 'utf-8'));
+    expect(config.secrets).toBeUndefined();
+
+    const profilesPath = path.join(tempEnv.openclawDir, 'agents', 'main', 'agent', 'auth-profiles.json');
+    expect(existsSync(profilesPath)).toBe(true);
+    const profiles = JSON.parse(readFileSync(profilesPath, 'utf-8'));
+    expect(profiles.profiles['anthropic:default'].key).toBe('aquaman-proxy-managed');
+  }, TEST_TIMEOUT);
+});

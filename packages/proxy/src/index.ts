@@ -50,6 +50,21 @@ export {
   authProfilesAreSqliteOnly
 } from './openclaw/integration.js';
 
+// OpenClaw SecretRef provider-integration wiring (v0.14.0+)
+export {
+  type SecretRefRef,
+  type SecretRefWiringResult,
+  type SecretRefWiringStatus,
+  SECRETREF_PLUGIN_ID,
+  SECRETREF_INTEGRATION_ID,
+  SECRETREF_PROVIDER_ALIAS,
+  SECRETREF_SUPPORTED_PROVIDERS,
+  supportsSecretRefIntegrations,
+  buildProviderRef,
+  wireSecretRefProviders,
+  secretRefWiringStatus
+} from './openclaw/secretref.js';
+
 // Hermes Integration (v0.13.0+)
 export {
   type HermesEnvConfig,

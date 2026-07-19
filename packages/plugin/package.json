@@ -4,7 +4,7 @@
   "description": "Protect API keys and secrets for OpenClaw. Credentials stay in your vault, never in the agent's memory",
   "type": "module",
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && cp secrets-resolver.mjs dist/secrets-resolver.mjs",
     "prepublishOnly": "npm run clean && npm run build",
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },

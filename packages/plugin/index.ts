@@ -315,10 +315,34 @@ function registerStatusTool(api: OpenClawPluginApi, services: string[]): void {
  * `openclaw doctor --fix`, which then archives the file. `aquaman openclaw
  * doctor` detects this and points the operator at the import step. We can't run
  * that import from plugin load — the process-launching module is isolated to
- * proxy-manager.ts to keep the OpenClaw security scanner clean. Holistic fix
- * (SecretRef provider manifest) is tracked for the next plugin touch; see
- * ROADMAP.md.
+ * proxy-manager.ts to keep the OpenClaw security scanner clean.
+ *
+ * v0.14.0+: on gateways with the SecretRef wiring in openclaw.json (written by
+ * `aquaman openclaw setup` on >= 2026.6.5), this whole surface is legacy — the
+ * manifest's secretProviderIntegrations resolver supplies the placeholder via
+ * the canonical SecretRef path, so generation is skipped entirely.
  */
+
+/**
+ * True when openclaw.json already carries the aquaman SecretRef provider
+ * wiring (secrets.providers.aquaman → this plugin's exec integration).
+ * Deliberately a local fs read, not an aquaman-proxy import — keeps the
+ * plugin entry free of anything the OpenClaw security scanner flags.
+ */
+function secretRefWiringPresent(stateDir: string): boolean {
+  try {
+    const raw = fs.readFileSync(path.join(stateDir, "openclaw.json"), "utf-8");
+    const config = JSON.parse(raw);
+    const provider = config?.secrets?.providers?.aquaman;
+    return (
+      provider?.source === "exec" &&
+      provider?.pluginIntegration?.pluginId === "aquaman-plugin"
+    );
+  } catch {
+    return false;
+  }
+}
+
 function ensureAuthProfiles(log: OpenClawPluginApi["logger"], services: string[]): void {
   const stateDir =
     process.env.OPENCLAW_STATE_DIR ||
@@ -330,6 +354,13 @@ function ensureAuthProfiles(log: OpenClawPluginApi["logger"], services: string[]
     "agent",
     "auth-profiles.json"
   );
+
+  if (secretRefWiringPresent(stateDir)) {
+    log.info(
+      "SecretRef wiring active — skipping legacy auth-profiles.json generation"
+    );
+    return;
+  }
 
   if (fs.existsSync(profilesPath)) return;
 
