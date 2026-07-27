@@ -43,7 +43,7 @@
   "dependencies": {
     "@sinclair/typebox": "^0.34.52",
     "aquaman-proxy": "0.14.0",
-    "undici": "^7.25.0"
+    "undici": "^7.29.0"
   },
   "peerDependencies": {
     "openclaw": ">=2026.5.7"
