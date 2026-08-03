@@ -81,6 +81,13 @@ Aquaman keeps API credentials out of the agent process by running them in a sepa
 - `aquaman openclaw doctor` surfaces audit log issues; `aquaman audit tail` shows recent entries.
 - Operators can constrain which upstream endpoints get proxied (and therefore credentialed) via the `policy` config in `~/.aquaman/config.yaml`. Denied requests return 403 before any credential is injected.
 
+**Host surface the plugin touches**
+
+- `process:spawn` — `aquaman` (the proxy binary; see "Proxy process" above).
+- `global:override` — `globalThis.fetch` (the interceptor; scoped to your `services` list).
+- `env:write` — `*_BASE_URL` and `GITHUB_API_URL` (sentinel base URLs pointing at the proxy).
+- `fs:write` — `~/.openclaw/agents/*/agent/auth-profiles.json` (legacy path only; skipped when SecretRef wiring is present).
+
 ### Scanner findings
 
 `openclaw security audit --deep` reports two expected findings:
