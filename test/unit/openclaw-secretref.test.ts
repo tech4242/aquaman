@@ -28,9 +28,10 @@ describe('supportsSecretRefIntegrations (version gate)', () => {
   it.each([
     ['2026.6.5', true],
     ['2026.6.10', true],
-    // 2026.6.33 is the extended-stable line and the current CI pin — the
-    // SecretRef path must activate on it, not fall back to auth-profiles.
+    // 2026.6.33/.34 are the extended-stable line (.34 is the current CI pin) —
+    // the SecretRef path must activate on it, not fall back to auth-profiles.
     ['2026.6.33', true],
+    ['2026.6.34', true],
     ['2026.7.1', true],
     ['2027.1.1', true],
     ['2026.6.4', false],

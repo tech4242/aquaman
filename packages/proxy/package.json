@@ -44,12 +44,22 @@
   "license": "MIT",
   "dependencies": {
     "commander": "^12.0.0",
-    "yaml": "^2.3.4",
-    "argon2": "^0.45.0",
-    "kdbxweb": "^2.1.1"
+    "yaml": "^2.3.4"
   },
   "optionalDependencies": {
     "keytar": "^7.9.0"
+  },
+  "peerDependencies": {
+    "argon2": "^0.45.1",
+    "kdbxweb": "^2.1.1"
+  },
+  "peerDependenciesMeta": {
+    "argon2": {
+      "optional": true
+    },
+    "kdbxweb": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
