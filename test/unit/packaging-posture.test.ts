@@ -1,0 +1,98 @@
+/**
+ * Packaging-posture regression guards (v0.14.1+).
+ *
+ * A consumer's `npm audit` of our published tarball is a security signal about
+ * a credential proxy — it is what flipped the ClawHub scan of aquaman-plugin
+ * 0.14.0 to `suspicious`. These tests pin the packaging decisions that keep
+ * that audit clean, because every one of them fails silently: nothing breaks
+ * locally, the damage only shows up in someone else's install.
+ */
+
+import { describe, it, expect } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as url from 'node:url';
+
+const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
+const ROOT = path.resolve(__dirname, '../..');
+
+const readJson = (rel: string) => JSON.parse(fs.readFileSync(path.join(ROOT, rel), 'utf8'));
+
+describe('aquaman-proxy dependency surface', () => {
+  const proxyPkg = readJson('packages/proxy/package.json');
+
+  // kdbxweb 2.1.1 (latest) requires @xmldom/xmldom ^0.7.4, whose 0.7.x line has
+  // no fixed release (5 high advisories). The repo-root `overrides` pin to
+  // 0.8.13 protects THIS tree only — overrides are not published — so as a
+  // regular dependency it shipped a vulnerable resolution to every consumer.
+  // optionalDependencies would not help: npm installs those by default.
+  // Optional peers are the only form npm skips.
+  it.each(['kdbxweb', 'argon2'])('declares %s as an optional peer, not a dependency', (dep) => {
+    expect(proxyPkg.dependencies?.[dep]).toBeUndefined();
+    expect(proxyPkg.optionalDependencies?.[dep]).toBeUndefined();
+    expect(proxyPkg.peerDependencies?.[dep]).toBeDefined();
+    expect(proxyPkg.peerDependenciesMeta?.[dep]?.optional).toBe(true);
+  });
+
+  it('keeps the KeePassXC backend imports lazy so a missing peer is a runtime error, not a boot crash', () => {
+    const backend = fs.readFileSync(
+      path.join(ROOT, 'packages/proxy/src/core/credentials/backends/keepassxc.ts'),
+      'utf8'
+    );
+    expect(backend).toMatch(/await import\('kdbxweb'\)/);
+    expect(backend).toMatch(/await import\('argon2'\)/);
+    // Static imports of either would defeat the optional-peer split.
+    expect(backend).not.toMatch(/^import .*from '(kdbxweb|argon2)'/m);
+    // The failure path must stay actionable — it is the only install docs a
+    // user hits at the moment the peer is missing.
+    expect(backend).toMatch(/npm install kdbxweb argon2/);
+  });
+});
+
+describe('aquaman-plugin dependency surface', () => {
+  const pluginPkg = readJson('packages/plugin/package.json');
+
+  // npm >= 7 auto-installs non-optional peers, so a plain `npm i aquaman-plugin`
+  // was dragging an ~86 MB copy of the gateway — and its advisories — into
+  // consumer trees. The host always provides itself.
+  it('declares openclaw as an optional peer', () => {
+    expect(pluginPkg.peerDependencies?.openclaw).toBeDefined();
+    expect(pluginPkg.peerDependenciesMeta?.openclaw?.optional).toBe(true);
+    expect(pluginPkg.dependencies?.openclaw).toBeUndefined();
+  });
+
+  // ClawScan flags caret ranges on a credential proxy as a reproducibility
+  // risk. Dependabot moves these; humans should not widen them back.
+  it.each(['undici', '@sinclair/typebox'])('exact-pins %s', (dep) => {
+    expect(pluginPkg.dependencies[dep]).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it('pins aquaman-proxy exactly at the workspace version', () => {
+    expect(pluginPkg.dependencies['aquaman-proxy']).toBe(pluginPkg.version);
+  });
+});
+
+describe('lockfile dev scoping', () => {
+  const lock = readJson('package-lock.json');
+  const openclawEntries = Object.keys(lock.packages ?? {}).filter((k) =>
+    k.startsWith('node_modules/openclaw')
+  );
+
+  // The shipped-deps gate is `npm audit --omit=dev --audit-level=high`, which
+  // reads these flags. Regenerating the lockfile WITHOUT --legacy-peer-deps
+  // makes npm follow the plugin's openclaw peer edge, which strips dev:true
+  // from the whole subtree and quietly turns our gate into an audit of the
+  // gateway's tree. Nothing fails when that happens — hence this guard.
+  it('keeps the openclaw subtree dev-scoped (regenerate with npm install --legacy-peer-deps)', () => {
+    expect(openclawEntries.length).toBeGreaterThan(0);
+    const shipped = openclawEntries.filter((k) => !lock.packages[k].dev);
+    expect(shipped).toEqual([]);
+  });
+
+  it('keeps the KeePassXC peers out of the shipped tree', () => {
+    for (const dep of ['node_modules/kdbxweb', 'node_modules/argon2', 'node_modules/@xmldom/xmldom']) {
+      const entry = lock.packages[dep];
+      if (entry) expect(entry.dev).toBe(true);
+    }
+  });
+});
