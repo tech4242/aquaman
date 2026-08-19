@@ -3,7 +3,9 @@
  * SecretRef exec resolver for the aquaman OpenClaw plugin (v0.14.0+).
  *
  * Speaks the OpenClaw secret-provider exec protocol (protocolVersion 1,
- * verified against openclaw 2026.6.10 `resolveExecRefs`/`runExecResolver`):
+ * verified against openclaw 2026.6.10 `resolveExecRefs`/`runExecResolver`;
+ * re-verified 2026-08-03 against gateway/secrets docs — protocol unchanged
+ * through 2026.7.2-beta):
  *   stdin:  {"protocolVersion":1,"provider":"aquaman","ids":["anthropic/api_key",...]}
  *   stdout: {"protocolVersion":1,"values":{"<id>":"<value>",...},"errors":{...}}
  *

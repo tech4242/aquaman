@@ -89,6 +89,18 @@ secret orchestrator. Notes on the security model:
 - Fail-open by design: if the proxy is down, Hermes still starts (with a warning).
 - One bad ref never blocks the others; errors/warnings never contain the token.
 
+On Hermes 0.19+ the source participates in the full orchestrator: mapped-vs-bulk
+precedence (an explicit `env:` binding outranks a bulk project dump), first-claim-wins
+across sources with conflict warnings, and `(from Aquaman Proxy)` provenance labels.
+Order it against other sources with `secrets.sources: [aquaman, bitwarden]`. The source
+passes Hermes' own secret-source conformance kit — see `tests/test_conformance.py`.
+
+**Timing caveat:** plugin discovery runs later in Hermes' startup than the first
+`load_hermes_dotenv()` call, so a plugin-provided source is not consulted by the very
+first env load of the process that discovers it. It *is* consulted by every subsequently
+spawned Hermes process (gateway children, cron sessions, subagents). Bundled sources
+cover first-process bootstrap; that's a Hermes design property, not an aquaman gap.
+
 ## Uninstall
 
 ```bash

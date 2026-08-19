@@ -237,7 +237,7 @@ Bring your own vault - aquaman has no house store. Pick the backend you already 
 |---|---|---|
 | `keychain` | Local dev on macOS (default) | Works out of the box |
 | `encrypted-file` | Linux, WSL2, CI/CD | AES-256-GCM, password-protected |
-| `keepassxc` | Existing KeePass users | Set `AQUAMAN_KEEPASS_PASSWORD` or key file |
+| `keepassxc` | Existing KeePass users | `npm i -g kdbxweb argon2` (optional peers since v0.14.1), then set `AQUAMAN_KEEPASS_PASSWORD` or a key file |
 | `1password` | Team credential sharing | `brew install 1password-cli && op signin` — for unattended agents use a [service account](https://developer.1password.com/docs/service-accounts/) (`OP_SERVICE_ACCOUNT_TOKEN`) |
 | `vault` | Enterprise secrets management | Set `VAULT_ADDR` + `VAULT_TOKEN` |
 | `systemd-creds` | Linux with systemd ≥ 256 | TPM2-backed, no root required |

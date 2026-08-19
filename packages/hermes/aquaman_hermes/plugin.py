@@ -37,7 +37,7 @@ import os
 import re
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, MutableMapping, Optional, Tuple
 from urllib.parse import urlparse
 
 logger = logging.getLogger("aquaman_hermes")
@@ -47,15 +47,42 @@ logger = logging.getLogger("aquaman_hermes")
 _BASE_URL_ENV_VARS = ("ANTHROPIC_BASE_URL", "OPENAI_BASE_URL")
 
 
-def _loopback_origin() -> Optional[str]:
+def _source_env() -> "MutableMapping[str, str]":
+    """The environment mapping a secret-source read should go through.
+
+    Hermes after 0.19.0 hands each ``fetch()`` a per-fetch environment view via
+    a ContextVar (``agent.secret_sources.base.get_source_environment``) instead
+    of mutating ``os.environ``; under ``gateway.multiplex_profiles`` that view
+    is the *profile's* env, so reading ``os.environ`` directly would resolve
+    another profile's loopback token and URL. Every bundled Hermes source reads
+    through it.
+
+    The helper is absent on 0.18.x and on released 0.19.0, and the ContextVar
+    returns ``os.environ`` outside an active fetch (status command, health
+    hook) — so this degrades to today's behavior on every host we support.
+    """
+    try:
+        from agent.secret_sources.base import (  # type: ignore[import-not-found]
+            get_source_environment,
+        )
+    except Exception:
+        return os.environ
+    try:
+        return get_source_environment()
+    except Exception:
+        return os.environ
+
+
+def _loopback_origin(env: "Optional[MutableMapping[str, str]]" = None) -> Optional[str]:
     """Return ``http://host:port`` of the aquaman loopback listener, or None.
 
     Derived from whichever provider base-URL env var aquaman set. We only keep
     scheme+host+port — the per-service path (``/anthropic`` etc.) is dropped so
     we can hit ``/_health``.
     """
+    env = env if env is not None else os.environ
     for var in _BASE_URL_ENV_VARS:
-        val = os.environ.get(var)
+        val = env.get(var)
         if not val:
             continue
         parsed = urlparse(val)
@@ -165,7 +192,9 @@ _PROXY_ISOLATED_VARS: Dict[str, str] = {
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 
-def _wired_placeholder_vars() -> "frozenset[str]":
+def _wired_placeholder_vars(
+    env: "Optional[MutableMapping[str, str]]" = None,
+) -> "frozenset[str]":
     """Provider api-key vars currently wired as loopback placeholders.
 
     A provider key var is a placeholder (not a real credential) exactly when
@@ -174,28 +203,39 @@ def _wired_placeholder_vars() -> "frozenset[str]":
     source: a real key there would leak into Hermes' env AND break the
     proxy's token gate (the placeholder IS the loopback token).
     """
+    env = env if env is not None else os.environ
     wired = set()
     for key_var, url_var in _PROXY_ISOLATED_VARS.items():
-        parsed = urlparse(os.environ.get(url_var) or "")
+        parsed = urlparse(env.get(url_var) or "")
         if parsed.hostname in _LOOPBACK_HOSTS:
             wired.add(key_var)
     return frozenset(wired)
 
 
-def _scrub_secret_text(text: str, cfg: Optional[dict] = None) -> str:
+def _scrub_secret_text(
+    text: str,
+    cfg: Optional[dict] = None,
+    env: "Optional[MutableMapping[str, str]]" = None,
+) -> str:
     """Remove the loopback token from text destined for Hermes' startup log.
 
     Error/warning strings in a FetchResult are logged by Hermes at startup —
     they must never carry the token, even when an unexpected exception message
     embeds it (urllib errors can echo request headers).
+
+    Scrubs the token from BOTH the per-fetch env view and ``os.environ``: under
+    profile multiplexing they can differ, and a value that leaked from either
+    one must not survive into the log.
     """
     names = {_DEFAULT_TOKEN_ENV}
     if isinstance(cfg, dict) and cfg.get("token_env"):
         names.add(str(cfg["token_env"]))
+    mappings = [os.environ] if env is None or env is os.environ else [env, os.environ]
     for name in names:
-        value = os.environ.get(name)
-        if value:
-            text = text.replace(value, "[REDACTED:loopback-token]")
+        for mapping in mappings:
+            value = mapping.get(name)
+            if value:
+                text = text.replace(value, "[REDACTED:loopback-token]")
     return text
 
 
@@ -272,12 +312,98 @@ def build_secret_source():
             token_env = _DEFAULT_TOKEN_ENV
             if isinstance(cfg, dict):
                 token_env = str(cfg.get("token_env") or token_env)
-            return frozenset({token_env}) | _wired_placeholder_vars()
+            return frozenset({token_env}) | _wired_placeholder_vars(_source_env())
+
+        def config_schema(self) -> dict:
+            # Informational only — lets Hermes' setup/status surfaces render
+            # this source's config without hardcoding aquaman knowledge.
+            return {
+                "enabled": {
+                    "description": "Turn the aquaman secret source on.",
+                    "default": False,
+                },
+                "env": {
+                    "description": (
+                        "ENV_VAR -> aquaman://service/key bindings. LLM provider "
+                        "keys are refused: they stay process-isolated on the "
+                        "loopback proxy path."
+                    ),
+                    "default": {},
+                },
+                "token_env": {
+                    "description": (
+                        "Env var holding the loopback token "
+                        "(written by `aquaman hermes setup`)."
+                    ),
+                    "default": _DEFAULT_TOKEN_ENV,
+                },
+                "base_url": {
+                    "description": (
+                        "Origin of the aquaman loopback listener. Defaults to "
+                        "AQUAMAN_LOOPBACK_URL, then the wired provider base URL."
+                    ),
+                    "default": _DEFAULT_LOOPBACK_URL,
+                },
+                "request_timeout_seconds": {
+                    "description": "Per-ref HTTP timeout against the proxy broker.",
+                    "default": _DEFAULT_REQUEST_TIMEOUT,
+                },
+                "override_existing": {
+                    "description": (
+                        "Let a resolved value replace an existing .env/shell "
+                        "value. An explicit binding is strong intent, so this "
+                        "defaults on (matching the bundled 1Password source)."
+                    ),
+                    "default": True,
+                },
+            }
+
+        def remediation(self, kind, cfg: dict) -> str:
+            # Pure kind -> string mapping, no I/O (contract). Points at
+            # aquaman's own verbs instead of Hermes' generic
+            # `hermes secrets aquaman setup`, which does not exist.
+            hints = {
+                ErrorKind.NOT_CONFIGURED: (
+                    "Run `aquaman hermes setup`, then bind vars under "
+                    "secrets.aquaman.env in Hermes' config.yaml."
+                ),
+                ErrorKind.NETWORK: (
+                    "Start the proxy with `aquaman daemon`, then verify with "
+                    "`aquaman hermes doctor`."
+                ),
+                ErrorKind.TIMEOUT: (
+                    "Proxy was slow — check `aquaman hermes doctor`, or raise "
+                    "secrets.aquaman.request_timeout_seconds."
+                ),
+                ErrorKind.AUTH_FAILED: (
+                    "Loopback token rejected — re-run `aquaman hermes setup` "
+                    "to rewrite it into ~/.hermes/.env."
+                ),
+                ErrorKind.AUTH_EXPIRED: (
+                    "Loopback token no longer valid — re-run "
+                    "`aquaman hermes setup`."
+                ),
+                ErrorKind.REF_INVALID: (
+                    "Check the aquaman://service/key refs in "
+                    "secrets.aquaman.env against `aquaman credentials list`."
+                ),
+                ErrorKind.EMPTY_VALUE: (
+                    "Vault returned an empty value — re-add it with "
+                    "`aquaman credentials add <service> <key>`."
+                ),
+            }
+            try:
+                return hints.get(kind, "") if kind is not None else ""
+            except Exception:  # contract: never raise on the startup path
+                return ""
 
         def fetch(self, cfg: dict, home_path) -> "FetchResult":
             cfg = cfg if isinstance(cfg, dict) else {}
+            # Read every env value through Hermes' per-fetch view so profile
+            # multiplexing resolves this profile's token/URL, not another's.
+            env = _source_env()
             try:
-                result = self._fetch(cfg)
+                result = self._fetch(cfg, env)
             except Exception as exc:  # contract: never raise
                 result = FetchResult(
                     error=f"aquaman source internal error: {exc}",
@@ -285,11 +411,12 @@ def build_secret_source():
                 )
             # Startup-log hygiene: whatever we surface, the token stays out.
             if result.error:
-                result.error = _scrub_secret_text(result.error, cfg)
-            result.warnings = [_scrub_secret_text(w, cfg) for w in result.warnings]
+                result.error = _scrub_secret_text(result.error, cfg, env)
+            result.warnings = [_scrub_secret_text(w, cfg, env) for w in result.warnings]
             return result
 
-        def _fetch(self, cfg: dict) -> "FetchResult":
+        def _fetch(self, cfg: dict, env=None) -> "FetchResult":
+            env = env if env is not None else os.environ
             env_map = cfg.get("env")
             if not isinstance(env_map, dict) or not env_map:
                 return FetchResult(
@@ -299,7 +426,7 @@ def build_secret_source():
                 )
 
             token_env = str(cfg.get("token_env") or _DEFAULT_TOKEN_ENV)
-            token = os.environ.get(token_env)
+            token = env.get(token_env)
             if not token:
                 return FetchResult(
                     error=f"{token_env} is not set — run: aquaman hermes setup "
@@ -309,8 +436,8 @@ def build_secret_source():
 
             origin = str(
                 cfg.get("base_url")
-                or os.environ.get("AQUAMAN_LOOPBACK_URL")
-                or _loopback_origin()
+                or env.get("AQUAMAN_LOOPBACK_URL")
+                or _loopback_origin(env)
                 or _DEFAULT_LOOPBACK_URL
             ).rstrip("/")
             timeout = float(cfg.get("request_timeout_seconds") or _DEFAULT_REQUEST_TIMEOUT)

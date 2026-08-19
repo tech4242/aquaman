@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Agent-host pins are deliberate, never dependabot-driven (see ROADMAP:
+  # agent-host dependabot policy). OpenClaw is pinned separately per job.
+  HERMES_VERSION: "0.19.0"
+
 jobs:
   lint:
     name: Lint & Typecheck
@@ -132,11 +137,11 @@ jobs:
           path: |
             /usr/local/lib/node_modules/openclaw
             /usr/local/bin/openclaw
-          key: openclaw-${{ runner.os }}-node24-2026.6.10
+          key: openclaw-${{ runner.os }}-node24-2026.6.34
       - name: Install openclaw
         if: steps.cache-openclaw.outputs.cache-hit != 'true'
         run: |
-          npm install -g openclaw@2026.6.10 --ignore-scripts
+          npm install -g openclaw@2026.6.34 --ignore-scripts
           npm rebuild -g openclaw
       - run: npx vitest run test/e2e/openclaw-plugin.test.ts
 
@@ -221,3 +226,14 @@ jobs:
       - name: Run aquaman-hermes plugin tests
         working-directory: packages/hermes
         run: uv run --with pytest python -m pytest tests/ -q
+
+      - name: Run Hermes secret-source conformance kit (real hermes-agent)
+        working-directory: packages/hermes
+        # tests/test_conformance.py self-skips without hermes-agent, so the
+        # step above stays dependency-free. This one installs the real host
+        # and runs Hermes' own kit against our SecretSource — the upstream
+        # "review bar" for a contract-compliant backend. Pinned so a host
+        # release changes this job deliberately, not silently.
+        run: |
+          uv run --with pytest --with hermes-agent==${{ env.HERMES_VERSION }} \
+            python -m pytest tests/test_conformance.py -q

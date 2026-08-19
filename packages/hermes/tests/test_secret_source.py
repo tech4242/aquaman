@@ -352,3 +352,111 @@ def test_end_to_end_fetch_against_real_server(hermes_base, broker_server, monkey
     ), Path("/tmp"))
     assert result.ok
     assert result.secrets == {"GITHUB_TOKEN": "ghp_live_value"}
+
+
+# ---------------------------------------------------------------------------
+# Per-fetch environment view (Hermes `main`, post-0.19.0)
+#
+# Hermes after 0.19.0 hands fetch() a ContextVar-scoped environment instead of
+# mutating os.environ; under gateway.multiplex_profiles that view is the
+# *profile's* env. Reading os.environ directly would resolve another profile's
+# loopback token and URL. Released 0.19.0 has no such view, so the plugin must
+# work on both host shapes.
+# ---------------------------------------------------------------------------
+
+def test_fetch_reads_token_and_url_from_per_fetch_env(hermes_base_env_view, monkeypatch):
+    # Process env carries a DIFFERENT profile's wiring — it must lose.
+    monkeypatch.setenv("AQUAMAN_LOOPBACK_TOKEN", "wrong-profile-token")
+    monkeypatch.setenv("AQUAMAN_LOOPBACK_URL", "http://127.0.0.1:9999")
+    calls = _stub_broker(monkeypatch, values={"github/token": "ghp_profile"})
+
+    profile_env = {
+        "AQUAMAN_LOOPBACK_TOKEN": TOKEN,
+        "AQUAMAN_LOOPBACK_URL": "http://127.0.0.1:8585",
+    }
+    token = hermes_base_env_view.set_source_environment(profile_env)
+    try:
+        source = plugin.build_secret_source()
+        result = source.fetch(_cfg({"GITHUB_TOKEN": "aquaman://github/token"}), Path("/tmp"))
+    finally:
+        hermes_base_env_view.reset_source_environment(token)
+
+    assert result.ok
+    assert result.secrets == {"GITHUB_TOKEN": "ghp_profile"}
+    assert [c["token"] for c in calls] == [TOKEN]
+    assert [c["origin"] for c in calls] == ["http://127.0.0.1:8585"]
+
+
+def test_fetch_falls_back_to_os_environ_without_env_view(hermes_base, monkeypatch):
+    # Released 0.19.0 / 0.18.x: no get_source_environment in base.
+    assert not hasattr(hermes_base, "get_source_environment")
+    monkeypatch.setenv("AQUAMAN_LOOPBACK_TOKEN", TOKEN)
+    monkeypatch.setenv("AQUAMAN_LOOPBACK_URL", "http://127.0.0.1:8585")
+    calls = _stub_broker(monkeypatch, values={"github/token": "ghp_real"})
+    source = plugin.build_secret_source()
+    result = source.fetch(_cfg({"GITHUB_TOKEN": "aquaman://github/token"}), Path("/tmp"))
+    assert result.ok
+    assert [c["token"] for c in calls] == [TOKEN]
+
+
+def test_per_fetch_env_token_is_scrubbed_from_errors(hermes_base_env_view, monkeypatch):
+    """A token that only exists in the profile view must still never be logged."""
+    profile_env = {"AQUAMAN_LOOPBACK_TOKEN": TOKEN, "AQUAMAN_LOOPBACK_URL": "http://127.0.0.1:8585"}
+    _stub_broker(monkeypatch, exc=RuntimeError(f"boom token={TOKEN}"))
+    token = hermes_base_env_view.set_source_environment(profile_env)
+    try:
+        source = plugin.build_secret_source()
+        result = source.fetch(_cfg({"GITHUB_TOKEN": "aquaman://github/token"}), Path("/tmp"))
+    finally:
+        hermes_base_env_view.reset_source_environment(token)
+    assert not result.ok
+    assert TOKEN not in result.error
+    assert "[REDACTED:loopback-token]" in result.error
+
+
+def test_protected_env_vars_uses_per_fetch_env(hermes_base_env_view):
+    profile_env = {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8585/anthropic"}
+    token = hermes_base_env_view.set_source_environment(profile_env)
+    try:
+        source = plugin.build_secret_source()
+        protected = source.protected_env_vars({})
+    finally:
+        hermes_base_env_view.reset_source_environment(token)
+    assert "ANTHROPIC_API_KEY" in protected
+    assert "AQUAMAN_LOOPBACK_TOKEN" in protected
+
+
+# ---------------------------------------------------------------------------
+# Optional contract hooks
+# ---------------------------------------------------------------------------
+
+def test_config_schema_documents_every_supported_key(hermes_base):
+    schema = plugin.build_secret_source().config_schema()
+    assert set(schema) == {
+        "enabled", "env", "token_env", "base_url",
+        "request_timeout_seconds", "override_existing",
+    }
+    for key, spec in schema.items():
+        assert spec["description"], f"{key} needs a description"
+        assert "default" in spec, f"{key} needs a default"
+    # Must mirror the real defaults, or setup surfaces lie to users.
+    assert schema["token_env"]["default"] == plugin._DEFAULT_TOKEN_ENV
+    assert schema["override_existing"]["default"] is True
+
+
+def test_remediation_points_at_aquaman_verbs(hermes_base):
+    source = plugin.build_secret_source()
+    ErrorKind = hermes_base.ErrorKind
+    assert "aquaman daemon" in source.remediation(ErrorKind.NETWORK, {})
+    assert "aquaman hermes setup" in source.remediation(ErrorKind.AUTH_FAILED, {})
+    assert "aquaman credentials" in source.remediation(ErrorKind.EMPTY_VALUE, {})
+    # Hermes' generic default suggests a CLI verb aquaman does not ship.
+    for kind in ErrorKind:
+        assert "hermes secrets aquaman" not in source.remediation(kind, {})
+
+
+def test_remediation_never_raises_and_tolerates_unknown_kind(hermes_base):
+    source = plugin.build_secret_source()
+    assert source.remediation(None, {}) == ""
+    assert source.remediation("not-an-error-kind", {}) == ""
+    assert source.remediation(hermes_base.ErrorKind.INTERNAL, None) == ""

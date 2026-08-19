@@ -174,9 +174,24 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
       expect(result).not.toMatch(/aquaman-plugin[\s\S]{0,200}?(error|failed)/i);
     });
 
-    it('manifest declares env:write permission for *_BASE_URL', () => {
-      // Verifying intent at the manifest level — runtime side-effect is
-      // covered by the openclaw-contract unit tests.
+    it('manifest declares only documented top-level fields', () => {
+      // OpenClaw's manifest loader reads documented fields only ("Avoid custom
+      // top-level keys" — docs/plugins/manifest.md), and ClawHub's package
+      // validator raises `manifest-unknown-fields` for anything else. v0.14.0
+      // shipped author/license/repository/permissions here and tripped it;
+      // npm metadata belongs in package.json, and the host surface we touch
+      // (spawn, fetch override, env writes, auth-profiles writes) is disclosed
+      // in the plugin README instead. Runtime side-effects are covered by the
+      // openclaw-contract unit tests.
+      const DOCUMENTED_TOP_LEVEL_FIELDS = new Set([
+        'id',
+        'name',
+        'version',
+        'description',
+        'configSchema',
+        'nonSecretAuthMarkers',
+        'secretProviderIntegrations',
+      ]);
       const manifestPath = path.join(
         testStateDir,
         'extensions',
@@ -184,18 +199,10 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
         'openclaw.plugin.json'
       );
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
-      expect(manifest.permissions['env:write']).toContain('*_BASE_URL');
-    });
-
-    it('manifest declares process:spawn permission for aquaman', () => {
-      const manifestPath = path.join(
-        testStateDir,
-        'extensions',
-        'aquaman-plugin',
-        'openclaw.plugin.json'
+      const undocumented = Object.keys(manifest).filter(
+        (key) => !DOCUMENTED_TOP_LEVEL_FIELDS.has(key)
       );
-      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
-      expect(manifest.permissions['process:spawn']).toContain('aquaman');
+      expect(undocumented).toEqual([]);
     });
 
     it('configured services include anthropic and openai', () => {

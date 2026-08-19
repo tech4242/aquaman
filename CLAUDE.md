@@ -107,6 +107,8 @@ The `openclaw.plugin.json` manifest defines `additionalProperties: false` with o
 
 **Do NOT add extra keys** (like `proxyAutoStart`, `auditEnabled`) to `openclaw.json` — OpenClaw validates against the manifest schema and will reject them. Use `~/.aquaman/config.yaml` for advanced settings.
 
+**Manifest top-level keys are an allowlist too (v0.14.1 fix).** OpenClaw's loader reads only documented manifest fields ("Avoid custom top-level keys" — `docs/plugins/manifest.md`), and ClawHub's package validator raises `manifest-unknown-fields` for anything else. v0.14.0 shipped `author`, `license`, `repository`, and `permissions` here and tripped it. npm metadata belongs in `package.json`; `permissions` was never an OpenClaw field at all (it was our v0.11.1-era ClawScan declaration) — the host surface we touch is now disclosed in the plugin README instead. The manifest currently declares exactly: `id`, `name`, `version`, `description`, `configSchema`, `nonSecretAuthMarkers`, `secretProviderIntegrations`. A regression test in `test/e2e/openclaw-plugin.test.ts` asserts that set. **Note: this class of bug is NOT catchable locally** — `clawhub package validate` skips the manifest-field check unless it can inspect an OpenClaw *source checkout* (an installed npm package yields `targetOpenClaw.status: "missing"`), so a local `PASS` proves nothing here.
+
 **HTTP interceptor scope (v0.11.4+):** `activateHttpInterceptor()` in `packages/plugin/index.ts` filters the resolved host map (dynamic from proxy `/_hostmap`, or builtin `FALLBACK_HOST_MAP`) by `configuredServices` before activating the interceptor. Hosts whose service is not in the plugin's `services` config are never redirected. This narrows the attack surface (closes ClawScan ASI02) and matches user intent.
 
 ### OpenClaw Auth Profiles
@@ -180,7 +182,7 @@ The `aquaman-coder` package extends aquaman to AI coding agents. v0.12.0 ships t
 - `adapters/claude-code/setup.ts` — Writes `~/.claude/settings.json` atomically (mode 0o600, parent dir 0o700). Idempotent via substring-match on the hook command.
 - `cli/index.ts` — Commander-based CLI: `setup <agent>`, `project list/add/remove`, `get <ref>`, `exec <cmd...>`, `hook`, `doctor`.
 
-**Critical hook-protocol notes (re-verified 2026-07-19 against live docs @ Claude Code 2.1.215):** Our contract (`permissionDecision` / `permissionDecisionReason` / `updatedInput` for PreToolUse; `additionalContext` + `updatedToolOutput` for PostToolUse; exit-2 via stderr) is fully supported; no field changes 2.1.203–2.1.215. (1) **`PreToolUse.additionalEnvVars`** — env-var injection. **Deliberately NOT used for credentials**: hook stdout JSON would carry real values through Claude Code's process/memory, which is exactly what the broker + `exec`-wrapper isolation exists to avoid. (2) **`PostToolUse.updatedToolOutput` — ADOPTED in v0.14.0**: `handlePostToolUse` runs the redactor over every tool's output (string via `redact`, structured via `redactDeep`, shape preserved) and rewrites it before it reaches the transcript — covers Read/Grep surfacing on-disk secrets, MCP tools, and unwrapped Bash; the exec wrapper still owns value-based redaction of injected values. Opt-out `AQUAMAN_DISABLE_OUTPUT_REWRITE=1` (pre-2.1.170 hosts) degrades to the warning-only `additionalContext` behavior. (3) Claude Code 2.1.210 fixed exit-2 handling when hook stdout JSON fails schema validation — our hook output is locked down by schema-validity regression tests (`test/unit/coder-hook.test.ts`). When extending, **verify against the live Claude Code docs**, not training-data memory.
+**Critical hook-protocol notes (re-verified 2026-08-17 against the live changelog @ Claude Code 2.1.233; stable 2.1.224):** Our contract (`permissionDecision` / `permissionDecisionReason` / `updatedInput` for PreToolUse; `additionalContext` + `updatedToolOutput` for PostToolUse; exit-2 via stderr) is fully supported; no field changes 2.1.203–2.1.233. (1) **`PreToolUse.additionalEnvVars`** — env-var injection. **Deliberately NOT used for credentials**: hook stdout JSON would carry real values through Claude Code's process/memory, which is exactly what the broker + `exec`-wrapper isolation exists to avoid. (2) **`PostToolUse.updatedToolOutput` — ADOPTED in v0.14.0**: `handlePostToolUse` runs the redactor over every tool's output (string via `redact`, structured via `redactDeep`, shape preserved) and rewrites it before it reaches the transcript — covers Read/Grep surfacing on-disk secrets, MCP tools, and unwrapped Bash; the exec wrapper still owns value-based redaction of injected values. Opt-out `AQUAMAN_DISABLE_OUTPUT_REWRITE=1` (pre-2.1.170 hosts) degrades to the warning-only `additionalContext` behavior. (3) **2.1.214** fixed exit-2 not blocking as documented when the hook's stdout JSON fails schema validation — our hook output is locked down by schema-validity regression tests (`test/unit/coder-hook.test.ts`). (This citation has been wrong twice: v0.13.1 notes said 2.1.210, v0.14.1's first pass said 2.1.217. The changelog on `main` contains exactly one "exit code 2" entry in the 2.1.2xx range and it sits under **2.1.214** — re-verified 2026-08-17 by reading the file, not the summary.) (3a) Later hook-behavior fixes, all compatible: **2.1.222** (PreToolUse auto-allow hooks bypassing tool restrictions in background agent tasks) and **2.1.224** (a hook-callback timeout misreported to the model as a user rejection — worth knowing since broker resolution sits on the PreToolUse path). **2.1.232** added first-party redaction for the GitLab token families (`glpat-`, `glrt-`, `gloas-`, …); our redactor's BUILTIN_PATTERNS do not cover those yet. (4) **Sandbox settings (2.1.216 `sandbox.filesystem.disabled`, 2.1.219 `sandbox.network.strictAllowlist`)** — `strictAllowlist` denies non-allowlisted hosts for sandboxed commands without prompting. The broker speaks HTTP over a UDS (no host, no port), so credential resolution is **not** an allowlist subject; `test/e2e/coder-sandbox-compat.test.ts` pins that invariant so a refactor to loopback TCP (the Hermes transport) can't silently make the coder path sandbox-blockable. **Open limitation:** the socket lives at `$HOME/.aquaman/proxy.sock`, so *filesystem* sandboxing that hides `$HOME` from the command blocks the broker regardless of network policy — not yet verified against a live sandboxed session; a socket-path override is the likely fix if it bites. (5) **2.1.214 + 2.1.221 put first-party credential substitution in the sandbox**: `sandbox.credentials` gained `extract` / `decode: "jwt"` + `maskClaims` / `awsPairs` / `sigv4` (2.1.214, needs `network.tlsTerminate`), then `mode: "mask"` for credential *files* on Linux/WSL (2.1.221) — the sandboxed command reads a sentinel copy while the sandbox proxy substitutes the real value on egress. That is our placeholder-plus-egress-injection pattern, shipped inside local Claude Code, and it lands after the v0.14.1 verification window. It is scoped to sandboxed sessions with settings-level configuration and carries no vault backends, no per-read audit, and no cross-host story — but any copy claiming local Claude Code has *no* first-party credential isolation is now wrong. When extending, **verify against the live Claude Code docs**, not training-data memory.
 
 **Project map example** (`~/.aquaman/projects.yaml`):
 
@@ -293,7 +295,8 @@ credentials; LLM-key isolation is entirely proxy-side. **Do NOT put isolation lo
 them at Hermes startup through the **token-gated loopback `POST /broker/resolve`**
 (token from `AQUAMAN_LOOPBACK_TOKEN`, written into the `~/.hermes/.env` managed block by
 `aquaman hermes setup` alongside `AQUAMAN_LOOPBACK_URL`). Design rules, all
-conformance-tested (`tests/test_secret_source.py`, `tests/test_compliance.py`):
+conformance-tested (`tests/test_secret_source.py`, `tests/test_compliance.py`, and
+`tests/test_conformance.py` — Hermes' OWN kit against a real install; see below):
 - **Two-tier security model, non-negotiable:** LLM provider keys (ANTHROPIC/OPENAI) are
   REFUSED by the source — they stay on the loopback proxy path (process-isolated
   placeholder). Project secrets materialize into Hermes' env (same residency as any
@@ -306,6 +309,45 @@ conformance-tested (`tests/test_secret_source.py`, `tests/test_compliance.py`):
 - `protected_env_vars()` covers the token var + wired provider placeholders, so no other
   secret source can overwrite the loopback wiring; `override_existing` defaults true.
 - Every surfaced error/warning string is scrubbed of the token (`_scrub_secret_text`).
+
+**Hermes 0.19 contract notes (v0.14.1, verified 2026-08-03 against the 0.19.0 wheel AND
+`main`):** 0.19.0 (2026-07-20) rewrote the orchestrator — mapped-beats-bulk precedence,
+first-claim-wins, conflict warnings, per-var provenance, `secrets.sources: [...]` ordering.
+Our source still registers unchanged (the registry gates on `api_version` / `shape` /
+`scheme` / name, all of which we declare). Three additions handled in v0.14.1:
+- **Per-fetch environment view** — `get_source_environment()` (a ContextVar the
+  orchestrator installs around `fetch()`). It was `main`-only when v0.14.1 was written and
+  **shipped in the 0.20.x line** (present in `agent/secret_sources/base.py` at tag
+  `v2026.8.16.2`) — so this is live host behavior, not forward-compat. Every env read on
+  the fetch path goes through `_source_env()`, which feature-detects it and falls back to
+  `os.environ`. It matters under `gateway.multiplex_profiles`, where the view is the
+  *profile's* env — reading `os.environ` would resolve another profile's token and URL.
+- **`config_schema()`** (present in 0.19.0) and **`remediation(kind, cfg)`** (`main` when
+  written, also shipped in 0.20.x) are now implemented; remediation points at aquaman's
+  verbs, since Hermes' generic default suggests a `hermes secrets aquaman setup` command
+  we don't ship.
+- **Conformance kit** — Hermes' docs call green conformance "the review bar." The kit is
+  repo-only (the wheel ships `agent/secret_sources/` but not `tests/`), so it's vendored
+  verbatim at `packages/hermes/tests/_hermes_conformance.py` with provenance;
+  `test_conformance.py` subclasses it and self-skips without hermes-agent. CI runs it
+  against the real host, pinned via the workflow-level `HERMES_VERSION`.
+Also note: Hermes 0.19 ships **built-in Bitwarden + 1Password secret sources**, and its
+docs list a generic command-helper source in-tree — the bundled set is closed and all
+other backends must be plugins, which is the lane we occupy.
+
+**Hermes 0.20 notes (checked 2026-08-17):** 0.20.0 landed 2026-08-03 and 0.20.1/.2/.3
+followed through 2026-08-17. **`SECRET_SOURCE_API_VERSION` is still `1`** at tag
+`v2026.8.16.2`, and the ABC surface we implement (`fetch` / `is_enabled` /
+`override_existing` / `protected_env_vars` / `fetch_timeout_seconds` / `config_schema` /
+`remediation`) is unchanged — our source registers as-is. What did change: the generic
+**command-helper secret source is now in-tree** (the #44509 concept, plus a `run_secret_cli`
+helper in `base.py`); vault-injected keys are **scoped per profile home**; the orchestrator
+gained `preserve_existing` + profile aliasing; `${env:VAR}` SecretRef parity now spans
+config.yaml and MCP config, and **secret-source env vars reach stdio MCP servers** (widens
+where materialized project secrets land — the two-tier docs should say so). **PyPI still
+serves 0.19.0 only** — 0.19.1 and the 0.20.x line are GitHub-tagged releases — so CI's
+`HERMES_VERSION: "0.19.0"` remains the newest installable wheel and the vendored
+conformance kit is still the 0.19 one.
 
 **End-to-end setup:**
 
@@ -478,13 +520,42 @@ Since the Gateway runs on Unix-like systems, backend choice depends on deploymen
 |---------|----------|----------|
 | `keychain` | macOS (LaunchAgent) | Local dev, personal machines |
 | `encrypted-file` | Linux, WSL2, CI/CD | Servers without native keyring |
-| `keepassxc` | Any (with .kdbx file) | Users with existing KeePass databases |
+| `keepassxc` | Any (with .kdbx file) | Users with existing KeePass databases — **needs `npm i -g kdbxweb argon2`** (v0.14.1+) |
 | `1password` | Any (via `op` CLI) | Team credential sharing |
 | `vault` | Any (via HTTP API) | Enterprise secrets management |
 | `systemd-creds` | Linux (systemd ≥ 256) | TPM2-backed, no root needed, no master password |
 | `bitwarden` | Any (via `bw` CLI) | Bitwarden users |
 
 Backend selection is auto-detected by `aquaman setup` and `aquaman openclaw setup` (macOS → keychain; Linux → keychain if libsecret, else systemd-creds if systemd ≥ 256, else encrypted-file). Maintainer-level details of each backend (file layout, encryption flow, in-memory caching) are in `OPERATIONS.md`.
+
+### Dependency posture (v0.14.1+)
+
+The published packages carry as little as possible, because a consumer's `npm audit` of
+our tarball is a **published security signal** — it is what flipped the ClawHub scan of
+0.14.0 to `suspicious`.
+
+- **`kdbxweb` + `argon2` are optional peer deps of `aquaman-proxy`, not dependencies.**
+  `kdbxweb@2.1.1` (latest) requires `@xmldom/xmldom@^0.7.4`, whose 0.7.x line is unfixed
+  (5 high advisories) — and the repo-root `overrides` pin to 0.8.13 **does not publish**,
+  so every `npm i -g aquaman-proxy@0.14.0` resolved a vulnerable @xmldom. `optionalDependencies`
+  would NOT have fixed this (npm installs those by default); optional *peers* are the only
+  form npm skips. Both are lazily imported (`backends/keepassxc.ts`) and the existing
+  error text already tells users to `npm install kdbxweb argon2`. They stay in the repo's
+  root devDependencies so the KeePassXC tests keep running.
+- **`openclaw` is an optional peer of `aquaman-plugin`.** Non-optional peers are
+  auto-installed by npm ≥ 7, so `npm i aquaman-plugin` was pulling an ~86 MB copy of the
+  gateway into consumer trees (and its advisories into their audits). The host always
+  provides itself.
+- **`undici` and `@sinclair/typebox` are exact-pinned** in the plugin (ClawScan flagged
+  caret ranges as reproducibility risk for a credential proxy). Dependabot bumps them.
+- **Lockfile regeneration must use `npm install --legacy-peer-deps`** — the same flag CI's
+  `npm ci` uses. Without it npm follows the plugin's `openclaw` peer edge, the whole
+  openclaw subtree loses `dev: true`, and `npm audit --omit=dev` (the shipped-deps gate at
+  `ci.yml`) silently starts auditing the gateway's tree instead of ours. This — not a
+  Dependabot bug — is why dependabot-regenerated lockfiles kept "stripping" the dev flags.
+
+Verified shape (v0.14.1): a fresh install of the `aquaman-proxy` + `aquaman-plugin`
+tarballs is **43 packages, 0 vulnerabilities**, with no `@xmldom/xmldom` and no `openclaw`.
 
 ## Testing
 
