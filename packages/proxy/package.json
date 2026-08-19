@@ -63,7 +63,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
-    "tsx": "^4.23.1",
+    "tsx": "^4.23.12",
     "typescript": "^5.3.0"
   },
   "files": [
