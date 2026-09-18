@@ -14,6 +14,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { parse as yamlParse, stringify as yamlStringify } from 'yaml';
+import { defaultProjectsPath as proxyDefaultProjectsPath } from 'aquaman-proxy';
 
 export interface ProjectConfig {
   /** Filesystem paths this project owns. Longest-prefix wins. */
@@ -33,8 +34,12 @@ export interface ProjectsFile {
 const AQUAMAN_REF = /^aquaman:\/\/([a-z0-9][a-z0-9._-]*)\/([a-zA-Z0-9][a-zA-Z0-9._-]*)$/;
 const POSIX_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+/**
+ * `<configDir>/projects.yaml`, the file the daemon's broker reads its
+ * declared refs from (honors AQUAMAN_CONFIG_DIR, like the rest of aquaman).
+ */
 export function defaultProjectsPath(): string {
-  return path.join(os.homedir(), '.aquaman', 'projects.yaml');
+  return proxyDefaultProjectsPath();
 }
 
 /**

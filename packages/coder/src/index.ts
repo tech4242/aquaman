@@ -37,7 +37,9 @@ export {
   type BrokerResolveResult,
   type BrokerClientOptions,
   BrokerClient,
+  BrokerError,
   defaultSocketPath,
+  sandboxSocketHint,
 } from './broker-client.js';
 
 export {
@@ -53,7 +55,10 @@ export {
   type ClaudeSettings,
   type SetupOptions,
   type SetupResult,
+  type SandboxSocketStatus,
   defaultSettingsPath,
   installClaudeCodeHooks,
   uninstallClaudeCodeHooks,
+  socketAllowedByEntry,
+  sandboxSocketStatus,
 } from './adapters/claude-code/setup.js';
