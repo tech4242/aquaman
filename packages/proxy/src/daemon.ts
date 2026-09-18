@@ -648,6 +648,8 @@ export class CredentialProxy {
         timestamp: new Date(),
         authenticated: false,
         statusCode: 404,
+        // Without an error the audit logger records this as a successful use.
+        error: `credential_not_found: ${service}/${key}`,
       });
       return;
     }

@@ -235,14 +235,17 @@ describe('CredentialProxy E2E', () => {
 
     it('emits an audit request event on 404 (not found)', async () => {
       requestLog.length = 0;
+      // Declared (so it reaches the vault) but absent from the vault.
       await udsFetch(socketPath, '/broker/resolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ service: 'anthropic', key: 'missing_key' }),
+        body: JSON.stringify({ service: 'anthropic', key: 'nonexistent_key' }),
       });
       expect(requestLog.length).toBe(1);
       expect(requestLog[0].statusCode).toBe(404);
       expect(requestLog[0].authenticated).toBe(false);
+      // A miss is a failed use in the audit log, not a success (v0.15.0).
+      expect(requestLog[0].error).toBe('credential_not_found: anthropic/nonexistent_key');
     });
   });
 });
