@@ -17,8 +17,8 @@
       "minGatewayVersion": "2026.6.5"
     },
     "build": {
-      "openclawVersion": "2026.6.34",
-      "pluginSdkVersion": "2026.6.34"
+      "openclawVersion": "2026.7.33",
+      "pluginSdkVersion": "2026.7.33"
     }
   },
   "keywords": [
@@ -43,7 +43,7 @@
   "dependencies": {
     "@sinclair/typebox": "0.34.52",
     "aquaman-proxy": "0.14.1",
-    "undici": "7.29.0"
+    "undici": "7.29.1"
   },
   "peerDependencies": {
     "openclaw": ">=2026.6.5"

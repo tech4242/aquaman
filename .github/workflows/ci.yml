@@ -37,10 +37,11 @@ jobs:
           npm ci --legacy-peer-deps --ignore-scripts
           npm rebuild keytar esbuild oxlint
       # Block the build only on vulnerabilities in dependencies we actually
-      # ship (proxy/plugin/coder). Dev/test-only deps (vitest/vite/esbuild, the
-      # openclaw e2e harness and its bundled hono/protobufjs/tar) never reach a
-      # published tarball, and openclaw's transitive tree churns advisories we
-      # don't control — gating on them would wedge CI without protecting users.
+      # ship (proxy/plugin/coder). Dev/test-only deps (vitest/vite/esbuild,
+      # kdbxweb/argon2 for the KeePassXC tests) never reach a published tarball.
+      # The openclaw gateway is NOT in the lockfile at all since v0.15.0 — the
+      # e2e job installs it out-of-tree per lane, so its shrinkwrapped tree
+      # never shows up in these audits.
       - name: npm audit — block on high+ in shipped deps
         run: npm audit --omit=dev --audit-level=high
       # Surface dev-dependency advisories for awareness, without blocking.
@@ -109,9 +110,17 @@ jobs:
           fail_ci_if_error: true
 
   e2e-openclaw:
-    name: E2E OpenClaw Plugin
+    name: E2E OpenClaw Plugin (${{ matrix.openclaw }})
     runs-on: ubuntu-latest
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        # Host-compat lanes. extended-stable is the conservative line users
+        # sit on; the second lane tracks the OpenClaw 2.0 (2026.8.1+) line at
+        # the newest release clawstat.us doesn't flag (9.4 is "skip"). Bumps
+        # are manual compat events — see .github/dependabot.yml.
+        openclaw: ['2026.7.33', '2026.9.1']
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -137,13 +146,17 @@ jobs:
           path: |
             /usr/local/lib/node_modules/openclaw
             /usr/local/bin/openclaw
-          key: openclaw-${{ runner.os }}-node24-2026.6.34
+          key: openclaw-${{ runner.os }}-node24-${{ matrix.openclaw }}
       - name: Install openclaw
         if: steps.cache-openclaw.outputs.cache-hit != 'true'
         run: |
-          npm install -g openclaw@2026.6.34 --ignore-scripts
+          npm install -g openclaw@${{ matrix.openclaw }} --ignore-scripts
           npm rebuild -g openclaw
+      - name: Assert the lane's gateway version
+        run: openclaw --version | grep -F "${{ matrix.openclaw }}"
       - run: npx vitest run test/e2e/openclaw-plugin.test.ts
+        env:
+          OPENCLAW_BIN: openclaw
 
       - name: Install plugin for security audit
         run: |
