@@ -102,6 +102,10 @@ export function getDefaultConfig(): WrapperConfig {
     },
     hermes: {
       configMethod: 'dotenv'
+    },
+    broker: {
+      enabled: true,
+      allowedRefs: []
     }
   };
 }
@@ -199,6 +203,13 @@ export function applyEnvOverrides(config: WrapperConfig): WrapperConfig {
     config.loopback.token = env['AQUAMAN_LOOPBACK_TOKEN'];
   }
 
+  // Credential broker switch (v0.15.0+). Only 'false' disables; the broker is
+  // still limited to declared refs when on.
+  if (env['AQUAMAN_BROKER_ENABLED']) {
+    config.broker = config.broker ?? { enabled: true, allowedRefs: [] };
+    config.broker.enabled = env['AQUAMAN_BROKER_ENABLED'] !== 'false';
+  }
+
   return config;
 }
 
@@ -236,6 +247,9 @@ function mergeConfig(
     hermes: override.hermes !== undefined
       ? { ...base.hermes, ...override.hermes } as WrapperConfig['hermes']
       : base.hermes,
+    broker: override.broker !== undefined
+      ? { ...base.broker, ...override.broker } as WrapperConfig['broker']
+      : base.broker,
     policy: override.policy !== undefined ? { ...base.policy, ...override.policy } : base.policy
   };
 }

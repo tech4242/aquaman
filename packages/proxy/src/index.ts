@@ -17,6 +17,20 @@ export {
   type ServiceDefinition
 } from './daemon.js';
 
+// Credential-broker scoping (v0.15.0+)
+export {
+  type BrokerScope,
+  type BrokerScopeOptions,
+  type BrokerDecision,
+  type BrokerCaller,
+  type DeclaredRefsResult,
+  createBrokerScope,
+  loadProjectRefs,
+  parseAquamanRef,
+  formatAquamanRef,
+  defaultProjectsPath
+} from './broker-scope.js';
+
 // Service Registry
 export {
   type AuthMode,
@@ -75,6 +89,7 @@ export {
   writeHermesEnv,
   formatHermesEnvForDisplay,
   managedScopeShadowedKeys,
+  hermesSecretSourceRefs,
   HERMES_MANAGED_ENV_PATH
 } from './hermes/config-writer.js';
 

@@ -8,10 +8,12 @@
  *   - maps the Hermes base-URL conventions (/anthropic + /openai/v1) correctly
  *   - exempts /_health from token gating
  *   - leaves the UDS listener token-free (unchanged behavior)
+ *   - (v0.15.0) serves the broker only for declared refs, and never the
+ *     LLM-provider tier over loopback
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { CredentialProxy, createCredentialProxy, createServiceRegistry } from 'aquaman-proxy';
+import { CredentialProxy, createCredentialProxy, createServiceRegistry, createBrokerScope, HERMES_SUPPORTED_SERVICES } from 'aquaman-proxy';
 import { MemoryStore } from 'aquaman-core';
 import type { RequestInfo } from 'aquaman-proxy';
 import { MockUpstream, createMockUpstream } from '../helpers/mock-upstream.js';
@@ -20,6 +22,7 @@ import { tmpSocketPath, cleanupSocket, udsFetch } from '../helpers/uds-proxy.js'
 const TOKEN = 'aqm_lb_e2e_test_token_0123456789abcdef';
 const REAL_ANTHROPIC_KEY = 'sk-ant-real-key';
 const REAL_OPENAI_KEY = 'sk-openai-real-key';
+const NPM_TOKEN = 'npm_hermes_e2e_project_secret';
 
 describe('Loopback listener E2E (Hermes path)', () => {
   let proxy: CredentialProxy;
@@ -37,6 +40,7 @@ describe('Loopback listener E2E (Hermes path)', () => {
     store = new MemoryStore();
     await store.set('anthropic', 'api_key', REAL_ANTHROPIC_KEY);
     await store.set('openai', 'api_key', REAL_OPENAI_KEY);
+    await store.set('npm', 'token', NPM_TOKEN);
 
     requestLog = [];
     socketPath = tmpSocketPath();
@@ -51,6 +55,14 @@ describe('Loopback listener E2E (Hermes path)', () => {
       serviceRegistry: registry,
       allowedServices: ['anthropic', 'openai'],
       loopback: { port: 0, token: TOKEN, host: '127.0.0.1' },
+      // The daemon's real scope shape: declared refs + the Hermes LLM tier
+      // denied over loopback. anthropic/api_key is declared on purpose, to
+      // prove the loopback denial wins over a declaration.
+      broker: createBrokerScope({
+        projectsPath: '/nonexistent/aquaman-test/projects.yaml',
+        allowedRefs: ['aquaman://npm/token', 'aquaman://github/token', 'aquaman://anthropic/api_key'],
+        loopbackDeniedServices: HERMES_SUPPORTED_SERVICES,
+      }),
       onRequest: (info) => { requestLog.push(info); },
     });
 
@@ -152,52 +164,64 @@ describe('Loopback listener E2E (Hermes path)', () => {
     });
   });
 
-  describe('broker over loopback (Hermes secret source, v0.14.0+)', () => {
-    it('resolves a credential with the token', async () => {
-      const res = await fetch(`${baseUrl}/broker/resolve`, {
+  describe('broker over loopback (Hermes secret source, v0.14.0+; scoped v0.15.0+)', () => {
+    const resolve = (body: object, headers: Record<string, string> = { 'x-aquaman-token': TOKEN }) =>
+      fetch(`${baseUrl}/broker/resolve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-aquaman-token': TOKEN },
-        body: JSON.stringify({ service: 'anthropic', key: 'api_key' }),
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify(body),
       });
+
+    it('resolves a declared project secret with the token', async () => {
+      const res = await resolve({ service: 'npm', key: 'token' });
       expect(res.status).toBe(200);
       const body = await res.json();
-      expect(body.value).toBe(REAL_ANTHROPIC_KEY);
+      expect(body.value).toBe(NPM_TOKEN);
       expect(body.expires_at).toBeDefined();
     });
 
     it('rejects broker resolution without the token (401)', async () => {
-      const res = await fetch(`${baseUrl}/broker/resolve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ service: 'anthropic', key: 'api_key' }),
-      });
+      const res = await resolve({ service: 'npm', key: 'token' }, {});
       expect(res.status).toBe(401);
       const body = await res.json();
       expect(body.error).toContain('token');
     });
 
-    it('returns 404 with an actionable fix for a missing credential', async () => {
-      const res = await fetch(`${baseUrl}/broker/resolve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-aquaman-token': TOKEN },
-        body: JSON.stringify({ service: 'github', key: 'token' }),
-      });
+    it('never materializes the LLM-provider tier over loopback, even when declared', async () => {
+      for (const service of ['anthropic', 'openai']) {
+        const res = await resolve({ service, key: 'api_key' });
+        expect(res.status).toBe(404);
+        const text = await res.text();
+        expect(JSON.parse(text).code).toBe('broker_ref_isolated');
+        expect(text).not.toContain(REAL_ANTHROPIC_KEY);
+        expect(text).not.toContain(REAL_OPENAI_KEY);
+      }
+    });
+
+    it('refuses undeclared refs without consulting the vault', async () => {
+      const res = await resolve({ service: 'slack', key: 'bot_token' });
+      expect(res.status).toBe(404);
+      const body = await res.json();
+      expect(body.code).toBe('broker_ref_not_declared');
+      expect(body.fix).toContain('aquaman broker allow aquaman://slack/bot_token');
+    });
+
+    it('returns 404 with an actionable fix for a declared but missing credential', async () => {
+      const res = await resolve({ service: 'github', key: 'token' });
       expect(res.status).toBe(404);
       const body = await res.json();
       expect(body.fix).toContain('aquaman credentials add github token');
     });
 
-    it('audits loopback broker resolves like UDS ones', async () => {
+    it('audits loopback broker resolves — and refusals — like UDS ones', async () => {
       requestLog.length = 0;
-      await fetch(`${baseUrl}/broker/resolve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-aquaman-token': TOKEN },
-        body: JSON.stringify({ service: 'anthropic', key: 'api_key' }),
-      });
+      await resolve({ service: 'npm', key: 'token' });
+      await resolve({ service: 'anthropic', key: 'api_key' });
       const brokerEvents = requestLog.filter((r) => r.method === 'BROKER');
-      expect(brokerEvents).toHaveLength(1);
-      expect(brokerEvents[0].service).toBe('anthropic');
-      expect(brokerEvents[0].statusCode).toBe(200);
+      expect(brokerEvents).toHaveLength(2);
+      expect(brokerEvents[0]).toMatchObject({ service: 'npm', statusCode: 200, authenticated: true });
+      expect(brokerEvents[1]).toMatchObject({ service: 'anthropic', statusCode: 404, authenticated: false });
+      expect(brokerEvents[1].error).toContain('broker_ref_isolated');
     });
   });
 

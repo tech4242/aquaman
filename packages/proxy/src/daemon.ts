@@ -14,6 +14,7 @@ import { type CredentialStore, generateId } from './core/index.js';
 import { ServiceRegistry, createServiceRegistry, type ServiceDefinition, type AuthMode } from './service-registry.js';
 import { OAuthTokenCache, createOAuthTokenCache } from './oauth-token-cache.js';
 import { matchPolicy, type PolicyConfig } from './request-policy.js';
+import type { BrokerScope } from './broker-scope.js';
 
 // Service name validation: lowercase alphanum, dots, hyphens, underscores
 const SAFE_SERVICE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
@@ -55,6 +56,13 @@ export interface CredentialProxyOptions {
    * or `x-aquaman-token`. Requests on the UDS are unaffected (file-perm gated).
    */
   loopback?: { port: number; token: string; host?: string };
+  /**
+   * Credential broker (`POST /broker/resolve`) scope. When omitted the broker
+   * is OFF: the endpoint refuses every request without touching the vault.
+   * Only `aquaman daemon` passes a scope; OpenClaw-hosted proxies never do.
+   * See broker-scope.ts for the rules.
+   */
+  broker?: BrokerScope;
 }
 
 export interface RequestInfo {
@@ -228,13 +236,14 @@ export class CredentialProxy {
       return;
     }
 
-    // Broker endpoint — resolves a vault-stored credential and returns it
-    // with a short-lived expiry hint. Used by aquaman-coder hooks (v0.12.0+)
-    // to materialize credentials on-demand for one tool call, then discard.
+    // Broker endpoint: resolves a vault-stored credential and returns its
+    // VALUE, with a short-lived expiry hint. Used by aquaman-coder (v0.12.0+)
+    // and the Hermes secret source (v0.14.0+) to materialize declared refs.
     // The expires_at field is a hint for the consumer, not a server-side
-    // expiration (the value isn't cached daemon-side beyond the call).
+    // expiration. Scoped since v0.15.0: off unless the proxy was built with a
+    // BrokerScope, and limited to declared refs when on (broker-scope.ts).
     if ((url === '/broker/resolve' || url === '/broker/resolve/') && req.method === 'POST') {
-      await this.handleBrokerResolve(req, res, requestId);
+      await this.handleBrokerResolve(req, res, requestId, fromLoopback);
       return;
     }
 
@@ -509,7 +518,8 @@ export class CredentialProxy {
   private async handleBrokerResolve(
     req: IncomingMessage,
     res: ServerResponse,
-    requestId: string
+    requestId: string,
+    fromLoopback: boolean
   ): Promise<void> {
     res.setHeader('Content-Type', 'application/json');
 
@@ -569,6 +579,35 @@ export class CredentialProxy {
         return;
       }
       ttlSeconds = Math.floor(ttlInput);
+    }
+
+    // Scope check BEFORE the vault lookup: a refusal must not depend on (or
+    // reveal) what the vault holds. 404 rather than 403 so that clients which
+    // treat 401/403 as "bad token" (the Hermes source aborts all refs on
+    // those) handle a refusal per ref, like a missing credential.
+    const scope = this.options.broker;
+    const decision = scope
+      ? scope.check(service, key, fromLoopback ? 'loopback' : 'uds')
+      : {
+          allowed: false as const,
+          code: 'broker_disabled' as const,
+          reason: 'The credential broker is disabled on this proxy',
+          fix: 'OpenClaw-hosted proxies never hand out credential values. For coding agents or the Hermes secret source, run: aquaman daemon',
+        };
+    if (!decision.allowed) {
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: decision.reason, fix: decision.fix, code: decision.code }));
+      this.emitRequest({
+        id: requestId,
+        service,
+        method: 'BROKER',
+        path: '/broker/resolve',
+        timestamp: new Date(),
+        authenticated: false,
+        statusCode: 404,
+        error: `${decision.code}: ${service}/${key}`,
+      });
+      return;
     }
 
     // Fetch from vault

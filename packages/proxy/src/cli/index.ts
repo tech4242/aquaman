@@ -18,6 +18,7 @@ import * as http from 'node:http';
 import {
   loadConfig,
   getConfigDir,
+  getConfigPath,
   ensureConfigDir,
   getDefaultConfig,
   expandPath,
@@ -39,7 +40,8 @@ import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
 import { createOpenClawIntegration, authProfilesAreSqliteOnly } from '../openclaw/integration.js';
 import { supportsSecretRefIntegrations, wireSecretRefProviders, secretRefWiringStatus } from '../openclaw/secretref.js';
 import { createHermesIntegration, detectHermes } from '../hermes/integration.js';
-import { managedScopeShadowedKeys, HERMES_MANAGED_ENV_PATH } from '../hermes/config-writer.js';
+import { managedScopeShadowedKeys, HERMES_MANAGED_ENV_PATH, HERMES_SUPPORTED_SERVICES, hermesSecretSourceRefs } from '../hermes/config-writer.js';
+import { createBrokerScope, parseAquamanRef, defaultProjectsPath, type BrokerScope } from '../broker-scope.js';
 import { loadPolicyFromConfig, validatePolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 
@@ -123,6 +125,59 @@ function loadLoopbackOptions(config: WrapperConfig): { port: number; token: stri
     return undefined;
   }
   return { port: lb.port || DEFAULT_LOOPBACK_PORT, token: lb.token, host: lb.host || '127.0.0.1' };
+}
+
+/** Broker scope for `aquaman daemon`, or undefined when `broker.enabled: false`. */
+function daemonBrokerScope(config: WrapperConfig): BrokerScope | undefined {
+  if (config.broker?.enabled === false) return undefined;
+  return createBrokerScope({
+    configPath: getConfigPath(),
+    loopbackDeniedServices: HERMES_SUPPORTED_SERVICES,
+  });
+}
+
+/**
+ * Add or remove refs in config.yaml `broker.allowedRefs`. Edits the raw file
+ * (not loadConfig + saveConfig) so env overrides such as the loopback token
+ * are never persisted as a side effect. The daemon re-reads the list on change.
+ */
+function updateBrokerAllowedRefs(refs: string[], mode: 'allow' | 'revoke'): void {
+  const invalid = refs.filter(r => !parseAquamanRef(r));
+  if (invalid.length > 0) {
+    console.error(`Invalid ref${invalid.length > 1 ? 's' : ''}: ${invalid.join(', ')}`);
+    console.error('Refs look like aquaman://<service>/<key>, e.g. aquaman://github/token');
+    process.exit(1);
+  }
+
+  ensureConfigDir();
+  const configPath = getConfigPath();
+  let raw: Record<string, any> = {};
+  if (fs.existsSync(configPath)) {
+    const parsed = yamlParse(fs.readFileSync(configPath, 'utf-8'));
+    if (parsed && typeof parsed === 'object') raw = parsed;
+  }
+  const current = new Set<string>(Array.isArray(raw.broker?.allowedRefs) ? raw.broker.allowedRefs : []);
+  for (const ref of refs) {
+    if (mode === 'allow') current.add(ref);
+    else current.delete(ref);
+  }
+  raw.broker = { ...(raw.broker && typeof raw.broker === 'object' ? raw.broker : {}), allowedRefs: [...current].sort() };
+  fs.writeFileSync(configPath, yamlStringify(raw), { encoding: 'utf-8', mode: 0o600 });
+
+  const verb = mode === 'allow' ? 'Allowed' : 'Revoked';
+  for (const ref of refs) console.log(`${verb}: ${ref}`);
+  if (mode === 'allow') {
+    console.log('\nAny process running as you can now fetch these values from `aquaman daemon`. Only allow refs you intend to materialize.');
+  }
+  if (raw.broker.enabled === false) {
+    console.log('Note: broker.enabled is false in config.yaml, so the broker is off regardless.');
+  }
+}
+
+function describeBroker(scope: BrokerScope | undefined): string {
+  if (!scope) return 'disabled (broker.enabled: false)';
+  const n = scope.declared().length;
+  return `${n} declared ref${n === 1 ? '' : 's'} (see: aquaman broker list)`;
 }
 
 /**
@@ -720,6 +775,8 @@ openclaw
     // Start credential proxy
     const socketPath = path.join(getConfigDir(), 'proxy.sock');
     const policyConfig = loadPolicyFromConfig(config);
+    // No `broker`: this proxy fronts OpenClaw, and the OpenClaw path never
+    // hands credential values out (v0.15.0; see broker-scope.ts).
     const credentialProxy = createCredentialProxy({
       socketPath,
       store: credentialStore,
@@ -883,6 +940,10 @@ program
 
     // Start credential proxy
     const policyConfig2 = loadPolicyFromConfig(config);
+    // The daemon is the only proxy that serves the credential broker, and only
+    // for declared refs (projects.yaml + broker.allowedRefs). Over loopback the
+    // Hermes LLM-provider keys are never materialized.
+    const brokerScope = daemonBrokerScope(config);
     const credentialProxy = createCredentialProxy({
       socketPath,
       store: credentialStore,
@@ -890,6 +951,7 @@ program
       serviceRegistry,
       policyConfig: policyConfig2,
       loopback: loadLoopbackOptions(config),
+      broker: brokerScope,
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
@@ -905,6 +967,10 @@ program
     writePidFile();
 
     console.log(`Credential proxy: ${socketPath}`);
+    console.log(`Credential broker: ${describeBroker(brokerScope)}`);
+    if (brokerScope?.declarationError()) {
+      console.error(`  ⚠ ${brokerScope.declarationError()} — refs declared there are refused until it parses`);
+    }
     console.log(`Audit logging: ${config.audit.enabled ? 'enabled' : 'disabled'}`);
     console.log(`Credential backend: ${config.credentials.backend}`);
     console.log(`PID file: ${getPidFile()}`);
@@ -954,6 +1020,9 @@ openclaw
 
     // Start credential proxy
     const policyConfig3 = loadPolicyFromConfig(config);
+    // No `broker`: this proxy runs inside the OpenClaw plugin's lifecycle and
+    // must never hand credential values to the gateway or its agents — that
+    // was the ClawScan finding against 0.14.x (v0.15.0; see broker-scope.ts).
     const credentialProxy = createCredentialProxy({
       socketPath,
       store: credentialStore,
@@ -1241,7 +1310,35 @@ hermes
       }
     }
 
-    // 5. Hermes installed
+    // 5. Secret-source bindings are declared to the broker (v0.15.0+). The
+    // daemon only materializes declared refs, so a binding in Hermes'
+    // config.yaml alone now resolves to a "not declared" warning at startup.
+    {
+      const bound = hermesSecretSourceRefs();
+      if (bound.error) {
+        fail(`Hermes config unreadable (${bound.error}) — can't check secret-source bindings`);
+      } else if (bound.refs.length === 0) {
+        console.log(`  • No aquaman secret-source bindings in ${bound.path} (optional)`);
+      } else {
+        const scope = daemonBrokerScope(config);
+        if (!scope) {
+          fail(`${bound.refs.length} secret-source binding(s) in ${bound.path}, but broker.enabled is false — none will resolve`);
+        } else {
+          const undeclared = bound.refs.filter((ref) => {
+            const r = parseAquamanRef(ref)!;
+            return !scope.check(r.service, r.key, 'loopback').allowed;
+          });
+          if (undeclared.length === 0) {
+            pass(`All ${bound.refs.length} secret-source binding(s) are declared to the broker`);
+          } else {
+            fail(`Secret-source binding(s) not declared to the broker, so the daemon refuses them: ${undeclared.join(', ')}`);
+            console.log(`    → aquaman broker allow ${undeclared.join(' ')}`);
+          }
+        }
+      }
+    }
+
+    // 6. Hermes installed
     const info = await detectHermes(config.hermes?.binaryPath || 'hermes');
     if (info.installed) pass(`Hermes CLI installed (v${info.version})`);
     else console.log('  • Hermes CLI not found on PATH (install: uv tool install hermes-agent)');
@@ -2691,6 +2788,50 @@ policy
       const rule = result.matchedRule!;
       console.log(`  \u2717 DENIED by rule: ${rule.method} ${rule.path} \u2192 ${rule.action}`);
     }
+  });
+
+// Credential broker scope (v0.15.0+)
+const broker = program
+  .command('broker')
+  .description('Credential broker scope: which refs `aquaman daemon` may hand out');
+
+broker
+  .command('list')
+  .description('List the refs the daemon broker will materialize, and where each is declared')
+  .action(() => {
+    const config = loadConfig();
+    console.log('Credential broker: served by `aquaman daemon` only. OpenClaw-hosted proxies never hand out credential values.\n');
+    if (config.broker?.enabled === false) {
+      console.log('  Disabled (broker.enabled: false in config.yaml) — every broker request is refused.');
+      return;
+    }
+    const scope = daemonBrokerScope(config)!;
+    const declared = scope.declared();
+    if (declared.length === 0) {
+      console.log('  No declared refs — every broker request is refused.');
+    }
+    for (const d of declared) console.log(`  ${d.ref}  (${d.source})`);
+    const err = scope.declarationError();
+    if (err) console.log(`\n  ⚠ ${err} — refs declared there are refused until it parses`);
+    console.log(`\n  Never over the loopback listener: ${HERMES_SUPPORTED_SERVICES.join(', ')} (process-isolated on the proxy path)`);
+    console.log(`  Coding-agent refs: ${defaultProjectsPath()}  (aquaman coder project add ...)`);
+    console.log(`  Other refs:        broker.allowedRefs in ${getConfigPath()}  (aquaman broker allow ...)`);
+  });
+
+broker
+  .command('allow')
+  .description('Allow aquaman://service/key refs to be materialized (e.g. Hermes secret-source bindings)')
+  .argument('<refs...>', 'one or more aquaman://service/key refs')
+  .action((refs: string[]) => {
+    updateBrokerAllowedRefs(refs, 'allow');
+  });
+
+broker
+  .command('revoke')
+  .description('Stop materializing refs added with `aquaman broker allow`')
+  .argument('<refs...>', 'one or more aquaman://service/key refs')
+  .action((refs: string[]) => {
+    updateBrokerAllowedRefs(refs, 'revoke');
   });
 
 // Migration commands

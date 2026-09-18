@@ -324,9 +324,10 @@ def build_secret_source():
                 },
                 "env": {
                     "description": (
-                        "ENV_VAR -> aquaman://service/key bindings. LLM provider "
-                        "keys are refused: they stay process-isolated on the "
-                        "loopback proxy path."
+                        "ENV_VAR -> aquaman://service/key bindings. Each ref must "
+                        "also be declared to the proxy (`aquaman broker allow "
+                        "<ref>`, aquaman >= 0.15). LLM provider keys are refused: "
+                        "they stay process-isolated on the loopback proxy path."
                     ),
                     "default": {},
                 },
@@ -364,8 +365,9 @@ def build_secret_source():
             # `hermes secrets aquaman setup`, which does not exist.
             hints = {
                 ErrorKind.NOT_CONFIGURED: (
-                    "Run `aquaman hermes setup`, then bind vars under "
-                    "secrets.aquaman.env in Hermes' config.yaml."
+                    "Run `aquaman hermes setup`, bind vars under "
+                    "secrets.aquaman.env in Hermes' config.yaml, and declare "
+                    "each ref with `aquaman broker allow <ref>`."
                 ),
                 ErrorKind.NETWORK: (
                     "Start the proxy with `aquaman daemon`, then verify with "
@@ -385,7 +387,8 @@ def build_secret_source():
                 ),
                 ErrorKind.REF_INVALID: (
                     "Check the aquaman://service/key refs in "
-                    "secrets.aquaman.env against `aquaman credentials list`."
+                    "secrets.aquaman.env against `aquaman credentials list` "
+                    "and `aquaman broker list`."
                 ),
                 ErrorKind.EMPTY_VALUE: (
                     "Vault returned an empty value — re-add it with "

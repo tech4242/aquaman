@@ -25,7 +25,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CredentialProxy, createCredentialProxy, createServiceRegistry } from 'aquaman-proxy';
+import { CredentialProxy, createCredentialProxy, createServiceRegistry, createBrokerScope } from 'aquaman-proxy';
 import { MemoryStore, CachingStore, wrapWithCache } from 'aquaman-core';
 import type { RequestInfo } from 'aquaman-proxy';
 import { MockUpstream, createMockUpstream } from '../helpers/mock-upstream.js';
@@ -53,6 +53,11 @@ describe('Credential cache — compliance (v0.13.1+)', () => {
       serviceRegistry: registry,
       allowedServices: ['anthropic'],
       policyConfig,
+      // A coding-agent project that declared the key (daemon semantics, v0.15.0+).
+      broker: createBrokerScope({
+        projectsPath: '/nonexistent/aquaman-test/projects.yaml',
+        allowedRefs: ['aquaman://anthropic/api_key'],
+      }),
       onRequest: (info) => { requestLog.push(info); },
     });
     await proxy.start();

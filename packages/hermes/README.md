@@ -76,13 +76,23 @@ secrets:
       DATABASE_URL: aquaman://supabase/db_url
 ```
 
+Then declare the same refs to the proxy. Since aquaman 0.15 the daemon hands out
+only refs you have declared, so a binding in Hermes' config alone is refused:
+
+```bash
+aquaman broker allow aquaman://github/token aquaman://supabase/db_url
+aquaman hermes doctor   # flags any binding that isn't declared yet
+```
+
 At startup the source resolves each binding through the proxy's token-gated
 loopback broker (per-read, hash-chain audited) and hands the values to Hermes'
 secret orchestrator. Notes on the security model:
 
-- **LLM provider keys are refused.** `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` bindings
-  are rejected with a warning — those stay on the loopback proxy path, where the real
-  key never enters the Hermes process at all.
+- **LLM provider keys are refused**, by this source and by the proxy itself.
+  `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` bindings are rejected with a warning, and the
+  proxy never hands out anthropic/openai keys over the loopback listener even if they
+  are declared. Those stay on the loopback proxy path, where the real key never enters
+  the Hermes process at all.
 - Project secrets resolved this way **do** live in Hermes' process env (that's what a
   Hermes secret source is). What you gain over a `.env` line: vault-at-rest storage,
   per-read tamper-evident audit, instant rotation, and no plaintext files on disk.

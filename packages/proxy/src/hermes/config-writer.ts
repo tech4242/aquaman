@@ -24,7 +24,10 @@
  */
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
+import { parse as parseYaml } from 'yaml';
+import { parseAquamanRef } from '../broker-scope.js';
 
 /** Matches the SAFE_SERVICE_NAME pattern from daemon.ts. */
 const SAFE_SERVICE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
@@ -97,6 +100,39 @@ export function hermesWiredServices(services: string[]): string[] {
 export function getHermesEnvPath(homeDir: string): string {
   const stateDir = process.env['HERMES_HOME'] || path.join(homeDir, '.hermes');
   return path.join(stateDir, '.env');
+}
+
+/**
+ * `aquaman://` refs bound in the Hermes secret source (`secrets.aquaman.env`
+ * in `$HERMES_HOME/config.yaml`), excluding the LLM-provider vars the source
+ * refuses anyway. Read-only, for diagnostics: since v0.15.0 each of these
+ * must also be declared to the daemon's broker (`aquaman broker allow`), and
+ * `aquaman hermes doctor` uses this to say which ones aren't.
+ */
+export function hermesSecretSourceRefs(homeDir: string = os.homedir()): { path: string; refs: string[]; error?: string } {
+  const configPath = path.join(process.env['HERMES_HOME'] || path.join(homeDir, '.hermes'), 'config.yaml');
+  let raw: string;
+  try {
+    raw = fs.readFileSync(configPath, 'utf-8');
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') return { path: configPath, refs: [] };
+    return { path: configPath, refs: [], error: `cannot read ${configPath}: ${err?.message ?? err}` };
+  }
+  let parsed: any;
+  try {
+    parsed = parseYaml(raw);
+  } catch (err: any) {
+    return { path: configPath, refs: [], error: `cannot parse ${configPath}: ${err?.message ?? err}` };
+  }
+  const env = parsed?.secrets?.aquaman?.env;
+  const refs = new Set<string>();
+  if (env && typeof env === 'object') {
+    for (const [name, ref] of Object.entries(env)) {
+      if (name === 'ANTHROPIC_API_KEY' || name === 'OPENAI_API_KEY') continue;
+      if (typeof ref === 'string' && parseAquamanRef(ref)) refs.add(ref);
+    }
+  }
+  return { path: configPath, refs: [...refs].sort() };
 }
 
 /**

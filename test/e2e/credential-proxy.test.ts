@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { CredentialProxy, createCredentialProxy } from 'aquaman-proxy';
+import { CredentialProxy, createCredentialProxy, createBrokerScope } from 'aquaman-proxy';
 import { MemoryStore, CachingStore } from 'aquaman-core';
 import { CountingStore } from '../helpers/counting-store.js';
 import { createMockUpstream } from '../helpers/mock-upstream.js';
@@ -30,6 +30,13 @@ describe('CredentialProxy E2E', () => {
       socketPath,
       store,
       allowedServices: ['anthropic', 'openai'],
+      // v0.15.0: the broker only serves declared refs. These tests exercise
+      // the resolve mechanics, so declare what they ask for (the missing-key
+      // case must be declared too, to reach the vault lookup).
+      broker: createBrokerScope({
+        projectsPath: '/nonexistent/aquaman-test/projects.yaml',
+        allowedRefs: ['aquaman://anthropic/api_key', 'aquaman://openai/api_key', 'aquaman://anthropic/nonexistent_key'],
+      }),
       onRequest: (info) => {
         requestLog.push(info);
       }

@@ -2,7 +2,7 @@
  * Unit tests for the Hermes config-writer (v0.13.0+)
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -12,6 +12,7 @@ import {
   hermesWiredServices,
   getHermesEnvPath,
   writeHermesEnv,
+  hermesSecretSourceRefs,
 } from 'aquaman-proxy';
 
 describe('generateHermesEnv', () => {
@@ -171,5 +172,43 @@ describe('managedScopeShadowedKeys (Hermes >=0.17 managed scope)', () => {
 
   it('returns empty for an unreadable path instead of throwing', () => {
     expect(managedScopeShadowedKeys(OUR_ENV, path.join(dir, 'nodir', 'x.env'))).toEqual([]);
+  });
+});
+
+describe('hermesSecretSourceRefs (v0.15.0 doctor input)', () => {
+  let home: string;
+  const prevHermesHome = process.env['HERMES_HOME'];
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-hermes-refs-'));
+    process.env['HERMES_HOME'] = path.join(home, '.hermes');
+    fs.mkdirSync(process.env['HERMES_HOME'], { recursive: true });
+  });
+  afterEach(() => {
+    if (prevHermesHome === undefined) delete process.env['HERMES_HOME'];
+    else process.env['HERMES_HOME'] = prevHermesHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it('returns valid bound refs, skipping the provider vars the source refuses', () => {
+    fs.writeFileSync(path.join(home, '.hermes', 'config.yaml'), [
+      'secrets:',
+      '  aquaman:',
+      '    enabled: true',
+      '    env:',
+      '      GITHUB_TOKEN: aquaman://github/token',
+      '      DATABASE_URL: aquaman://supabase/db_url',
+      '      ANTHROPIC_API_KEY: aquaman://anthropic/api_key',
+      '      BROKEN: not-a-ref',
+    ].join('\n'));
+    const r = hermesSecretSourceRefs(home);
+    expect(r.error).toBeUndefined();
+    expect(r.refs).toEqual(['aquaman://github/token', 'aquaman://supabase/db_url']);
+    expect(r.path).toBe(path.join(home, '.hermes', 'config.yaml'));
+  });
+
+  it('is empty without a config file and reports a malformed one', () => {
+    expect(hermesSecretSourceRefs(home).refs).toEqual([]);
+    fs.writeFileSync(path.join(home, '.hermes', 'config.yaml'), 'secrets: [\n');
+    expect(hermesSecretSourceRefs(home).error).toMatch(/cannot parse/);
   });
 });
