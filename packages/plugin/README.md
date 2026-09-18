@@ -77,9 +77,10 @@ Aquaman keeps API credentials out of the agent process by running them in a sepa
 
 **Auth profiles (legacy path, OpenClaw < 2026.6.5)**
 
-- On load the plugin writes `~/.openclaw/agents/<id>/agent/auth-profiles.json` with placeholder API-key entries for `anthropic` and `openai` so OpenClaw doesn't reject requests before they reach the proxy. The proxy strips the placeholder and injects the real credential. Skipped automatically when the SecretRef wiring is present.
+- On gateways older than 2026.6.5 the plugin writes `~/.openclaw/agents/<id>/agent/auth-profiles.json` on load, with placeholder API-key entries for `anthropic` and `openai`, so OpenClaw doesn't reject requests before they reach the proxy. The proxy strips the placeholder and injects the real credential. It's skipped when the SecretRef wiring is present, and it never happens during OpenClaw's discovery loads (`plugins inspect|doctor|install`) (v0.15.0+).
 - The plugin never overwrites an existing `auth-profiles.json`. To suppress generation entirely, set `autoGenerateAuthProfiles: false` in the plugin config (v0.11.4+).
-- **OpenClaw ≥ 2026.6.5 without SecretRef wiring:** provider auth profiles moved into each agent's `openclaw-agent.sqlite` and the runtime read path for `auth-profiles.json` was removed ([openclaw/openclaw#89102](https://github.com/openclaw/openclaw/pull/89102)). The placeholder must be imported into SQLite once with `openclaw doctor --fix` — or better, re-run `aquaman openclaw setup` to get the SecretRef wiring. Run `aquaman openclaw doctor`; it detects the state and prints the exact remediation.
+- **OpenClaw ≥ 2026.6.5:** provider auth profiles live in SQLite and the runtime read path for `auth-profiles.json` was removed ([openclaw/openclaw#89102](https://github.com/openclaw/openclaw/pull/89102)), so since v0.15.0 the plugin doesn't write the file there. It warns you to run `aquaman openclaw setup`, which wires SecretRef.
+- **OpenClaw 2.0 (≥ 2026.8.1):** a leftover `auth-profiles.json` is no longer ignored. It locks `anthropic`/`openai` out ("requires legacy credential migration"). aquaman-plugin ≤ 0.14.x recreated it on every load, so the lockout came back even after `openclaw doctor --fix`. After upgrading to 0.15.0, run `openclaw doctor --fix` once to archive it. `aquaman openclaw doctor` detects the state and prints the exact steps.
 
 **Audit log**
 
@@ -92,7 +93,8 @@ Aquaman keeps API credentials out of the agent process by running them in a sepa
 - `process:spawn` — `aquaman` (the proxy binary; see "Proxy process" above).
 - `global:override` — `globalThis.fetch` (the interceptor; scoped to your `services` list).
 - `env:write` — `*_BASE_URL` and `GITHUB_API_URL` (sentinel base URLs pointing at the proxy).
-- `fs:write` — `~/.openclaw/agents/*/agent/auth-profiles.json` (legacy path only; skipped when SecretRef wiring is present).
+- `fs:write` — `~/.openclaw/agents/*/agent/auth-profiles.json` (legacy gateways < 2026.6.5 only; skipped when SecretRef wiring is present, and never during discovery loads).
+- Agent tool `aquaman_status`, declared in the manifest's `contracts.tools` (OpenClaw drops undeclared tools).
 
 ### Scanner findings
 

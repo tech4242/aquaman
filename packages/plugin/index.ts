@@ -32,6 +32,15 @@ interface OpenClawPluginLogger {
 interface OpenClawPluginApi {
   logger: OpenClawPluginLogger;
   pluginConfig: unknown;
+  /**
+   * Why the host is calling register(). Only "full" is a real gateway load;
+   * `plugins inspect` / `doctor` / `install` call it with "discovery" /
+   * "tool-discovery" just to collect registrations. Absent on older hosts
+   * (treated as "full"). Verified on 2026.7.33 and 2026.9.1.
+   */
+  registrationMode?: string;
+  /** Host runtime info. `version` is the gateway's own version (2026.7.33+ verified). */
+  runtime?: { version?: string };
   registerService(def: {
     id: string;
     start(ctx: { logger: OpenClawPluginLogger }): void | Promise<void>;
@@ -82,10 +91,19 @@ import { loadHostMap, isProxyRunning, getProxyVersion } from "./src/proxy-health
  * Avoids execSync("which ...") which triggers dangerous-exec security audit flags.
  */
 
-// Read plugin version from package.json
-const pluginPkgPath = path.join(path.dirname(new URL(import.meta.url).pathname), 'package.json');
+// Read plugin version from package.json. The published entry is dist/index.js,
+// so package.json sits one level up; from source (tests) it's alongside.
+const pluginDir = path.dirname(new URL(import.meta.url).pathname);
 let PLUGIN_VERSION = 'unknown';
-try { PLUGIN_VERSION = JSON.parse(fs.readFileSync(pluginPkgPath, 'utf-8')).version; } catch { /* ok */ }
+for (const candidate of [path.join(pluginDir, '..', 'package.json'), path.join(pluginDir, 'package.json')]) {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(candidate, 'utf-8'));
+    if (pkg?.name === 'aquaman-plugin' && typeof pkg.version === 'string') {
+      PLUGIN_VERSION = pkg.version;
+      break;
+    }
+  } catch { /* try the next candidate */ }
+}
 
 let proxyManager: ProxyManager | null = null;
 let httpInterceptor: HttpInterceptor | null = null;
@@ -343,7 +361,36 @@ function secretRefWiringPresent(stateDir: string): boolean {
   }
 }
 
-function ensureAuthProfiles(log: OpenClawPluginApi["logger"], services: string[]): void {
+/**
+ * True when the gateway version is at least `min` (calendar versions like
+ * 2026.9.1 or 2026.9.1-beta.2). Unknown versions return false.
+ */
+function gatewayAtLeast(version: string | undefined, min: [number, number, number]): boolean {
+  const m = typeof version === "string" ? /^(\d{4})\.(\d{1,2})\.(\d{1,3})/.exec(version) : null;
+  if (!m) return false;
+  const v = [Number(m[1]), Number(m[2]), Number(m[3])];
+  for (let i = 0; i < 3; i++) {
+    if (v[i] !== min[i]) return v[i] > min[i];
+  }
+  return true;
+}
+
+/**
+ * Legacy placeholder writer for gateways that still read auth-profiles.json.
+ *
+ * OpenClaw >= 2026.6.5 stopped reading that file at runtime (profiles live in
+ * SQLite), so writing it there does nothing useful. On the 2.0 line
+ * (2026.8.1+) it is actively harmful: a legacy JSON beside the SQLite store
+ * blocks those providers with AUTH_PROFILE_MIGRATION_REQUIRED, and since this
+ * ran on every load it came back even after `openclaw doctor --fix` archived
+ * it (verified on 2026.9.1). On those versions the placeholder reaches the
+ * gateway through the SecretRef wiring `aquaman openclaw setup` writes.
+ */
+function ensureAuthProfiles(
+  log: OpenClawPluginApi["logger"],
+  services: string[],
+  gatewayVersion: string | undefined,
+): void {
   const stateDir =
     process.env.OPENCLAW_STATE_DIR ||
     path.join(os.homedir(), ".openclaw");
@@ -358,6 +405,14 @@ function ensureAuthProfiles(log: OpenClawPluginApi["logger"], services: string[]
   if (secretRefWiringPresent(stateDir)) {
     log.info(
       "SecretRef wiring active — skipping legacy auth-profiles.json generation"
+    );
+    return;
+  }
+
+  if (gatewayAtLeast(gatewayVersion, [2026, 6, 5])) {
+    log.warn(
+      `OpenClaw ${gatewayVersion} reads provider credentials from SecretRefs, not auth-profiles.json. ` +
+      "Run `aquaman openclaw setup` to wire the aquaman SecretRef provider (no auth-profiles.json is written)."
     );
     return;
   }
@@ -400,7 +455,12 @@ const plugin: OpenClawPluginDefinition = {
   description: 'API key protection for OpenClaw. Credentials stay in your vault, never in the agent\'s memory',
 
   register(api) {
-    api.logger.info("Aquaman plugin loaded");
+    // Host calls with registrationMode "discovery" / "tool-discovery" only to
+    // collect registrations (`plugins inspect`, `doctor`, `install`). Register
+    // everything in every mode, but only touch the filesystem and process env
+    // on a real gateway load.
+    const fullLoad = api.registrationMode === undefined || api.registrationMode === "full";
+    if (fullLoad) api.logger.info("Aquaman plugin loaded");
 
     // Read services from plugin config
     const pluginCfg = api.pluginConfig as
@@ -412,8 +472,10 @@ const plugin: OpenClawPluginDefinition = {
     // `autoGenerateAuthProfiles: false` for operators managing their own auth
     // profiles. (Closes ClawScan ASI03.)
     const autoGenerateAuthProfiles = pluginCfg?.autoGenerateAuthProfiles ?? true;
-    if (autoGenerateAuthProfiles) {
-      ensureAuthProfiles(api.logger, configuredServices);
+    if (!fullLoad) {
+      // discovery: no side effects
+    } else if (autoGenerateAuthProfiles) {
+      ensureAuthProfiles(api.logger, configuredServices, api.runtime?.version);
     } else {
       api.logger.info("auto-generation of auth-profiles.json disabled by plugin config");
     }
@@ -422,19 +484,22 @@ const plugin: OpenClawPluginDefinition = {
     const proxyAvailable = isAquamanProxyInstalled();
 
     if (!proxyAvailable) {
-      api.logger.warn(
-        "aquaman proxy not found. Install with: npm install -g aquaman-proxy"
-      );
-      api.logger.warn(
-        "Then run: aquaman openclaw setup"
-      );
+      if (fullLoad) {
+        api.logger.warn(
+          "aquaman proxy not found. Install with: npm install -g aquaman-proxy"
+        );
+        api.logger.warn(
+          "Then run: aquaman openclaw setup"
+        );
+      }
       // DO NOT call configureEnvironment() — sentinel URLs without a proxy
       // would break all API calls (connection refused to non-existent socket)
     } else {
-      api.logger.info("aquaman proxy found, will start proxy on gateway start");
-
-      // Configure environment variables immediately (sentinel hostname)
-      configureEnvironment(api.logger, configuredServices);
+      if (fullLoad) {
+        api.logger.info("aquaman proxy found, will start proxy on gateway start");
+        // Configure environment variables immediately (sentinel hostname)
+        configureEnvironment(api.logger, configuredServices);
+      }
 
       // Register service for proxy lifecycle management
       api.registerService({

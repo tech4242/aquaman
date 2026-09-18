@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createCredentialProxy } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
-import { createOpenClawIntegration, authProfilesAreSqliteOnly } from '../openclaw/integration.js';
+import { createOpenClawIntegration, authProfilesAreSqliteOnly, legacyAuthProfilesBlockProviders, pluginInstallNeedsCapabilityConsent } from '../openclaw/integration.js';
 import { supportsSecretRefIntegrations, wireSecretRefProviders, secretRefWiringStatus } from '../openclaw/secretref.js';
 import { createHermesIntegration, detectHermes } from '../hermes/integration.js';
 import { managedScopeShadowedKeys, HERMES_MANAGED_ENV_PATH, HERMES_SUPPORTED_SERVICES, hermesSecretSourceRefs } from '../hermes/config-writer.js';
@@ -1753,6 +1753,19 @@ openclaw
         }
 
         if (shouldInstall) {
+          // Detect the gateway version once — it gates the install command
+          // (capability consent on 2026.8.1+) and the credential surface:
+          // SecretRef wiring (canonical, >= 2026.6.5) vs the legacy
+          // auth-profiles.json placeholder. AQUAMAN_OPENCLAW_VERSION overrides
+          // detection (tests + operators pinning behavior explicitly).
+          let ocVersion: string | null = process.env.AQUAMAN_OPENCLAW_VERSION || null;
+          if (!ocVersion) {
+            try {
+              const { execSync } = await import('node:child_process');
+              ocVersion = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8', timeout: 5000 }).trim();
+            } catch { /* CLI not on PATH */ }
+          }
+
           // a. Copy plugin files
           const currentDir = path.dirname(fileURLToPath(import.meta.url));
           const pluginSrc = path.resolve(currentDir, '../../../plugin');
@@ -1763,13 +1776,25 @@ openclaw
             fs.cpSync(pluginSrc, pluginDest, { recursive: true });
             console.log('  \u2713 Plugin installed to ' + pluginDest);
           } else if (cliDetected) {
-            // npm install — plugin source not bundled, use openclaw's plugin installer
+            // npm install — plugin source not bundled, use openclaw's plugin
+            // installer. OpenClaw 2026.8.1+ requires capability consent for
+            // third-party plugins: interactively we let OpenClaw show its own
+            // consent screen to the human; --non-interactive means the operator
+            // pre-approved, so we pass --accept-capabilities and say so. The
+            // clawhub: source avoids the extra --force an npm spec needs.
+            const consent = pluginInstallNeedsCapabilityConsent(ocVersion);
+            const args = consent
+              ? ['plugins', 'install', 'clawhub:aquaman-plugin', ...(isNonInteractive ? ['--accept-capabilities'] : [])]
+              : ['plugins', 'install', 'aquaman-plugin'];
             try {
-              const { execSync: execSyncFallback } = await import('node:child_process');
-              execSyncFallback('openclaw plugins install aquaman-plugin', { stdio: 'pipe' });
+              const { execFileSync: execFileSyncFallback } = await import('node:child_process');
+              execFileSyncFallback('openclaw', args, { stdio: consent && !isNonInteractive ? 'inherit' : 'pipe' });
               console.log('  \u2713 Plugin installed via openclaw');
+              if (consent && isNonInteractive) {
+                console.log('  \u2192 Accepted the plugin\u2019s OpenClaw capabilities on your behalf (--non-interactive)');
+              }
             } catch {
-              console.log('  \u2717 Could not install plugin. Run: openclaw plugins install aquaman-plugin');
+              console.log(`  \u2717 Could not install plugin. Run: openclaw ${args.join(' ')}${consent && isNonInteractive ? '' : consent ? '  (then approve its capabilities)' : ''}`);
             }
           }
 
@@ -1800,18 +1825,6 @@ openclaw
             }
           };
 
-          // Detect the gateway version once \u2014 it gates the credential surface:
-          // SecretRef wiring (canonical, >= 2026.6.5) vs the legacy
-          // auth-profiles.json placeholder. AQUAMAN_OPENCLAW_VERSION overrides
-          // detection (tests + operators pinning behavior explicitly).
-          let ocVersion: string | null = process.env.AQUAMAN_OPENCLAW_VERSION || null;
-          if (!ocVersion) {
-            try {
-              const { execSync } = await import('node:child_process');
-              ocVersion = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8', timeout: 5000 }).trim();
-            } catch { /* CLI not on PATH */ }
-          }
-
           // b2. SecretRef provider wiring (v0.14.0+, OpenClaw >= 2026.6.5).
           // Config-level refs in openclaw.json are runtime-read on every
           // version and survive OpenClaw's plaintext scrubs \u2014 no SQLite
@@ -1837,6 +1850,12 @@ openclaw
           const profilesPath = path.join(openclawStateDir, 'agents', 'main', 'agent', 'auth-profiles.json');
           if (secretRefSupported) {
             console.log('  \u2192 Legacy auth-profiles.json placeholder skipped (SecretRef wiring replaces it)');
+            if (legacyAuthProfilesBlockProviders(ocVersion) && fs.existsSync(profilesPath)) {
+              // Left behind by aquaman-plugin <= 0.14.x. On 2026.8.1+ it locks
+              // anthropic/openai out until OpenClaw archives it.
+              console.log('  \u2717 A legacy auth-profiles.json from an older aquaman-plugin blocks providers on this OpenClaw');
+              console.log('      Run once: openclaw doctor --fix   (archives it; aquaman-plugin 0.15.0+ never recreates it)');
+            }
           } else if (!fs.existsSync(profilesPath)) {
             const profiles: Record<string, any> = {};
             const order: Record<string, string[]> = {};
@@ -2242,7 +2261,17 @@ openclaw
       const agentDir = path.join(openclawStateDir, 'agents', 'main', 'agent');
       const profilesPath = path.join(agentDir, 'auth-profiles.json');
       const sqlitePath = path.join(agentDir, 'openclaw-agent.sqlite');
-      if (secretRefFullyWired) {
+      if (legacyAuthProfilesBlockProviders(openclawVersion) && fs.existsSync(profilesPath)) {
+        // OpenClaw 2.0 line: the legacy JSON is not inert any more — it blocks
+        // providers with AUTH_PROFILE_MIGRATION_REQUIRED (#114033). Older
+        // aquaman-plugin versions rewrote it on every load; 0.15.0+ doesn't.
+        console.log(`  \u2717 ${aqua('Auth profiles')} legacy auth-profiles.json blocks anthropic/openai on ${openclawVersion} (AUTH_PROFILE_MIGRATION_REQUIRED)`);
+        if (!secretRefFullyWired) {
+          console.log('    \u2192 First: aquaman openclaw setup   (wires the SecretRef provider that replaces it)');
+        }
+        console.log('    \u2192 Then run once: openclaw doctor --fix   (archives the file; aquaman-plugin 0.15.0+ never recreates it)');
+        issues++;
+      } else if (secretRefFullyWired) {
         console.log(`  ✓ ${aqua('Auth profiles')} not needed (SecretRef wiring replaces the placeholder flow)`);
         if (fs.existsSync(profilesPath)) {
           console.log('    → Optional: the legacy auth-profiles.json placeholder is inert and may be deleted');
@@ -2257,8 +2286,8 @@ openclaw
         } else if (fs.existsSync(sqlitePath)) {
           console.log(`  \u2713 ${aqua('Auth profiles')} (SQLite store present; OpenClaw \u2265 2026.6.5)`);
         } else {
-          console.log(`  \u2717 ${aqua('Auth profiles')} missing (no SQLite store found)`);
-          console.log('    \u2192 Run: aquaman setup, then: openclaw doctor --fix');
+          console.log(`  \u2717 ${aqua('Auth profiles')} missing: no credential wiring for OpenClaw ${openclawVersion}`);
+          console.log('    \u2192 Run: aquaman openclaw setup   (wires the SecretRef provider; the plugin no longer writes auth-profiles.json here)');
           issues++;
         }
       } else if (fs.existsSync(profilesPath)) {

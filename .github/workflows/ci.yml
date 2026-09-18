@@ -145,13 +145,23 @@ jobs:
         with:
           path: |
             /usr/local/lib/node_modules/openclaw
+            /usr/local/lib/node_modules/@openclaw
             /usr/local/bin/openclaw
-          key: openclaw-${{ runner.os }}-node24-${{ matrix.openclaw }}
+          key: openclaw-v2-${{ runner.os }}-node24-${{ matrix.openclaw }}
       - name: Install openclaw
         if: steps.cache-openclaw.outputs.cache-hit != 'true'
         run: |
           npm install -g openclaw@${{ matrix.openclaw }} --ignore-scripts
           npm rebuild -g openclaw
+          # 2026.7.33's npm-shrinkwrap.json omits its own @openclaw/ai
+          # dependency, so doctor/agent paths die with "Cannot find package
+          # '@openclaw/ai'" (openclaw/openclaw#151657). Install the matching
+          # version next to it when it's missing; a no-op once upstream fixes it.
+          ROOT="$(npm root -g)"
+          if node -e "const d=require('$ROOT/openclaw/package.json').dependencies||{}; process.exit(d['@openclaw/ai'] ? 0 : 1)" \
+             && [ ! -d "$ROOT/openclaw/node_modules/@openclaw/ai" ] && [ ! -d "$ROOT/@openclaw/ai" ]; then
+            npm install -g "@openclaw/ai@${{ matrix.openclaw }}" --ignore-scripts
+          fi
       - name: Assert the lane's gateway version
         run: openclaw --version | grep -F "${{ matrix.openclaw }}"
       - run: npx vitest run test/e2e/openclaw-plugin.test.ts

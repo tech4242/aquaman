@@ -28,11 +28,15 @@ describe('supportsSecretRefIntegrations (version gate)', () => {
   it.each([
     ['2026.6.5', true],
     ['2026.6.10', true],
-    // 2026.6.33/.34 are the extended-stable line (.34 is the current CI pin) —
-    // the SecretRef path must activate on it, not fall back to auth-profiles.
+    // 2026.6.33/.34 were the June extended-stable line; 2026.7.33 is the July
+    // extended-stable CI pin and 2026.9.1 the OpenClaw 2.0 CI lane (v0.15.0).
+    // The SecretRef path must activate on all of them, not fall back to
+    // auth-profiles.
     ['2026.6.33', true],
     ['2026.6.34', true],
     ['2026.7.1', true],
+    ['2026.7.33', true],
+    ['2026.9.1', true],
     ['2027.1.1', true],
     ['2026.6.4', false],
     ['2026.5.12', false],

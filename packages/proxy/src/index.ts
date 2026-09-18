@@ -61,7 +61,9 @@ export {
   OpenClawIntegration,
   createOpenClawIntegration,
   parseCalendarVersion,
-  authProfilesAreSqliteOnly
+  authProfilesAreSqliteOnly,
+  legacyAuthProfilesBlockProviders,
+  pluginInstallNeedsCapabilityConsent
 } from './openclaw/integration.js';
 
 // OpenClaw SecretRef provider-integration wiring (v0.14.0+)
