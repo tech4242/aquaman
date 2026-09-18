@@ -116,8 +116,19 @@ describe('aquaman setup E2E', () => {
         expect(config.plugins?.entries?.['aquaman-plugin']).toBeDefined();
         expect(config.plugins.entries['aquaman-plugin'].enabled).toBe(true);
         expect(config.plugins.entries['aquaman-plugin'].config.backend).toBeDefined();
-        expect(config.plugins?.allow).toContain('aquaman-plugin');
+        // v0.15.0: setup never creates a plugins.allow list (one holding only
+        // aquaman-plugin blocks OpenClaw's own anthropic/openai provider plugins).
+        expect(config.plugins?.allow).toBeUndefined();
       }
+    }, TEST_TIMEOUT);
+
+    it('appends to an existing plugins.allow list instead of replacing it', async () => {
+      const openclawJsonPath = path.join(tempEnv.openclawDir, 'openclaw.json');
+      writeFileSync(openclawJsonPath, JSON.stringify({ plugins: { allow: ['anthropic', 'openai', 'telegram'] } }));
+      const { exitCode } = await runSetup([], {}, tempEnv);
+      expect(exitCode).toBe(0);
+      const config = JSON.parse(readFileSync(openclawJsonPath, 'utf-8'));
+      expect(config.plugins.allow).toEqual(['anthropic', 'openai', 'telegram', 'aquaman-plugin']);
     }, TEST_TIMEOUT);
 
     it('generates auth-profiles.json with placeholders', async () => {

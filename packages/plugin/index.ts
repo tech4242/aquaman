@@ -701,7 +701,7 @@ const plugin: OpenClawPluginDefinition = {
     }
 
     registerStatusTool(api, configuredServices);
-    api.logger.info("Aquaman plugin registered successfully");
+    if (fullLoad) api.logger.info("Aquaman plugin registered successfully");
   }
 };
 

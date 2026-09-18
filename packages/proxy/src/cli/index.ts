@@ -1810,10 +1810,19 @@ openclaw
           if (!openclawConfig.plugins) openclawConfig.plugins = {};
           if (!openclawConfig.plugins.entries) openclawConfig.plugins.entries = {};
 
-          // Set plugins.allow so OpenClaw trusts the plugin (avoids extensions_no_allowlist audit warning)
-          if (!openclawConfig.plugins.allow) openclawConfig.plugins.allow = [];
-          if (!openclawConfig.plugins.allow.includes('aquaman-plugin')) {
-            openclawConfig.plugins.allow.push('aquaman-plugin');
+          // plugins.allow is an allowlist for EVERY plugin, OpenClaw's own
+          // included: on current gateways the anthropic/openai model providers
+          // are stock plugins. Creating a list that holds only aquaman-plugin
+          // (what setup did through v0.14.x) blocked them, so every
+          // anthropic/* model became "Unknown model" (verified 2026-09-18 on
+          // 2026.7.33 and 2026.9.1). Append to an existing list; never create
+          // a restrictive one on the user's behalf.
+          if (Array.isArray(openclawConfig.plugins.allow)) {
+            if (!openclawConfig.plugins.allow.includes('aquaman-plugin')) {
+              openclawConfig.plugins.allow.push('aquaman-plugin');
+            }
+          } else {
+            console.log('  \u2192 No plugins.allow list in openclaw.json; left it unset (a list with only aquaman-plugin would block OpenClaw\u2019s own provider plugins)');
           }
 
           const configuredServices = storedServices.length > 0 ? storedServices : ['anthropic', 'openai'];
@@ -2212,9 +2221,20 @@ openclaw
       if (fs.existsSync(openclawJsonPath)) {
         try {
           const openclawConfig = JSON.parse(fs.readFileSync(openclawJsonPath, 'utf-8'));
-          const allowList: string[] = openclawConfig.plugins?.allow || [];
-          if (allowList.includes('aquaman-plugin')) {
+          const allowList: string[] | undefined = Array.isArray(openclawConfig.plugins?.allow) ? openclawConfig.plugins.allow : undefined;
+          if (!allowList) {
+            console.log(`  \u2713 ${aqua('Plugin')} allowed (no plugins.allow trust list; \`openclaw security audit\` notes extensions_no_allowlist)`);
+          } else if (allowList.includes('aquaman-plugin')) {
             console.log(`  \u2713 ${aqua('Plugin')} in plugins.allow trust list`);
+            // A list that excludes OpenClaw's own provider plugins blocks
+            // them (aquaman setup <= 0.14.x wrote exactly such a list).
+            const svcs: string[] = openclawConfig.plugins?.entries?.['aquaman-plugin']?.config?.services ?? ['anthropic', 'openai'];
+            const blocked = ['anthropic', 'openai'].filter(p => svcs.includes(p) && !allowList.includes(p));
+            if (blocked.length > 0 && supportsSecretRefIntegrations(openclawVersion)) {
+              console.log(`  \u2717 ${aqua('Plugin')} plugins.allow blocks OpenClaw\u2019s own provider plugin(s): ${blocked.join(', ')} (their models report "Unknown model")`);
+              console.log(`    \u2192 Add ${blocked.map(b => `"${b}"`).join(', ')} to plugins.allow in openclaw.json (aquaman setup <= 0.14.x created a list without them)`);
+              issues++;
+            }
           } else {
             console.log(`  \u2717 ${aqua('Plugin')} not in plugins.allow trust list`);
             console.log('    \u2192 Run: aquaman setup (or add "aquaman-plugin" to plugins.allow in openclaw.json)');

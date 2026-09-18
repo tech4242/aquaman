@@ -215,6 +215,7 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
         'nonSecretAuthMarkers',
         'secretProviderIntegrations',
         'contracts',
+        'activation',
       ]);
       const manifestPath = path.join(
         testStateDir,

@@ -219,6 +219,25 @@ describe('aquaman doctor E2E', () => {
       expect(stdout).toContain('Auth profiles not needed');
     }, TEST_TIMEOUT);
 
+    it('flags a plugins.allow list that blocks OpenClaw\u2019s own provider plugins (v0.14.x setup residue)', () => {
+      tempEnv = createTempEnv({ withConfig: true, withPlugin: true });
+      writeOpenClawJson(tempEnv, { ...PLUGIN_ENTRY, ...FULL_WIRING });
+      const { stdout, exitCode } = runDoctor(tempEnv, { AQUAMAN_OPENCLAW_VERSION: '2026.9.1' });
+
+      expect(stdout).toContain('plugins.allow blocks OpenClaw\u2019s own provider plugin(s): anthropic, openai');
+      expect(exitCode).toBe(1);
+    }, TEST_TIMEOUT);
+
+    it('treats a missing plugins.allow list as allowed', () => {
+      tempEnv = createTempEnv({ withConfig: true, withPlugin: true });
+      const { plugins, ...rest } = PLUGIN_ENTRY as any;
+      writeOpenClawJson(tempEnv, { ...rest, plugins: { entries: plugins.entries }, ...FULL_WIRING });
+      const { stdout } = runDoctor(tempEnv, { AQUAMAN_OPENCLAW_VERSION: '2026.9.1' });
+
+      expect(stdout).toContain('Plugin allowed (no plugins.allow trust list');
+      expect(stdout).not.toContain('not in plugins.allow');
+    }, TEST_TIMEOUT);
+
     it('stays silent on gateways below the SecretRef floor', () => {
       tempEnv = createTempEnv({ withConfig: true, withPlugin: true });
       writeOpenClawJson(tempEnv, PLUGIN_ENTRY);
