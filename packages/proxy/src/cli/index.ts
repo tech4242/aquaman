@@ -42,7 +42,7 @@ import { supportsSecretRefIntegrations, wireSecretRefProviders, secretRefWiringS
 import { createHermesIntegration, detectHermes } from '../hermes/integration.js';
 import { managedScopeShadowedKeys, hermesManagedEnvPath, HERMES_SUPPORTED_SERVICES, hermesSecretSourceRefs } from '../hermes/config-writer.js';
 import { createBrokerScope, parseAquamanRef, defaultProjectsPath, type BrokerScope } from '../broker-scope.js';
-import { loadPolicyFromConfig, validatePolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
+import { loadPolicyFromConfig, validatePolicyConfig, lintPolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 
 // Read version from package.json (single source of truth)
@@ -2107,6 +2107,12 @@ openclaw
             const summary = denyRules.map(r => r.method !== '*' ? `${r.action} ${r.method} ${r.path}` : `${r.action} ${r.path}`).join(', ');
             console.log(`      ${svc}: ${summary}`);
           }
+        }
+        // Deny rules that can never fire (pre-0.15.0 preset shapes) — a
+        // security issue, since the operator believes the endpoint is blocked.
+        for (const warning of lintPolicyConfig(policyConfigDoc)) {
+          console.log(`  \u2717 ${aqua('Policy')} ${warning}`);
+          issues++;
         }
         // Warn about policies for non-proxied services
         if (config.credentials.proxiedServices) {

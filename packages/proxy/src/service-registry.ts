@@ -110,14 +110,17 @@ const BUILTIN_SERVICES: ServiceDefinition[] = [
     hostPatterns: ['api.mistral.ai']
   },
   {
+    // Hugging Face retired api-inference.huggingface.co (no DNS record as of
+    // 2026-09-18); inference goes through the router: /hf-inference/models/<id>
+    // for the HF Inference provider, /v1/chat/completions OpenAI-compatible.
     name: 'huggingface',
-    upstream: 'https://api-inference.huggingface.co',
+    upstream: 'https://router.huggingface.co',
     authHeader: 'Authorization',
     authPrefix: 'Bearer ',
     credentialKey: 'api_key',
-    description: 'Hugging Face Inference API',
+    description: 'Hugging Face Inference API (router)',
     authMode: 'header',
-    hostPatterns: ['api-inference.huggingface.co']
+    hostPatterns: ['router.huggingface.co']
   },
 
   // ── Header Auth Channels ────────────────────────────────────────────

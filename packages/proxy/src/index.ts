@@ -113,6 +113,7 @@ export {
   matchPolicy,
   loadPolicyFromConfig,
   validatePolicyConfig,
+  lintPolicyConfig,
   getDefaultPolicyPresets
 } from './request-policy.js';
 

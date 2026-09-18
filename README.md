@@ -219,16 +219,17 @@ policy:
     defaultAction: allow
     rules:
       - method: "*"
-        path: "/admin.*"
-        action: deny
+        path: "/api/admin.*"
+        action: deny          # Slack Web API admin methods
   gmail:
     defaultAction: allow
     rules:
       - method: POST
-        path: "/v1/users/*/messages/send"
+        path: "/gmail/v1/users/*/messages/send"
         action: deny          # drafts ok, sending blocked
 ```
 
+- **Paths are the upstream API's full path** after the service prefix, the way real traffic arrives: Slack's Web API is `/api/<method>`, Gmail's is `/gmail/v1/...`. Presets before v0.15.0 used `/admin.*` and `/v1/users/*/messages/send`, which never match real traffic. `aquaman doctor` flags them if they're still in your config.
 - **No policy = allow all** (backward compatible)
 - **First match wins**: rules evaluated top-to-bottom, unmatched requests fall through to `defaultAction`
 - **Denied before auth**: blocked requests never get real credentials

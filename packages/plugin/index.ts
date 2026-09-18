@@ -125,7 +125,7 @@ const FALLBACK_HOST_MAP = new Map<string, string>([
   ['api.x.ai', 'xai'],
   ['gateway.ai.cloudflare.com', 'cloudflare-ai'],
   ['api.mistral.ai', 'mistral'],
-  ['api-inference.huggingface.co', 'huggingface'],
+  ['router.huggingface.co', 'huggingface'],
   ['slack.com', 'slack'],
   ['*.slack.com', 'slack'],
   ['discord.com', 'discord'],
