@@ -13,6 +13,7 @@ import {
   getHermesEnvPath,
   writeHermesEnv,
   hermesSecretSourceRefs,
+  hermesManagedEnvPath,
 } from 'aquaman-proxy';
 
 describe('generateHermesEnv', () => {
@@ -210,5 +211,33 @@ describe('hermesSecretSourceRefs (v0.15.0 doctor input)', () => {
     expect(hermesSecretSourceRefs(home).refs).toEqual([]);
     fs.writeFileSync(path.join(home, '.hermes', 'config.yaml'), 'secrets: [\n');
     expect(hermesSecretSourceRefs(home).error).toMatch(/cannot parse/);
+  });
+});
+
+describe('hermesManagedEnvPath (Hermes 0.21 HERMES_MANAGED_DIR)', () => {
+  const prev = process.env['HERMES_MANAGED_DIR'];
+  afterEach(() => {
+    if (prev === undefined) delete process.env['HERMES_MANAGED_DIR'];
+    else process.env['HERMES_MANAGED_DIR'] = prev;
+  });
+
+  it('defaults to /etc/hermes/.env and honors a non-empty override', () => {
+    delete process.env['HERMES_MANAGED_DIR'];
+    expect(hermesManagedEnvPath()).toBe('/etc/hermes/.env');
+    process.env['HERMES_MANAGED_DIR'] = '  ';
+    expect(hermesManagedEnvPath()).toBe('/etc/hermes/.env');
+    process.env['HERMES_MANAGED_DIR'] = '/opt/org/hermes-policy';
+    expect(hermesManagedEnvPath()).toBe('/opt/org/hermes-policy/.env');
+  });
+
+  it('managedScopeShadowedKeys reads the relocated scope by default', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-managed-'));
+    try {
+      fs.writeFileSync(path.join(dir, '.env'), 'ANTHROPIC_BASE_URL=https://api.anthropic.com\n');
+      process.env['HERMES_MANAGED_DIR'] = dir;
+      expect(managedScopeShadowedKeys({ ANTHROPIC_BASE_URL: 'x', OPENAI_BASE_URL: 'y' })).toEqual(['ANTHROPIC_BASE_URL']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

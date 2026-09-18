@@ -182,9 +182,20 @@ export function writeHermesEnv(env: Record<string, string>, filePath: string): v
  */
 export const HERMES_MANAGED_ENV_PATH = '/etc/hermes/.env';
 
+/**
+ * The managed-scope .env Hermes actually loads. Hermes 0.21 lets the
+ * deployment relocate the scope with `HERMES_MANAGED_DIR` (non-empty wins over
+ * /etc/hermes; hermes_cli/managed_scope.py `get_managed_dir()`), so checking
+ * only /etc/hermes would miss a relocated policy.
+ */
+export function hermesManagedEnvPath(): string {
+  const override = (process.env['HERMES_MANAGED_DIR'] ?? '').trim();
+  return override ? path.join(override, '.env') : HERMES_MANAGED_ENV_PATH;
+}
+
 export function managedScopeShadowedKeys(
   ourEnv: Record<string, string>,
-  managedEnvPath: string = HERMES_MANAGED_ENV_PATH
+  managedEnvPath: string = hermesManagedEnvPath()
 ): string[] {
   let content: string;
   try {

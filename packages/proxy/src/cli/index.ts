@@ -40,7 +40,7 @@ import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
 import { createOpenClawIntegration, authProfilesAreSqliteOnly, legacyAuthProfilesBlockProviders, pluginInstallNeedsCapabilityConsent } from '../openclaw/integration.js';
 import { supportsSecretRefIntegrations, wireSecretRefProviders, secretRefWiringStatus } from '../openclaw/secretref.js';
 import { createHermesIntegration, detectHermes } from '../hermes/integration.js';
-import { managedScopeShadowedKeys, HERMES_MANAGED_ENV_PATH, HERMES_SUPPORTED_SERVICES, hermesSecretSourceRefs } from '../hermes/config-writer.js';
+import { managedScopeShadowedKeys, hermesManagedEnvPath, HERMES_SUPPORTED_SERVICES, hermesSecretSourceRefs } from '../hermes/config-writer.js';
 import { createBrokerScope, parseAquamanRef, defaultProjectsPath, type BrokerScope } from '../broker-scope.js';
 import { loadPolicyFromConfig, validatePolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
@@ -1221,7 +1221,7 @@ hermes
 
     const shadowed = managedScopeShadowedKeys(integration.configureHermes());
     if (shadowed.length > 0) {
-      console.log(`  Managed scope:     ⚠ ${HERMES_MANAGED_ENV_PATH} pins ${shadowed.join(', ')} — proxy bypassed for these keys`);
+      console.log(`  Managed scope:     ⚠ ${hermesManagedEnvPath()} pins ${shadowed.join(', ')} — proxy bypassed for these keys`);
     }
 
     const info = await detectHermes(config.hermes?.binaryPath || 'hermes');
@@ -1286,7 +1286,7 @@ hermes
     {
       const shadowed = managedScopeShadowedKeys(integration.configureHermes());
       if (shadowed.length > 0) {
-        fail(`Hermes managed scope (${HERMES_MANAGED_ENV_PATH}) pins ${shadowed.join(', ')} — it overrides ~/.hermes/.env, so the proxy is BYPASSED for these keys. Remove them from the managed file or point them at the proxy.`);
+        fail(`Hermes managed scope (${hermesManagedEnvPath()}) pins ${shadowed.join(', ')} — it overrides ~/.hermes/.env, so the proxy is BYPASSED for these keys. Remove them from the managed file or point them at the proxy.`);
       } else {
         pass('No managed-scope override of aquaman env vars');
       }

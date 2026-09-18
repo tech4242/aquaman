@@ -91,6 +91,7 @@ export {
   writeHermesEnv,
   formatHermesEnvForDisplay,
   managedScopeShadowedKeys,
+  hermesManagedEnvPath,
   hermesSecretSourceRefs,
   HERMES_MANAGED_ENV_PATH
 } from './hermes/config-writer.js';
