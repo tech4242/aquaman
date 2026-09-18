@@ -105,7 +105,7 @@ Aquaman keeps API credentials out of the agent process by running them in a sepa
 
 ClawHub's ClawScan additionally produces a higher-level review of plugin behavior. Its verdict on 0.14.x was `suspicious` because of the broker endpoint described above; v0.15.0 removes that endpoint from the plugin's proxy. See the publisher note on the package page for context on each item.
 
-`aquaman openclaw setup` adds the plugin to `plugins.allow` automatically so OpenClaw knows you trust it.
+`aquaman openclaw setup` appends the plugin to your `plugins.allow` list if you have one, and never creates one. That list governs OpenClaw's own plugins too, including the `anthropic`/`openai` model providers, so a list holding only `aquaman-plugin` blocks them, and setup did exactly that through v0.14.x. If you have that leftover list, add `"anthropic"` and `"openai"` to it. `aquaman openclaw doctor` flags it.
 
 ## Available commands
 
