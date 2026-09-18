@@ -64,6 +64,16 @@ When Claude Code runs a Bash tool in `~/code/my-app`, aquaman's hook rewrites th
 - Pipes stdout/stderr through a redactor that prepends a value-based pattern for each resolved value: **whatever string was injected gets redacted, regardless of shape** (Atlassian tokens, Notion secrets, internal-API keys - none of them need to match a known provider format). Generic shape-based patterns (sk-ant-, ghp_, sk_live_, AKIA…, JWTs, PEM blocks, ATATT3xF…) still run after as defense-in-depth for secrets the child surfaces that we did NOT inject.
 - Cleans up when the command exits.
 
+### What the broker hands out
+
+The daemon's broker (`aquaman daemon`) materializes only refs you declared, meaning the `env` refs in `projects.yaml` plus anything added with `aquaman broker allow` (v0.15.0+). Everything else is refused before the vault is consulted, and so is every request to a proxy started by the OpenClaw plugin. `aquaman broker list` shows what's declared. Declaring a ref is an explicit opt-in: any process running as you can fetch it from the daemon, which is exactly what the `exec` wrapper does.
+
+### Claude Code's sandbox
+
+Claude Code's sandbox denies Unix-socket connects it hasn't allowlisted, so a sandboxed `aquaman-coder exec` can't reach the broker by default (you'd see a "blocked … most likely by Claude Code's sandbox" error). On **macOS**, `aquaman coder setup claude-code` adds exactly the proxy socket to `sandbox.network.allowUnixSockets` in `~/.claude/settings.json`. It never adds a directory or `allowAllUnixSockets`, and never turns the sandbox on or off. `aquaman coder doctor` checks the merged user, managed, and project settings.
+
+**Linux/WSL2:** Claude Code ignores `allowUnixSockets` there (seccomp can't filter by path), so sandboxed commands can reach the broker only with `sandbox.network.allowAllUnixSockets: true`, which opens every Unix socket to them.
+
 ## CLI surface
 
 The unified CLI lives in `aquaman-proxy` and delegates `coder` subcommands here:
@@ -74,7 +84,7 @@ aquaman coder
 ├── doctor                    Deep diagnostic - projects, broker, per-project vault checks
 ├── status                    Configured projects + hook wiring + broker connectivity
 ├── project list/add/remove   ~/.aquaman/projects.yaml CRUD
-├── get <ref>                 Resolve an aquaman://service/key reference once
+├── get <ref>                 Resolve a declared aquaman://service/key reference once
 ├── exec <cmd> [args...]      Run a command with project env injected + output redacted
 └── hook                      Stdio hook handler (invoked by Claude Code; not user-facing)
 ```
@@ -100,7 +110,8 @@ Claude Code / Codex / OpenCode / Cursor
 The hook uses Claude Code's real protocol (verified against the live docs):
 
 - **PreToolUse** on Bash: emits `{ hookSpecificOutput: { permissionDecision: "allow", updatedInput: { command: "aquaman-coder exec -- sh -c '...'" } } }`. Claude Code runs the rewritten command in its child shell; the wrapper does the broker resolve.
-- **PostToolUse**: emits `{ hookSpecificOutput: { additionalContext: "aquaman: tool output contained secret patterns…" } }` if the redactor finds secrets in the output. Real scrubbing happens inside `aquaman-coder exec`'s stdout pipeline; the PostToolUse hook is an alert. (Claude Code ~2.1.170+ added `updatedToolOutput` for true output rewriting — planned as an additional redaction layer for non-Bash tools. It also added `PreToolUse.additionalEnvVars`, which we deliberately do NOT use for credentials: hook output transits the agent process, defeating the isolation.)
+- **PostToolUse**: runs the redactor over every tool's output and rewrites it via `updatedToolOutput` (v0.14.0+) before it reaches the transcript. That covers Read/Grep surfacing on-disk secrets, MCP tools, and unwrapped Bash. `aquaman-coder exec` still owns value-based redaction of what it injected. Set `AQUAMAN_DISABLE_OUTPUT_REWRITE=1` on Claude Code < 2.1.170 to fall back to a warning via `additionalContext`. Caveat from Claude Code's docs: OpenTelemetry tool spans record the original output before hooks run, so this redaction doesn't reach OTel exports.
+- Credentials are never passed through hook output. The hook contract has no env-injection field for PreToolUse, and we wouldn't use one: hook stdout transits Claude Code's process, which is what the broker + `exec` wrapper exists to avoid.
 
 See [`docs/PACKAGES.md`](../../docs/PACKAGES.md) for cross-package import rules.
 

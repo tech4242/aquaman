@@ -14,7 +14,7 @@ You set up Claude Code, OpenClaw, or Hermes, and now you're staring at `.env` fi
 
 Aquaman fixes this with three layers of defense:
 
-1. **Process isolation**: API keys live in a separate proxy process. The agent never sees them. Even RCE in the agent can't reach credentials. They're in a different address space.
+1. **Process isolation**: API keys live in a separate proxy process that injects them on the way out. On the OpenClaw and Hermes LLM paths the agent never holds a key, and nothing on the proxy hands one back. Even RCE in the agent can't read them: they're in a different address space. Coding agents get only the refs you declare, one command at a time.
 2. **Request policies**: Per-service rules control *which endpoints* an agent can call. Block admin APIs, prevent deletions, allow drafts but deny sends. Denied requests never get real credentials.
 3. **Tamper-evident audit**: Every credential use is logged with SHA-256 hash chains. You can prove what was accessed and detect tampering after the fact.
 
@@ -105,6 +105,8 @@ When Claude Code runs a Bash tool in `~/code/my-app`, aquaman's hook rewrites th
 - Pipes stdout/stderr through a redactor that prepends a value-based pattern for each resolved value: **whatever string was injected gets redacted, regardless of shape** (Atlassian tokens, Notion secrets, internal-API keys - none of them need to match a known provider format). Generic shape-based patterns (sk-ant-, ghp_, sk_live_, AKIA…, JWTs, PEM blocks, ATATT3xF…) still run after as defense-in-depth for secrets the child surfaces that we did NOT inject.
 - Cleans up when the command exits.
 
+**Claude Code sandbox:** the sandbox blocks Unix sockets by default, so `aquaman coder setup claude-code` allowlists the proxy socket (`sandbox.network.allowUnixSockets`) on macOS. **Linux/WSL2: Claude Code ignores that list there, so sandboxed commands can reach the broker only with `sandbox.network.allowAllUnixSockets: true`, which opens every Unix socket to them.**
+
 ### 4. Hermes (agent host)
 
 Hermes is a foreign (Python) host with no transport hook to inject, so isolation is done proxy-side: the proxy exposes an opt-in, token-gated loopback listener and Hermes is pointed at it through its own env vars.
@@ -129,6 +131,8 @@ aquaman-hermes install                # drops the plugin into ~/.hermes/plugins/
 hermes plugins enable aquaman
 ```
 
+The plugin also registers an `aquaman` **secret source** (Hermes ≥ 0.18.1) for project secrets such as `GITHUB_TOKEN`: bind them under `secrets.aquaman.env` in Hermes' `config.yaml`, then declare each ref to the daemon with `aquaman broker allow aquaman://github/token` (required since v0.15.0; `aquaman hermes doctor` lists any you missed). Those values do enter Hermes' env, unlike the LLM keys above. See [`packages/hermes/README.md`](packages/hermes/README.md).
+
 ## How It Works
 
 ```
@@ -143,7 +147,7 @@ Agent / OpenClaw / Coding Agent             Aquaman Proxy
 │                      │                    │    header / url-path │
 │  No credentials.     │  ~/.aquaman/       │    basic / oauth     │
 │  No open ports.      │  proxy.sock        │                      │
-│  Nothing to steal.   │  (chmod 0o600)     │                      │
+│  No keys to read.    │  (chmod 0o600)     │                      │
 └──────────────────────┘                    └──┬─────────┬─────────┘
                                                │         │
                                                │         ▼
@@ -158,21 +162,24 @@ Agent / OpenClaw / Coding Agent             Aquaman Proxy
 1. **Store**: Credentials live in the vault backend you already run - no house vault (Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds, encrypted-file).
 2. **Policy**: Proxy checks method + path rules *before* touching credentials. Denied requests get a `403`, never real auth headers.
 3. **Inject**: Proxy looks up the credential and adds the auth header before forwarding. 25 builtin services, 4 injecting auth modes (header, URL-path, HTTP Basic, OAuth); a 5th, `none`, is at-rest-only (proxy rejects traffic).
-4. **Broker (coder path)**: `POST /broker/resolve` materializes a credential per tool call, scoped to a single command's env, then expires.
+4. **Broker (coder + Hermes secret source)**: `POST /broker/resolve` materializes a credential per tool call, scoped to a single command's env. Only `aquaman daemon` serves it, and only for refs you declared (`projects.yaml` or `aquaman broker allow`). The OpenClaw plugin's proxy never serves it (v0.15.0+).
 5. **Audit**: Every credential use is logged with SHA-256 hash chains.
 
-The agent only ever sees a sentinel hostname (`aquaman.local`) or a placeholder marker (`aquaman-proxy-managed`). It never sees a real key, and no TCP port is open for other processes to probe.
+On the proxy paths the agent only ever sees a sentinel hostname (`aquaman.local`) or a placeholder marker (`aquaman-proxy-managed`). It never sees a real key, and no TCP port is open for other processes to probe. On the coder path the *child* command gets the declared values and the agent sees redacted output.
 
 ## Security Model
 
 | Layer | What it does | What it stops |
 |---|---|---|
-| **Process isolation** | Credentials in separate process, connected via Unix domain socket (`chmod 0o600`) | Compromised agent can't read keys - different address space, no TCP port to probe |
+| **Process isolation** | Credentials in separate process, connected via Unix domain socket (`chmod 0o600`) | Compromised agent can't read proxied keys - different address space, no TCP port to probe |
+| **Broker scope** | Only `aquaman daemon` hands out values, and only for refs you declared; OpenClaw-hosted proxies never do (v0.15.0+) | An agent can't pull arbitrary vault entries through the socket |
 | **Service allowlisting** | `proxiedServices` controls which APIs the agent can reach | Agent can't talk to services you didn't authorize |
 | **Request policies** | Method + path rules per service, enforced before credential injection | Agent can reach Anthropic but not its admin API; can draft emails but not send them |
 | **Audit trail** | SHA-256 hash-chained logs of every credential use | Post-incident forensics, tamper detection, compliance evidence |
 | **Per-tool-call broker (coder)** | `aquaman-coder exec` materializes creds for one command at a time | Credentials don't sprawl across the agent's shell environment |
 | **Output redaction (coder)** | `aquaman-coder exec` pipes stdout/stderr through a redactor that scrubs each value it just injected verbatim - plus generic provider patterns as a fallback | Even arbitrary, shape-less credentials never reach the agent transcript |
+
+**What same-user isolation can't do.** The socket's `0o600` keeps other *users* out, not other processes running as you. Any such process, a compromised agent included, can still send requests through the proxy to the services you configured while it runs (request policy bounds what, the audit log records it), and can fetch refs you declared for materialization, since that is what declaring means. It cannot read the keys the proxy injects. For a harder boundary, run the agent as a different OS user or inside a sandbox.
 
 Detailed model - per-integration specifics (HTTP interceptor scope, auth profiles, scanner findings, ClawScan publisher note) - lives in [`packages/plugin/README.md`](packages/plugin/README.md) and [`packages/coder/README.md`](packages/coder/README.md).
 

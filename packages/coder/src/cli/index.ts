@@ -169,7 +169,7 @@ project
 
 program
   .command('get <ref>')
-  .description('Resolve an aquaman:// ref via the broker and print the value')
+  .description('Resolve a declared aquaman:// ref via the broker and print the value')
   .action(async (ref: string) => {
     const parsed = parseRef(ref);
     if (!parsed) {

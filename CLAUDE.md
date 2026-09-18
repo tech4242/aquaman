@@ -182,7 +182,7 @@ The `aquaman-coder` package extends aquaman to AI coding agents. v0.12.0 ships t
 - `adapters/claude-code/setup.ts` — Writes `~/.claude/settings.json` atomically (mode 0o600, parent dir 0o700). Idempotent via substring-match on the hook command.
 - `cli/index.ts` — Commander-based CLI: `setup <agent>`, `project list/add/remove`, `get <ref>`, `exec <cmd...>`, `hook`, `doctor`.
 
-**Critical hook-protocol notes (re-verified 2026-08-17 against the live changelog @ Claude Code 2.1.233; stable 2.1.224):** Our contract (`permissionDecision` / `permissionDecisionReason` / `updatedInput` for PreToolUse; `additionalContext` + `updatedToolOutput` for PostToolUse; exit-2 via stderr) is fully supported; no field changes 2.1.203–2.1.233. (1) **`PreToolUse.additionalEnvVars`** — env-var injection. **Deliberately NOT used for credentials**: hook stdout JSON would carry real values through Claude Code's process/memory, which is exactly what the broker + `exec`-wrapper isolation exists to avoid. (2) **`PostToolUse.updatedToolOutput` — ADOPTED in v0.14.0**: `handlePostToolUse` runs the redactor over every tool's output (string via `redact`, structured via `redactDeep`, shape preserved) and rewrites it before it reaches the transcript — covers Read/Grep surfacing on-disk secrets, MCP tools, and unwrapped Bash; the exec wrapper still owns value-based redaction of injected values. Opt-out `AQUAMAN_DISABLE_OUTPUT_REWRITE=1` (pre-2.1.170 hosts) degrades to the warning-only `additionalContext` behavior. (3) **2.1.214** fixed exit-2 not blocking as documented when the hook's stdout JSON fails schema validation — our hook output is locked down by schema-validity regression tests (`test/unit/coder-hook.test.ts`). (This citation has been wrong twice: v0.13.1 notes said 2.1.210, v0.14.1's first pass said 2.1.217. The changelog on `main` contains exactly one "exit code 2" entry in the 2.1.2xx range and it sits under **2.1.214** — re-verified 2026-08-17 by reading the file, not the summary.) (3a) Later hook-behavior fixes, all compatible: **2.1.222** (PreToolUse auto-allow hooks bypassing tool restrictions in background agent tasks) and **2.1.224** (a hook-callback timeout misreported to the model as a user rejection — worth knowing since broker resolution sits on the PreToolUse path). **2.1.232** added first-party redaction for the GitLab token families (`glpat-`, `glrt-`, `gloas-`, …); our redactor's BUILTIN_PATTERNS do not cover those yet. (4) **Sandbox settings (2.1.216 `sandbox.filesystem.disabled`, 2.1.219 `sandbox.network.strictAllowlist`)** — `strictAllowlist` denies non-allowlisted hosts for sandboxed commands without prompting. The broker speaks HTTP over a UDS (no host, no port), so credential resolution is **not** an allowlist subject; `test/e2e/coder-sandbox-compat.test.ts` pins that invariant so a refactor to loopback TCP (the Hermes transport) can't silently make the coder path sandbox-blockable. **Open limitation:** the socket lives at `$HOME/.aquaman/proxy.sock`, so *filesystem* sandboxing that hides `$HOME` from the command blocks the broker regardless of network policy — not yet verified against a live sandboxed session; a socket-path override is the likely fix if it bites. (5) **2.1.214 + 2.1.221 put first-party credential substitution in the sandbox**: `sandbox.credentials` gained `extract` / `decode: "jwt"` + `maskClaims` / `awsPairs` / `sigv4` (2.1.214, needs `network.tlsTerminate`), then `mode: "mask"` for credential *files* on Linux/WSL (2.1.221) — the sandboxed command reads a sentinel copy while the sandbox proxy substitutes the real value on egress. That is our placeholder-plus-egress-injection pattern, shipped inside local Claude Code, and it lands after the v0.14.1 verification window. It is scoped to sandboxed sessions with settings-level configuration and carries no vault backends, no per-read audit, and no cross-host story — but any copy claiming local Claude Code has *no* first-party credential isolation is now wrong. When extending, **verify against the live Claude Code docs**, not training-data memory.
+**Critical hook-protocol notes (re-verified 2026-09-18 against the live hooks reference + raw changelog @ Claude Code 2.1.276; stable 2.1.267):** Our contract (`permissionDecision` / `permissionDecisionReason` / `updatedInput` for PreToolUse; `additionalContext` + `updatedToolOutput` for PostToolUse; exit-2 via stderr) is fully supported; no field changes 2.1.203–2.1.276. (1) **There is no `PreToolUse.additionalEnvVars`.** Earlier notes here claimed one; it appears nowhere in the hooks reference, the changelog, or the tracker (checked 2026-09-18). PreToolUse outputs are exactly the four fields above; the only hook env mechanism is SessionStart's `CLAUDE_ENV_FILE`. Credentials must never transit hook output regardless. (2) **`PostToolUse.updatedToolOutput` — ADOPTED in v0.14.0**: `handlePostToolUse` runs the redactor over every tool's output (string via `redact`, structured via `redactDeep`, shape preserved) and rewrites it before it reaches the transcript. Opt-out `AQUAMAN_DISABLE_OUTPUT_REWRITE=1` (pre-2.1.170 hosts) degrades to warning-only `additionalContext`. Docs caveats: an `updatedToolOutput` that doesn't match the tool's output shape is ignored, and **OTel tool spans record the pre-hook output**, so our redaction doesn't reach telemetry exports. (3) **2.1.214** fixed exit-2 not blocking when the hook's stdout JSON fails schema validation, and **2.1.248** made JSON-looking-but-invalid stdout a hook error. Our hook output is locked down by schema-validity regression tests (`test/unit/coder-hook.test.ts`). (The exit-2 citation was wrong twice before: 2.1.210, then 2.1.217. It is **2.1.214**.) (3a) Compatible additions since: **2.1.222/2.1.224** (auto-allow in background tasks; hook-timeout misreported as rejection), **2.1.236** optional PostToolUse `classifierContext`, **2.1.251** `PreModelSwitch`/`PostModelSwitch` events. **2.1.232** added first-party redaction for GitLab token families (`glpat-`, `glrt-`, `gloas-`, …); our BUILTIN_PATTERNS don't cover those yet. (4) **Sandbox: a UDS IS an allowlist subject — corrected in v0.15.0.** v0.14.1 claimed the broker's UDS was "not an allowlist subject". That holds for HOST allowlists (`allowedDomains`, 2.1.219 `strictAllowlist`) but is wrong for sockets: the sandbox denies every Unix-socket connect unless the path is in `sandbox.network.allowUnixSockets` (macOS only; exact path or parent dir, `~` ok, globs ignored) or `allowAllUnixSockets: true` (the only option on Linux/WSL2, where seccomp can't filter by path — since 2.1.92). Verified empirically 2026-09-18 with `@anthropic-ai/sandbox-runtime` 0.0.76 (the runtime Claude Code embeds): default → `connect EPERM`; file-read rules never gate the connect. v0.15.0: `coder setup claude-code` adds exactly the socket on macOS, `coder doctor` checks merged user/managed/project settings, `BrokerClient` maps EPERM/EACCES to a sandbox hint, and the README carries the one-line Linux limitation. Hook commands themselves run unsandboxed; only the rewritten Bash command is sandboxed. Never recommend `excludedCommands` for `aquaman-coder exec` (it unsandboxes the whole wrapped command). (5) **First-party credential substitution exists in the sandbox**: `sandbox.credentials` (`extract` / `decode: "jwt"` + `maskClaims` / `awsPairs` / `sigv4`, 2.1.214; `mode: "mask"` for credential files on Linux/WSL, 2.1.221) — our placeholder-plus-egress pattern, scoped to sandboxed sessions. 2.1.246 stopped honoring project/local-scope `sandbox.credentials`; 2.1.251 requires approval for managed settings that inject credentials or terminate TLS. No vault backends, no per-read audit, no cross-host story, but any copy claiming local Claude Code has *no* first-party credential isolation is wrong. #29910 (built-in secrets management) still open. When extending, **verify against the live Claude Code docs**, not training-data memory.
 
 **Project map example** (`~/.aquaman/projects.yaml`):
 
@@ -309,6 +309,11 @@ conformance-tested (`tests/test_secret_source.py`, `tests/test_compliance.py`, a
 - `protected_env_vars()` covers the token var + wired provider placeholders, so no other
   secret source can overwrite the loopback wiring; `override_existing` defaults true.
 - Every surfaced error/warning string is scrubbed of the token (`_scrub_secret_text`).
+- **v0.15.0: each bound ref must also be declared to the daemon** (`aquaman broker allow
+  <ref>`), and the proxy refuses anthropic/openai over loopback server-side. Refusals are
+  404s, so the source records them as per-ref warnings, not the fatal token error.
+  `aquaman hermes doctor` reads `$HERMES_HOME/config.yaml` (`hermesSecretSourceRefs()`) and
+  lists undeclared bindings.
 
 **Hermes 0.19 contract notes (v0.14.1, verified 2026-08-03 against the 0.19.0 wheel AND
 `main`):** 0.19.0 (2026-07-20) rewrote the orchestrator — mapped-beats-bulk precedence,
@@ -394,6 +399,36 @@ pip install aquaman-hermes && aquaman-hermes install && hermes plugins enable aq
 
 UDS socket file permissions (`chmod 0o600`) restrict proxy access to the owning user. No shared-secret token needed — only processes running as the same user can connect to the socket.
 
+### Credential broker scope (v0.15.0+)
+
+`POST /broker/resolve` is the one endpoint that returns a credential VALUE instead of
+injecting it. Through v0.14.x it was routed before `allowedServices`/policy in every mode,
+including `openclaw plugin-mode`, so any same-user process (an OpenClaw agent's exec tool,
+`curl --unix-socket ~/.aquaman/proxy.sock`) could read any vault entry. That is the
+ClawScan `suspicious` finding against aquaman-plugin 0.14.x, present since v0.12.0. Rules
+now (`packages/proxy/src/broker-scope.ts`, passed to `createCredentialProxy({ broker })`):
+- **OpenClaw-hosted proxies get no scope → broker off** (`openclaw plugin-mode`,
+  `openclaw start`): 404 `broker_disabled`, no vault lookup. Never add a scope there.
+- **`aquaman daemon` serves declared refs only**: `projects.yaml` env refs ∪ config.yaml
+  `broker.allowedRefs` (managed by `aquaman broker list|allow|revoke`, which edit the raw
+  file so env overrides are never persisted). Both files are mtime-reloaded (no restart);
+  an unparseable file declares nothing. `broker.enabled: false` / `AQUAMAN_BROKER_ENABLED=false`
+  turns it off.
+- **Loopback never materializes the Hermes LLM tier** (`HERMES_SUPPORTED_SERVICES`), even
+  if declared: 404 `broker_ref_isolated`. It's the Python client's two-tier rule,
+  enforced server-side.
+- The scope is checked **before** the vault, so refusals don't reveal vault contents. 404
+  (not 403) because the Hermes source treats 401/403 as a fatal token error; refusals carry a
+  machine-readable `code` and are audited.
+- Honest limit: same-user processes can reach the socket and edit `~/.aquaman/*`.
+  Declaring a ref opts it into materialization for them. The scope keeps *undeclared* and
+  *isolated* credentials out of reach; it is not an inter-process boundary for one user.
+- Both proxies bind `~/.aquaman/proxy.sock`, and the last one started wins (pre-existing).
+  With the OpenClaw plugin's proxy on the socket, coder/Hermes broker calls get
+  `broker_disabled` — `coder doctor` names that case.
+- Conformance: `test/compliance/broker-scope.test.ts` (in-process + real `plugin-mode` /
+  `daemon` processes).
+
 ### Credential caching (v0.13.1+)
 
 `CachingStore` (`packages/proxy/src/core/credentials/caching-store.ts`) is a TTL'd in-memory decorator over any `CredentialStore`, applied **only in daemon contexts** (the three `createCredentialProxy` sites in `cli/index.ts`, via `wrapWithCache(store, resolveCacheTtl(config))`). One-shot CLI commands never cache. Rationale: 1Password prompts biometrics per `op` spawn (making unattended agents unusable), Bitwarden spawns `bw` (~1–2 s), Vault does an HTTP round-trip — per request/broker-resolve without the cache.
@@ -428,6 +463,7 @@ aquaman stop         # stop the daemon
 aquaman init         # low-level config bootstrap
 
 aquaman credentials add/list/delete/guide
+aquaman broker list/allow/revoke   # v0.15.0+: which refs the daemon may hand out
 aquaman audit tail/verify/rotate
 aquaman services list/validate
 aquaman policy list/test
@@ -548,14 +584,25 @@ our tarball is a **published security signal** — it is what flipped the ClawHu
   provides itself.
 - **`undici` and `@sinclair/typebox` are exact-pinned** in the plugin (ClawScan flagged
   caret ranges as reproducibility risk for a credential proxy). Dependabot bumps them.
-- **Lockfile regeneration must use `npm install --legacy-peer-deps`** — the same flag CI's
-  `npm ci` uses. Without it npm follows the plugin's `openclaw` peer edge, the whole
-  openclaw subtree loses `dev: true`, and `npm audit --omit=dev` (the shipped-deps gate at
-  `ci.yml`) silently starts auditing the gateway's tree instead of ours. This — not a
-  Dependabot bug — is why dependabot-regenerated lockfiles kept "stripping" the dev flags.
+- **The OpenClaw gateway is not in the lockfile (v0.15.0+).** It was a root devDependency
+  only to serve as the e2e harness, and extended-stable 2026.7.33 ships an
+  `npm-shrinkwrap.json` pinning vulnerable hono/@hono/node-server/protobufjs/qs that root
+  `overrides` can't reach. CI's e2e job installs the pinned gateway globally per lane
+  (`2026.7.33`, `2026.9.1`), and `test/e2e/openclaw-plugin.test.ts` calls `$OPENCLAW_BIN`
+  (default `openclaw` on PATH). **Never `npx openclaw`** there: with no local install it
+  silently downloads `latest`. Lockfile went 508 → 203 packages; `npm audit` (dev
+  included) = 0. `packaging-posture.test.ts` fails if openclaw comes back.
+- **Lockfile regeneration uses `--legacy-peer-deps`**, now pinned by a root `.npmrc`
+  (`legacy-peer-deps=true`), the same flag CI's `npm ci` passes. Without it npm follows the
+  optional peer edges (proxy → kdbxweb/argon2) and marks those subtrees `devOptional`,
+  which `npm audit --omit=dev` keeps, so the shipped-deps gate audits the wrong tree. That
+  is what broke Dependabot PRs #62/#63 (superseded in v0.15.0). Whether Dependabot honors
+  the `.npmrc` is unverified — check the next Dependabot PR's lockfile.
 
 Verified shape (v0.14.1): a fresh install of the `aquaman-proxy` + `aquaman-plugin`
 tarballs is **43 packages, 0 vulnerabilities**, with no `@xmldom/xmldom` and no `openclaw`.
+npm ≥ 11.19 (bundled with Node 24.21) no longer runs install scripts unless allowlisted;
+`npm rebuild <pkg>` still runs them (it warns), which is what CI relies on for keytar.
 
 ## Testing
 
@@ -586,6 +633,7 @@ Manual smoke-test recipes for the OpenClaw plugin install path, channel auth mod
 | `packages/proxy/src/core/audit/logger.ts` | Hash-chained logging |
 | `packages/proxy/src/daemon.ts` | HTTP proxy server on UDS (header, url-path, basic, oauth auth modes) |
 | `packages/proxy/src/request-policy.ts` | Request-level policy enforcement (method+path rules, segment-based glob matching) |
+| `packages/proxy/src/broker-scope.ts` | Credential-broker scope: declared refs (projects.yaml + broker.allowedRefs), loopback LLM-tier denial (v0.15.0+) |
 | `packages/proxy/src/cli/index.ts` | CLI (Commander.js, 20 commands incl. `setup`, `doctor`, `policy list/test`, `migrate openclaw`) |
 | `packages/proxy/src/service-registry.ts` | Builtin service definitions (25 services) |
 | `packages/proxy/src/oauth-token-cache.ts` | OAuth client credentials token exchange + caching |
@@ -612,6 +660,7 @@ Manual smoke-test recipes for the OpenClaw plugin install path, channel auth mod
 | `test/unit/request-policy.test.ts` | Request policy unit tests (path matching, policy evaluation, validation, presets) |
 | `test/e2e/hermes-loopback.test.ts` | Loopback listener E2E (token gating, both provider shapes, isolation, UDS stays token-free) |
 | `test/compliance/loopback-listener.test.ts` | Loopback-path compliance (AC-3 token gate, ATLAS T0055/T0090 key isolation, AU-10 audited path) |
+| `test/compliance/broker-scope.test.ts` | Broker-scope compliance (AC-3/AC-6/AU-2, ATLAS T0055/T0098) incl. real `plugin-mode` + `daemon` processes |
 | `test/compliance/cache-residency.test.ts` | Credential-cache compliance (AU-2 audit parity, AC-3 deny-before-cache, SC-28 memory-only, T0055 isolation, IA-5 invalidation) |
 | `test/unit/credentials/caching-store.test.ts` | CachingStore unit tests (TTL, invalidation, no negative caching, error transparency) |
 | `test/unit/hermes/config-writer.test.ts` | Hermes env-writer unit tests (path mapping, HERMES_HOME, idempotent block, loopback wiring vars) |

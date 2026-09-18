@@ -1,6 +1,6 @@
 # aquaman-plugin: API Key Protection for OpenClaw
 
-The [aquaman](https://github.com/tech4242/aquaman) adapter for the [OpenClaw Gateway](https://openclaw.ai). Your API keys and tokens stay in your vault. The agent never sees them. Even a compromised agent can't steal credentials - they live in a separate process.
+The [aquaman](https://github.com/tech4242/aquaman) adapter for the [OpenClaw Gateway](https://openclaw.ai). Your API keys and tokens stay in your vault. The agent never sees them: they live in a separate process that injects them on the way out, and that process has no endpoint that hands a key back. A compromised agent can't read them. What it *can* do while it runs is send requests through the proxy, which request policy bounds and the audit log records (see [Security model](#security-model)).
 
 This plugin **spawns** [`aquaman-proxy`](https://www.npmjs.com/package/aquaman-proxy) (exact-pinned, same author) on Gateway startup, routes channel traffic through a UDS to that proxy, and lets you reach the same vault and policy engine from inside OpenClaw.
 
@@ -18,7 +18,7 @@ Agent / OpenClaw Gateway              Aquaman Proxy
 │                      │              │                      │
 │  No credentials.     │  ~/.aquaman/ │                      │
 │  No open ports.      │  proxy.sock  │                      │
-│  Nothing to steal.   │  (chmod 600) │                      │
+│  No keys to read.    │  (chmod 600) │                      │
 └──────────────────────┘              └──┬──────────┬────────┘
                                          │          │
                                          │          ▼
@@ -53,6 +53,12 @@ Troubleshooting: `openclaw aquaman doctor` (or `aquaman openclaw doctor` from a 
 ## Security model
 
 Aquaman keeps API credentials out of the agent process by running them in a separate proxy process. The agent never sees the secret - only a sentinel base URL that the proxy intercepts, authenticates, and forwards. See the [architecture diagram in the main README](https://github.com/tech4242/aquaman#how-it-works).
+
+**What a compromised agent can and can't do**
+
+- **Can't read your keys.** They are in the proxy's address space. Since v0.15.0 the proxy this plugin spawns (`aquaman openclaw plugin-mode`) serves no endpoint that returns a credential value. Through v0.14.x it exposed `POST /broker/resolve`, the coding-agent credential broker, to any process that could reach the socket. That is what ClawHub's ClawScan flagged on 0.14.x. Upgrade if you're on 0.12–0.14.
+- **Can** send requests through the proxy to the services in your `services` list while it runs. The socket's `chmod 0o600` keeps other users out, not other processes running as you. Request policy (deny rules, enforced before injection) bounds what those requests can do, and every one is in the hash-chained audit log.
+- **If you also run `aquaman daemon`** for coding agents or the Hermes secret source, refs you declared there (`projects.yaml`, `aquaman broker allow`) can be fetched by any process running as you, since that is what declaring a ref means. Both proxies bind `~/.aquaman/proxy.sock`; the one started last owns it, and this plugin's proxy never serves the broker.
 
 **Proxy process**
 
@@ -95,7 +101,7 @@ Aquaman keeps API credentials out of the agent process by running them in a sepa
 - **`dangerous-exec`** on the proxy-manager module: the plugin spawns the proxy as a separate process. This is how credential isolation works.
 - **`tools_reachable_permissive_policy`**: advisory about your tool policy, not an aquaman vulnerability. Set `"tools": { "profile": "coding" }` in `openclaw.json` if your agents handle untrusted input.
 
-ClawHub's ClawScan additionally produces a higher-level review of plugin behavior. The current scan acknowledges credential isolation, proxy spawn, the host map, the auth-profiles generation, and the audit log. See the publisher note on the package page for context on each item.
+ClawHub's ClawScan additionally produces a higher-level review of plugin behavior. Its verdict on 0.14.x was `suspicious` because of the broker endpoint described above; v0.15.0 removes that endpoint from the plugin's proxy. See the publisher note on the package page for context on each item.
 
 `aquaman openclaw setup` adds the plugin to `plugins.allow` automatically so OpenClaw knows you trust it.
 
