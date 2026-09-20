@@ -100,7 +100,7 @@ Scoped since v0.15.0, because it hands out values rather than injecting them:
 - **[Root README](https://github.com/tech4242/aquaman#readme)**: value prop, three-path Quick Start, security model
 - **[`docs/PACKAGES.md`](../../docs/PACKAGES.md)**: package boundary policy
 - **[`docs/compliance/`](../../docs/compliance/)**: MITRE ATLAS + NIST SP 800-53 mappings
-- **[`CLAUDE.md`](../../CLAUDE.md)**: architecture notes
+- **[`AGENTS.md`](../../AGENTS.md)**: architecture notes
 
 ## License
 
