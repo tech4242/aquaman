@@ -143,7 +143,15 @@ jobs:
           fi
       - run: npm run build                     # produce packages/plugin/dist for the bundle
       - run: npm install -g clawhub@latest      # an old CLI gets rejected by the hardened server
-      - run: clawhub login --token "$CLAWHUB_TOKEN"
+      - name: ClawHub login
+        # Output suppressed: this repo is public, so Actions logs are
+        # world-readable, and login echoes account context on some CLI
+        # versions. Actions masks the exact secret but not a partial form.
+        run: |
+          if ! clawhub login --token "$CLAWHUB_TOKEN" >/dev/null 2>&1; then
+            echo "::error::ClawHub login failed (token rejected, expired, or the CLI contract changed)"
+            exit 1
+          fi
         env: { CLAWHUB_TOKEN: "${{ secrets.CLAWHUB_TOKEN }}" }
       - name: Validate (Plugin Inspector — must be PASS, 0 breakages)
         run: clawhub package validate packages/plugin
