@@ -37,6 +37,14 @@ export interface ServiceDefinition {
   hostPatterns?: string[];
   /** OAuth client credentials config for authMode 'oauth' */
   oauthConfig?: OAuthConfig;
+  /**
+   * Floor for the upstream idle timeout, in ms. A long-polling API holds the
+   * connection open with no bytes flowing, which the proxy's default 30s idle
+   * timeout would kill mid-poll. The effective timeout is the larger of this
+   * and the configured one, so raising the global still works and lowering it
+   * cannot silently break the service.
+   */
+  minRequestTimeout?: number;
 }
 
 export interface ServiceRegistryOptions {
@@ -226,7 +234,11 @@ const BUILTIN_SERVICES: ServiceDefinition[] = [
     description: 'Telegram Bot API',
     authMode: 'url-path',
     authPathTemplate: '/bot{token}',
-    hostPatterns: ['api.telegram.org']
+    hostPatterns: ['api.telegram.org'],
+    // getUpdates holds a poll open for 30s and the Bot API client aborts it
+    // at 45s; media downloads allow 120s to first byte. Stay above both so
+    // the client's own deadline is the one that fires.
+    minRequestTimeout: 180000
   },
 
   // ── HTTP Basic Auth Channels ────────────────────────────────────────

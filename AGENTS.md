@@ -84,11 +84,26 @@ OpenClaw's model calls use its own `provider-transport-fetch` with its own undic
 
 Rejected alternative: a forward proxy. `models.providers.<id>.request.proxy` and `HTTPS_PROXY` both route traffic (`proxy=configured` / `proxy=env`; a loopback proxy also needs `request.allowPrivateNetwork`), but undici CONNECTs for every https target, so a proxy sees an opaque tunnel and cannot inject without terminating TLS with its own CA. There is no plugin hook for outbound HTTP and no Unix-socket support for provider transport.
 
-### Channels are not proxied on 2026.7.33+
+### Channel egress: Telegram routed, the rest at-rest only
 
-Verified live 2026-09-20: with the interceptor active for `api.telegram.org`, Telegram's `getMe` reached Telegram directly and produced no audit entry. Telegram, Discord and Matrix build their own dispatcher per request; only MS Teams reads the global fetch, and this build ships no Slack channel. On these versions the plugin covers channel credentials at rest (storage, `aquaman openclaw migrate`) but not egress injection.
+The fetch interceptor stopped covering channels on 2026.7.33+: each channel builds its own undici dispatcher per request and never reads `globalThis.fetch`. Verified live 2026-09-20, `getMe` reached Telegram directly with no audit entry.
 
-Routing needs a per-channel endpoint override: `channels.telegram.apiRoot` exists, Discord and Slack have none, and Matrix/Mattermost/Nextcloud Talk point at the user's own server. A Telegram route also needs the loopback gate to accept the token from the `/bot<token>` path segment and strip it before injecting. Designed, not built; ROADMAP tracks it for v0.16.0.
+Routing therefore needs whatever endpoint override the host exposes, and only Telegram has one.
+
+- `aquaman openclaw setup` writes `channels.telegram.apiRoot = http://127.0.0.1:<port>/telegram` and sets `botToken` to the loopback token. Verified end to end on a live 2026.9.1 gateway: `getMe` went through the proxy, the vault token was injected, and the call was audited.
+- The Bot API has no auth header, so the loopback token arrives in the `/bot<TOKEN>` segment. `findUrlPathCredentialSlot()` in `daemon.ts` accepts it there, strips it before the policy check and the request log, and puts the real token back at the same index. Index matters: media downloads are `/file/bot<TOKEN>/<path>`, so prefixing blindly would build `/bot<real>/file/...`.
+- Wiring is all-or-nothing per channel. A self-hosted `apiRoot`, a `tokenFile`, multi-account config, or an empty vault means the channel is left untouched and reported, because a half-wired channel is a dead bot.
+- Everything else stays at-rest only (vault storage plus `aquaman openclaw migrate`). Discord and Slack expose no override; Matrix, Mattermost and Nextcloud Talk already point at the user's own server. `aquaman openclaw doctor` lists them as unroutable rather than implying coverage.
+
+Gotchas, all verified against the 2026.9.4 bundle:
+
+- `apiRoot` governs every Bot API surface: methods, the `getUpdates` long poll, `/file` downloads, setWebhook/deleteWebhook, probes, membership audits. No surface falls back to the literal host.
+- No https-only check anywhere, so a plain `http://` loopback origin is accepted.
+- The SSRF guard runs on media downloads only, and a custom `apiRoot` auto-allowlists its own host, so `127.0.0.1` needs no `dangerouslyAllowPrivateNetwork`. A redirect off that host is still blocked.
+- Use the literal `127.0.0.1`. One fallback attempt forces `family: 4` unconditionally, so an IPv6-only listener silently loses two of three attempts.
+- `getUpdates` holds a poll 30s and the client aborts at 45s; media allows 120s to first byte. The proxy's 30s idle timeout would cut polls short, so the telegram service definition sets `minRequestTimeout: 180000` and the daemon takes the max of that and the configured timeout.
+- `channels.telegram.proxy`, `OPENCLAW_PROXY_URL` and `http_proxy`/`https_proxy` all steal the request before it reaches the listener.
+- The loopback token is written into openclaw.json, so `isAquamanPlaceholder()` (core/utils/config.ts) treats the `aqm_lb_` prefix as aquaman-owned. Without it the migrator reports our own placeholder as a plaintext credential.
 
 ### Manifest rules
 

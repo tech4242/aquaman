@@ -60,18 +60,26 @@ Aquaman keeps API credentials out of the agent process by running them in a sepa
 - The SecretRef resolver hands the gateway the **loopback token** as the provider api key. The listener is token-gated, the token only grants access to 127.0.0.1, and the proxy strips it before injecting your real key from the vault.
 - Why not the Unix socket: OpenClaw's model transport builds its own HTTP client. It never calls `globalThis.fetch` and resolves hostnames itself, so the older `aquaman.local` sentinel could not work for model traffic on 2026.7.33+. `aquaman openclaw doctor` fails if a provider is credential-wired but not routed.
 
-**Channel credentials on 2026.7.33+: not proxied**
+**Channel credentials on 2026.7.33+: Telegram routed, the rest at rest only**
 
-Verified 2026-09-20 on a live gateway: with this plugin's interceptor active for `api.telegram.org`, Telegram's `getMe` reached Telegram directly and nothing hit the proxy. Telegram, Discord and Matrix build their own HTTP client per request; only MS Teams uses the global `fetch`. Model-provider isolation is unaffected, since it no longer depends on the interceptor.
+Each channel builds its own HTTP client per request, so this plugin's interceptor no longer sees channel traffic. Model-provider isolation is unaffected, since it no longer depends on the interceptor either.
 
-On these versions aquaman covers channel tokens at rest (vault storage, `aquaman openclaw migrate`) but not egress injection. Routing needs a per-channel endpoint override: Telegram has `channels.telegram.apiRoot`, Discord and Slack have none, and Matrix, Mattermost and Nextcloud Talk point at your own server.
+Telegram is the one bundled channel with an endpoint override. `aquaman openclaw setup` writes:
+
+```json5
+{ channels: { telegram: { apiRoot: "http://127.0.0.1:8585/telegram", botToken: "<loopback token>" } } }
+```
+
+The Bot API carries its token in the URL path rather than a header, so the loopback token travels in the `/bot<TOKEN>` segment. The proxy accepts it there, strips it, and injects your real bot token from the vault. Setup leaves a channel untouched and says why when it uses a self-hosted `apiRoot`, a `tokenFile`, multiple accounts, or has no vault credential yet.
+
+Other channels are vault storage and `aquaman openclaw migrate` only: OpenClaw uses the token directly, so the proxy is not in the path and those calls are not audited. Discord and Slack expose no override; Matrix, Mattermost and Nextcloud Talk already point at your own server. `aquaman openclaw doctor` reports which of your channels are in which group.
 
 ### Transports and access control
 
 The proxy listens two ways, and which one a host uses depends on what that host can dial:
 
 - **Unix socket** `~/.aquaman/proxy.sock` (`0600`): coding agents and anything else that can dial a socket. File permissions mean only processes running as you can connect.
-- **Loopback TCP** `127.0.0.1:<port>`, token-gated: Hermes (v0.13.0+) and OpenClaw model traffic (v0.15.0+), because both build their own HTTP client.
+- **Loopback TCP** `127.0.0.1:<port>`, token-gated: Hermes (v0.13.0+), OpenClaw model traffic and Telegram (v0.15.0+), because each builds its own HTTP client.
 
 The token is a capability to reach the local proxy, not a credential: generated per install, stored in `~/.aquaman/config.yaml` (`0600`), stripped by the proxy before your real key is injected. Any local process can reach a loopback port, including other users, where the socket's `0600` shuts them out, so the listener stays off until a host needs it. Full table in the [root README](https://github.com/tech4242/aquaman#transports-and-access-control).
 

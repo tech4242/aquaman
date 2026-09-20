@@ -68,11 +68,13 @@ Four layers of protection:
 | Path | Transport | Access control |
 |---|---|---|
 | Coding agents, any client that can dial a socket | Unix socket `~/.aquaman/proxy.sock` | File permissions (`0600`): only processes running as you |
-| Hermes (v0.13.0+), OpenClaw model traffic (v0.15.0+) | Loopback TCP `127.0.0.1:<port>` | Per-install token, constant-time check, loopback bind |
+| Hermes (v0.13.0+), OpenClaw model and Telegram traffic (v0.15.0+) | Loopback TCP `127.0.0.1:<port>` | Per-install token, constant-time check, loopback bind |
 
 Hermes and OpenClaw each build their own HTTP client and can't dial a socket, so they use the listener. Everything else uses the socket.
 
 The token is a capability to reach the local proxy, not a credential. Generated per install, stored in `~/.aquaman/config.yaml` (`0600`), sent by the host as its provider api key. The proxy checks it, strips it, injects your real key.
+
+The Telegram Bot API has no auth header, so there the token travels in the `/bot<TOKEN>` path segment instead. The proxy accepts it there, strips it before the policy check and the request log, and puts the real bot token back at the same position, which is what keeps `/file/bot<TOKEN>/<path>` downloads working.
 
 Trade-off: any local process can reach a loopback port, including other users, where the socket's `0600` shuts them out. The token is the gate there, so the listener stays off until `aquaman hermes setup` or `aquaman openclaw setup` turns it on.
 

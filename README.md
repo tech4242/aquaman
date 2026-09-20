@@ -25,7 +25,7 @@ Aquaman ships as four coordinated packages, sharing one vault + one daemon. Inst
 | Package | What it does | When to install |
 |---|---|---|
 | **[`aquaman-proxy`](packages/proxy/)** | Core: vault, daemon, audit, policy, CLI. The piece everyone needs. | Always. |
-| **[`aquaman-plugin`](packages/plugin/)** | OpenClaw Gateway adapter. Spawns the proxy on Gateway startup; intercepts channel traffic; 25 builtin services across 5 auth modes. | If you run an OpenClaw Gateway. Also available at https://clawhub.ai/plugins/aquaman-plugin |
+| **[`aquaman-plugin`](packages/plugin/)** | OpenClaw Gateway adapter. Spawns the proxy on Gateway startup; routes model and Telegram traffic through it; 25 builtin services across 5 auth modes. | If you run an OpenClaw Gateway. Also available at https://clawhub.ai/plugins/aquaman-plugin |
 | **[`aquaman-coder`](packages/coder/)** | AI coding-agent adapter. Project-scoped `aquaman://service/key` references resolved per Bash tool call. | If you use Claude Code (today) - Codex / OpenCode / Cursor planned. |
 | **[`aquaman-hermes`](packages/hermes/)** | Hermes agent-host plugin (Python, on PyPI). Points Hermes at an opt-in, token-gated loopback listener via its native `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`; adds an in-session `/aquaman-status` command, tool, and health probe. Isolation is proxy-side; the plugin holds no credentials. | If you run the Hermes agent host. `pip install aquaman-hermes` |
 
@@ -58,7 +58,7 @@ Troubleshooting: `openclaw aquaman doctor`.
 
 **Using npm directly?** `npm install -g aquaman-proxy && aquaman openclaw setup` does the same - installs the proxy CLI, stores your keys, installs the plugin into `~/.openclaw/extensions/aquaman-plugin/`, and wires the credentials (SecretRef refs on OpenClaw ≥ 2026.6.5, the auth-profiles.json placeholder on older versions).
 
-`aquaman openclaw setup` points `models.providers.<svc>.baseUrl` at the proxy's loopback listener, because OpenClaw's model transport bypasses the fetch interceptor. Most channels bypass it too on 2026.7.33+, so channel tokens are stored and migrated but not injected at egress there (see [`packages/plugin/README.md`](packages/plugin/README.md)). Add channels under the plugin config in `openclaw.json`; supported ones include Slack, Discord, Telegram, MS Teams, Matrix, LINE, Twitch, Twilio, BlueBubbles, Mattermost, Nostr, Tlon, Feishu, Google Chat, ElevenLabs, xAI, Cloudflare AI Gateway, Mistral, Hugging Face, and more (25 total).
+`aquaman openclaw setup` points `models.providers.<svc>.baseUrl` and `channels.telegram.apiRoot` at the proxy's loopback listener, because OpenClaw's model transport and its channels each build their own HTTP client and bypass the fetch interceptor. Channels other than Telegram expose no endpoint override, so their tokens are stored and migrated but not injected at egress (see [`packages/plugin/README.md`](packages/plugin/README.md)). Add channels under the plugin config in `openclaw.json`; supported ones include Slack, Discord, Telegram, MS Teams, Matrix, LINE, Twitch, Twilio, BlueBubbles, Mattermost, Nostr, Tlon, Feishu, Google Chat, ElevenLabs, xAI, Cloudflare AI Gateway, Mistral, Hugging Face, and more (25 total).
 
 ### 3. AI coding agents (Claude Code today)
 
@@ -184,19 +184,24 @@ On the proxy paths the agent sees a local endpoint plus a marker: the `aquaman-p
 | Path | Transport | Access control |
 |---|---|---|
 | Coding agents, any client that can dial a socket | Unix socket `~/.aquaman/proxy.sock` | File permissions (`0600`): only processes running as you |
-| Hermes (v0.13.0+), OpenClaw model traffic (v0.15.0+) | Loopback TCP `127.0.0.1:<port>` | Per-install token, constant-time check, loopback bind |
+| Hermes (v0.13.0+), OpenClaw model and Telegram traffic (v0.15.0+) | Loopback TCP `127.0.0.1:<port>` | Per-install token, constant-time check, loopback bind |
 
 Hermes and OpenClaw each build their own HTTP client and can't dial a socket, so they use the listener. Everything else uses the socket.
 
-The token is a capability to reach the local proxy, not a credential. Generated per install, stored in `~/.aquaman/config.yaml` (`0600`), sent by the host as its provider api key. The proxy checks it, strips it, injects your real key.
+The token is a capability to reach the local proxy, not a credential. Generated per install, stored in `~/.aquaman/config.yaml` (`0600`), sent by the host as its provider api key. The proxy checks it, strips it, injects your real key. Telegram has no auth header, so there the token rides in the `/bot<TOKEN>` path segment instead.
 
 Trade-off: any local process can reach a loopback port, including other users, where the socket's `0600` shuts them out. The token is the gate there, so the listener stays off until `aquaman hermes setup` or `aquaman openclaw setup` turns it on.
 
 ### Channel credentials on OpenClaw 2026.7.33+
 
-Not proxied. Verified 2026-09-20 on a live gateway: with the interceptor active for `api.telegram.org`, Telegram's `getMe` reached Telegram directly and nothing hit the proxy. Telegram, Discord and Matrix build their own HTTP client per request; only MS Teams uses the global `fetch`. On these versions aquaman stores channel tokens in your vault and migrates them, but does not inject them at egress. Model providers are unaffected.
+| Channel | Egress through the proxy |
+|---|---|
+| Telegram | Yes, since v0.15.0 |
+| Everything else | No. Vault storage and migration only |
 
-Routing needs a per-channel endpoint override. Telegram has `channels.telegram.apiRoot`; Discord and Slack have none; Matrix, Mattermost and Nextcloud Talk point at your own server.
+Each channel builds its own HTTP client per request, so the plugin's `fetch` interceptor no longer sees channel traffic on these versions. Routing a channel needs an endpoint override from the host, and Telegram is the only one that has it: `aquaman openclaw setup` points `channels.telegram.apiRoot` at the proxy and replaces the bot token with the loopback token.
+
+For the rest, your token stays in the vault but OpenClaw uses it directly, so the proxy is not in the path and those calls are not audited. `aquaman openclaw doctor` lists which of your configured channels are in which group. Model providers are unaffected.
 
 **What same-user isolation can't do.** The socket's `0o600` keeps other users out, not other processes running as you. Such a process can send requests through the proxy while it runs (bounded by request policy, recorded in the audit log) and can fetch refs you declared, which is what declaring means. It cannot read the keys the proxy injects. For a harder boundary, run the agent as a different OS user or in a sandbox.
 

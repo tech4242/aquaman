@@ -148,6 +148,65 @@ describe('Channel Credential Injection E2E', () => {
       expect(lastRequest!.path).toBe(`/bot${TEST_TELEGRAM_TOKEN}/sendMessage`);
     });
 
+    // A real Bot API client (OpenClaw pointed at us with
+    // `channels.telegram.apiRoot`) sends the bot segment itself, filled with
+    // whatever placeholder it was configured with. Replace it, don't stack a
+    // second one on top.
+    it('replaces a client-sent bot segment instead of prefixing another', async () => {
+      const response = await udsFetch(socketPath, '/telegram/botPLACEHOLDER/sendMessage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: 123, text: 'test' })
+      });
+
+      expect(response.status).toBe(200);
+      expect(upstream.getLastRequest()!.path).toBe(`/bot${TEST_TELEGRAM_TOKEN}/sendMessage`);
+    });
+
+    it('keeps the bot segment in place for the file-download shape', async () => {
+      const response = await udsFetch(
+        socketPath,
+        '/telegram/file/botPLACEHOLDER/photos/file_1.jpg',
+        { method: 'GET' }
+      );
+
+      expect(response.status).toBe(200);
+      expect(upstream.getLastRequest()!.path).toBe(
+        `/file/bot${TEST_TELEGRAM_TOKEN}/photos/file_1.jpg`
+      );
+    });
+
+    it('preserves the query string alongside a client-sent bot segment', async () => {
+      const response = await udsFetch(
+        socketPath,
+        '/telegram/botPLACEHOLDER/getUpdates?offset=42&timeout=30',
+        { method: 'GET' }
+      );
+
+      expect(response.status).toBe(200);
+      expect(upstream.getLastRequest()!.path).toBe(
+        `/bot${TEST_TELEGRAM_TOKEN}/getUpdates?offset=42&timeout=30`
+      );
+    });
+
+    it('never surfaces the presented bot segment in the request log', async () => {
+      await udsFetch(socketPath, '/telegram/botPLACEHOLDER/getMe', { method: 'GET' });
+
+      const logged = requestLog.at(-1);
+      expect(logged!.path).toBe('/telegram/getMe');
+      expect(logged!.path).not.toContain('PLACEHOLDER');
+      expect(logged!.path).not.toContain(TEST_TELEGRAM_TOKEN);
+    });
+
+    it('rejects a stored token that would inject extra path segments', async () => {
+      await store.set('telegram', 'bot_token', '123456:ABC/../openai');
+
+      const response = await udsFetch(socketPath, '/telegram/getMe', { method: 'GET' });
+
+      expect(response.status).toBe(500);
+      expect(upstream.getLastRequest()).toBeUndefined();
+    });
+
     it('returns 401 when telegram bot_token is missing', async () => {
       store.clear();
 

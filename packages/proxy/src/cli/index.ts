@@ -39,6 +39,12 @@ import { createCredentialProxy } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
 import { createOpenClawIntegration, authProfilesAreSqliteOnly, legacyAuthProfilesBlockProviders, pluginInstallNeedsCapabilityConsent } from '../openclaw/integration.js';
 import { supportsSecretRefIntegrations, wireSecretRefProviders, secretRefWiringStatus } from '../openclaw/secretref.js';
+import {
+  CHANNEL_ROUTING_SUPPORTED,
+  wireChannelRouting,
+  channelRoutingStatus,
+  type ChannelSkipReason
+} from '../openclaw/channel-routing.js';
 import { createHermesIntegration, detectHermes } from '../hermes/integration.js';
 import { managedScopeShadowedKeys, hermesManagedEnvPath, HERMES_SUPPORTED_SERVICES, hermesSecretSourceRefs } from '../hermes/config-writer.js';
 import { createBrokerScope, parseAquamanRef, defaultProjectsPath, type BrokerScope } from '../broker-scope.js';
@@ -263,6 +269,24 @@ async function promptSecretInput(prompt: string): Promise<string> {
       resolve(answer.trim());
     });
   });
+}
+
+/** One-line explanation of why `openclaw setup` left a channel alone. */
+function describeChannelSkip(reason: ChannelSkipReason, channel: string): string {
+  switch (reason) {
+    case 'no-vault-credential':
+      return `no credential in the vault (add it: aquaman credentials add ${channel} bot_token)`;
+    case 'user-endpoint':
+      return 'it already points at your own endpoint (self-hosted Bot API or regional proxy)';
+    case 'token-file':
+      return 'its token comes from tokenFile, whose precedence over a config token we will not guess at';
+    case 'multi-account':
+      return 'multi-account channels need one vault entry per account, which the service model has no room for yet';
+    case 'not-wired':
+      return 'routable but not wired yet (re-run: aquaman openclaw setup)';
+    case 'unroutable':
+      return 'this OpenClaw exposes no endpoint override for it, so its traffic cannot be routed';
+  }
 }
 
 const program = new Command();
@@ -1839,8 +1863,31 @@ openclaw
           // version and survive OpenClaw's plaintext scrubs \u2014 no SQLite
           // import step needed, unlike the legacy placeholder.
           const secretRefSupported = supportsSecretRefIntegrations(ocVersion);
+          // Which configured channels aquaman can actually take over: the host
+          // must expose an endpoint override and the vault must already hold
+          // the real token. Resolved up front because the wiring is sync, and
+          // only for channels the user actually configured -- a vault probe
+          // can be slow (keepassxc opens and derives a key per call).
+          const channelsConfigured = CHANNEL_ROUTING_SUPPORTED.filter(
+            c => openclawConfig.channels?.[c] && typeof openclawConfig.channels[c] === 'object'
+          );
+          const channelsWithVaultCredential = new Set<string>();
+          if (channelsConfigured.length > 0) {
+            const channelRegistry = createServiceRegistry();
+            for (const channel of channelsConfigured) {
+              const def = channelRegistry.get(channel);
+              if (!def) continue;
+              if (await store.exists(channel, def.credentialKey)) {
+                channelsWithVaultCredential.add(channel);
+              }
+            }
+          }
+
+          // Both routes need the loopback listener: model traffic (provider
+          // baseUrl) and channel egress (apiRoot). Decide once.
           let loopbackOrigin: string | undefined;
-          if (secretRefSupported) {
+          let loopbackToken: string | undefined;
+          if (secretRefSupported || channelsConfigured.length > 0) {
             // OpenClaw's model transport builds its own undici dispatcher: it
             // ignores the aquaman.local sentinel (its own DNS fails) and never
             // calls globalThis.fetch, so the plugin's interceptor can't see
@@ -1852,8 +1899,11 @@ openclaw
             config.loopback = { enabled: true, host: lbHost, port: lbPort, token: lbToken };
             saveConfig(config);
             loopbackOrigin = `http://${lbHost}:${lbPort}`;
+            loopbackToken = lbToken;
             console.log(`  \u2713 Loopback listener enabled on ${loopbackOrigin} (token-gated, loopback-bound)`);
+          }
 
+          if (secretRefSupported && loopbackOrigin) {
             const wiring = wireSecretRefProviders(openclawConfig, configuredServices, { loopbackOrigin });
             if (wiring.wiredProviders.length > 0) {
               console.log(`  \u2713 SecretRef wiring for ${wiring.wiredProviders.join(', ')} (canonical credential surface)`);
@@ -1867,6 +1917,34 @@ openclaw
             const userKept = wiring.skippedProviders.filter(s => s === 'anthropic' || s === 'openai');
             if (userKept.length > 0) {
               console.log(`  \u2192 Left existing user-set apiKey untouched for: ${userKept.join(', ')}`);
+            }
+          }
+
+          // b3. Channel egress routing (v0.15.0+). Channels each build their
+          // own undici dispatcher, so the plugin's fetch interceptor never
+          // sees them. Telegram is the one bundled channel with an endpoint
+          // override, and the Bot API carries its token in the path, so the
+          // placeholder written here is the loopback token itself.
+          if (loopbackOrigin && loopbackToken) {
+            const routing = wireChannelRouting(openclawConfig, {
+              loopbackOrigin,
+              loopbackToken,
+              hasVaultCredential: (svc) => channelsWithVaultCredential.has(svc)
+            });
+            if (routing.routedChannels.length > 0) {
+              // A routed channel that isn't in proxiedServices gets a 404 from
+              // our own proxy, which is exactly the dead bot the all-or-nothing
+              // wiring exists to avoid. Open the route we just pointed at us.
+              const proxied = config.credentials.proxiedServices;
+              const added = routing.routedChannels.filter(c => !proxied.includes(c));
+              if (added.length > 0) {
+                config.credentials.proxiedServices = [...proxied, ...added];
+                saveConfig(config);
+              }
+              console.log(`  \u2713 Channel traffic routed through the proxy for ${routing.routedChannels.join(', ')}`);
+            }
+            for (const skip of routing.skipped) {
+              console.log(`  \u2192 ${skip.channel} left as-is: ${describeChannelSkip(skip.reason, skip.channel)}`);
             }
           }
 
@@ -2001,6 +2079,9 @@ openclaw
     // 2. Backend accessible
     let config;
     let store: import('../core/index.js').CredentialStore | null = null;
+    // Services the vault holds anything for. Used by the channel-routing
+    // check below, which runs outside the store's try block.
+    const vaultServices = new Set<string>();
     try {
       config = loadConfig();
 
@@ -2037,6 +2118,7 @@ openclaw
 
       // 3. Count credentials
       const creds = await store.list();
+      for (const c of creds) vaultServices.add(c.service);
       if (creds.length > 0) {
         const names = creds.map(c => `${c.service}/${c.key}`).join(', ');
         console.log(`  \u2713 ${aqua('Backend:')} ${config.credentials.backend} (accessible)`);
@@ -2305,6 +2387,44 @@ openclaw
           }
         } catch {
           // openclaw.json invalid — already reported above
+        }
+      }
+
+      // 8.6. Channel egress routing (v0.15.0+). Channels build their own
+      //      undici dispatcher, so the plugin's fetch interceptor never sees
+      //      them. Only channels whose endpoint OpenClaw lets us override can
+      //      be routed; the rest are at-rest storage only and say so.
+      if (fs.existsSync(openclawJsonPath)) {
+        try {
+          const openclawConfig = JSON.parse(fs.readFileSync(openclawJsonPath, 'utf-8'));
+          const routing = channelRoutingStatus(openclawConfig, {
+            hasVaultCredential: (svc) => vaultServices.has(svc)
+          });
+          if (routing.routed.length > 0) {
+            console.log(`  \u2713 ${aqua('Channel routing')} through the proxy for ${routing.routed.join(', ')}`);
+            // Routed but not proxied means our own proxy 404s the channel.
+            const notProxied = routing.routed.filter(
+              c => !(config?.credentials?.proxiedServices ?? []).includes(c)
+            );
+            if (notProxied.length > 0) {
+              console.log(`  \u2717 ${aqua('Channel routing')} ${notProxied.join(', ')} routed here but missing from proxiedServices, so the proxy returns 404`);
+              console.log(`    \u2192 Add ${notProxied.join(', ')} to credentials.proxiedServices in ~/.aquaman/config.yaml (or re-run: aquaman openclaw setup)`);
+              issues++;
+            }
+          }
+          for (const skip of routing.notRouted) {
+            console.log(`  \u2717 ${aqua('Channel routing')} ${skip.channel} sends its token straight to the vendor`);
+            console.log(`    \u2192 ${describeChannelSkip(skip.reason, skip.channel)}`);
+            issues++;
+          }
+          if (routing.unroutable.length > 0) {
+            // Not a failure: nothing the user can do, and the credentials can
+            // still live in the vault. Stated so nobody assumes coverage.
+            console.log(`  \u2192 ${aqua('Channel routing')} not available for ${routing.unroutable.join(', ')} on this OpenClaw (no endpoint override)`);
+            console.log('    (their tokens can live in the vault, but the proxy is not in their egress path)');
+          }
+        } catch {
+          // openclaw.json invalid \u2014 already reported above
         }
       }
 

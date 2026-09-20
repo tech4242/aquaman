@@ -20,6 +20,56 @@ import type { BrokerScope } from './broker-scope.js';
 const SAFE_SERVICE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
 
 /**
+ * A url-path service carries its credential in a path segment instead of a
+ * header (Telegram: `/bot<TOKEN>/sendMessage`). A client pointed at us sends
+ * that segment filled with whatever it has — a placeholder, or on the loopback
+ * listener the aquaman token, because the segment is the only auth slot the
+ * shape has.
+ */
+export interface UrlPathCredentialSlot {
+  /** Index of the credential segment within the service-relative path. */
+  index: number;
+  /** What the client put there. Never forwarded upstream. */
+  presented: string;
+}
+
+/**
+ * Only the first two segments are considered. Telegram builds exactly
+ * `/bot<TOKEN>/<method>` and `/file/bot<TOKEN>/<file_path>`, so a deeper scan
+ * would only add ways for a method or file name to be mistaken for the slot.
+ */
+const URL_PATH_SLOT_SCAN_DEPTH = 2;
+
+/**
+ * Locate the credential segment in a service-relative path.
+ *
+ * Returns null when the client sent no such segment, which is the shape the
+ * plugin's fetch interceptor produces (`/telegram/sendMessage`). Callers then
+ * insert the credential at index 0, the pre-v0.15.0 behaviour.
+ */
+export function findUrlPathCredentialSlot(
+  segments: string[],
+  authPathTemplate: string
+): UrlPathCredentialSlot | null {
+  const templateSegments = authPathTemplate.split('/').filter(s => s);
+  if (templateSegments.length !== 1) return null;
+  const [prefix, suffix] = templateSegments[0].split('{token}');
+  if (suffix === undefined) return null;
+
+  const depth = Math.min(segments.length, URL_PATH_SLOT_SCAN_DEPTH);
+  for (let index = 0; index < depth; index++) {
+    const segment = segments[index];
+    if (segment.length <= prefix.length + suffix.length) continue;
+    if (!segment.startsWith(prefix) || !segment.endsWith(suffix)) continue;
+    return {
+      index,
+      presented: segment.slice(prefix.length, segment.length - suffix.length)
+    };
+  }
+  return null;
+}
+
+/**
  * Constant-time string comparison that doesn't leak length via an early
  * return. timingSafeEqual requires equal-length buffers, so unequal lengths
  * are compared against self (to burn comparable time) and then rejected.
@@ -195,7 +245,29 @@ export class CredentialProxy {
       candidates.push(authz.replace(/^Bearer\s+/i, ''));
     }
 
+    const pathBorne = this.urlPathTokenCandidate(req.url || '/');
+    if (pathBorne) candidates.push(pathBorne);
+
     return candidates.some(c => timingSafeStrEqual(c, expected));
+  }
+
+  /**
+   * A url-path service sends no auth header at all, so the loopback token can
+   * only arrive in the credential segment. OpenClaw's Telegram channel, for
+   * instance, is pointed at us with `channels.telegram.apiRoot` and a
+   * placeholder bot token; the placeholder it sends is the loopback token.
+   */
+  private urlPathTokenCandidate(url: string): string | undefined {
+    const segments = url.split('/').filter(p => p);
+    const service = segments[0];
+    if (!service || !SAFE_SERVICE_NAME.test(service)) return undefined;
+    if (!this.options.allowedServices.includes(service)) return undefined;
+
+    const serviceDef = this.serviceRegistry.get(service);
+    if (!serviceDef || serviceDef.authMode !== 'url-path' || !serviceDef.authPathTemplate) {
+      return undefined;
+    }
+    return findUrlPathCredentialSlot(segments.slice(1), serviceDef.authPathTemplate)?.presented;
   }
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse, fromLoopback = false): Promise<void> {
@@ -210,7 +282,7 @@ export class CredentialProxy {
       res.statusCode = 401;
       res.end(JSON.stringify({
         error: 'Loopback request rejected: missing or invalid aquaman loopback token',
-        fix: 'Set the placeholder api_key in ~/.hermes/.env to the token from: aquaman hermes status'
+        fix: 'The host must present the loopback token as its placeholder credential. Hermes: aquaman hermes status. OpenClaw: aquaman openclaw status'
       }));
       return;
     }
@@ -286,13 +358,24 @@ export class CredentialProxy {
       credentialKey: serviceDef.credentialKey
     };
 
-    const remainingPath = '/' + pathParts.slice(1).join('/');
+    // Split the credential segment out of a url-path request before anything
+    // else reads the path, so policy rules match the method (`/sendMessage`,
+    // not `/bot<TOKEN>/sendMessage`) and nothing observable records the token
+    // the client presented.
+    const serviceSegments = pathParts.slice(1);
+    const credentialSlot = authMode === 'url-path' && serviceDef.authPathTemplate
+      ? findUrlPathCredentialSlot(serviceSegments, serviceDef.authPathTemplate)
+      : null;
+    const canonicalSegments = credentialSlot
+      ? serviceSegments.filter((_, i) => i !== credentialSlot.index)
+      : serviceSegments;
+    const remainingPath = '/' + canonicalSegments.join('/');
 
     const requestInfo: RequestInfo = {
       id: requestId,
       service,
       method: req.method || 'GET',
-      path: url,
+      path: credentialSlot ? `/${service}${remainingPath}` : url,
       timestamp: new Date(),
       authenticated: false
     };
@@ -307,7 +390,7 @@ export class CredentialProxy {
         res.setHeader('Content-Type', 'application/json');
         res.statusCode = 403;
         res.end(JSON.stringify({
-          error: `Request denied by policy: ${req.method || 'GET'} ${url}`,
+          error: `Request denied by policy: ${req.method || 'GET'} ${requestInfo.path}`,
           fix: `Check policy rules for "${service}" in ~/.aquaman/config.yaml`
         }));
         return;
@@ -337,9 +420,31 @@ export class CredentialProxy {
       let upstreamPath: string;
 
       if (authMode === 'url-path' && serviceDef.authPathTemplate) {
-        // Inject token into URL path: /bot{token}/getUpdates
-        const tokenPath = serviceDef.authPathTemplate.replace('{token}', credential);
-        upstreamPath = tokenPath + remainingPath;
+        // Put the real token back in the position the client used it: index 0
+        // for `/bot<TOKEN>/sendMessage`, index 1 for the file-download shape
+        // `/file/bot<TOKEN>/<file_path>`. A client that sent no segment at all
+        // gets the credential prefixed, as before.
+        // A credential that contains a slash would silently become extra path
+        // segments and send the request somewhere the service definition never
+        // named. No url-path token has one; refuse rather than guess.
+        if (credential.includes('/')) {
+          requestInfo.error = 'Invalid credential: url-path token contains a slash';
+          requestInfo.statusCode = 500;
+          this.emitRequest(requestInfo);
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = 500;
+          res.end(JSON.stringify({
+            error: `Stored credential ${service}/${config.credentialKey} is not a valid ${service} token`,
+            fix: `Re-add it: aquaman credentials add ${service} ${config.credentialKey}`
+          }));
+          return;
+        }
+        const template = serviceDef.authPathTemplate;
+        const injected = (template.startsWith('/') ? template.slice(1) : template)
+          .replace('{token}', credential);
+        const segments = [...canonicalSegments];
+        segments.splice(credentialSlot?.index ?? 0, 0, injected);
+        upstreamPath = '/' + segments.join('/');
       } else {
         upstreamPath = remainingPath;
       }
@@ -470,8 +575,9 @@ export class CredentialProxy {
         resolve();
       });
 
-      // Add timeout to prevent indefinite hangs
-      const timeout = this.options.requestTimeout ?? 30000;
+      // Add timeout to prevent indefinite hangs. Long-polling services declare
+      // a floor so a shorter global setting can't cut their polls short.
+      const timeout = Math.max(this.options.requestTimeout ?? 30000, serviceDef.minRequestTimeout ?? 0);
       proxyReq.setTimeout(timeout, () => {
         proxyReq.destroy();
         requestInfo.error = 'Gateway timeout';

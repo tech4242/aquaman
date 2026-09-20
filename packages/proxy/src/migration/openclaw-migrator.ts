@@ -10,6 +10,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import type { CredentialStore } from '../core/index.js';
+import { isAquamanPlaceholder } from '../core/index.js';
 
 export interface CredentialMapping {
   /** JSON path segments within openclaw.json to find the credential */
@@ -176,7 +177,7 @@ export function extractCredentials(config: any): CredentialMapping[] {
         for (const fieldDef of providerDef.fields) {
           const value = acc[fieldDef.field];
           if (value && typeof value === 'string' && value.trim()
-              && value !== 'aquaman-proxy-managed' && !value.startsWith('aquaman://')) {
+              && !isAquamanPlaceholder(value)) {
             results.push({
               jsonPath: ['channels', providerDef.provider, 'accounts', accountId, fieldDef.field],
               service: fieldDef.service,
@@ -192,7 +193,7 @@ export function extractCredentials(config: any): CredentialMapping[] {
     for (const fieldDef of providerDef.fields) {
       const value = providerConfig[fieldDef.field];
       if (value && typeof value === 'string' && value.trim()
-          && value !== 'aquaman-proxy-managed' && !value.startsWith('aquaman://')) {
+          && !isAquamanPlaceholder(value)) {
         // Avoid duplicating if already found in accounts
         const alreadyFound = results.some(
           r => r.service === fieldDef.service && r.key === fieldDef.key
@@ -275,7 +276,7 @@ function scanObjectForCredentials(
     }
 
     if (typeof value !== 'string' || !value.trim()) continue;
-    if (value === 'aquaman-proxy-managed' || value.startsWith('aquaman://')) continue;
+    if (isAquamanPlaceholder(value)) continue;
     if (!CREDENTIAL_FIELD_PATTERN.test(field)) continue;
 
     // Convert camelCase field to snake_case key
@@ -364,7 +365,7 @@ export async function migrateFromOpenClaw(
     }
 
     // Skip placeholder values
-    if (value === 'aquaman-proxy-managed' || value.startsWith('aquaman://')) {
+    if (isAquamanPlaceholder(value)) {
       result.skipped.push({
         service: mapping.service,
         key: mapping.key,
@@ -767,7 +768,7 @@ export async function autoMigrateOpenClaw(options: AutoMigrateOptions): Promise<
           current = current[key];
         }
         const value = typeof current === 'string' ? current : null;
-        if (value && value !== 'aquaman-proxy-managed' && !value.startsWith('aquaman://')) {
+        if (value && !isAquamanPlaceholder(value)) {
           const id = `${m.service}/${m.key}`;
           if (!seen.has(id)) {
             seen.add(id);
@@ -784,7 +785,7 @@ export async function autoMigrateOpenClaw(options: AutoMigrateOptions): Promise<
           current = current[key];
         }
         const value = typeof current === 'string' ? current : null;
-        if (value && value !== 'aquaman-proxy-managed' && !value.startsWith('aquaman://')) {
+        if (value && !isAquamanPlaceholder(value)) {
           const id = `${m.service}/${m.key}`;
           if (!seen.has(id)) {
             seen.add(id);

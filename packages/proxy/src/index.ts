@@ -14,7 +14,9 @@ export {
   type RequestInfo,
   CredentialProxy,
   createCredentialProxy,
-  type ServiceDefinition
+  type ServiceDefinition,
+  type UrlPathCredentialSlot,
+  findUrlPathCredentialSlot
 } from './daemon.js';
 
 // Credential-broker scoping (v0.15.0+)
@@ -81,6 +83,20 @@ export {
   wireSecretRefProviders,
   secretRefWiringStatus
 } from './openclaw/secretref.js';
+
+// OpenClaw channel egress routing (v0.15.0+)
+export {
+  type ChannelSkip,
+  type ChannelSkipReason,
+  type ChannelRoutingResult,
+  type ChannelRoutingOptions,
+  type ChannelRoutingStatus,
+  CHANNEL_ROUTING_SUPPORTED,
+  CHANNEL_ROUTING_UNSUPPORTED,
+  loopbackChannelBaseUrl,
+  wireChannelRouting,
+  channelRoutingStatus
+} from './openclaw/channel-routing.js';
 
 // Hermes Integration (v0.13.0+)
 export {
