@@ -14,7 +14,7 @@ You set up Claude Code, OpenClaw, or Hermes, and now you're staring at `.env` fi
 
 Aquaman fixes this with three layers of defense:
 
-1. **Process isolation**: API keys live in a separate proxy process that injects them on the way out. On the OpenClaw and Hermes LLM paths the agent never holds a key, and nothing on the proxy hands one back. Even RCE in the agent can't read them: they're in a different address space. Coding agents get only the refs you declare, one command at a time.
+1. **Process isolation**: API keys live in a separate proxy process that injects them at egress. The agent holds a marker, never a key, so even RCE in the agent can't read one. Coding agents get only the refs you declare, one command at a time.
 2. **Request policies**: Per-service rules control *which endpoints* an agent can call. Block admin APIs, prevent deletions, allow drafts but deny sends. Denied requests never get real credentials.
 3. **Tamper-evident audit**: Every credential use is logged with SHA-256 hash chains. You can prove what was accessed and detect tampering after the fact.
 
@@ -58,7 +58,7 @@ Troubleshooting: `openclaw aquaman doctor`.
 
 **Using npm directly?** `npm install -g aquaman-proxy && aquaman openclaw setup` does the same - installs the proxy CLI, stores your keys, installs the plugin into `~/.openclaw/extensions/aquaman-plugin/`, and wires the credentials (SecretRef refs on OpenClaw ≥ 2026.6.5, the auth-profiles.json placeholder on older versions).
 
-Model traffic reaches the proxy through a token-gated loopback listener that `aquaman openclaw setup` wires into `models.providers.<svc>.baseUrl`, because OpenClaw's model transport bypasses the fetch interceptor. On 2026.7.33+ most channels bypass it too (verified with Telegram), so channel support on those versions means at-rest storage and migration, not egress injection — see [`packages/plugin/README.md`](packages/plugin/README.md). The interceptor still covers the services in the plugin's `services` config that do use the global fetch. Add more under the plugin config in `openclaw.json` - supported channels include Slack, Discord, Telegram, MS Teams, Matrix, LINE, Twitch, Twilio, BlueBubbles, Mattermost, Nostr, Tlon, Feishu, Google Chat, ElevenLabs, xAI, Cloudflare AI Gateway, Mistral, Hugging Face, and more (25 total).
+`aquaman openclaw setup` points `models.providers.<svc>.baseUrl` at the proxy's loopback listener, because OpenClaw's model transport bypasses the fetch interceptor. Most channels bypass it too on 2026.7.33+, so channel tokens are stored and migrated but not injected at egress there (see [`packages/plugin/README.md`](packages/plugin/README.md)). Add channels under the plugin config in `openclaw.json`; supported ones include Slack, Discord, Telegram, MS Teams, Matrix, LINE, Twitch, Twilio, BlueBubbles, Mattermost, Nostr, Tlon, Feishu, Google Chat, ElevenLabs, xAI, Cloudflare AI Gateway, Mistral, Hugging Face, and more (25 total).
 
 ### 3. AI coding agents (Claude Code today)
 
@@ -105,7 +105,7 @@ When Claude Code runs a Bash tool in `~/code/my-app`, aquaman's hook rewrites th
 - Pipes stdout/stderr through a redactor that prepends a value-based pattern for each resolved value: **whatever string was injected gets redacted, regardless of shape** (Atlassian tokens, Notion secrets, internal-API keys - none of them need to match a known provider format). Generic shape-based patterns (sk-ant-, ghp_, sk_live_, AKIA…, JWTs, PEM blocks, ATATT3xF…) still run after as defense-in-depth for secrets the child surfaces that we did NOT inject.
 - Cleans up when the command exits.
 
-**Claude Code sandbox:** the sandbox blocks Unix sockets by default, so `aquaman coder setup claude-code` allowlists the proxy socket (`sandbox.network.allowUnixSockets`) on macOS. **Linux/WSL2: Claude Code ignores that list there, so sandboxed commands can reach the broker only with `sandbox.network.allowAllUnixSockets: true`, which opens every Unix socket to them.**
+**Claude Code sandbox:** it blocks Unix sockets by default, so `aquaman coder setup claude-code` allowlists the proxy socket on macOS (`sandbox.network.allowUnixSockets`). Linux and WSL2 ignore that list, where the only option is `sandbox.network.allowAllUnixSockets: true`, which opens every Unix socket to sandboxed commands.
 
 ### 4. Hermes (agent host)
 
@@ -131,7 +131,7 @@ aquaman-hermes install                # drops the plugin into ~/.hermes/plugins/
 hermes plugins enable aquaman
 ```
 
-The plugin also registers an `aquaman` **secret source** (Hermes ≥ 0.18.1) for project secrets such as `GITHUB_TOKEN`: bind them under `secrets.aquaman.env` in Hermes' `config.yaml`, then declare each ref to the daemon with `aquaman broker allow aquaman://github/token` (required since v0.15.0; `aquaman hermes doctor` lists any you missed). Those values do enter Hermes' env, unlike the LLM keys above. See [`packages/hermes/README.md`](packages/hermes/README.md).
+The plugin also registers an `aquaman` **secret source** (Hermes ≥ 0.18.1) for project secrets like `GITHUB_TOKEN`. Bind them under `secrets.aquaman.env` in Hermes' `config.yaml`, then declare each ref with `aquaman broker allow aquaman://github/token` (required since v0.15.0; `aquaman hermes doctor` lists any you missed). Unlike the LLM keys above, these values do enter Hermes' env. See [`packages/hermes/README.md`](packages/hermes/README.md).
 
 ## How It Works
 
@@ -165,13 +165,13 @@ Agent / OpenClaw / Coding Agent             Aquaman Proxy
 4. **Broker (coder + Hermes secret source)**: `POST /broker/resolve` materializes a credential per tool call, scoped to a single command's env. Only `aquaman daemon` serves it, and only for refs you declared (`projects.yaml` or `aquaman broker allow`). The OpenClaw plugin's proxy never serves it (v0.15.0+).
 5. **Audit**: Every credential use is logged with SHA-256 hash chains.
 
-On the proxy paths the agent only ever sees a local endpoint (a `aquaman.local` sentinel over the Unix socket, or `http://127.0.0.1:<port>/<service>` for hosts that build their own HTTP client) plus a marker in place of the key: the `aquaman-proxy-managed` placeholder, or the loopback token, which only grants access to the local proxy. It never sees a real key. On the coder path the *child* command gets the declared values and the agent sees redacted output.
+On the proxy paths the agent sees a local endpoint plus a marker: the `aquaman-proxy-managed` placeholder, or the loopback token, which only works against your local proxy. Never a real key. On the coder path the *child* command gets the declared values and the agent sees redacted output.
 
 ## Security Model
 
 | Layer | What it does | What it stops |
 |---|---|---|
-| **Process isolation** | Credentials in separate process, connected via Unix domain socket (`chmod 0o600`) | Compromised agent can't read proxied keys - different address space, no TCP port to probe |
+| **Process isolation** | Credentials in a separate process, reached over a Unix socket (`chmod 0o600`) or a token-gated loopback listener | Compromised agent can't read proxied keys: different address space |
 | **Broker scope** | Only `aquaman daemon` hands out values, and only for refs you declared; OpenClaw-hosted proxies never do (v0.15.0+) | An agent can't pull arbitrary vault entries through the socket |
 | **Service allowlisting** | `proxiedServices` controls which APIs the agent can reach | Agent can't talk to services you didn't authorize |
 | **Request policies** | Method + path rules per service, enforced before credential injection | Agent can reach Anthropic but not its admin API; can draft emails but not send them |
@@ -183,22 +183,22 @@ On the proxy paths the agent only ever sees a local endpoint (a `aquaman.local` 
 
 | Path | Transport | Access control |
 |---|---|---|
-| Coding agents (`aquaman-coder`), any UDS-capable client | Unix socket `~/.aquaman/proxy.sock` | File permissions (`0600`) — only processes running as you |
-| Hermes (v0.13.0+), OpenClaw model traffic (v0.15.0+) | Loopback TCP `127.0.0.1:<port>` | Per-install token, constant-time check, bound to loopback |
+| Coding agents, any client that can dial a socket | Unix socket `~/.aquaman/proxy.sock` | File permissions (`0600`): only processes running as you |
+| Hermes (v0.13.0+), OpenClaw model traffic (v0.15.0+) | Loopback TCP `127.0.0.1:<port>` | Per-install token, constant-time check, loopback bind |
 
-Two transports because two kinds of host. Anything that can dial a Unix socket does. Hermes and OpenClaw cannot: each builds its own HTTP client, Hermes exposes no transport hook, and OpenClaw's model transport neither calls `globalThis.fetch` nor resolves a sentinel hostname. A loopback listener is the only interface they accept.
+Hermes and OpenClaw each build their own HTTP client and can't dial a socket, so they use the listener. Everything else uses the socket.
 
-The token is a capability to reach the local proxy, not a credential. It is generated per install, stored in `~/.aquaman/config.yaml` (`0600`), and handed to the host as the provider "api key" so it travels on every call. The proxy checks it, strips it, and injects the real key from your vault.
+The token is a capability to reach the local proxy, not a credential. Generated per install, stored in `~/.aquaman/config.yaml` (`0600`), sent by the host as its provider api key. The proxy checks it, strips it, injects your real key.
 
-The honest difference: any process on the machine can *reach* a loopback port, including other local users, where the socket's `0600` shuts them out. The token is what stops them there. So the listener stays off until a host needs it — `aquaman hermes setup` or `aquaman openclaw setup` turn it on — and the Unix socket remains the default everywhere else. On a single-user machine the two are equivalent in practice; on a shared machine the socket is stricter.
+Trade-off: any local process can reach a loopback port, including other users, where the socket's `0600` shuts them out. The token is the gate there, so the listener stays off until `aquaman hermes setup` or `aquaman openclaw setup` turns it on.
 
 ### Channel credentials on OpenClaw 2026.7.33+
 
-Not protected today. Verified on 2026-09-20 against a live gateway: with the plugin's interceptor active for `api.telegram.org`, Telegram's `getMe` still went straight to Telegram and nothing reached the proxy. Telegram, Discord and Matrix each build their own HTTP client per request, so the `globalThis.fetch` interceptor never sees them; only MS Teams still goes through it. Model-provider isolation is unaffected — it no longer relies on the interceptor.
+Not proxied. Verified 2026-09-20 on a live gateway: with the interceptor active for `api.telegram.org`, Telegram's `getMe` reached Telegram directly and nothing hit the proxy. Telegram, Discord and Matrix build their own HTTP client per request; only MS Teams uses the global `fetch`. On these versions aquaman stores channel tokens in your vault and migrates them, but does not inject them at egress. Model providers are unaffected.
 
-Routing them needs a per-channel endpoint override, and only some channels have one: Telegram has `channels.telegram.apiRoot`; Discord and Slack have no equivalent; Matrix, Mattermost and Nextcloud Talk point at your own server.
+Routing needs a per-channel endpoint override. Telegram has `channels.telegram.apiRoot`; Discord and Slack have none; Matrix, Mattermost and Nextcloud Talk point at your own server.
 
-**What same-user isolation can't do.** The socket's `0o600` keeps other *users* out, not other processes running as you. Any such process, a compromised agent included, can still send requests through the proxy to the services you configured while it runs (request policy bounds what, the audit log records it), and can fetch refs you declared for materialization, since that is what declaring means. It cannot read the keys the proxy injects. For a harder boundary, run the agent as a different OS user or inside a sandbox.
+**What same-user isolation can't do.** The socket's `0o600` keeps other users out, not other processes running as you. Such a process can send requests through the proxy while it runs (bounded by request policy, recorded in the audit log) and can fetch refs you declared, which is what declaring means. It cannot read the keys the proxy injects. For a harder boundary, run the agent as a different OS user or in a sandbox.
 
 Detailed model - per-integration specifics (HTTP interceptor scope, auth profiles, scanner findings, ClawScan publisher note) - lives in [`packages/plugin/README.md`](packages/plugin/README.md) and [`packages/coder/README.md`](packages/coder/README.md).
 
@@ -248,7 +248,7 @@ policy:
         action: deny          # drafts ok, sending blocked
 ```
 
-- **Paths are the upstream API's full path** after the service prefix, the way real traffic arrives: Slack's Web API is `/api/<method>`, Gmail's is `/gmail/v1/...`. Presets before v0.15.0 used `/admin.*` and `/v1/users/*/messages/send`, which never match real traffic. `aquaman doctor` flags them if they're still in your config.
+- **Paths are the upstream API's full path** after the service prefix: Slack's Web API is `/api/<method>`, Gmail's is `/gmail/v1/...`. Presets before v0.15.0 used `/admin.*` and `/v1/users/*/messages/send`, which never matched real traffic. `aquaman doctor` flags those if they're still in your config.
 - **No policy = allow all** (backward compatible)
 - **First match wins**: rules evaluated top-to-bottom, unmatched requests fall through to `defaultAction`
 - **Denied before auth**: blocked requests never get real credentials
@@ -265,7 +265,7 @@ Bring your own vault - aquaman has no house store. Pick the backend you already 
 | `keychain` | Local dev on macOS (default) | Works out of the box |
 | `encrypted-file` | Linux, WSL2, CI/CD | AES-256-GCM, password-protected |
 | `keepassxc` | Existing KeePass users | `npm i -g kdbxweb argon2` (optional peers since v0.14.1), then set `AQUAMAN_KEEPASS_PASSWORD` or a key file |
-| `1password` | Team credential sharing | `brew install 1password-cli && op signin` — for unattended agents use a [service account](https://developer.1password.com/docs/service-accounts/) (`OP_SERVICE_ACCOUNT_TOKEN`) |
+| `1password` | Team credential sharing | `brew install 1password-cli && op signin`. For unattended agents use a [service account](https://developer.1password.com/docs/service-accounts/) (`OP_SERVICE_ACCOUNT_TOKEN`) |
 | `vault` | Enterprise secrets management | Set `VAULT_ADDR` + `VAULT_TOKEN` |
 | `systemd-creds` | Linux with systemd ≥ 256 | TPM2-backed, no root required |
 | `bitwarden` | Bitwarden users | `bw login && export BW_SESSION=$(bw unlock --raw)` |
@@ -276,9 +276,9 @@ Bring your own vault - aquaman has no house store. Pick the backend you already 
 
 ### Credential caching (v0.13.1+)
 
-Backends with a per-access cost — `1password` (a biometric prompt per read in desktop-app mode), `bitwarden` (~1-2 s CLI spawn), `vault` (an HTTP round-trip) — are cached **in the daemon's memory** for 15 minutes by default, so a busy agent session unlocks the vault once per window instead of once per request. The other backends are already fast or cache internally, so caching is off for them by default. Tune with `credentials.cacheTtlSeconds` in `~/.aquaman/config.yaml` (or `AQUAMAN_CACHE_TTL`); `0` disables.
+Backends with a per-access cost, like `1password` (a biometric prompt per read in desktop-app mode), `bitwarden` (~1-2 s CLI spawn) and `vault` (an HTTP round-trip), are cached **in the daemon's memory** for 15 minutes by default, so a busy agent session unlocks the vault once per window instead of once per request. The other backends are already fast or cache internally, so caching is off for them by default. Tune with `credentials.cacheTtlSeconds` in `~/.aquaman/config.yaml` (or `AQUAMAN_CACHE_TTL`); `0` disables.
 
-The honest trade-off: a per-access biometric prompt is a user-presence check, and the cache removes per-access presence for the TTL window. For unattended agents that prompt never gets answered — it gets the vault abandoned for a plaintext `.env`, which is strictly worse. The cache does **not** move the isolation boundary: values live only in the proxy process (where they already transit on every request), are never written to disk, and are invalidated immediately when you rotate through `aquaman credentials add`. Writes always go to your vault. Conformance-tested in [`test/compliance/cache-residency.test.ts`](test/compliance/cache-residency.test.ts). For zero prompts with 1Password, use a service account scoped to the `aquaman` vault — `aquaman doctor` will point you there.
+The honest trade-off: a per-access biometric prompt is a user-presence check, and the cache removes per-access presence for the TTL window. For unattended agents that prompt never gets answered, so the vault gets abandoned for a plaintext `.env`, which is strictly worse. The cache does **not** move the isolation boundary: values live only in the proxy process (where they already transit on every request), are never written to disk, and are invalidated immediately when you rotate through `aquaman credentials add`. Writes always go to your vault. Conformance-tested in [`test/compliance/cache-residency.test.ts`](test/compliance/cache-residency.test.ts). For zero prompts with 1Password, use a service account scoped to the `aquaman` vault; `aquaman doctor` will point you there.
 
 ## License
 

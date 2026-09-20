@@ -66,7 +66,7 @@ When Claude Code runs a Bash tool in `~/code/my-app`, aquaman's hook rewrites th
 
 ### Transport
 
-`aquaman-coder` talks to the proxy over the Unix socket `~/.aquaman/proxy.sock` (`0600`) and nothing else: no port, no token, no network. Only processes running as you can reach it. Hermes and OpenClaw use a token-gated loopback listener instead, because neither can dial a socket — that listener is not involved in the coder path. See the [root README](https://github.com/tech4242/aquaman#transports-and-access-control).
+`aquaman-coder` talks to the proxy over the Unix socket `~/.aquaman/proxy.sock` (`0600`) and nothing else: no port, no token, no network. Only processes running as you can reach it. Hermes and OpenClaw use a token-gated loopback listener instead, because neither can dial a socket; that listener is not part of the coder path. See the [root README](https://github.com/tech4242/aquaman#transports-and-access-control).
 
 ### What the broker hands out
 

@@ -60,20 +60,20 @@ Aquaman keeps API credentials out of the agent process by running them in a sepa
 - The SecretRef resolver hands the gateway the **loopback token** as the provider api key. The listener is token-gated, the token only grants access to 127.0.0.1, and the proxy strips it before injecting your real key from the vault.
 - Why not the Unix socket: OpenClaw's model transport builds its own HTTP client. It never calls `globalThis.fetch` and resolves hostnames itself, so the older `aquaman.local` sentinel could not work for model traffic on 2026.7.33+. `aquaman openclaw doctor` fails if a provider is credential-wired but not routed.
 
-**Channel credentials on 2026.7.33+ — not protected**
+**Channel credentials on 2026.7.33+: not proxied**
 
-Verified against a live gateway on 2026-09-20: with this plugin's interceptor active for `api.telegram.org`, Telegram's `getMe` went straight to Telegram and nothing reached the proxy. Telegram, Discord and Matrix each build their own HTTP client per request, so the `globalThis.fetch` interceptor never sees them; only MS Teams still goes through it. Model-provider isolation is unaffected — it no longer depends on the interceptor.
+Verified 2026-09-20 on a live gateway: with this plugin's interceptor active for `api.telegram.org`, Telegram's `getMe` reached Telegram directly and nothing hit the proxy. Telegram, Discord and Matrix build their own HTTP client per request; only MS Teams uses the global `fetch`. Model-provider isolation is unaffected, since it no longer depends on the interceptor.
 
-Routing a channel needs a per-channel endpoint override, and only some have one: Telegram has `channels.telegram.apiRoot`; Discord and Slack have no equivalent; Matrix, Mattermost and Nextcloud Talk point at your own server. Until that lands, keep channel tokens in OpenClaw's own secret storage and treat aquaman's channel support as covering at-rest storage and migration, not egress injection, on these versions.
+On these versions aquaman covers channel tokens at rest (vault storage, `aquaman openclaw migrate`) but not egress injection. Routing needs a per-channel endpoint override: Telegram has `channels.telegram.apiRoot`, Discord and Slack have none, and Matrix, Mattermost and Nextcloud Talk point at your own server.
 
 ### Transports and access control
 
-Aquaman's proxy listens two ways, and which one a host uses is not a preference — it's what the host can dial:
+The proxy listens two ways, and which one a host uses depends on what that host can dial:
 
-- **Unix socket** `~/.aquaman/proxy.sock`, `0600`: coding agents and anything else that can dial a socket. Access control is file permissions, so only processes running as you can connect.
-- **Loopback TCP** `127.0.0.1:<port>`, token-gated: Hermes (v0.13.0+) and OpenClaw model traffic (v0.15.0+), because both build their own HTTP client and cannot dial a socket.
+- **Unix socket** `~/.aquaman/proxy.sock` (`0600`): coding agents and anything else that can dial a socket. File permissions mean only processes running as you can connect.
+- **Loopback TCP** `127.0.0.1:<port>`, token-gated: Hermes (v0.13.0+) and OpenClaw model traffic (v0.15.0+), because both build their own HTTP client.
 
-The loopback token is a capability to reach the local proxy, not a credential: generated per install, stored in `~/.aquaman/config.yaml` (`0600`), stripped by the proxy before the real key is injected. A loopback port can be reached by any process on the machine, including other local users, where the socket's `0600` shuts them out — so the listener stays off until a host needs it, and the socket stays the default. Full table in the [root README](https://github.com/tech4242/aquaman#transports-and-access-control).
+The token is a capability to reach the local proxy, not a credential: generated per install, stored in `~/.aquaman/config.yaml` (`0600`), stripped by the proxy before your real key is injected. Any local process can reach a loopback port, including other users, where the socket's `0600` shuts them out, so the listener stays off until a host needs it. Full table in the [root README](https://github.com/tech4242/aquaman#transports-and-access-control).
 
 **What a compromised agent can and can't do**
 
@@ -91,9 +91,9 @@ The loopback token is a capability to reach the local proxy, not a credential: g
 - Only services listed in the plugin's `services` config get their traffic redirected to the local proxy. As of v0.11.4, the interceptor filters its known-host map by your `services` list. Channels you didn't opt into keep talking to the upstream directly.
 - The interceptor uses a Unix Domain Socket (no TCP, no network exposure). UDS file permissions are `chmod 0o600`, enforced explicitly at proxy startup (v0.12.0+).
 
-**Credential wiring — SecretRef (v0.14.0+, OpenClaw ≥ 2026.6.5)**
+**Credential wiring: SecretRef (v0.14.0+, OpenClaw ≥ 2026.6.5)**
 
-- On current OpenClaw, `aquaman openclaw setup` wires the plugin through OpenClaw's canonical **SecretRef** credential surface: the manifest declares an exec resolver (`secretProviderIntegrations.aquaman` → `dist/secrets-resolver.mjs`) and `openclaw.json` gets `models.providers.<svc>.apiKey` refs pointing at it. The resolver returns a static placeholder — real keys stay in your vault; the proxy strips the placeholder and injects the real credential per request.
+- On current OpenClaw, `aquaman openclaw setup` wires the plugin through OpenClaw's canonical **SecretRef** credential surface: the manifest declares an exec resolver (`secretProviderIntegrations.aquaman` → `dist/secrets-resolver.mjs`) and `openclaw.json` gets `models.providers.<svc>.apiKey` refs pointing at it. The resolver returns the loopback token, or the `aquaman-proxy-managed` placeholder when no listener is configured. Either way it's a marker: real keys stay in your vault, and the proxy strips the marker and injects the real credential per request.
 - No `openclaw doctor --fix` import step, and the wiring survives OpenClaw's plaintext-scrub flows (`openclaw secrets configure --apply`). `aquaman openclaw doctor` reports the wiring state and suggests the upgrade on legacy installs.
 
 **Auth profiles (legacy path, OpenClaw < 2026.6.5)**
@@ -111,10 +111,10 @@ The loopback token is a capability to reach the local proxy, not a credential: g
 
 **Host surface the plugin touches**
 
-- `process:spawn` — `aquaman` (the proxy binary; see "Proxy process" above).
-- `global:override` — `globalThis.fetch` (the interceptor; scoped to your `services` list).
-- `env:write` — `*_BASE_URL` and `GITHUB_API_URL` (sentinel base URLs pointing at the proxy).
-- `fs:write` — `~/.openclaw/agents/*/agent/auth-profiles.json` (legacy gateways < 2026.6.5 only; skipped when SecretRef wiring is present, and never during discovery loads).
+- `process:spawn`: `aquaman` (the proxy binary; see "Proxy process" above).
+- `global:override`: `globalThis.fetch` (the interceptor; scoped to your `services` list).
+- `env:write`: `*_BASE_URL` and `GITHUB_API_URL` (sentinel base URLs, skipped for providers routed by config).
+- `fs:write`: `~/.openclaw/agents/*/agent/auth-profiles.json` (legacy gateways < 2026.6.5 only; skipped when SecretRef wiring is present, and never during discovery loads).
 - Agent tool `aquaman_status`, declared in the manifest's `contracts.tools` (OpenClaw drops undeclared tools).
 
 ### Scanner findings
