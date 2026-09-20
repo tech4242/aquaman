@@ -176,41 +176,26 @@ The Python plugin registers an `aquaman` `SecretSource` through `ctx.register_se
 
 ## CLI shape
 
-```bash
-# Top level (vault only, agent agnostic)
-aquaman setup | doctor | status | daemon | stop | init
-aquaman credentials add/list/delete/guide
-aquaman broker list/allow/revoke        # which refs the daemon may hand out (v0.15.0+)
-aquaman audit tail/verify/rotate
-aquaman services list/validate
-aquaman policy list/test
+Run `aquaman --help` (and `aquaman <namespace> --help`) rather than duplicating the surface here. The shape: vault-level commands at the top, then `openclaw`, `coder` and `hermes` namespaces, with `setup`/`doctor`/`status` at every level (top-level is an overview, namespaced goes deep). Doctor exits 1 if any check fails.
 
-aquaman openclaw setup|doctor|status|start|configure|migrate   # plugin-mode is hidden
-aquaman coder setup|doctor|status|project|get|exec             # hook is hidden
-aquaman hermes setup|doctor|status|configure
-```
+Gotchas the help text doesn't tell you:
 
-`setup`/`doctor`/`status` exist at every level: top-level gives an overview, namespaced versions go deep. Doctor exits 1 if any check fails.
-
-`aquaman setup` is vault only. `aquaman openclaw setup` adds the plugin install, openclaw.json merge, SecretRef plus loopback wiring, and optional credential migration. `aquaman coder setup claude-code` writes the hook entry and the sandbox socket allowance. Common flags: `--backend`, `--non-interactive` (reads `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AQUAMAN_ENCRYPTION_PASSWORD`, `AQUAMAN_KEEPASS_PASSWORD`, `VAULT_ADDR`, `VAULT_TOKEN`, `BW_SESSION`), `--no-policy`.
-
-Error messages carry fixes: a 401 from the proxy returns `{ error, fix: "Run: aquaman credentials add <service> <key>" }`.
+- `aquaman openclaw plugin-mode` and `aquaman coder hook` are hidden. They are spawned by the plugin and by Claude Code, never run by hand.
+- `aquaman coder *` delegates to the separate `aquaman-coder` binary, so it can be missing while the rest of the CLI works.
+- `--non-interactive` reads `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AQUAMAN_ENCRYPTION_PASSWORD`, `AQUAMAN_KEEPASS_PASSWORD`, `VAULT_ADDR`, `VAULT_TOKEN`, `BW_SESSION`.
+- `aquaman openclaw setup` does far more than the vault wizard: plugin install, openclaw.json merge, SecretRef plus loopback wiring, optional credential migration.
+- Errors carry fixes. A proxy 401 returns `{ error, fix: "Run: aquaman credentials add <service> <key>" }`; keep that convention when adding failure paths.
 
 ## Credential backends
 
-| Backend | Platform | Use case |
-|---|---|---|
-| `keychain` | macOS | Local dev |
-| `encrypted-file` | Linux, WSL2, CI | No native keyring |
-| `keepassxc` | Any (.kdbx) | Existing KeePass users; needs `npm i -g kdbxweb argon2` |
-| `1password` | Any (`op` CLI) | Team sharing |
-| `vault` | Any (HTTP API) | Enterprise |
-| `systemd-creds` | Linux (systemd ≥ 256) | TPM2-backed, no master password |
-| `bitwarden` | Any (`bw` CLI) | Bitwarden users |
+Seven backends; the list and their trade-offs are in the root README, the internals in OPERATIONS.md. Setup auto-detects: macOS → keychain; Linux → keychain with libsecret, else systemd-creds (systemd ≥ 256), else encrypted-file.
 
-Setup auto-detects: macOS → keychain; Linux → keychain with libsecret, else systemd-creds, else encrypted-file. Backend internals are in OPERATIONS.md.
+Gotchas:
 
-`CachingStore` (`core/credentials/caching-store.ts`) is a TTL'd in-memory decorator applied only in daemon contexts, because 1Password prompts biometrics per `op` spawn, Bitwarden spawns `bw`, and Vault does an HTTP round-trip. Default 900 s for `1password`/`bitwarden`/`vault`, off elsewhere; `credentials.cacheTtlSeconds` or `AQUAMAN_CACHE_TTL` overrides, `0` disables. No negative caching, write-through invalidation, errors never cached, memory only, audit stays per-request. Conformance: `test/compliance/cache-residency.test.ts`. For zero prompts with 1Password use `OP_SERVICE_ACCOUNT_TOKEN`; doctor prints the hint.
+- `keepassxc` needs `npm i -g kdbxweb argon2`, which are optional peers rather than dependencies (see Dependency posture).
+- `keepassxc`, `systemd-creds` and `encrypted-file` cache internally for the daemon's lifetime with no TTL, so a credential added while the daemon runs is invisible until restart.
+- `CachingStore` (`core/credentials/caching-store.ts`) is a TTL'd in-memory decorator applied only in daemon contexts, because 1Password prompts biometrics per `op` spawn, Bitwarden spawns `bw`, and Vault does an HTTP round-trip. Default 900 s for `1password`/`bitwarden`/`vault`, off elsewhere; `credentials.cacheTtlSeconds` or `AQUAMAN_CACHE_TTL` overrides, `0` disables. No negative caching, write-through invalidation, errors never cached, memory only, audit stays per-request. Conformance: `test/compliance/cache-residency.test.ts`.
+- For zero prompts with 1Password use `OP_SERVICE_ACCOUNT_TOKEN`; doctor prints the hint. `OP_CONNECT_HOST`/`OP_CONNECT_TOKEN` win if both are set.
 
 ## Dependency posture
 
