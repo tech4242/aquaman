@@ -1839,10 +1839,30 @@ openclaw
           // version and survive OpenClaw's plaintext scrubs \u2014 no SQLite
           // import step needed, unlike the legacy placeholder.
           const secretRefSupported = supportsSecretRefIntegrations(ocVersion);
+          let loopbackOrigin: string | undefined;
           if (secretRefSupported) {
-            const wiring = wireSecretRefProviders(openclawConfig, configuredServices);
+            // OpenClaw's model transport builds its own undici dispatcher: it
+            // ignores the aquaman.local sentinel (its own DNS fails) and never
+            // calls globalThis.fetch, so the plugin's interceptor can't see
+            // provider traffic. Route it at the loopback listener instead —
+            // OpenClaw's documented local-provider pattern (v0.15.0).
+            const lbHost = config.loopback?.host || '127.0.0.1';
+            const lbPort = config.loopback?.port || DEFAULT_LOOPBACK_PORT;
+            const lbToken = config.loopback?.token || generateLoopbackToken();
+            config.loopback = { enabled: true, host: lbHost, port: lbPort, token: lbToken };
+            saveConfig(config);
+            loopbackOrigin = `http://${lbHost}:${lbPort}`;
+            console.log(`  \u2713 Loopback listener enabled on ${loopbackOrigin} (token-gated, loopback-bound)`);
+
+            const wiring = wireSecretRefProviders(openclawConfig, configuredServices, { loopbackOrigin });
             if (wiring.wiredProviders.length > 0) {
               console.log(`  \u2713 SecretRef wiring for ${wiring.wiredProviders.join(', ')} (canonical credential surface)`);
+            }
+            if (wiring.baseUrlProviders.length > 0) {
+              console.log(`  \u2713 Model traffic routed through the proxy for ${wiring.baseUrlProviders.join(', ')}`);
+            }
+            if (wiring.keptUserBaseUrl.length > 0) {
+              console.log(`  \u2192 Left existing user-set baseUrl untouched for: ${wiring.keptUserBaseUrl.join(', ')} (proxy NOT in the path for those)`);
             }
             const userKept = wiring.skippedProviders.filter(s => s === 'anthropic' || s === 'openai');
             if (userKept.length > 0) {
@@ -2260,6 +2280,16 @@ openclaw
           if (status.providerConfigured && status.missingProviders.length === 0) {
             secretRefFullyWired = true;
             console.log(`  ✓ ${aqua('SecretRef')} wiring active (${status.wiredProviders.join(', ') || 'no providers'})`);
+            // The apiKey ref alone doesn't put the proxy in the path: without
+            // a loopback baseUrl OpenClaw's transport calls the upstream
+            // directly and the placeholder fails there (v0.15.0).
+            if (status.missingBaseUrl.length > 0) {
+              console.log(`  ✗ ${aqua('Model routing')} ${status.missingBaseUrl.join(', ')} still call the provider directly — the proxy is bypassed`);
+              console.log('    → Run: aquaman openclaw setup   (points models.providers.<svc>.baseUrl at the loopback listener)');
+              issues++;
+            } else if (status.baseUrlProviders.length > 0) {
+              console.log(`  ✓ ${aqua('Model routing')} through the proxy for ${status.baseUrlProviders.join(', ')}`);
+            }
           } else if (status.providerConfigured) {
             // Half-migrated: the provider block exists but some providers still
             // lack refs — a real inconsistency, fail the check.

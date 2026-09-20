@@ -14,6 +14,7 @@
       "source": "exec",
       "command": "${node}",
       "args": ["./dist/secrets-resolver.mjs"],
+      "passEnv": ["HOME", "AQUAMAN_CONFIG_DIR"],
       "timeoutMs": 5000
     }
   },

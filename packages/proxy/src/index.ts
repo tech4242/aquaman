@@ -77,6 +77,7 @@ export {
   SECRETREF_SUPPORTED_PROVIDERS,
   supportsSecretRefIntegrations,
   buildProviderRef,
+  loopbackProviderBaseUrl,
   wireSecretRefProviders,
   secretRefWiringStatus
 } from './openclaw/secretref.js';

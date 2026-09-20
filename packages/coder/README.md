@@ -64,6 +64,10 @@ When Claude Code runs a Bash tool in `~/code/my-app`, aquaman's hook rewrites th
 - Pipes stdout/stderr through a redactor that prepends a value-based pattern for each resolved value: **whatever string was injected gets redacted, regardless of shape** (Atlassian tokens, Notion secrets, internal-API keys - none of them need to match a known provider format). Generic shape-based patterns (sk-ant-, ghp_, sk_live_, AKIA…, JWTs, PEM blocks, ATATT3xF…) still run after as defense-in-depth for secrets the child surfaces that we did NOT inject.
 - Cleans up when the command exits.
 
+### Transport
+
+`aquaman-coder` talks to the proxy over the Unix socket `~/.aquaman/proxy.sock` (`0600`) and nothing else: no port, no token, no network. Only processes running as you can reach it. Hermes and OpenClaw use a token-gated loopback listener instead, because neither can dial a socket — that listener is not involved in the coder path. See the [root README](https://github.com/tech4242/aquaman#transports-and-access-control).
+
 ### What the broker hands out
 
 The daemon's broker (`aquaman daemon`) materializes only refs you declared, meaning the `env` refs in `projects.yaml` plus anything added with `aquaman broker allow` (v0.15.0+). Everything else is refused before the vault is consulted, and so is every request to a proxy started by the OpenClaw plugin. `aquaman broker list` shows what's declared. Declaring a ref is an explicit opt-in: any process running as you can fetch it from the daemon, which is exactly what the `exec` wrapper does.

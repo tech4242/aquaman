@@ -240,8 +240,44 @@ function activateHttpInterceptor(log: OpenClawPluginApi["logger"]): void {
 /**
  * Set environment variables for SDK clients using sentinel hostname
  */
+/**
+ * Services whose openclaw.json baseUrl already points at an aquaman loopback
+ * listener (written by `aquaman openclaw setup`, v0.15.0+).
+ *
+ * OpenClaw's model transport builds its own undici dispatcher: it never calls
+ * globalThis.fetch and resolves hostnames itself, so the `aquaman.local`
+ * sentinel cannot work for provider traffic (it fails with ENOTFOUND, and
+ * before that it silently went direct). Those providers are routed by config
+ * instead, and setting a sentinel env var for them would only give other
+ * readers — sidecars, harnesses — an unresolvable URL.
+ */
+function loopbackRoutedServices(stateDir: string): Set<string> {
+  const routed = new Set<string>();
+  try {
+    const raw = fs.readFileSync(path.join(stateDir, "openclaw.json"), "utf-8");
+    const providers = JSON.parse(raw)?.models?.providers ?? {};
+    for (const [service, entry] of Object.entries<any>(providers)) {
+      const baseUrl = entry?.baseUrl;
+      if (typeof baseUrl === "string" && /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d+\//.test(baseUrl)) {
+        routed.add(service);
+      }
+    }
+  } catch {
+    // no config / unreadable — fall back to the sentinel path
+  }
+  return routed;
+}
+
 function configureEnvironment(log: OpenClawPluginApi["logger"], services: string[]): void {
+  const stateDir = process.env.OPENCLAW_STATE_DIR || path.join(os.homedir(), ".openclaw");
+  const routed = loopbackRoutedServices(stateDir);
+  if (routed.size > 0) {
+    log.info(
+      `Model traffic for ${[...routed].join(", ")} is routed through the proxy by openclaw.json baseUrl — not setting sentinel env vars for those`
+    );
+  }
   for (const service of services) {
+    if (routed.has(service)) continue;
     const serviceUrl = `http://aquaman.local/${service}`;
 
     switch (service) {

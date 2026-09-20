@@ -58,7 +58,7 @@ Troubleshooting: `openclaw aquaman doctor`.
 
 **Using npm directly?** `npm install -g aquaman-proxy && aquaman openclaw setup` does the same - installs the proxy CLI, stores your keys, installs the plugin into `~/.openclaw/extensions/aquaman-plugin/`, and wires the credentials (SecretRef refs on OpenClaw ≥ 2026.6.5, the auth-profiles.json placeholder on older versions).
 
-The plugin's HTTP interceptor only redirects traffic for services in its `services` config (Anthropic + OpenAI by default). Add more under the plugin config in `openclaw.json` - supported channels include Slack, Discord, Telegram, MS Teams, Matrix, LINE, Twitch, Twilio, BlueBubbles, Mattermost, Nostr, Tlon, Feishu, Google Chat, ElevenLabs, xAI, Cloudflare AI Gateway, Mistral, Hugging Face, and more (25 total).
+Model traffic reaches the proxy through a token-gated loopback listener that `aquaman openclaw setup` wires into `models.providers.<svc>.baseUrl`, because OpenClaw's model transport bypasses the fetch interceptor. On 2026.7.33+ most channels bypass it too (verified with Telegram), so channel support on those versions means at-rest storage and migration, not egress injection — see [`packages/plugin/README.md`](packages/plugin/README.md). The interceptor still covers the services in the plugin's `services` config that do use the global fetch. Add more under the plugin config in `openclaw.json` - supported channels include Slack, Discord, Telegram, MS Teams, Matrix, LINE, Twitch, Twilio, BlueBubbles, Mattermost, Nostr, Tlon, Feishu, Google Chat, ElevenLabs, xAI, Cloudflare AI Gateway, Mistral, Hugging Face, and more (25 total).
 
 ### 3. AI coding agents (Claude Code today)
 
@@ -165,7 +165,7 @@ Agent / OpenClaw / Coding Agent             Aquaman Proxy
 4. **Broker (coder + Hermes secret source)**: `POST /broker/resolve` materializes a credential per tool call, scoped to a single command's env. Only `aquaman daemon` serves it, and only for refs you declared (`projects.yaml` or `aquaman broker allow`). The OpenClaw plugin's proxy never serves it (v0.15.0+).
 5. **Audit**: Every credential use is logged with SHA-256 hash chains.
 
-On the proxy paths the agent only ever sees a sentinel hostname (`aquaman.local`) or a placeholder marker (`aquaman-proxy-managed`). It never sees a real key, and no TCP port is open for other processes to probe. On the coder path the *child* command gets the declared values and the agent sees redacted output.
+On the proxy paths the agent only ever sees a local endpoint (a `aquaman.local` sentinel over the Unix socket, or `http://127.0.0.1:<port>/<service>` for hosts that build their own HTTP client) plus a marker in place of the key: the `aquaman-proxy-managed` placeholder, or the loopback token, which only grants access to the local proxy. It never sees a real key. On the coder path the *child* command gets the declared values and the agent sees redacted output.
 
 ## Security Model
 
@@ -178,6 +178,25 @@ On the proxy paths the agent only ever sees a sentinel hostname (`aquaman.local`
 | **Audit trail** | SHA-256 hash-chained logs of every credential use | Post-incident forensics, tamper detection, compliance evidence |
 | **Per-tool-call broker (coder)** | `aquaman-coder exec` materializes creds for one command at a time | Credentials don't sprawl across the agent's shell environment |
 | **Output redaction (coder)** | `aquaman-coder exec` pipes stdout/stderr through a redactor that scrubs each value it just injected verbatim - plus generic provider patterns as a fallback | Even arbitrary, shape-less credentials never reach the agent transcript |
+
+### Transports and access control
+
+| Path | Transport | Access control |
+|---|---|---|
+| Coding agents (`aquaman-coder`), any UDS-capable client | Unix socket `~/.aquaman/proxy.sock` | File permissions (`0600`) — only processes running as you |
+| Hermes (v0.13.0+), OpenClaw model traffic (v0.15.0+) | Loopback TCP `127.0.0.1:<port>` | Per-install token, constant-time check, bound to loopback |
+
+Two transports because two kinds of host. Anything that can dial a Unix socket does. Hermes and OpenClaw cannot: each builds its own HTTP client, Hermes exposes no transport hook, and OpenClaw's model transport neither calls `globalThis.fetch` nor resolves a sentinel hostname. A loopback listener is the only interface they accept.
+
+The token is a capability to reach the local proxy, not a credential. It is generated per install, stored in `~/.aquaman/config.yaml` (`0600`), and handed to the host as the provider "api key" so it travels on every call. The proxy checks it, strips it, and injects the real key from your vault.
+
+The honest difference: any process on the machine can *reach* a loopback port, including other local users, where the socket's `0600` shuts them out. The token is what stops them there. So the listener stays off until a host needs it — `aquaman hermes setup` or `aquaman openclaw setup` turn it on — and the Unix socket remains the default everywhere else. On a single-user machine the two are equivalent in practice; on a shared machine the socket is stricter.
+
+### Channel credentials on OpenClaw 2026.7.33+
+
+Not protected today. Verified on 2026-09-20 against a live gateway: with the plugin's interceptor active for `api.telegram.org`, Telegram's `getMe` still went straight to Telegram and nothing reached the proxy. Telegram, Discord and Matrix each build their own HTTP client per request, so the `globalThis.fetch` interceptor never sees them; only MS Teams still goes through it. Model-provider isolation is unaffected — it no longer relies on the interceptor.
+
+Routing them needs a per-channel endpoint override, and only some channels have one: Telegram has `channels.telegram.apiRoot`; Discord and Slack have no equivalent; Matrix, Mattermost and Nextcloud Talk point at your own server.
 
 **What same-user isolation can't do.** The socket's `0o600` keeps other *users* out, not other processes running as you. Any such process, a compromised agent included, can still send requests through the proxy to the services you configured while it runs (request policy bounds what, the audit log records it), and can fetch refs you declared for materialization, since that is what declaring means. It cannot read the keys the proxy injects. For a harder boundary, run the agent as a different OS user or inside a sandbox.
 

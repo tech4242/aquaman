@@ -2,14 +2,14 @@
 
 The [aquaman](https://github.com/tech4242/aquaman) adapter for the [OpenClaw Gateway](https://openclaw.ai). Your API keys and tokens stay in your vault. The agent never sees them: they live in a separate process that injects them on the way out, and that process has no endpoint that hands a key back. A compromised agent can't read them. What it *can* do while it runs is send requests through the proxy, which request policy bounds and the audit log records (see [Security model](#security-model)).
 
-This plugin **spawns** [`aquaman-proxy`](https://www.npmjs.com/package/aquaman-proxy) (exact-pinned, same author) on Gateway startup, routes channel traffic through a UDS to that proxy, and lets you reach the same vault and policy engine from inside OpenClaw.
+This plugin **spawns** [`aquaman-proxy`](https://www.npmjs.com/package/aquaman-proxy) (exact-pinned, same author) on Gateway startup, routes model traffic to that proxy over a token-gated loopback listener, and lets you reach the same vault and policy engine from inside OpenClaw.
 
 ```
 Agent / OpenClaw Gateway              Aquaman Proxy
 ┌──────────────────────┐              ┌──────────────────────┐
 │                      │              │                      │
-│  ANTHROPIC_BASE_URL  │══ Unix ═════>│  Keychain / 1Pass /  │
-│  = aquaman.local     │   Domain     │  Vault / Encrypted   │
+│  models.providers.*  │══ loopback ═>│  Keychain / 1Pass /  │
+│  .baseUrl = 127.0.0.1│   (models)   │  Vault / Encrypted   │
 │                      │<═ Socket ════│                      │
 │  fetch() interceptor │══ (UDS) ════>│  + Policy enforced   │
 │  redirects channel   │              │  + Auth injected:    │
@@ -17,7 +17,7 @@ Agent / OpenClaw Gateway              Aquaman Proxy
 │                      │              │    basic / oauth     │
 │                      │              │                      │
 │  No credentials.     │  ~/.aquaman/ │                      │
-│  No open ports.      │  proxy.sock  │                      │
+│  Token-gated loopback│  proxy.sock  │                      │
 │  No keys to read.    │  (chmod 600) │                      │
 └──────────────────────┘              └──┬──────────┬────────┘
                                          │          │
@@ -53,6 +53,27 @@ Troubleshooting: `openclaw aquaman doctor` (or `aquaman openclaw doctor` from a 
 ## Security model
 
 Aquaman keeps API credentials out of the agent process by running them in a separate proxy process. The agent never sees the secret - only a sentinel base URL that the proxy intercepts, authenticates, and forwards. See the [architecture diagram in the main README](https://github.com/tech4242/aquaman#how-it-works).
+
+**How model traffic reaches the proxy (v0.15.0+)**
+
+- `aquaman openclaw setup` enables aquaman's loopback listener and points `models.providers.<svc>.baseUrl` at it (`http://127.0.0.1:<port>/anthropic`, `…/openai/v1`). That is OpenClaw's documented local-provider pattern, and it trusts that exact origin for model requests.
+- The SecretRef resolver hands the gateway the **loopback token** as the provider api key. The listener is token-gated, the token only grants access to 127.0.0.1, and the proxy strips it before injecting your real key from the vault.
+- Why not the Unix socket: OpenClaw's model transport builds its own HTTP client. It never calls `globalThis.fetch` and resolves hostnames itself, so the older `aquaman.local` sentinel could not work for model traffic on 2026.7.33+. `aquaman openclaw doctor` fails if a provider is credential-wired but not routed.
+
+**Channel credentials on 2026.7.33+ — not protected**
+
+Verified against a live gateway on 2026-09-20: with this plugin's interceptor active for `api.telegram.org`, Telegram's `getMe` went straight to Telegram and nothing reached the proxy. Telegram, Discord and Matrix each build their own HTTP client per request, so the `globalThis.fetch` interceptor never sees them; only MS Teams still goes through it. Model-provider isolation is unaffected — it no longer depends on the interceptor.
+
+Routing a channel needs a per-channel endpoint override, and only some have one: Telegram has `channels.telegram.apiRoot`; Discord and Slack have no equivalent; Matrix, Mattermost and Nextcloud Talk point at your own server. Until that lands, keep channel tokens in OpenClaw's own secret storage and treat aquaman's channel support as covering at-rest storage and migration, not egress injection, on these versions.
+
+### Transports and access control
+
+Aquaman's proxy listens two ways, and which one a host uses is not a preference — it's what the host can dial:
+
+- **Unix socket** `~/.aquaman/proxy.sock`, `0600`: coding agents and anything else that can dial a socket. Access control is file permissions, so only processes running as you can connect.
+- **Loopback TCP** `127.0.0.1:<port>`, token-gated: Hermes (v0.13.0+) and OpenClaw model traffic (v0.15.0+), because both build their own HTTP client and cannot dial a socket.
+
+The loopback token is a capability to reach the local proxy, not a credential: generated per install, stored in `~/.aquaman/config.yaml` (`0600`), stripped by the proxy before the real key is injected. A loopback port can be reached by any process on the machine, including other local users, where the socket's `0600` shuts them out — so the listener stays off until a host needs it, and the socket stays the default. Full table in the [root README](https://github.com/tech4242/aquaman#transports-and-access-control).
 
 **What a compromised agent can and can't do**
 
