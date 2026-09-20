@@ -81,7 +81,10 @@ export function buildProviderRef(service: string): SecretRefRef {
  * adds `/chat/completions` to `<origin>/openai/v1`.
  */
 export function loopbackProviderBaseUrl(service: string, origin: string): string | null {
-  const base = origin.replace(/\/+$/, '');
+  // Trim trailing slashes without a regex: /\/+$/ backtracks polynomially on
+  // an origin ending in many slashes (CodeQL js/polynomial-redos).
+  let base = origin;
+  while (base.length > 0 && base.endsWith('/')) base = base.slice(0, -1);
   if (service === 'anthropic') return `${base}/anthropic`;
   if (service === 'openai') return `${base}/openai/v1`;
   return null;
