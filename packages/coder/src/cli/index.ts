@@ -15,6 +15,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 import { Command } from 'commander';
 import { VERSION } from '../index.js';
@@ -26,13 +27,25 @@ import {
   parseRef,
   type ProjectConfig,
 } from '../projects.js';
-import { BrokerClient, defaultSocketPath } from '../broker-client.js';
+import { BrokerClient, BrokerError, defaultSocketPath } from '../broker-client.js';
 import { runHookFromStdin } from '../adapters/claude-code/hook.js';
 import {
   installClaudeCodeHooks,
   uninstallClaudeCodeHooks,
   defaultSettingsPath,
+  sandboxSocketStatus,
 } from '../adapters/claude-code/setup.js';
+
+/** Claude Code's managed (enterprise) settings file for this platform. */
+function managedSettingsPath(): string {
+  return process.platform === 'darwin'
+    ? '/Library/Application Support/ClaudeCode/managed-settings.json'
+    : '/etc/claude-code/managed-settings.json';
+}
+
+/** One-line statement of the Linux/WSL2 sandbox limitation (README carries the same line). */
+const LINUX_SANDBOX_LIMITATION =
+  'On Linux/WSL2 Claude Code ignores sandbox.network.allowUnixSockets, so sandboxed commands can reach the broker only with sandbox.network.allowAllUnixSockets: true, which opens every Unix socket to them.';
 
 // ANSI color helpers — aquamarine theme. Mirrors packages/proxy/src/cli/index.ts
 // so `aquaman coder doctor` matches `aquaman openclaw doctor`.
@@ -69,6 +82,20 @@ program
       console.log(`${opts.uninstall ? 'Removed' : 'Installed'} aquaman-coder hook -> ${result.path}`);
     } else {
       console.log(`No changes needed (${result.path})`);
+    }
+    switch (result.sandboxSocket) {
+      case 'added':
+        console.log(`Allowed the proxy socket for Claude Code's sandbox (sandbox.network.allowUnixSockets: ${defaultSocketPath()})`);
+        break;
+      case 'present':
+        console.log('Claude Code sandbox: proxy socket already allowed');
+        break;
+      case 'removed':
+        console.log('Removed the proxy socket from sandbox.network.allowUnixSockets');
+        break;
+      case 'unsupported-platform':
+        if (!opts.uninstall) console.log(`Note: ${LINUX_SANDBOX_LIMITATION}`);
+        break;
     }
   });
 
@@ -142,7 +169,7 @@ project
 
 program
   .command('get <ref>')
-  .description('Resolve an aquaman:// ref via the broker and print the value')
+  .description('Resolve a declared aquaman:// ref via the broker and print the value')
   .action(async (ref: string) => {
     const parsed = parseRef(ref);
     if (!parsed) {
@@ -292,11 +319,18 @@ program
             await broker.resolve({ service: parsed.service, key: parsed.key, ttlSeconds: 1 });
             checks.push({ name: `project ${name}: ${envName}`, ok: true, detail: ref });
           } catch (err) {
+            const code = err instanceof BrokerError ? err.code : undefined;
+            const fix =
+              code === 'broker_disabled'
+                ? 'The proxy on this socket was started by the OpenClaw plugin, which never hands out credentials. Run `aquaman daemon` for coding agents.'
+                : code === 'broker_ref_not_declared'
+                  ? `aquaman broker list  (the daemon does not see this ref as declared — is it reading ${defaultProjectsPath()}?)`
+                  : `aquaman credentials add ${parsed.service} ${parsed.key}`;
             checks.push({
               name: `project ${name}: ${envName}`,
               ok: false,
               detail: `${ref} — ${(err as Error).message}`,
-              fix: `aquaman credentials add ${parsed.service} ${parsed.key}`,
+              fix,
             });
           }
         }
@@ -320,6 +354,36 @@ program
         ok: false,
         detail: `${settingsPath} does not exist`,
         fix: 'aquaman coder setup claude-code',
+      });
+    }
+
+    // 6. Claude Code sandbox can reach the proxy socket. Merge user, managed,
+    // and each project's .claude/settings{,.local}.json the way Claude Code
+    // merges list settings.
+    const settingsFiles = [defaultSettingsPath(), managedSettingsPath()];
+    for (const cfg of Object.values(projects?.projects ?? {})) {
+      for (const p of cfg.paths ?? []) {
+        const dir = p.startsWith('~/') ? path.join(process.env['HOME'] ?? '', p.slice(2)) : p;
+        settingsFiles.push(path.join(dir, '.claude', 'settings.json'), path.join(dir, '.claude', 'settings.local.json'));
+      }
+    }
+    const sb = sandboxSocketStatus(settingsFiles);
+    if (!sb.sandboxEnabled) {
+      checks.push({
+        name: 'Claude Code sandbox',
+        ok: true,
+        detail: sb.socketAllowed || process.platform !== 'darwin'
+          ? 'not enabled'
+          : 'not enabled (proxy socket not allowlisted yet — run `aquaman coder setup claude-code` before enabling it)',
+      });
+    } else if (sb.socketAllowed) {
+      checks.push({ name: 'Claude Code sandbox', ok: true, detail: 'enabled; proxy socket allowed' });
+    } else {
+      checks.push({
+        name: 'Claude Code sandbox',
+        ok: false,
+        detail: 'enabled, but sandboxed commands cannot connect to the proxy socket (EPERM)',
+        fix: process.platform === 'darwin' ? 'aquaman coder setup claude-code' : LINUX_SANDBOX_LIMITATION,
       });
     }
 

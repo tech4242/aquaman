@@ -18,6 +18,7 @@ import * as http from 'node:http';
 import {
   loadConfig,
   getConfigDir,
+  getConfigPath,
   ensureConfigDir,
   getDefaultConfig,
   expandPath,
@@ -36,11 +37,18 @@ import { fileURLToPath } from 'node:url';
 
 import { createCredentialProxy } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
-import { createOpenClawIntegration, authProfilesAreSqliteOnly } from '../openclaw/integration.js';
+import { createOpenClawIntegration, authProfilesAreSqliteOnly, legacyAuthProfilesBlockProviders, pluginInstallNeedsCapabilityConsent } from '../openclaw/integration.js';
 import { supportsSecretRefIntegrations, wireSecretRefProviders, secretRefWiringStatus } from '../openclaw/secretref.js';
+import {
+  CHANNEL_ROUTING_SUPPORTED,
+  wireChannelRouting,
+  channelRoutingStatus,
+  type ChannelSkipReason
+} from '../openclaw/channel-routing.js';
 import { createHermesIntegration, detectHermes } from '../hermes/integration.js';
-import { managedScopeShadowedKeys, HERMES_MANAGED_ENV_PATH } from '../hermes/config-writer.js';
-import { loadPolicyFromConfig, validatePolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
+import { managedScopeShadowedKeys, hermesManagedEnvPath, HERMES_SUPPORTED_SERVICES, hermesSecretSourceRefs } from '../hermes/config-writer.js';
+import { createBrokerScope, parseAquamanRef, defaultProjectsPath, type BrokerScope } from '../broker-scope.js';
+import { loadPolicyFromConfig, validatePolicyConfig, lintPolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 
 // Read version from package.json (single source of truth)
@@ -123,6 +131,59 @@ function loadLoopbackOptions(config: WrapperConfig): { port: number; token: stri
     return undefined;
   }
   return { port: lb.port || DEFAULT_LOOPBACK_PORT, token: lb.token, host: lb.host || '127.0.0.1' };
+}
+
+/** Broker scope for `aquaman daemon`, or undefined when `broker.enabled: false`. */
+function daemonBrokerScope(config: WrapperConfig): BrokerScope | undefined {
+  if (config.broker?.enabled === false) return undefined;
+  return createBrokerScope({
+    configPath: getConfigPath(),
+    loopbackDeniedServices: HERMES_SUPPORTED_SERVICES,
+  });
+}
+
+/**
+ * Add or remove refs in config.yaml `broker.allowedRefs`. Edits the raw file
+ * (not loadConfig + saveConfig) so env overrides such as the loopback token
+ * are never persisted as a side effect. The daemon re-reads the list on change.
+ */
+function updateBrokerAllowedRefs(refs: string[], mode: 'allow' | 'revoke'): void {
+  const invalid = refs.filter(r => !parseAquamanRef(r));
+  if (invalid.length > 0) {
+    console.error(`Invalid ref${invalid.length > 1 ? 's' : ''}: ${invalid.join(', ')}`);
+    console.error('Refs look like aquaman://<service>/<key>, e.g. aquaman://github/token');
+    process.exit(1);
+  }
+
+  ensureConfigDir();
+  const configPath = getConfigPath();
+  let raw: Record<string, any> = {};
+  if (fs.existsSync(configPath)) {
+    const parsed = yamlParse(fs.readFileSync(configPath, 'utf-8'));
+    if (parsed && typeof parsed === 'object') raw = parsed;
+  }
+  const current = new Set<string>(Array.isArray(raw.broker?.allowedRefs) ? raw.broker.allowedRefs : []);
+  for (const ref of refs) {
+    if (mode === 'allow') current.add(ref);
+    else current.delete(ref);
+  }
+  raw.broker = { ...(raw.broker && typeof raw.broker === 'object' ? raw.broker : {}), allowedRefs: [...current].sort() };
+  fs.writeFileSync(configPath, yamlStringify(raw), { encoding: 'utf-8', mode: 0o600 });
+
+  const verb = mode === 'allow' ? 'Allowed' : 'Revoked';
+  for (const ref of refs) console.log(`${verb}: ${ref}`);
+  if (mode === 'allow') {
+    console.log('\nAny process running as you can now fetch these values from `aquaman daemon`. Only allow refs you intend to materialize.');
+  }
+  if (raw.broker.enabled === false) {
+    console.log('Note: broker.enabled is false in config.yaml, so the broker is off regardless.');
+  }
+}
+
+function describeBroker(scope: BrokerScope | undefined): string {
+  if (!scope) return 'disabled (broker.enabled: false)';
+  const n = scope.declared().length;
+  return `${n} declared ref${n === 1 ? '' : 's'} (see: aquaman broker list)`;
 }
 
 /**
@@ -208,6 +269,24 @@ async function promptSecretInput(prompt: string): Promise<string> {
       resolve(answer.trim());
     });
   });
+}
+
+/** One-line explanation of why `openclaw setup` left a channel alone. */
+function describeChannelSkip(reason: ChannelSkipReason, channel: string): string {
+  switch (reason) {
+    case 'no-vault-credential':
+      return `no credential in the vault (add it: aquaman credentials add ${channel} bot_token)`;
+    case 'user-endpoint':
+      return 'it already points at your own endpoint (self-hosted Bot API or regional proxy)';
+    case 'token-file':
+      return 'its token comes from tokenFile, whose precedence over a config token we will not guess at';
+    case 'multi-account':
+      return 'multi-account channels need one vault entry per account, which the service model has no room for yet';
+    case 'not-wired':
+      return 'routable but not wired yet (re-run: aquaman openclaw setup)';
+    case 'unroutable':
+      return 'this OpenClaw exposes no endpoint override for it, so its traffic cannot be routed';
+  }
 }
 
 const program = new Command();
@@ -720,6 +799,8 @@ openclaw
     // Start credential proxy
     const socketPath = path.join(getConfigDir(), 'proxy.sock');
     const policyConfig = loadPolicyFromConfig(config);
+    // No `broker`: this proxy fronts OpenClaw, and the OpenClaw path never
+    // hands credential values out (v0.15.0; see broker-scope.ts).
     const credentialProxy = createCredentialProxy({
       socketPath,
       store: credentialStore,
@@ -883,6 +964,10 @@ program
 
     // Start credential proxy
     const policyConfig2 = loadPolicyFromConfig(config);
+    // The daemon is the only proxy that serves the credential broker, and only
+    // for declared refs (projects.yaml + broker.allowedRefs). Over loopback the
+    // Hermes LLM-provider keys are never materialized.
+    const brokerScope = daemonBrokerScope(config);
     const credentialProxy = createCredentialProxy({
       socketPath,
       store: credentialStore,
@@ -890,6 +975,7 @@ program
       serviceRegistry,
       policyConfig: policyConfig2,
       loopback: loadLoopbackOptions(config),
+      broker: brokerScope,
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
@@ -905,6 +991,10 @@ program
     writePidFile();
 
     console.log(`Credential proxy: ${socketPath}`);
+    console.log(`Credential broker: ${describeBroker(brokerScope)}`);
+    if (brokerScope?.declarationError()) {
+      console.error(`  ⚠ ${brokerScope.declarationError()} — refs declared there are refused until it parses`);
+    }
     console.log(`Audit logging: ${config.audit.enabled ? 'enabled' : 'disabled'}`);
     console.log(`Credential backend: ${config.credentials.backend}`);
     console.log(`PID file: ${getPidFile()}`);
@@ -954,6 +1044,9 @@ openclaw
 
     // Start credential proxy
     const policyConfig3 = loadPolicyFromConfig(config);
+    // No `broker`: this proxy runs inside the OpenClaw plugin's lifecycle and
+    // must never hand credential values to the gateway or its agents — that
+    // was the ClawScan finding against 0.14.x (v0.15.0; see broker-scope.ts).
     const credentialProxy = createCredentialProxy({
       socketPath,
       store: credentialStore,
@@ -1152,7 +1245,7 @@ hermes
 
     const shadowed = managedScopeShadowedKeys(integration.configureHermes());
     if (shadowed.length > 0) {
-      console.log(`  Managed scope:     ⚠ ${HERMES_MANAGED_ENV_PATH} pins ${shadowed.join(', ')} — proxy bypassed for these keys`);
+      console.log(`  Managed scope:     ⚠ ${hermesManagedEnvPath()} pins ${shadowed.join(', ')} — proxy bypassed for these keys`);
     }
 
     const info = await detectHermes(config.hermes?.binaryPath || 'hermes');
@@ -1217,7 +1310,7 @@ hermes
     {
       const shadowed = managedScopeShadowedKeys(integration.configureHermes());
       if (shadowed.length > 0) {
-        fail(`Hermes managed scope (${HERMES_MANAGED_ENV_PATH}) pins ${shadowed.join(', ')} — it overrides ~/.hermes/.env, so the proxy is BYPASSED for these keys. Remove them from the managed file or point them at the proxy.`);
+        fail(`Hermes managed scope (${hermesManagedEnvPath()}) pins ${shadowed.join(', ')} — it overrides ~/.hermes/.env, so the proxy is BYPASSED for these keys. Remove them from the managed file or point them at the proxy.`);
       } else {
         pass('No managed-scope override of aquaman env vars');
       }
@@ -1241,7 +1334,35 @@ hermes
       }
     }
 
-    // 5. Hermes installed
+    // 5. Secret-source bindings are declared to the broker (v0.15.0+). The
+    // daemon only materializes declared refs, so a binding in Hermes'
+    // config.yaml alone now resolves to a "not declared" warning at startup.
+    {
+      const bound = hermesSecretSourceRefs();
+      if (bound.error) {
+        fail(`Hermes config unreadable (${bound.error}) — can't check secret-source bindings`);
+      } else if (bound.refs.length === 0) {
+        console.log(`  • No aquaman secret-source bindings in ${bound.path} (optional)`);
+      } else {
+        const scope = daemonBrokerScope(config);
+        if (!scope) {
+          fail(`${bound.refs.length} secret-source binding(s) in ${bound.path}, but broker.enabled is false — none will resolve`);
+        } else {
+          const undeclared = bound.refs.filter((ref) => {
+            const r = parseAquamanRef(ref)!;
+            return !scope.check(r.service, r.key, 'loopback').allowed;
+          });
+          if (undeclared.length === 0) {
+            pass(`All ${bound.refs.length} secret-source binding(s) are declared to the broker`);
+          } else {
+            fail(`Secret-source binding(s) not declared to the broker, so the daemon refuses them: ${undeclared.join(', ')}`);
+            console.log(`    → aquaman broker allow ${undeclared.join(' ')}`);
+          }
+        }
+      }
+    }
+
+    // 6. Hermes installed
     const info = await detectHermes(config.hermes?.binaryPath || 'hermes');
     if (info.installed) pass(`Hermes CLI installed (v${info.version})`);
     else console.log('  • Hermes CLI not found on PATH (install: uv tool install hermes-agent)');
@@ -1656,6 +1777,19 @@ openclaw
         }
 
         if (shouldInstall) {
+          // Detect the gateway version once — it gates the install command
+          // (capability consent on 2026.8.1+) and the credential surface:
+          // SecretRef wiring (canonical, >= 2026.6.5) vs the legacy
+          // auth-profiles.json placeholder. AQUAMAN_OPENCLAW_VERSION overrides
+          // detection (tests + operators pinning behavior explicitly).
+          let ocVersion: string | null = process.env.AQUAMAN_OPENCLAW_VERSION || null;
+          if (!ocVersion) {
+            try {
+              const { execSync } = await import('node:child_process');
+              ocVersion = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8', timeout: 5000 }).trim();
+            } catch { /* CLI not on PATH */ }
+          }
+
           // a. Copy plugin files
           const currentDir = path.dirname(fileURLToPath(import.meta.url));
           const pluginSrc = path.resolve(currentDir, '../../../plugin');
@@ -1666,13 +1800,25 @@ openclaw
             fs.cpSync(pluginSrc, pluginDest, { recursive: true });
             console.log('  \u2713 Plugin installed to ' + pluginDest);
           } else if (cliDetected) {
-            // npm install — plugin source not bundled, use openclaw's plugin installer
+            // npm install — plugin source not bundled, use openclaw's plugin
+            // installer. OpenClaw 2026.8.1+ requires capability consent for
+            // third-party plugins: interactively we let OpenClaw show its own
+            // consent screen to the human; --non-interactive means the operator
+            // pre-approved, so we pass --accept-capabilities and say so. The
+            // clawhub: source avoids the extra --force an npm spec needs.
+            const consent = pluginInstallNeedsCapabilityConsent(ocVersion);
+            const args = consent
+              ? ['plugins', 'install', 'clawhub:aquaman-plugin', ...(isNonInteractive ? ['--accept-capabilities'] : [])]
+              : ['plugins', 'install', 'aquaman-plugin'];
             try {
-              const { execSync: execSyncFallback } = await import('node:child_process');
-              execSyncFallback('openclaw plugins install aquaman-plugin', { stdio: 'pipe' });
+              const { execFileSync: execFileSyncFallback } = await import('node:child_process');
+              execFileSyncFallback('openclaw', args, { stdio: consent && !isNonInteractive ? 'inherit' : 'pipe' });
               console.log('  \u2713 Plugin installed via openclaw');
+              if (consent && isNonInteractive) {
+                console.log('  \u2192 Accepted the plugin\u2019s OpenClaw capabilities on your behalf (--non-interactive)');
+              }
             } catch {
-              console.log('  \u2717 Could not install plugin. Run: openclaw plugins install aquaman-plugin');
+              console.log(`  \u2717 Could not install plugin. Run: openclaw ${args.join(' ')}${consent && isNonInteractive ? '' : consent ? '  (then approve its capabilities)' : ''}`);
             }
           }
 
@@ -1688,10 +1834,19 @@ openclaw
           if (!openclawConfig.plugins) openclawConfig.plugins = {};
           if (!openclawConfig.plugins.entries) openclawConfig.plugins.entries = {};
 
-          // Set plugins.allow so OpenClaw trusts the plugin (avoids extensions_no_allowlist audit warning)
-          if (!openclawConfig.plugins.allow) openclawConfig.plugins.allow = [];
-          if (!openclawConfig.plugins.allow.includes('aquaman-plugin')) {
-            openclawConfig.plugins.allow.push('aquaman-plugin');
+          // plugins.allow is an allowlist for EVERY plugin, OpenClaw's own
+          // included: on current gateways the anthropic/openai model providers
+          // are stock plugins. Creating a list that holds only aquaman-plugin
+          // (what setup did through v0.14.x) blocked them, so every
+          // anthropic/* model became "Unknown model" (verified 2026-09-18 on
+          // 2026.7.33 and 2026.9.1). Append to an existing list; never create
+          // a restrictive one on the user's behalf.
+          if (Array.isArray(openclawConfig.plugins.allow)) {
+            if (!openclawConfig.plugins.allow.includes('aquaman-plugin')) {
+              openclawConfig.plugins.allow.push('aquaman-plugin');
+            }
+          } else {
+            console.log('  \u2192 No plugins.allow list in openclaw.json; left it unset (a list with only aquaman-plugin would block OpenClaw\u2019s own provider plugins)');
           }
 
           const configuredServices = storedServices.length > 0 ? storedServices : ['anthropic', 'openai'];
@@ -1703,31 +1858,93 @@ openclaw
             }
           };
 
-          // Detect the gateway version once \u2014 it gates the credential surface:
-          // SecretRef wiring (canonical, >= 2026.6.5) vs the legacy
-          // auth-profiles.json placeholder. AQUAMAN_OPENCLAW_VERSION overrides
-          // detection (tests + operators pinning behavior explicitly).
-          let ocVersion: string | null = process.env.AQUAMAN_OPENCLAW_VERSION || null;
-          if (!ocVersion) {
-            try {
-              const { execSync } = await import('node:child_process');
-              ocVersion = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8', timeout: 5000 }).trim();
-            } catch { /* CLI not on PATH */ }
-          }
-
           // b2. SecretRef provider wiring (v0.14.0+, OpenClaw >= 2026.6.5).
           // Config-level refs in openclaw.json are runtime-read on every
           // version and survive OpenClaw's plaintext scrubs \u2014 no SQLite
           // import step needed, unlike the legacy placeholder.
           const secretRefSupported = supportsSecretRefIntegrations(ocVersion);
-          if (secretRefSupported) {
-            const wiring = wireSecretRefProviders(openclawConfig, configuredServices);
+          // Which configured channels aquaman can actually take over: the host
+          // must expose an endpoint override and the vault must already hold
+          // the real token. Resolved up front because the wiring is sync, and
+          // only for channels the user actually configured -- a vault probe
+          // can be slow (keepassxc opens and derives a key per call).
+          const channelsConfigured = CHANNEL_ROUTING_SUPPORTED.filter(
+            c => openclawConfig.channels?.[c] && typeof openclawConfig.channels[c] === 'object'
+          );
+          const channelsWithVaultCredential = new Set<string>();
+          if (channelsConfigured.length > 0) {
+            const channelRegistry = createServiceRegistry();
+            for (const channel of channelsConfigured) {
+              const def = channelRegistry.get(channel);
+              if (!def) continue;
+              if (await store.exists(channel, def.credentialKey)) {
+                channelsWithVaultCredential.add(channel);
+              }
+            }
+          }
+
+          // Both routes need the loopback listener: model traffic (provider
+          // baseUrl) and channel egress (apiRoot). Decide once.
+          let loopbackOrigin: string | undefined;
+          let loopbackToken: string | undefined;
+          if (secretRefSupported || channelsConfigured.length > 0) {
+            // OpenClaw's model transport builds its own undici dispatcher: it
+            // ignores the aquaman.local sentinel (its own DNS fails) and never
+            // calls globalThis.fetch, so the plugin's interceptor can't see
+            // provider traffic. Route it at the loopback listener instead —
+            // OpenClaw's documented local-provider pattern (v0.15.0).
+            const lbHost = config.loopback?.host || '127.0.0.1';
+            const lbPort = config.loopback?.port || DEFAULT_LOOPBACK_PORT;
+            const lbToken = config.loopback?.token || generateLoopbackToken();
+            config.loopback = { enabled: true, host: lbHost, port: lbPort, token: lbToken };
+            saveConfig(config);
+            loopbackOrigin = `http://${lbHost}:${lbPort}`;
+            loopbackToken = lbToken;
+            console.log(`  \u2713 Loopback listener enabled on ${loopbackOrigin} (token-gated, loopback-bound)`);
+          }
+
+          if (secretRefSupported && loopbackOrigin) {
+            const wiring = wireSecretRefProviders(openclawConfig, configuredServices, { loopbackOrigin });
             if (wiring.wiredProviders.length > 0) {
               console.log(`  \u2713 SecretRef wiring for ${wiring.wiredProviders.join(', ')} (canonical credential surface)`);
+            }
+            if (wiring.baseUrlProviders.length > 0) {
+              console.log(`  \u2713 Model traffic routed through the proxy for ${wiring.baseUrlProviders.join(', ')}`);
+            }
+            if (wiring.keptUserBaseUrl.length > 0) {
+              console.log(`  \u2192 Left existing user-set baseUrl untouched for: ${wiring.keptUserBaseUrl.join(', ')} (proxy NOT in the path for those)`);
             }
             const userKept = wiring.skippedProviders.filter(s => s === 'anthropic' || s === 'openai');
             if (userKept.length > 0) {
               console.log(`  \u2192 Left existing user-set apiKey untouched for: ${userKept.join(', ')}`);
+            }
+          }
+
+          // b3. Channel egress routing (v0.15.0+). Channels each build their
+          // own undici dispatcher, so the plugin's fetch interceptor never
+          // sees them. Telegram is the one bundled channel with an endpoint
+          // override, and the Bot API carries its token in the path, so the
+          // placeholder written here is the loopback token itself.
+          if (loopbackOrigin && loopbackToken) {
+            const routing = wireChannelRouting(openclawConfig, {
+              loopbackOrigin,
+              loopbackToken,
+              hasVaultCredential: (svc) => channelsWithVaultCredential.has(svc)
+            });
+            if (routing.routedChannels.length > 0) {
+              // A routed channel that isn't in proxiedServices gets a 404 from
+              // our own proxy, which is exactly the dead bot the all-or-nothing
+              // wiring exists to avoid. Open the route we just pointed at us.
+              const proxied = config.credentials.proxiedServices;
+              const added = routing.routedChannels.filter(c => !proxied.includes(c));
+              if (added.length > 0) {
+                config.credentials.proxiedServices = [...proxied, ...added];
+                saveConfig(config);
+              }
+              console.log(`  \u2713 Channel traffic routed through the proxy for ${routing.routedChannels.join(', ')}`);
+            }
+            for (const skip of routing.skipped) {
+              console.log(`  \u2192 ${skip.channel} left as-is: ${describeChannelSkip(skip.reason, skip.channel)}`);
             }
           }
 
@@ -1740,6 +1957,12 @@ openclaw
           const profilesPath = path.join(openclawStateDir, 'agents', 'main', 'agent', 'auth-profiles.json');
           if (secretRefSupported) {
             console.log('  \u2192 Legacy auth-profiles.json placeholder skipped (SecretRef wiring replaces it)');
+            if (legacyAuthProfilesBlockProviders(ocVersion) && fs.existsSync(profilesPath)) {
+              // Left behind by aquaman-plugin <= 0.14.x. On 2026.8.1+ it locks
+              // anthropic/openai out until OpenClaw archives it.
+              console.log('  \u2717 A legacy auth-profiles.json from an older aquaman-plugin blocks providers on this OpenClaw');
+              console.log('      Run once: openclaw doctor --fix   (archives it; aquaman-plugin 0.15.0+ never recreates it)');
+            }
           } else if (!fs.existsSync(profilesPath)) {
             const profiles: Record<string, any> = {};
             const order: Record<string, string[]> = {};
@@ -1856,6 +2079,9 @@ openclaw
     // 2. Backend accessible
     let config;
     let store: import('../core/index.js').CredentialStore | null = null;
+    // Services the vault holds anything for. Used by the channel-routing
+    // check below, which runs outside the store's try block.
+    const vaultServices = new Set<string>();
     try {
       config = loadConfig();
 
@@ -1892,6 +2118,7 @@ openclaw
 
       // 3. Count credentials
       const creds = await store.list();
+      for (const c of creds) vaultServices.add(c.service);
       if (creds.length > 0) {
         const names = creds.map(c => `${c.service}/${c.key}`).join(', ');
         console.log(`  \u2713 ${aqua('Backend:')} ${config.credentials.backend} (accessible)`);
@@ -1992,6 +2219,12 @@ openclaw
             console.log(`      ${svc}: ${summary}`);
           }
         }
+        // Deny rules that can never fire (pre-0.15.0 preset shapes) — a
+        // security issue, since the operator believes the endpoint is blocked.
+        for (const warning of lintPolicyConfig(policyConfigDoc)) {
+          console.log(`  \u2717 ${aqua('Policy')} ${warning}`);
+          issues++;
+        }
         // Warn about policies for non-proxied services
         if (config.credentials.proxiedServices) {
           for (const svc of Object.keys(policyConfigDoc)) {
@@ -2090,9 +2323,20 @@ openclaw
       if (fs.existsSync(openclawJsonPath)) {
         try {
           const openclawConfig = JSON.parse(fs.readFileSync(openclawJsonPath, 'utf-8'));
-          const allowList: string[] = openclawConfig.plugins?.allow || [];
-          if (allowList.includes('aquaman-plugin')) {
+          const allowList: string[] | undefined = Array.isArray(openclawConfig.plugins?.allow) ? openclawConfig.plugins.allow : undefined;
+          if (!allowList) {
+            console.log(`  \u2713 ${aqua('Plugin')} allowed (no plugins.allow trust list; \`openclaw security audit\` notes extensions_no_allowlist)`);
+          } else if (allowList.includes('aquaman-plugin')) {
             console.log(`  \u2713 ${aqua('Plugin')} in plugins.allow trust list`);
+            // A list that excludes OpenClaw's own provider plugins blocks
+            // them (aquaman setup <= 0.14.x wrote exactly such a list).
+            const svcs: string[] = openclawConfig.plugins?.entries?.['aquaman-plugin']?.config?.services ?? ['anthropic', 'openai'];
+            const blocked = ['anthropic', 'openai'].filter(p => svcs.includes(p) && !allowList.includes(p));
+            if (blocked.length > 0 && supportsSecretRefIntegrations(openclawVersion)) {
+              console.log(`  \u2717 ${aqua('Plugin')} plugins.allow blocks OpenClaw\u2019s own provider plugin(s): ${blocked.join(', ')} (their models report "Unknown model")`);
+              console.log(`    \u2192 Add ${blocked.map(b => `"${b}"`).join(', ')} to plugins.allow in openclaw.json (aquaman setup <= 0.14.x created a list without them)`);
+              issues++;
+            }
           } else {
             console.log(`  \u2717 ${aqua('Plugin')} not in plugins.allow trust list`);
             console.log('    \u2192 Run: aquaman setup (or add "aquaman-plugin" to plugins.allow in openclaw.json)');
@@ -2118,6 +2362,16 @@ openclaw
           if (status.providerConfigured && status.missingProviders.length === 0) {
             secretRefFullyWired = true;
             console.log(`  ✓ ${aqua('SecretRef')} wiring active (${status.wiredProviders.join(', ') || 'no providers'})`);
+            // The apiKey ref alone doesn't put the proxy in the path: without
+            // a loopback baseUrl OpenClaw's transport calls the upstream
+            // directly and the placeholder fails there (v0.15.0).
+            if (status.missingBaseUrl.length > 0) {
+              console.log(`  ✗ ${aqua('Model routing')} ${status.missingBaseUrl.join(', ')} still call the provider directly — the proxy is bypassed`);
+              console.log('    → Run: aquaman openclaw setup   (points models.providers.<svc>.baseUrl at the loopback listener)');
+              issues++;
+            } else if (status.baseUrlProviders.length > 0) {
+              console.log(`  ✓ ${aqua('Model routing')} through the proxy for ${status.baseUrlProviders.join(', ')}`);
+            }
           } else if (status.providerConfigured) {
             // Half-migrated: the provider block exists but some providers still
             // lack refs — a real inconsistency, fail the check.
@@ -2136,6 +2390,44 @@ openclaw
         }
       }
 
+      // 8.6. Channel egress routing (v0.15.0+). Channels build their own
+      //      undici dispatcher, so the plugin's fetch interceptor never sees
+      //      them. Only channels whose endpoint OpenClaw lets us override can
+      //      be routed; the rest are at-rest storage only and say so.
+      if (fs.existsSync(openclawJsonPath)) {
+        try {
+          const openclawConfig = JSON.parse(fs.readFileSync(openclawJsonPath, 'utf-8'));
+          const routing = channelRoutingStatus(openclawConfig, {
+            hasVaultCredential: (svc) => vaultServices.has(svc)
+          });
+          if (routing.routed.length > 0) {
+            console.log(`  \u2713 ${aqua('Channel routing')} through the proxy for ${routing.routed.join(', ')}`);
+            // Routed but not proxied means our own proxy 404s the channel.
+            const notProxied = routing.routed.filter(
+              c => !(config?.credentials?.proxiedServices ?? []).includes(c)
+            );
+            if (notProxied.length > 0) {
+              console.log(`  \u2717 ${aqua('Channel routing')} ${notProxied.join(', ')} routed here but missing from proxiedServices, so the proxy returns 404`);
+              console.log(`    \u2192 Add ${notProxied.join(', ')} to credentials.proxiedServices in ~/.aquaman/config.yaml (or re-run: aquaman openclaw setup)`);
+              issues++;
+            }
+          }
+          for (const skip of routing.notRouted) {
+            console.log(`  \u2717 ${aqua('Channel routing')} ${skip.channel} sends its token straight to the vendor`);
+            console.log(`    \u2192 ${describeChannelSkip(skip.reason, skip.channel)}`);
+            issues++;
+          }
+          if (routing.unroutable.length > 0) {
+            // Not a failure: nothing the user can do, and the credentials can
+            // still live in the vault. Stated so nobody assumes coverage.
+            console.log(`  \u2192 ${aqua('Channel routing')} not available for ${routing.unroutable.join(', ')} on this OpenClaw (no endpoint override)`);
+            console.log('    (their tokens can live in the vault, but the proxy is not in their egress path)');
+          }
+        } catch {
+          // openclaw.json invalid \u2014 already reported above
+        }
+      }
+
       // 9. Auth profiles. With SecretRef wiring active this surface is
       //    legacy/inert. Otherwise: OpenClaw >= 2026.6.5 reads provider auth
       //    profiles from each agent's openclaw-agent.sqlite and no longer reads
@@ -2145,7 +2437,17 @@ openclaw
       const agentDir = path.join(openclawStateDir, 'agents', 'main', 'agent');
       const profilesPath = path.join(agentDir, 'auth-profiles.json');
       const sqlitePath = path.join(agentDir, 'openclaw-agent.sqlite');
-      if (secretRefFullyWired) {
+      if (legacyAuthProfilesBlockProviders(openclawVersion) && fs.existsSync(profilesPath)) {
+        // OpenClaw 2.0 line: the legacy JSON is not inert any more — it blocks
+        // providers with AUTH_PROFILE_MIGRATION_REQUIRED (#114033). Older
+        // aquaman-plugin versions rewrote it on every load; 0.15.0+ doesn't.
+        console.log(`  \u2717 ${aqua('Auth profiles')} legacy auth-profiles.json blocks anthropic/openai on ${openclawVersion} (AUTH_PROFILE_MIGRATION_REQUIRED)`);
+        if (!secretRefFullyWired) {
+          console.log('    \u2192 First: aquaman openclaw setup   (wires the SecretRef provider that replaces it)');
+        }
+        console.log('    \u2192 Then run once: openclaw doctor --fix   (archives the file; aquaman-plugin 0.15.0+ never recreates it)');
+        issues++;
+      } else if (secretRefFullyWired) {
         console.log(`  ✓ ${aqua('Auth profiles')} not needed (SecretRef wiring replaces the placeholder flow)`);
         if (fs.existsSync(profilesPath)) {
           console.log('    → Optional: the legacy auth-profiles.json placeholder is inert and may be deleted');
@@ -2160,8 +2462,8 @@ openclaw
         } else if (fs.existsSync(sqlitePath)) {
           console.log(`  \u2713 ${aqua('Auth profiles')} (SQLite store present; OpenClaw \u2265 2026.6.5)`);
         } else {
-          console.log(`  \u2717 ${aqua('Auth profiles')} missing (no SQLite store found)`);
-          console.log('    \u2192 Run: aquaman setup, then: openclaw doctor --fix');
+          console.log(`  \u2717 ${aqua('Auth profiles')} missing: no credential wiring for OpenClaw ${openclawVersion}`);
+          console.log('    \u2192 Run: aquaman openclaw setup   (wires the SecretRef provider; the plugin no longer writes auth-profiles.json here)');
           issues++;
         }
       } else if (fs.existsSync(profilesPath)) {
@@ -2691,6 +2993,50 @@ policy
       const rule = result.matchedRule!;
       console.log(`  \u2717 DENIED by rule: ${rule.method} ${rule.path} \u2192 ${rule.action}`);
     }
+  });
+
+// Credential broker scope (v0.15.0+)
+const broker = program
+  .command('broker')
+  .description('Credential broker scope: which refs `aquaman daemon` may hand out');
+
+broker
+  .command('list')
+  .description('List the refs the daemon broker will materialize, and where each is declared')
+  .action(() => {
+    const config = loadConfig();
+    console.log('Credential broker: served by `aquaman daemon` only. OpenClaw-hosted proxies never hand out credential values.\n');
+    if (config.broker?.enabled === false) {
+      console.log('  Disabled (broker.enabled: false in config.yaml) — every broker request is refused.');
+      return;
+    }
+    const scope = daemonBrokerScope(config)!;
+    const declared = scope.declared();
+    if (declared.length === 0) {
+      console.log('  No declared refs — every broker request is refused.');
+    }
+    for (const d of declared) console.log(`  ${d.ref}  (${d.source})`);
+    const err = scope.declarationError();
+    if (err) console.log(`\n  ⚠ ${err} — refs declared there are refused until it parses`);
+    console.log(`\n  Never over the loopback listener: ${HERMES_SUPPORTED_SERVICES.join(', ')} (process-isolated on the proxy path)`);
+    console.log(`  Coding-agent refs: ${defaultProjectsPath()}  (aquaman coder project add ...)`);
+    console.log(`  Other refs:        broker.allowedRefs in ${getConfigPath()}  (aquaman broker allow ...)`);
+  });
+
+broker
+  .command('allow')
+  .description('Allow aquaman://service/key refs to be materialized (e.g. Hermes secret-source bindings)')
+  .argument('<refs...>', 'one or more aquaman://service/key refs')
+  .action((refs: string[]) => {
+    updateBrokerAllowedRefs(refs, 'allow');
+  });
+
+broker
+  .command('revoke')
+  .description('Stop materializing refs added with `aquaman broker allow`')
+  .argument('<refs...>', 'one or more aquaman://service/key refs')
+  .action((refs: string[]) => {
+    updateBrokerAllowedRefs(refs, 'revoke');
   });
 
 // Migration commands

@@ -83,12 +83,22 @@ describe('aquaman doctor E2E', () => {
       expect(stdout).toContain('Plugin not installed');
     }, TEST_TIMEOUT);
 
-    it('reports missing auth-profiles.json with fix command', () => {
+    it('reports missing auth-profiles.json with fix command (pre-SQLite gateway)', () => {
       tempEnv = createTempEnv({ withConfig: true, withPlugin: true });
-      const { stdout } = runDoctor(tempEnv);
+      // Pin the gateway version: otherwise this depends on whatever
+      // `openclaw` happens to be on PATH.
+      const { stdout } = runDoctor(tempEnv, { AQUAMAN_OPENCLAW_VERSION: '2026.5.12' });
 
       expect(stdout).toContain('Auth profiles missing');
       expect(stdout).toContain('aquaman setup');
+    }, TEST_TIMEOUT);
+
+    it('points at SecretRef setup when nothing is wired on a 2026.6.5+ gateway', () => {
+      tempEnv = createTempEnv({ withConfig: true, withPlugin: true });
+      const { stdout } = runDoctor(tempEnv, { AQUAMAN_OPENCLAW_VERSION: '2026.7.33' });
+
+      expect(stdout).toContain('Auth profiles missing: no credential wiring for OpenClaw 2026.7.33');
+      expect(stdout).toContain('aquaman openclaw setup');
     }, TEST_TIMEOUT);
 
     it('reports missing openclaw.json plugin entry', () => {
@@ -120,11 +130,12 @@ describe('aquaman doctor E2E', () => {
       // and `openclaw doctor --fix` archives the JSON after importing it. So a
       // healthy install on those versions is SQLite-present, JSON-absent. Stage
       // that. (On older OpenClaw the JSON would be required instead; the devDep
-      // pins >= 2026.6.6 so the SQLite path is what CI/local exercise.)
+      // v0.15.0: the gateway is no longer a repo dependency, so pin the
+      // version instead of depending on whatever `openclaw` is on PATH.
       const agentDir = path.join(tempEnv.openclawDir, 'agents', 'main', 'agent');
       mkdirSync(agentDir, { recursive: true });
       writeFileSync(path.join(agentDir, 'openclaw-agent.sqlite'), '');
-      const { stdout } = runDoctor(tempEnv);
+      const { stdout } = runDoctor(tempEnv, { AQUAMAN_OPENCLAW_VERSION: '2026.7.33' });
 
       expect(stdout).toContain('Config exists');
       expect(stdout).toContain('Plugin installed');
@@ -186,6 +197,46 @@ describe('aquaman doctor E2E', () => {
       expect(stdout).toContain('SecretRef wiring incomplete');
       expect(stdout).toContain('providers not wired: anthropic, openai');
       expect(exitCode).toBe(1);
+    }, TEST_TIMEOUT);
+
+    it('fails on a leftover legacy auth-profiles.json on the OpenClaw 2.0 line (provider lockout)', () => {
+      tempEnv = createTempEnv({ withConfig: true, withPlugin: true, withAuthProfiles: true });
+      writeOpenClawJson(tempEnv, { ...PLUGIN_ENTRY, ...FULL_WIRING });
+      const { stdout, exitCode } = runDoctor(tempEnv, { AQUAMAN_OPENCLAW_VERSION: '2026.9.1' });
+
+      expect(stdout).toContain('legacy auth-profiles.json blocks anthropic/openai on 2026.9.1');
+      expect(stdout).toContain('openclaw doctor --fix');
+      // SecretRef already wired, so no redundant setup step.
+      expect(stdout).not.toContain('First: aquaman openclaw setup');
+      expect(exitCode).toBe(1);
+    }, TEST_TIMEOUT);
+
+    it('treats the same leftover file as inert on 2026.7.x (no lockout there)', () => {
+      tempEnv = createTempEnv({ withConfig: true, withPlugin: true, withAuthProfiles: true });
+      writeOpenClawJson(tempEnv, { ...PLUGIN_ENTRY, ...FULL_WIRING });
+      const { stdout } = runDoctor(tempEnv, { AQUAMAN_OPENCLAW_VERSION: '2026.7.33' });
+
+      expect(stdout).not.toContain('blocks anthropic/openai');
+      expect(stdout).toContain('Auth profiles not needed');
+    }, TEST_TIMEOUT);
+
+    it('flags a plugins.allow list that blocks OpenClaw\u2019s own provider plugins (v0.14.x setup residue)', () => {
+      tempEnv = createTempEnv({ withConfig: true, withPlugin: true });
+      writeOpenClawJson(tempEnv, { ...PLUGIN_ENTRY, ...FULL_WIRING });
+      const { stdout, exitCode } = runDoctor(tempEnv, { AQUAMAN_OPENCLAW_VERSION: '2026.9.1' });
+
+      expect(stdout).toContain('plugins.allow blocks OpenClaw\u2019s own provider plugin(s): anthropic, openai');
+      expect(exitCode).toBe(1);
+    }, TEST_TIMEOUT);
+
+    it('treats a missing plugins.allow list as allowed', () => {
+      tempEnv = createTempEnv({ withConfig: true, withPlugin: true });
+      const { plugins, ...rest } = PLUGIN_ENTRY as any;
+      writeOpenClawJson(tempEnv, { ...rest, plugins: { entries: plugins.entries }, ...FULL_WIRING });
+      const { stdout } = runDoctor(tempEnv, { AQUAMAN_OPENCLAW_VERSION: '2026.9.1' });
+
+      expect(stdout).toContain('Plugin allowed (no plugins.allow trust list');
+      expect(stdout).not.toContain('not in plugins.allow');
     }, TEST_TIMEOUT);
 
     it('stays silent on gateways below the SecretRef floor', () => {

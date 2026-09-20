@@ -9,21 +9,63 @@
  *   stdin:  {"protocolVersion":1,"provider":"aquaman","ids":["anthropic/api_key",...]}
  *   stdout: {"protocolVersion":1,"values":{"<id>":"<value>",...},"errors":{...}}
  *
- * It returns the STATIC placeholder for every requested id — deliberately.
- * Real keys live in the aquaman vault; the proxy strips whatever key the
- * gateway presents and injects the real credential upstream. The SecretRef
- * only needs to resolve to a stable non-empty marker, and resolution must
- * succeed even when the aquaman daemon isn't running yet (the gateway
- * resolves its secrets snapshot eagerly at startup) — so this script
- * contacts nothing: no vault, no proxy, no network, no env reads.
+ * It NEVER returns a real credential. It returns the aquaman loopback token
+ * when one is configured, else the static placeholder. Both are markers the
+ * proxy strips before injecting the real key from the vault:
+ *   - loopback token: OpenClaw's model transport calls the proxy's loopback
+ *     listener (models.providers.<svc>.baseUrl), which is token-gated, so the
+ *     token has to travel as the provider api key — exactly as on the Hermes
+ *     path. It is a capability to reach 127.0.0.1, not a credential.
+ *   - placeholder: no listener configured (legacy sentinel/UDS path).
  *
- * The gateway spawns it as `${node} ./dist/secrets-resolver.mjs` with an
- * EMPTY child env (no passEnv declared in the manifest) inside the plugin
- * root, entrypoint permission-checked. Keep this file dependency-free.
+ * The token is read from aquaman's config.yaml with a tiny hand-rolled
+ * parser: this script must stay dependency-free, must never contact the vault
+ * or the network, and must still resolve when the daemon isn't running (the
+ * gateway resolves its secrets snapshot eagerly at startup). Any read problem
+ * falls back to the placeholder rather than failing the gateway's startup.
+ *
+ * The gateway spawns it as `${node} ./dist/secrets-resolver.mjs` inside the
+ * plugin root with a near-empty child env, entrypoint permission-checked —
+ * so the config path is resolved from AQUAMAN_CONFIG_DIR when passed through,
+ * else from the OS home directory (os.homedir() works without $HOME).
  */
+
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 const PLACEHOLDER = 'aquaman-proxy-managed';
 const PROTOCOL_VERSION = 1;
+
+/**
+ * `loopback.token` from aquaman's config.yaml, or null. Deliberately a
+ * line scanner, not a YAML dependency: only the top-level `loopback:` block
+ * is considered, and only when the listener is enabled.
+ */
+function readLoopbackToken() {
+  try {
+    const dir = process.env.AQUAMAN_CONFIG_DIR || path.join(os.homedir(), '.aquaman');
+    const text = fs.readFileSync(path.join(dir, 'config.yaml'), 'utf-8');
+    let inBlock = false;
+    let enabled = false;
+    let token = null;
+    for (const rawLine of text.split('\n')) {
+      const line = rawLine.replace(/\r$/, '');
+      if (/^[A-Za-z_][\w-]*\s*:/.test(line)) {
+        inBlock = /^loopback\s*:/.test(line);
+        continue;
+      }
+      if (!inBlock) continue;
+      const enabledMatch = line.match(/^\s+enabled\s*:\s*(true|false)\s*$/);
+      if (enabledMatch) enabled = enabledMatch[1] === 'true';
+      const tokenMatch = line.match(/^\s+token\s*:\s*["']?([A-Za-z0-9._-]+)["']?\s*$/);
+      if (tokenMatch) token = tokenMatch[1];
+    }
+    return enabled && token ? token : null;
+  } catch {
+    return null; // absent/unreadable/malformed — fall back to the placeholder
+  }
+}
 
 function fail(message) {
   process.stderr.write(`aquaman secrets-resolver: ${message}\n`);
@@ -49,11 +91,12 @@ async function main() {
   }
 
   const ids = Array.isArray(request.ids) ? request.ids : [];
+  const marker = readLoopbackToken() || PLACEHOLDER;
   const values = {};
   const errors = {};
   for (const id of ids) {
     if (typeof id === 'string' && id.length > 0) {
-      values[id] = PLACEHOLDER;
+      values[id] = marker;
     } else {
       errors[String(id)] = { message: 'invalid ref id (expected a non-empty string like "anthropic/api_key")' };
     }

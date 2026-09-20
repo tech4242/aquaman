@@ -47,6 +47,26 @@ function runSetup(
   });
 }
 
+/** Spawn any aquaman subcommand against the temp env, with stdin piped in. */
+function runCli(
+  args: string[],
+  tempEnv: TempEnv,
+  opts: { input?: string; env?: Record<string, string> } = {}
+): Promise<{ stdout: string; exitCode: number | null }> {
+  return new Promise((resolve) => {
+    const proc = spawn('npx', ['tsx', CLI_PATH, ...args], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, ...tempEnv.env, ...opts.env },
+    });
+    let stdout = '';
+    proc.stdout!.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr!.on('data', (d: Buffer) => { stdout += d.toString(); });
+    if (opts.input !== undefined) proc.stdin!.end(opts.input);
+    proc.on('exit', (code) => resolve({ stdout, exitCode: code }));
+    setTimeout(() => { proc.kill('SIGKILL'); resolve({ stdout, exitCode: -1 }); }, 25_000);
+  });
+}
+
 describe('aquaman setup E2E', () => {
   let tempEnv: TempEnv;
 
@@ -116,8 +136,19 @@ describe('aquaman setup E2E', () => {
         expect(config.plugins?.entries?.['aquaman-plugin']).toBeDefined();
         expect(config.plugins.entries['aquaman-plugin'].enabled).toBe(true);
         expect(config.plugins.entries['aquaman-plugin'].config.backend).toBeDefined();
-        expect(config.plugins?.allow).toContain('aquaman-plugin');
+        // v0.15.0: setup never creates a plugins.allow list (one holding only
+        // aquaman-plugin blocks OpenClaw's own anthropic/openai provider plugins).
+        expect(config.plugins?.allow).toBeUndefined();
       }
+    }, TEST_TIMEOUT);
+
+    it('appends to an existing plugins.allow list instead of replacing it', async () => {
+      const openclawJsonPath = path.join(tempEnv.openclawDir, 'openclaw.json');
+      writeFileSync(openclawJsonPath, JSON.stringify({ plugins: { allow: ['anthropic', 'openai', 'telegram'] } }));
+      const { exitCode } = await runSetup([], {}, tempEnv);
+      expect(exitCode).toBe(0);
+      const config = JSON.parse(readFileSync(openclawJsonPath, 'utf-8'));
+      expect(config.plugins.allow).toEqual(['anthropic', 'openai', 'telegram', 'aquaman-plugin']);
     }, TEST_TIMEOUT);
 
     it('generates auth-profiles.json with placeholders', async () => {
@@ -202,6 +233,74 @@ describe('aquaman setup E2E', () => {
 
       const profilesPath = path.join(tempEnv.openclawDir, 'agents', 'main', 'agent', 'auth-profiles.json');
       expect(existsSync(profilesPath)).toBe(false);
+    }, TEST_TIMEOUT);
+  });
+
+  // Channel egress routing (v0.15.0+). OpenClaw channels bypass the fetch
+  // interceptor, so Telegram is routed through the loopback listener instead.
+  // Wiring is all-or-nothing: a channel with our apiRoot but no vault
+  // credential behind it is a dead bot.
+  //
+  // These pin --backend encrypted-file. Without it setup auto-detects, which
+  // on macOS is the developer's real login keychain: the vault probe and the
+  // credential these tests store would land outside the temp env.
+  describe('channel routing', () => {
+    const writeTelegramConfig = (tempEnv: TempEnv, extra: Record<string, any> = {}) => {
+      const p = path.join(tempEnv.openclawDir, 'openclaw.json');
+      writeFileSync(p, JSON.stringify({
+        channels: { telegram: { enabled: true, botToken: 'real:bot-token', ...extra } }
+      }));
+      return p;
+    };
+
+    it('routes telegram and opens the proxy route for it', async () => {
+      const openclawJsonPath = writeTelegramConfig(tempEnv);
+      const add = await runCli(
+        ['credentials', 'add', 'telegram', 'bot_token', '--backend', 'encrypted-file'],
+        tempEnv,
+        { input: 'real:bot-token' }
+      );
+      expect(add.exitCode).toBe(0);
+
+      const { exitCode } = await runSetup(['--backend', 'encrypted-file'], {}, tempEnv);
+      expect(exitCode).toBe(0);
+
+      const config = JSON.parse(readFileSync(openclawJsonPath, 'utf-8'));
+      expect(config.channels.telegram.apiRoot).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/telegram$/);
+      // The placeholder is the loopback token, never the real bot token.
+      expect(config.channels.telegram.botToken).toMatch(/^aqm_lb_/);
+      expect(JSON.stringify(config)).not.toContain('real:bot-token');
+
+      // Routed but absent from proxiedServices would 404 at our own proxy.
+      const aquamanConfig = readFileSync(path.join(tempEnv.aquamanDir, 'config.yaml'), 'utf-8');
+      expect(aquamanConfig).toContain('telegram');
+    }, TEST_TIMEOUT);
+
+    it('leaves the channel untouched when the vault has no credential', async () => {
+      const openclawJsonPath = writeTelegramConfig(tempEnv);
+
+      const { exitCode } = await runSetup(['--backend', 'encrypted-file'], {}, tempEnv);
+      expect(exitCode).toBe(0);
+
+      const config = JSON.parse(readFileSync(openclawJsonPath, 'utf-8'));
+      expect(config.channels.telegram.apiRoot).toBeUndefined();
+      expect(config.channels.telegram.botToken).toBe('real:bot-token');
+    }, TEST_TIMEOUT);
+
+    it('never clobbers a self-hosted Bot API endpoint', async () => {
+      const openclawJsonPath = writeTelegramConfig(tempEnv, { apiRoot: 'https://bot-api.example.com' });
+      await runCli(
+        ['credentials', 'add', 'telegram', 'bot_token', '--backend', 'encrypted-file'],
+        tempEnv,
+        { input: 'real:bot-token' }
+      );
+
+      const { exitCode } = await runSetup(['--backend', 'encrypted-file'], {}, tempEnv);
+      expect(exitCode).toBe(0);
+
+      const config = JSON.parse(readFileSync(openclawJsonPath, 'utf-8'));
+      expect(config.channels.telegram.apiRoot).toBe('https://bot-api.example.com');
+      expect(config.channels.telegram.botToken).toBe('real:bot-token');
     }, TEST_TIMEOUT);
   });
 

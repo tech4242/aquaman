@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createCredentialProxy, type CredentialProxy } from 'aquaman-proxy';
+import { createCredentialProxy, createBrokerScope, type CredentialProxy } from 'aquaman-proxy';
 import { MemoryStore } from 'aquaman-core';
 import { BrokerClient, handlePreToolUse } from 'aquaman-coder';
 import { tmpSocketPath, cleanupSocket } from '../helpers/uds-proxy.js';
@@ -30,6 +30,10 @@ describe('aquaman-coder broker-client E2E', () => {
       socketPath,
       store,
       allowedServices: ['anthropic', 'github'],
+      broker: createBrokerScope({
+        projectsPath: '/nonexistent/aquaman-test/projects.yaml',
+        allowedRefs: ['aquaman://anthropic/api_key', 'aquaman://anthropic/missing_key', 'aquaman://github/token'],
+      }),
     });
     await proxy.start();
   });
@@ -125,6 +129,9 @@ describe('aquaman-coder exec — value-based redaction E2E', () => {
       socketPath: socketPathLocal,
       store,
       allowedServices: ['dummysvc'],
+      // The real daemon wiring: declared refs come from projects.yaml, which
+      // is written below AFTER the proxy starts (exercises the mtime reload).
+      broker: createBrokerScope({ projectsPath: path.join(tmpHome, '.aquaman', 'projects.yaml') }),
     });
     await proxy.start();
 

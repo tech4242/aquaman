@@ -15,8 +15,8 @@ the real credential. This plugin adds:
 - **`/aquaman-status`**: slash command showing proxy reachability + wiring.
 - **`aquaman_status`**: an agent-facing tool with the same info.
 - **`on_session_start`**: a one-shot health probe that warns if the proxy is down.
-- **`aquaman` secret source** (Hermes ≥ 0.18.1): resolves project/tool secrets —
-  GitHub tokens, database URLs, anything under `secrets.aquaman.env` — from your
+- **`aquaman` secret source** (Hermes ≥ 0.18.1): resolves project/tool secrets
+  (GitHub tokens, database URLs, anything under `secrets.aquaman.env`) from your
   vault at startup, through the proxy's token-gated broker. See below.
 
 ## How it works
@@ -60,9 +60,15 @@ hermes                            # then run: /aquaman-status
 `aquaman-hermes install` honors `HERMES_HOME` (the same var the Hermes CLI uses to
 relocate its config dir); it defaults to `~/.hermes`.
 
+## Transport and access control
+
+Hermes reaches the proxy over the token-gated loopback listener `127.0.0.1:<port>`, because Hermes builds its own HTTP client and cannot dial a Unix socket. Since aquaman v0.15.0 OpenClaw's model traffic uses the same listener, for the same reason; coding agents still use the socket `~/.aquaman/proxy.sock` (`0600`).
+
+The token is a capability to reach the local proxy, not a credential: generated per install, stored in `~/.aquaman/config.yaml` (`0600`) and in the managed block of `~/.hermes/.env`, and stripped by the proxy before your real key is injected. Any local process can reach a loopback port, including other users, where the socket's `0600` shuts them out. The token is the gate there, and the listener stays off until you run `aquaman hermes setup`.
+
 ## Project secrets (secret source, Hermes ≥ 0.18.1)
 
-LLM keys are only half the problem — agents also need GitHub tokens, database URLs,
+LLM keys are only half the problem. Agents also need GitHub tokens, database URLs,
 and other project secrets that usually end up in a plaintext `.env`. On Hermes ≥
 0.18.1 this plugin registers an `aquaman` secret source so those come from your
 vault instead. Bind them in `~/.hermes/config.yaml`:
@@ -76,13 +82,23 @@ secrets:
       DATABASE_URL: aquaman://supabase/db_url
 ```
 
+Then declare the same refs to the proxy. Since aquaman 0.15 the daemon hands out
+only refs you have declared, so a binding in Hermes' config alone is refused:
+
+```bash
+aquaman broker allow aquaman://github/token aquaman://supabase/db_url
+aquaman hermes doctor   # flags any binding that isn't declared yet
+```
+
 At startup the source resolves each binding through the proxy's token-gated
 loopback broker (per-read, hash-chain audited) and hands the values to Hermes'
 secret orchestrator. Notes on the security model:
 
-- **LLM provider keys are refused.** `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` bindings
-  are rejected with a warning — those stay on the loopback proxy path, where the real
-  key never enters the Hermes process at all.
+- **LLM provider keys are refused**, by this source and by the proxy itself.
+  `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` bindings are rejected with a warning, and the
+  proxy never hands out anthropic/openai keys over the loopback listener even if they
+  are declared. Those stay on the loopback proxy path, where the real key never enters
+  the Hermes process at all.
 - Project secrets resolved this way **do** live in Hermes' process env (that's what a
   Hermes secret source is). What you gain over a `.env` line: vault-at-rest storage,
   per-read tamper-evident audit, instant rotation, and no plaintext files on disk.
@@ -93,7 +109,7 @@ On Hermes 0.19+ the source participates in the full orchestrator: mapped-vs-bulk
 precedence (an explicit `env:` binding outranks a bulk project dump), first-claim-wins
 across sources with conflict warnings, and `(from Aquaman Proxy)` provenance labels.
 Order it against other sources with `secrets.sources: [aquaman, bitwarden]`. The source
-passes Hermes' own secret-source conformance kit — see `tests/test_conformance.py`.
+passes Hermes' own secret-source conformance kit (see `tests/test_conformance.py`).
 
 **Timing caveat:** plugin discovery runs later in Hermes' startup than the first
 `load_hermes_dotenv()` call, so a plugin-provided source is not consulted by the very
@@ -110,17 +126,17 @@ aquaman-hermes uninstall
 
 ## Notes
 
-- The status/command/hook surface holds no credentials — it only reads the provider
+- The status/command/hook surface holds no credentials. It only reads the provider
   base-URL env vars and probes the proxy's token-exempt `/_health` endpoint. The
   secret source transits credentials only while handing them to Hermes' orchestrator.
 - It depends only on the Python standard library.
 - LLM providers wired via base-URL: Anthropic + OpenAI. Channels are out of scope for
   the Hermes path (no base-URL lever); project secrets go through the secret source.
 - Hermes >=0.17 "managed scope": a root-owned `/etc/hermes/.env` overrides
-  `~/.hermes/.env` — if an admin pins the `ANTHROPIC_*`/`OPENAI_*` vars there, the
+  `~/.hermes/.env`. If an admin pins the `ANTHROPIC_*`/`OPENAI_*` vars there, the
   proxy is bypassed. `aquaman hermes doctor` detects and flags this.
 - With `gateway.multiplex_profiles` enabled (off by default), env is scoped per
-  profile — add the aquaman block to each profile's env file.
+  profile: add the aquaman block to each profile's env file.
 - Hermes 0.18's cron exfil guard refuses cron jobs that pair a named provider with
   an off-host `base_url` override; normal jobs inheriting the session runtime (the
   env vars aquaman writes) are unaffected.

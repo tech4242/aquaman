@@ -124,6 +124,20 @@ export interface HermesConfig {
   binaryPath?: string;
 }
 
+/**
+ * Credential broker (`POST /broker/resolve`), served by `aquaman daemon` only
+ * (v0.15.0+). The broker hands credential VALUES to same-user callers, so it
+ * serves only refs declared for materialization: the env refs in
+ * projects.yaml, plus `allowedRefs` here (e.g. Hermes secret-source bindings).
+ * OpenClaw-hosted proxies never serve it.
+ */
+export interface BrokerConfig {
+  /** Serve the broker from `aquaman daemon`. Default true. */
+  enabled: boolean;
+  /** Extra `aquaman://service/key` refs callers may materialize. Manage with `aquaman broker allow|revoke`. */
+  allowedRefs?: string[];
+}
+
 export interface WrapperConfig {
   credentials: CredentialsConfig;
   audit: AuditConfig;
@@ -131,6 +145,7 @@ export interface WrapperConfig {
   openclaw: OpenClawConfig;
   loopback?: LoopbackConfig;
   hermes?: HermesConfig;
+  broker?: BrokerConfig;
   policy?: Record<string, { defaultAction: 'allow' | 'deny'; rules: Array<{ method: string; path: string; action: 'allow' | 'deny' }> }>;
 }
 

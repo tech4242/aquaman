@@ -176,16 +176,52 @@ export function getDefaultPolicyPresets(): Record<string, ServicePolicy> {
     gmail: {
       defaultAction: 'allow',
       rules: [
-        // Gmail send: POST /gmail/v1/users/{userId}/messages/send
+        // Gmail send. Policy paths are the upstream API's full path after the
+        // service prefix, and Gmail's REST path is /gmail/v1/users/{userId}/...
+        { method: 'POST', path: '/gmail/v1/users/*/messages/send', action: 'deny' },
+        // Pre-0.15.0 form, kept so configs written with it keep matching.
         { method: 'POST', path: '/v1/users/*/messages/send', action: 'deny' },
       ]
     },
     slack: {
       defaultAction: 'allow',
       rules: [
-        // Slack admin methods: /admin.users.list, /admin.conversations.create, etc.
+        // Slack admin methods. Real Slack Web API traffic arrives as
+        // /api/admin.users.list (the interceptor keeps the full slack.com
+        // path; the proxy doesn't prepend the upstream's base path). Through
+        // v0.14.x this preset only had '/admin.*', which never matched a
+        // working request (verified against slack.com 2026-09-18).
+        { method: '*', path: '/api/admin.*', action: 'deny' },
         { method: '*', path: '/admin.*', action: 'deny' },
       ]
     }
   };
+}
+
+/**
+ * Known-ineffective rule shapes: deny rules written against a path that real
+ * upstream traffic never has. Returns human-readable warnings (empty when
+ * fine). These came from our own pre-0.15.0 presets, which `aquaman setup`
+ * persisted into users' config.yaml, so they outlive the preset fix.
+ */
+export function lintPolicyConfig(config: PolicyConfig): string[] {
+  const warnings: string[] = [];
+  const denies = (svc: string) =>
+    (config[svc]?.rules ?? []).filter(r => r.action === 'deny').map(r => r.path);
+
+  const slack = denies('slack');
+  if (slack.includes('/admin.*') && !slack.some(p => p.startsWith('/api/'))) {
+    warnings.push(
+      "slack: deny rule '/admin.*' never matches real Slack traffic, which arrives as /api/admin.*. " +
+      "Add a rule for path '/api/admin.*' (the v0.15.0 preset has both)."
+    );
+  }
+  const gmail = denies('gmail');
+  if (gmail.includes('/v1/users/*/messages/send') && !gmail.some(p => p.startsWith('/gmail/'))) {
+    warnings.push(
+      "gmail: deny rule '/v1/users/*/messages/send' doesn't match Gmail's real path /gmail/v1/users/*/messages/send. " +
+      "Add a rule for that path (the v0.15.0 preset has both)."
+    );
+  }
+  return warnings;
 }

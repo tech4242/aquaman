@@ -81,6 +81,8 @@ export {
   saveConfig,
   applyEnvOverrides,
   generateLoopbackToken,
+  isAquamanPlaceholder,
+  LOOPBACK_TOKEN_PREFIX,
   DEFAULT_LOOPBACK_PORT,
   DEFAULT_CACHE_TTL_SECONDS,
   CACHED_BY_DEFAULT_BACKENDS,

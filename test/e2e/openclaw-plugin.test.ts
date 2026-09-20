@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execSync } from 'node:child_process';
 
-// Every test here shells out to `npx openclaw ...` (multi-second cold spawns).
+// Every test here shells out to the openclaw CLI (multi-second cold spawns).
 // Under vitest 4's forks pool + full-suite parallelism these regularly exceed
 // the 5s default and flake; scope a realistic timeout to this file only.
 vi.setConfig({ testTimeout: 30_000 });
@@ -20,10 +20,17 @@ const PLUGIN_SRC = path.resolve(__dirname, '../../packages/plugin');
 
 let testStateDir: string;
 
-// Check if OpenClaw is available via npx
+// The gateway under test is NOT a repo dependency: it is installed out-of-tree
+// (CI: `npm install -g openclaw@<lane>`; locally: whatever `openclaw` is on
+// PATH), and OPENCLAW_BIN selects a specific build. Keeping it out of the
+// lockfile keeps its shrinkwrapped transitive tree out of our audits. Never go
+// through `npx` here — with no local install it would silently download
+// `latest` instead of the version the lane pins.
+const OPENCLAW_BIN = process.env.OPENCLAW_BIN || 'openclaw';
+
 function isOpenClawInstalled(): boolean {
   try {
-    execSync('npx openclaw --version', { stdio: 'pipe' });
+    execSync(`${OPENCLAW_BIN} --version`, { stdio: 'pipe' });
     return true;
   } catch {
     return false;
@@ -38,7 +45,7 @@ function isOpenClawInstalled(): boolean {
 function runOpenClaw(args: string): string {
   const testBinDir = path.join(testStateDir, 'bin');
   const { VITEST: _vitest, ...env } = process.env;
-  return execSync(`npx openclaw ${args} 2>&1`, {
+  return execSync(`${OPENCLAW_BIN} ${args} 2>&1`, {
     encoding: 'utf-8',
     env: {
       ...env,
@@ -90,7 +97,9 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
       { mode: 0o755 }
     );
 
-    // Write openclaw.json with both entries and installs (OpenClaw validates installs)
+    // Write openclaw.json the way `aquaman openclaw setup` does: entries +
+    // allow list. No `plugins.installs` — 2026.9.x rejects it outright
+    // ("Unrecognized key"); install records moved to state/openclaw.sqlite.
     writeFileSync(
       path.join(testStateDir, 'openclaw.json'),
       JSON.stringify({
@@ -103,15 +112,6 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
                 backend: 'keychain',
                 services: ['anthropic', 'openai'],
               }
-            }
-          },
-          installs: {
-            'aquaman-plugin': {
-              source: 'path',
-              sourcePath: PLUGIN_SRC,
-              installPath,
-              version: '0.1.0',
-              installedAt: new Date().toISOString()
             }
           }
         }
@@ -155,6 +155,29 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
         .map((line) => line.replace(/\/\S+/g, '<path>'))
         .filter((line) => /error|invalid|blocked|unsafe/i.test(line) && /aquaman/i.test(line));
       expect(aquamanErrorLines).toEqual([]);
+      // Unattributed loader diagnostics that only make sense for us.
+      expect(result).not.toMatch(/must declare contracts\.tools/);
+    });
+
+    it('runtime inspection registers the aquaman_status tool (contracts.tools declared)', () => {
+      // Without manifest contracts.tools, 2026.6.34+ loaders drop the tool:
+      // "plugin must declare contracts.tools before registering agent tools".
+      const result = runOpenClaw('plugins inspect aquaman-plugin --runtime');
+      expect(result).toContain('aquaman_status');
+      expect(result).not.toMatch(/must declare contracts\.tools/);
+    });
+
+    it('discovery-mode loads write no legacy auth-profiles.json', () => {
+      runOpenClaw('plugins inspect aquaman-plugin --runtime');
+      runOpenClaw('plugins doctor');
+      expect(existsSync(path.join(testStateDir, 'agents', 'main', 'agent', 'auth-profiles.json'))).toBe(false);
+    });
+
+    it('provider auth is not locked out after the plugin loads (2026.8.1+ lockout regression)', () => {
+      // On the 2.0 line a legacy auth-profiles.json beside the SQLite store
+      // made `models status` exit 1 ("requires legacy credential migration").
+      const result = runOpenClaw('models status');
+      expect(result).not.toMatch(/legacy credential migration|AUTH_PROFILE_MIGRATION_REQUIRED/);
     });
   });
 
@@ -191,6 +214,8 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
         'configSchema',
         'nonSecretAuthMarkers',
         'secretProviderIntegrations',
+        'contracts',
+        'activation',
       ]);
       const manifestPath = path.join(
         testStateDir,

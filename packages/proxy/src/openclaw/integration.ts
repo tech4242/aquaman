@@ -56,6 +56,39 @@ export function authProfilesAreSqliteOnly(version: string | undefined | null): b
   return d >= 5;
 }
 
+function calendarAtLeast(version: string | undefined | null, min: [number, number, number]): boolean {
+  const parts = parseCalendarVersion(version);
+  if (!parts) return false;
+  for (let i = 0; i < 3; i++) {
+    if (parts[i] !== min[i]) return parts[i] > min[i];
+  }
+  return true;
+}
+
+/**
+ * OpenClaw >= 2026.8.1 (the "OpenClaw 2.0" line) finished the SQLite-only
+ * auth-profile move (openclaw/openclaw#114033): a legacy `auth-profiles.json`
+ * beside the SQLite store now BLOCKS those providers with
+ * AUTH_PROFILE_MIGRATION_REQUIRED ("requires legacy credential migration; run
+ * openclaw doctor --fix") instead of being ignored. Verified on 2026.9.1; on
+ * 2026.7.33 the file is still just ignored.
+ */
+export function legacyAuthProfilesBlockProviders(version: string | undefined | null): boolean {
+  return calendarAtLeast(version, [2026, 8, 1]);
+}
+
+/**
+ * OpenClaw >= 2026.8.1 gates third-party plugin install/enable on capability
+ * consent (#130168/#131301/#134183): non-interactively that's
+ * `--accept-capabilities`, and npm/local sources also need `--force`
+ * (#102197). A `clawhub:` source needs only the consent flag. 2026.7.33
+ * accepts a bare `openclaw plugins install aquaman-plugin` (and rejects the
+ * unknown flags), so this gates which command setup runs.
+ */
+export function pluginInstallNeedsCapabilityConsent(version: string | undefined | null): boolean {
+  return calendarAtLeast(version, [2026, 8, 1]);
+}
+
 export class OpenClawIntegration {
   private config: WrapperConfig;
   private services: ServiceConfig[];

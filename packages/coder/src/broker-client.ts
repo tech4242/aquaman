@@ -9,6 +9,16 @@ import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+/**
+ * aquaman's config dir, same rule as the proxy's getConfigDir(). Duplicated
+ * rather than imported from aquaman-proxy on purpose: this CLI is spawned
+ * from source (`npx tsx .../cli/index.ts`) in tests and dev, where the proxy's
+ * dist build may not exist yet, and a runtime import would fail there.
+ */
+export function aquamanConfigDir(): string {
+  return process.env['AQUAMAN_CONFIG_DIR'] || path.join(os.homedir(), '.aquaman');
+}
+
 export interface BrokerResolveOptions {
   service: string;
   key: string;
@@ -25,8 +35,43 @@ export interface BrokerClientOptions {
   timeoutMs?: number;
 }
 
+/** Same socket the daemon binds: `<configDir>/proxy.sock` (honors AQUAMAN_CONFIG_DIR). */
 export function defaultSocketPath(): string {
-  return path.join(os.homedir(), '.aquaman', 'proxy.sock');
+  return path.join(aquamanConfigDir(), 'proxy.sock');
+}
+
+/**
+ * A broker refusal or failure with the daemon's machine-readable `code`
+ * (v0.15.0+: `broker_disabled`, `broker_ref_not_declared`,
+ * `broker_ref_isolated`) and HTTP status, so callers can pick the right fix.
+ */
+export class BrokerError extends Error {
+  readonly code?: string;
+  readonly status?: number;
+  readonly fix?: string;
+
+  constructor(message: string, opts: { code?: string; status?: number; fix?: string } = {}) {
+    super(message);
+    this.name = 'BrokerError';
+    this.code = opts.code;
+    this.status = opts.status;
+    this.fix = opts.fix;
+  }
+}
+
+/**
+ * Claude Code's sandbox denies Unix-socket connects it hasn't allowlisted, and
+ * the kernel reports that as EPERM (macOS Seatbelt) or EACCES/EPERM (Linux
+ * seccomp). Say so instead of surfacing a bare errno.
+ */
+export function sandboxSocketHint(socketPath: string): string {
+  return (
+    `Connecting to the aquaman proxy socket at ${socketPath} was blocked — most likely by ` +
+    `Claude Code's sandbox, which denies Unix sockets by default. On macOS run ` +
+    `\`aquaman coder setup claude-code\` (it allowlists this socket in sandbox.network.allowUnixSockets). ` +
+    `On Linux/WSL2 the sandbox can only allow it with sandbox.network.allowAllUnixSockets: true, ` +
+    `which opens every Unix socket to sandboxed commands.`
+  );
 }
 
 export class BrokerClient {
@@ -63,7 +108,7 @@ export class BrokerClient {
     if (statusCode >= 400) {
       const msg = json.error || `Broker error (HTTP ${statusCode})`;
       const fix = json.fix ? ` — ${json.fix}` : '';
-      throw new Error(`${msg}${fix}`);
+      throw new BrokerError(`${msg}${fix}`, { code: json.code, status: statusCode, fix: json.fix });
     }
 
     if (typeof json.value !== 'string' || typeof json.expires_at !== 'string') {
@@ -111,10 +156,13 @@ export class BrokerClient {
 
       req.on('error', (err: NodeJS.ErrnoException) => {
         if (err.code === 'ENOENT' || err.code === 'ECONNREFUSED') {
-          reject(new Error(
+          reject(new BrokerError(
             `Cannot reach aquaman proxy at ${this.socketPath}. ` +
-            `Start it with: aquaman daemon`
+            `Start it with: aquaman daemon`,
+            { code: 'proxy_unreachable' }
           ));
+        } else if (err.code === 'EPERM' || err.code === 'EACCES') {
+          reject(new BrokerError(sandboxSocketHint(this.socketPath), { code: 'socket_blocked' }));
         } else {
           reject(err);
         }

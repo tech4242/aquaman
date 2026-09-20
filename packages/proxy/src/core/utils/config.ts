@@ -55,8 +55,26 @@ export function resolveCacheTtl(config: WrapperConfig): number {
  * agent host as the provider api_key; the proxy strips it and injects the real
  * credential. Prefixed so it's recognizable in `~/.hermes/.env` and logs.
  */
+/** Every generated loopback token starts with this, so it is recognizable. */
+export const LOOPBACK_TOKEN_PREFIX = 'aqm_lb_';
+
 export function generateLoopbackToken(): string {
-  return 'aqm_lb_' + crypto.randomBytes(24).toString('hex');
+  return LOOPBACK_TOKEN_PREFIX + crypto.randomBytes(24).toString('hex');
+}
+
+/**
+ * True for a value aquaman itself wrote into a host's config as a stand-in
+ * for a credential: the static placeholder, an `aquaman://` reference, or a
+ * loopback token. None of them work against the vendor API, so tools that
+ * hunt for plaintext credentials must not report them as findings.
+ */
+export function isAquamanPlaceholder(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  return (
+    value === 'aquaman-proxy-managed' ||
+    value.startsWith('aquaman://') ||
+    value.startsWith(LOOPBACK_TOKEN_PREFIX)
+  );
 }
 
 export function getConfigDir(): string {
@@ -102,6 +120,10 @@ export function getDefaultConfig(): WrapperConfig {
     },
     hermes: {
       configMethod: 'dotenv'
+    },
+    broker: {
+      enabled: true,
+      allowedRefs: []
     }
   };
 }
@@ -199,6 +221,13 @@ export function applyEnvOverrides(config: WrapperConfig): WrapperConfig {
     config.loopback.token = env['AQUAMAN_LOOPBACK_TOKEN'];
   }
 
+  // Credential broker switch (v0.15.0+). Only 'false' disables; the broker is
+  // still limited to declared refs when on.
+  if (env['AQUAMAN_BROKER_ENABLED']) {
+    config.broker = config.broker ?? { enabled: true, allowedRefs: [] };
+    config.broker.enabled = env['AQUAMAN_BROKER_ENABLED'] !== 'false';
+  }
+
   return config;
 }
 
@@ -236,6 +265,9 @@ function mergeConfig(
     hermes: override.hermes !== undefined
       ? { ...base.hermes, ...override.hermes } as WrapperConfig['hermes']
       : base.hermes,
+    broker: override.broker !== undefined
+      ? { ...base.broker, ...override.broker } as WrapperConfig['broker']
+      : base.broker,
     policy: override.policy !== undefined ? { ...base.policy, ...override.policy } : base.policy
   };
 }

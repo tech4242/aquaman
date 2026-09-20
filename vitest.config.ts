@@ -3,6 +3,9 @@ import path from 'path';
 
 export default defineConfig({
   test: {
+    // Build workspace dists if missing: e2e tests spawn CLIs from source,
+    // and those child processes don't get vitest's aliases.
+    globalSetup: ['./test/helpers/ensure-build.ts'],
     globals: true,
     environment: 'node',
     include: ['test/**/*.test.ts'],

@@ -166,6 +166,22 @@ describe('OpenClaw Migrator', () => {
       expect(creds[0].key).toBe('app_token');
     });
 
+    // Channel routing (v0.15.0+) writes the loopback token as the channel's
+    // placeholder. It is a capability to reach the local proxy, not a
+    // credential, so the plaintext scan must not report it.
+    it('skips a loopback token written by channel routing', () => {
+      const config = {
+        channels: {
+          telegram: {
+            botToken: 'aqm_lb_' + 'ab'.repeat(24),
+            apiRoot: 'http://127.0.0.1:8585/telegram'
+          }
+        }
+      };
+
+      expect(extractCredentials(config)).toHaveLength(0);
+    });
+
     it('handles multiple providers simultaneously', () => {
       const config = {
         channels: {

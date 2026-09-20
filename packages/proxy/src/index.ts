@@ -14,8 +14,24 @@ export {
   type RequestInfo,
   CredentialProxy,
   createCredentialProxy,
-  type ServiceDefinition
+  type ServiceDefinition,
+  type UrlPathCredentialSlot,
+  findUrlPathCredentialSlot
 } from './daemon.js';
+
+// Credential-broker scoping (v0.15.0+)
+export {
+  type BrokerScope,
+  type BrokerScopeOptions,
+  type BrokerDecision,
+  type BrokerCaller,
+  type DeclaredRefsResult,
+  createBrokerScope,
+  loadProjectRefs,
+  parseAquamanRef,
+  formatAquamanRef,
+  defaultProjectsPath
+} from './broker-scope.js';
 
 // Service Registry
 export {
@@ -47,7 +63,9 @@ export {
   OpenClawIntegration,
   createOpenClawIntegration,
   parseCalendarVersion,
-  authProfilesAreSqliteOnly
+  authProfilesAreSqliteOnly,
+  legacyAuthProfilesBlockProviders,
+  pluginInstallNeedsCapabilityConsent
 } from './openclaw/integration.js';
 
 // OpenClaw SecretRef provider-integration wiring (v0.14.0+)
@@ -61,9 +79,24 @@ export {
   SECRETREF_SUPPORTED_PROVIDERS,
   supportsSecretRefIntegrations,
   buildProviderRef,
+  loopbackProviderBaseUrl,
   wireSecretRefProviders,
   secretRefWiringStatus
 } from './openclaw/secretref.js';
+
+// OpenClaw channel egress routing (v0.15.0+)
+export {
+  type ChannelSkip,
+  type ChannelSkipReason,
+  type ChannelRoutingResult,
+  type ChannelRoutingOptions,
+  type ChannelRoutingStatus,
+  CHANNEL_ROUTING_SUPPORTED,
+  CHANNEL_ROUTING_UNSUPPORTED,
+  loopbackChannelBaseUrl,
+  wireChannelRouting,
+  channelRoutingStatus
+} from './openclaw/channel-routing.js';
 
 // Hermes Integration (v0.13.0+)
 export {
@@ -75,6 +108,8 @@ export {
   writeHermesEnv,
   formatHermesEnvForDisplay,
   managedScopeShadowedKeys,
+  hermesManagedEnvPath,
+  hermesSecretSourceRefs,
   HERMES_MANAGED_ENV_PATH
 } from './hermes/config-writer.js';
 
@@ -95,6 +130,7 @@ export {
   matchPolicy,
   loadPolicyFromConfig,
   validatePolicyConfig,
+  lintPolicyConfig,
   getDefaultPolicyPresets
 } from './request-policy.js';
 

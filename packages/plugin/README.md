@@ -1,15 +1,15 @@
 # aquaman-plugin: API Key Protection for OpenClaw
 
-The [aquaman](https://github.com/tech4242/aquaman) adapter for the [OpenClaw Gateway](https://openclaw.ai). Your API keys and tokens stay in your vault. The agent never sees them. Even a compromised agent can't steal credentials - they live in a separate process.
+The [aquaman](https://github.com/tech4242/aquaman) adapter for the [OpenClaw Gateway](https://openclaw.ai). Your API keys and tokens stay in your vault. The agent never sees them: they live in a separate process that injects them on the way out, and that process has no endpoint that hands a key back. A compromised agent can't read them. What it *can* do while it runs is send requests through the proxy, which request policy bounds and the audit log records (see [Security model](#security-model)).
 
-This plugin **spawns** [`aquaman-proxy`](https://www.npmjs.com/package/aquaman-proxy) (exact-pinned, same author) on Gateway startup, routes channel traffic through a UDS to that proxy, and lets you reach the same vault and policy engine from inside OpenClaw.
+This plugin **spawns** [`aquaman-proxy`](https://www.npmjs.com/package/aquaman-proxy) (exact-pinned, same author) on Gateway startup, routes model traffic to that proxy over a token-gated loopback listener, and lets you reach the same vault and policy engine from inside OpenClaw.
 
 ```
 Agent / OpenClaw Gateway              Aquaman Proxy
 ┌──────────────────────┐              ┌──────────────────────┐
 │                      │              │                      │
-│  ANTHROPIC_BASE_URL  │══ Unix ═════>│  Keychain / 1Pass /  │
-│  = aquaman.local     │   Domain     │  Vault / Encrypted   │
+│  models.providers.*  │══ loopback ═>│  Keychain / 1Pass /  │
+│  .baseUrl = 127.0.0.1│   (models)   │  Vault / Encrypted   │
 │                      │<═ Socket ════│                      │
 │  fetch() interceptor │══ (UDS) ════>│  + Policy enforced   │
 │  redirects channel   │              │  + Auth injected:    │
@@ -17,8 +17,8 @@ Agent / OpenClaw Gateway              Aquaman Proxy
 │                      │              │    basic / oauth     │
 │                      │              │                      │
 │  No credentials.     │  ~/.aquaman/ │                      │
-│  No open ports.      │  proxy.sock  │                      │
-│  Nothing to steal.   │  (chmod 600) │                      │
+│  Token-gated loopback│  proxy.sock  │                      │
+│  No keys to read.    │  (chmod 600) │                      │
 └──────────────────────┘              └──┬──────────┬────────┘
                                          │          │
                                          │          ▼
@@ -54,6 +54,41 @@ Troubleshooting: `openclaw aquaman doctor` (or `aquaman openclaw doctor` from a 
 
 Aquaman keeps API credentials out of the agent process by running them in a separate proxy process. The agent never sees the secret - only a sentinel base URL that the proxy intercepts, authenticates, and forwards. See the [architecture diagram in the main README](https://github.com/tech4242/aquaman#how-it-works).
 
+**How model traffic reaches the proxy (v0.15.0+)**
+
+- `aquaman openclaw setup` enables aquaman's loopback listener and points `models.providers.<svc>.baseUrl` at it (`http://127.0.0.1:<port>/anthropic`, `…/openai/v1`). That is OpenClaw's documented local-provider pattern, and it trusts that exact origin for model requests.
+- The SecretRef resolver hands the gateway the **loopback token** as the provider api key. The listener is token-gated, the token only grants access to 127.0.0.1, and the proxy strips it before injecting your real key from the vault.
+- Why not the Unix socket: OpenClaw's model transport builds its own HTTP client. It never calls `globalThis.fetch` and resolves hostnames itself, so the older `aquaman.local` sentinel could not work for model traffic on 2026.7.33+. `aquaman openclaw doctor` fails if a provider is credential-wired but not routed.
+
+**Channel credentials on 2026.7.33+: Telegram routed, the rest at rest only**
+
+Each channel builds its own HTTP client per request, so this plugin's interceptor no longer sees channel traffic. Model-provider isolation is unaffected, since it no longer depends on the interceptor either.
+
+Telegram is the one bundled channel with an endpoint override. `aquaman openclaw setup` writes:
+
+```json5
+{ channels: { telegram: { apiRoot: "http://127.0.0.1:8585/telegram", botToken: "<loopback token>" } } }
+```
+
+The Bot API carries its token in the URL path rather than a header, so the loopback token travels in the `/bot<TOKEN>` segment. The proxy accepts it there, strips it, and injects your real bot token from the vault. Setup leaves a channel untouched and says why when it uses a self-hosted `apiRoot`, a `tokenFile`, multiple accounts, or has no vault credential yet.
+
+Other channels are vault storage and `aquaman openclaw migrate` only: OpenClaw uses the token directly, so the proxy is not in the path and those calls are not audited. Discord and Slack expose no override; Matrix, Mattermost and Nextcloud Talk already point at your own server. `aquaman openclaw doctor` reports which of your channels are in which group.
+
+### Transports and access control
+
+The proxy listens two ways, and which one a host uses depends on what that host can dial:
+
+- **Unix socket** `~/.aquaman/proxy.sock` (`0600`): coding agents and anything else that can dial a socket. File permissions mean only processes running as you can connect.
+- **Loopback TCP** `127.0.0.1:<port>`, token-gated: Hermes (v0.13.0+), OpenClaw model traffic and Telegram (v0.15.0+), because each builds its own HTTP client.
+
+The token is a capability to reach the local proxy, not a credential: generated per install, stored in `~/.aquaman/config.yaml` (`0600`), stripped by the proxy before your real key is injected. Any local process can reach a loopback port, including other users, where the socket's `0600` shuts them out, so the listener stays off until a host needs it. Full table in the [root README](https://github.com/tech4242/aquaman#transports-and-access-control).
+
+**What a compromised agent can and can't do**
+
+- **Can't read your keys.** They are in the proxy's address space. Since v0.15.0 the proxy this plugin spawns (`aquaman openclaw plugin-mode`) serves no endpoint that returns a credential value. Through v0.14.x it exposed `POST /broker/resolve`, the coding-agent credential broker, to any process that could reach the socket. That is what ClawHub's ClawScan flagged on 0.14.x. Upgrade if you're on 0.12–0.14.
+- **Can** send requests through the proxy to the services in your `services` list while it runs. The socket's `chmod 0o600` keeps other users out, not other processes running as you. Request policy (deny rules, enforced before injection) bounds what those requests can do, and every one is in the hash-chained audit log.
+- **If you also run `aquaman daemon`** for coding agents or the Hermes secret source, refs you declared there (`projects.yaml`, `aquaman broker allow`) can be fetched by any process running as you, since that is what declaring a ref means. Both proxies bind `~/.aquaman/proxy.sock`; the one started last owns it, and this plugin's proxy never serves the broker.
+
 **Proxy process**
 
 - The plugin spawns the `aquaman` binary from the `aquaman-proxy` npm package, declared as an exact-pinned dependency (no semver range) and published by the same author (`tech4242`). After spawn, the plugin checks the running proxy's reported version against its own and logs a warning if they disagree.
@@ -64,16 +99,17 @@ Aquaman keeps API credentials out of the agent process by running them in a sepa
 - Only services listed in the plugin's `services` config get their traffic redirected to the local proxy. As of v0.11.4, the interceptor filters its known-host map by your `services` list. Channels you didn't opt into keep talking to the upstream directly.
 - The interceptor uses a Unix Domain Socket (no TCP, no network exposure). UDS file permissions are `chmod 0o600`, enforced explicitly at proxy startup (v0.12.0+).
 
-**Credential wiring — SecretRef (v0.14.0+, OpenClaw ≥ 2026.6.5)**
+**Credential wiring: SecretRef (v0.14.0+, OpenClaw ≥ 2026.6.5)**
 
-- On current OpenClaw, `aquaman openclaw setup` wires the plugin through OpenClaw's canonical **SecretRef** credential surface: the manifest declares an exec resolver (`secretProviderIntegrations.aquaman` → `dist/secrets-resolver.mjs`) and `openclaw.json` gets `models.providers.<svc>.apiKey` refs pointing at it. The resolver returns a static placeholder — real keys stay in your vault; the proxy strips the placeholder and injects the real credential per request.
+- On current OpenClaw, `aquaman openclaw setup` wires the plugin through OpenClaw's canonical **SecretRef** credential surface: the manifest declares an exec resolver (`secretProviderIntegrations.aquaman` → `dist/secrets-resolver.mjs`) and `openclaw.json` gets `models.providers.<svc>.apiKey` refs pointing at it. The resolver returns the loopback token, or the `aquaman-proxy-managed` placeholder when no listener is configured. Either way it's a marker: real keys stay in your vault, and the proxy strips the marker and injects the real credential per request.
 - No `openclaw doctor --fix` import step, and the wiring survives OpenClaw's plaintext-scrub flows (`openclaw secrets configure --apply`). `aquaman openclaw doctor` reports the wiring state and suggests the upgrade on legacy installs.
 
 **Auth profiles (legacy path, OpenClaw < 2026.6.5)**
 
-- On load the plugin writes `~/.openclaw/agents/<id>/agent/auth-profiles.json` with placeholder API-key entries for `anthropic` and `openai` so OpenClaw doesn't reject requests before they reach the proxy. The proxy strips the placeholder and injects the real credential. Skipped automatically when the SecretRef wiring is present.
+- On gateways older than 2026.6.5 the plugin writes `~/.openclaw/agents/<id>/agent/auth-profiles.json` on load, with placeholder API-key entries for `anthropic` and `openai`, so OpenClaw doesn't reject requests before they reach the proxy. The proxy strips the placeholder and injects the real credential. It's skipped when the SecretRef wiring is present, and it never happens during OpenClaw's discovery loads (`plugins inspect|doctor|install`) (v0.15.0+).
 - The plugin never overwrites an existing `auth-profiles.json`. To suppress generation entirely, set `autoGenerateAuthProfiles: false` in the plugin config (v0.11.4+).
-- **OpenClaw ≥ 2026.6.5 without SecretRef wiring:** provider auth profiles moved into each agent's `openclaw-agent.sqlite` and the runtime read path for `auth-profiles.json` was removed ([openclaw/openclaw#89102](https://github.com/openclaw/openclaw/pull/89102)). The placeholder must be imported into SQLite once with `openclaw doctor --fix` — or better, re-run `aquaman openclaw setup` to get the SecretRef wiring. Run `aquaman openclaw doctor`; it detects the state and prints the exact remediation.
+- **OpenClaw ≥ 2026.6.5:** provider auth profiles live in SQLite and the runtime read path for `auth-profiles.json` was removed ([openclaw/openclaw#89102](https://github.com/openclaw/openclaw/pull/89102)), so since v0.15.0 the plugin doesn't write the file there. It warns you to run `aquaman openclaw setup`, which wires SecretRef.
+- **OpenClaw 2.0 (≥ 2026.8.1):** a leftover `auth-profiles.json` is no longer ignored. It locks `anthropic`/`openai` out ("requires legacy credential migration"). aquaman-plugin ≤ 0.14.x recreated it on every load, so the lockout came back even after `openclaw doctor --fix`. After upgrading to 0.15.0, run `openclaw doctor --fix` once to archive it. `aquaman openclaw doctor` detects the state and prints the exact steps.
 
 **Audit log**
 
@@ -83,10 +119,11 @@ Aquaman keeps API credentials out of the agent process by running them in a sepa
 
 **Host surface the plugin touches**
 
-- `process:spawn` — `aquaman` (the proxy binary; see "Proxy process" above).
-- `global:override` — `globalThis.fetch` (the interceptor; scoped to your `services` list).
-- `env:write` — `*_BASE_URL` and `GITHUB_API_URL` (sentinel base URLs pointing at the proxy).
-- `fs:write` — `~/.openclaw/agents/*/agent/auth-profiles.json` (legacy path only; skipped when SecretRef wiring is present).
+- `process:spawn`: `aquaman` (the proxy binary; see "Proxy process" above).
+- `global:override`: `globalThis.fetch` (the interceptor; scoped to your `services` list).
+- `env:write`: `*_BASE_URL` and `GITHUB_API_URL` (sentinel base URLs, skipped for providers routed by config).
+- `fs:write`: `~/.openclaw/agents/*/agent/auth-profiles.json` (legacy gateways < 2026.6.5 only; skipped when SecretRef wiring is present, and never during discovery loads).
+- Agent tool `aquaman_status`, declared in the manifest's `contracts.tools` (OpenClaw drops undeclared tools).
 
 ### Scanner findings
 
@@ -95,9 +132,9 @@ Aquaman keeps API credentials out of the agent process by running them in a sepa
 - **`dangerous-exec`** on the proxy-manager module: the plugin spawns the proxy as a separate process. This is how credential isolation works.
 - **`tools_reachable_permissive_policy`**: advisory about your tool policy, not an aquaman vulnerability. Set `"tools": { "profile": "coding" }` in `openclaw.json` if your agents handle untrusted input.
 
-ClawHub's ClawScan additionally produces a higher-level review of plugin behavior. The current scan acknowledges credential isolation, proxy spawn, the host map, the auth-profiles generation, and the audit log. See the publisher note on the package page for context on each item.
+ClawHub's ClawScan additionally produces a higher-level review of plugin behavior. Its verdict on 0.14.x was `suspicious` because of the broker endpoint described above; v0.15.0 removes that endpoint from the plugin's proxy. See the publisher note on the package page for context on each item.
 
-`aquaman openclaw setup` adds the plugin to `plugins.allow` automatically so OpenClaw knows you trust it.
+`aquaman openclaw setup` appends the plugin to your `plugins.allow` list if you have one, and never creates one. That list governs OpenClaw's own plugins too, including the `anthropic`/`openai` model providers, so a list holding only `aquaman-plugin` blocks them, and setup did exactly that through v0.14.x. If you have that leftover list, add `"anthropic"` and `"openai"` to it. `aquaman openclaw doctor` flags it.
 
 ## Available commands
 

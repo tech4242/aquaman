@@ -238,18 +238,29 @@ export class ProxyManager {
       this.process.stdout?.on('data', (data) => {
         stdout += data.toString();
 
-        // Try to parse connection info from first line
-        const firstLine = stdout.split('\n')[0];
-        if (firstLine && !this.connectionInfo) {
-          try {
-            const info = JSON.parse(firstLine) as ProxyConnectionInfo;
-            if (info.ready) {
-              this.connectionInfo = info;
-              this.options.onReady?.(info);
-              resolve(info);
+        // Find the connection-info JSON line. It is NOT the first stdout
+        // line: `plugin-mode` logs "Credential proxy listening on …" before
+        // it. Parsing only line 0 meant the ready line was never seen, the
+        // 10 s startup timeout fired, and the manager killed a healthy proxy
+        // (found in a real-gateway smoke test on 2026-09-18). Scan every
+        // complete line.
+        if (!this.connectionInfo) {
+          const lines = stdout.split('\n');
+          lines.pop(); // trailing partial line (or '') — wait for its newline
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('{')) continue;
+            try {
+              const info = JSON.parse(trimmed) as ProxyConnectionInfo;
+              if (info.ready) {
+                this.connectionInfo = info;
+                this.options.onReady?.(info);
+                resolve(info);
+                break;
+              }
+            } catch {
+              // Not the connection-info line
             }
-          } catch {
-            // Not JSON yet, keep buffering
           }
         }
       });

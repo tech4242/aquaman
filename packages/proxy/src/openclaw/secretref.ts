@@ -21,11 +21,20 @@
  * configure-flow scrubs (`scrubAuthProfilesForProviderTargets` deletes
  * plaintext keys but preserves valid refs).
  *
- * The resolver returns the static `aquaman-proxy-managed` placeholder; the
- * proxy strips whatever key the gateway presents and injects the real
- * credential upstream. Keys never enter the gateway process — the SecretRef
- * integration changes how the *placeholder* reaches the gateway, not the
- * isolation boundary.
+ * v0.15.0 also writes `models.providers.<svc>.baseUrl` pointing at aquaman's
+ * loopback listener. OpenClaw's model calls go through its own transport with
+ * its own undici dispatcher: it ignores the `aquaman.local` sentinel (its DNS
+ * lookup fails) and never calls `globalThis.fetch`, so the plugin's
+ * interceptor cannot see provider traffic (verified on 2026.7.33 and
+ * 2026.9.1). A loopback `baseUrl` is OpenClaw's documented local-provider
+ * pattern: the configured `scheme://host:port` origin is trusted for the
+ * guarded fetch path, plain HTTP included.
+ *
+ * The resolver returns the loopback token (falling back to the static
+ * `aquaman-proxy-managed` placeholder when no listener is configured); the
+ * proxy checks the token, strips it, and injects the real credential
+ * upstream. Keys never enter the gateway process — the token is a capability
+ * to reach the local proxy, not a credential.
  */
 
 import { parseCalendarVersion } from './integration.js';
@@ -64,6 +73,32 @@ export function buildProviderRef(service: string): SecretRefRef {
   return { source: 'exec', provider: SECRETREF_PROVIDER_ALIAS, id: `${service}/api_key` };
 }
 
+/**
+ * The URL OpenClaw should call for a provider, given the proxy's loopback
+ * origin (`http://127.0.0.1:<port>`). Path shapes match what each provider
+ * client appends, exactly as on the Hermes path: the Anthropic client adds
+ * `/v1/messages` to `<origin>/anthropic`, and the OpenAI-compatible client
+ * adds `/chat/completions` to `<origin>/openai/v1`.
+ */
+export function loopbackProviderBaseUrl(service: string, origin: string): string | null {
+  // Trim trailing slashes without a regex: /\/+$/ backtracks polynomially on
+  // an origin ending in many slashes (CodeQL js/polynomial-redos).
+  let base = origin;
+  while (base.length > 0 && base.endsWith('/')) base = base.slice(0, -1);
+  if (service === 'anthropic') return `${base}/anthropic`;
+  if (service === 'openai') return `${base}/openai/v1`;
+  return null;
+}
+
+/** A baseUrl aquaman owns: our loopback shape, or the retired sentinel host. */
+function isAquamanBaseUrl(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  return (
+    /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d+\/(anthropic|openai)(\/v1)?\/?$/.test(value) ||
+    /^http:\/\/aquaman\.local\//.test(value)
+  );
+}
+
 function isAquamanRef(value: unknown): boolean {
   return (
     typeof value === 'object' &&
@@ -79,6 +114,15 @@ export interface SecretRefWiringResult {
   wiredProviders: string[];
   /** Providers requested but skipped (unsupported by the resolver today). */
   skippedProviders: string[];
+  /** Providers whose baseUrl now points at the loopback listener. */
+  baseUrlProviders: string[];
+  /** Providers left alone because the user set their own baseUrl. */
+  keptUserBaseUrl: string[];
+}
+
+export interface SecretRefWiringOptions {
+  /** `http://127.0.0.1:<port>` — when given, providers also get a baseUrl. */
+  loopbackOrigin?: string;
 }
 
 /**
@@ -89,11 +133,14 @@ export interface SecretRefWiringResult {
  */
 export function wireSecretRefProviders(
   config: Record<string, any>,
-  services: string[]
+  services: string[],
+  options: SecretRefWiringOptions = {}
 ): SecretRefWiringResult {
   let changed = false;
   const wiredProviders: string[] = [];
   const skippedProviders: string[] = [];
+  const baseUrlProviders: string[] = [];
+  const keptUserBaseUrl: string[] = [];
 
   if (!config.secrets) config.secrets = {};
   if (!config.secrets.providers) config.secrets.providers = {};
@@ -137,9 +184,27 @@ export function wireSecretRefProviders(
       changed = true;
     }
     wiredProviders.push(service);
+
+    // Route the provider at the loopback listener. Without this, OpenClaw's
+    // transport calls the real upstream directly and the proxy never sees it.
+    const desiredBase = options.loopbackOrigin
+      ? loopbackProviderBaseUrl(service, options.loopbackOrigin)
+      : null;
+    if (desiredBase) {
+      const currentBase = providerEntry.baseUrl;
+      if (currentBase !== undefined && !isAquamanBaseUrl(currentBase)) {
+        keptUserBaseUrl.push(service);
+      } else {
+        if (currentBase !== desiredBase) {
+          providerEntry.baseUrl = desiredBase;
+          changed = true;
+        }
+        baseUrlProviders.push(service);
+      }
+    }
   }
 
-  return { changed, wiredProviders, skippedProviders };
+  return { changed, wiredProviders, skippedProviders, baseUrlProviders, keptUserBaseUrl };
 }
 
 export interface SecretRefWiringStatus {
@@ -149,6 +214,10 @@ export interface SecretRefWiringStatus {
   wiredProviders: string[];
   /** Requested + supported providers not yet wired. */
   missingProviders: string[];
+  /** Providers whose baseUrl points at a loopback aquaman listener. */
+  baseUrlProviders: string[];
+  /** Wired providers still calling the upstream directly (proxy bypassed). */
+  missingBaseUrl: string[];
 }
 
 /** Read-only status check for `aquaman openclaw doctor`. */
@@ -164,13 +233,22 @@ export function secretRefWiringStatus(
 
   const wiredProviders: string[] = [];
   const missingProviders: string[] = [];
+  const baseUrlProviders: string[] = [];
+  const missingBaseUrl: string[] = [];
   for (const service of services) {
     if (!(SECRETREF_SUPPORTED_PROVIDERS as readonly string[]).includes(service)) continue;
     if (isAquamanRef(config?.models?.providers?.[service]?.apiKey)) {
       wiredProviders.push(service);
+      // A wired apiKey with no loopback baseUrl means OpenClaw's transport
+      // still calls the upstream directly and the proxy is bypassed.
+      if (isAquamanBaseUrl(config?.models?.providers?.[service]?.baseUrl)) {
+        baseUrlProviders.push(service);
+      } else {
+        missingBaseUrl.push(service);
+      }
     } else {
       missingProviders.push(service);
     }
   }
-  return { providerConfigured, wiredProviders, missingProviders };
+  return { providerConfigured, wiredProviders, missingProviders, baseUrlProviders, missingBaseUrl };
 }

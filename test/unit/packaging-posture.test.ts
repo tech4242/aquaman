@@ -23,7 +23,7 @@ describe('aquaman-proxy dependency surface', () => {
 
   // kdbxweb 2.1.1 (latest) requires @xmldom/xmldom ^0.7.4, whose 0.7.x line has
   // no fixed release (5 high advisories). The repo-root `overrides` pin to
-  // 0.8.13 protects THIS tree only — overrides are not published — so as a
+  // 0.8.15 protects THIS tree only — overrides are not published — so as a
   // regular dependency it shipped a vulnerable resolution to every consumer.
   // optionalDependencies would not help: npm installs those by default.
   // Optional peers are the only form npm skips.
@@ -74,19 +74,25 @@ describe('aquaman-plugin dependency surface', () => {
 
 describe('lockfile dev scoping', () => {
   const lock = readJson('package-lock.json');
-  const openclawEntries = Object.keys(lock.packages ?? {}).filter((k) =>
-    k.startsWith('node_modules/openclaw')
-  );
 
   // The shipped-deps gate is `npm audit --omit=dev --audit-level=high`, which
-  // reads these flags. Regenerating the lockfile WITHOUT --legacy-peer-deps
-  // makes npm follow the plugin's openclaw peer edge, which strips dev:true
-  // from the whole subtree and quietly turns our gate into an audit of the
-  // gateway's tree. Nothing fails when that happens — hence this guard.
-  it('keeps the openclaw subtree dev-scoped (regenerate with npm install --legacy-peer-deps)', () => {
-    expect(openclawEntries.length).toBeGreaterThan(0);
-    const shipped = openclawEntries.filter((k) => !lock.packages[k].dev);
-    expect(shipped).toEqual([]);
+  // reads the lockfile's dev flags. The gateway used to live here as the e2e
+  // harness devDependency; any regeneration without --legacy-peer-deps turned
+  // its whole shrinkwrapped subtree into "shipped" and the gate quietly audited
+  // the gateway instead of us. v0.15.0 moved the harness out-of-tree (CI
+  // installs the pinned gateway globally per lane) — keep it out.
+  it('keeps the openclaw gateway out of the lockfile (e2e harness is installed out-of-tree)', () => {
+    const openclawEntries = Object.keys(lock.packages ?? {}).filter((k) =>
+      /(^|\/)node_modules\/openclaw$/.test(k)
+    );
+    expect(openclawEntries).toEqual([]);
+    expect(readJson('package.json').devDependencies?.openclaw).toBeUndefined();
+  });
+
+  // Root .npmrc enforces the same flag CI's `npm ci` passes, so local and
+  // Dependabot regenerations don't follow the optional peer edges below.
+  it('pins legacy-peer-deps for every lockfile regeneration', () => {
+    expect(fs.readFileSync(path.join(ROOT, '.npmrc'), 'utf-8')).toMatch(/^legacy-peer-deps=true$/m);
   });
 
   it('keeps the KeePassXC peers out of the shipped tree', () => {
