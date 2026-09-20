@@ -17,6 +17,8 @@ import { createProxyManager, findAquamanProxyBinary, type ProxyManager } from '.
 import { createTempEnv, type TempEnv } from '../helpers/temp-env.js';
 import { udsFetch } from '../helpers/uds-proxy.js';
 
+// dist is built by the globalSetup in vitest.config.ts (test/helpers/ensure-build.ts);
+// this only skips when there is no aquaman bin at all.
 const HAS_BINARY = findAquamanProxyBinary() !== null;
 
 describe.skipIf(!HAS_BINARY)('ProxyManager ↔ real plugin-mode process', () => {

@@ -130,11 +130,12 @@ describe('aquaman doctor E2E', () => {
       // and `openclaw doctor --fix` archives the JSON after importing it. So a
       // healthy install on those versions is SQLite-present, JSON-absent. Stage
       // that. (On older OpenClaw the JSON would be required instead; the devDep
-      // pins >= 2026.6.6 so the SQLite path is what CI/local exercise.)
+      // v0.15.0: the gateway is no longer a repo dependency, so pin the
+      // version instead of depending on whatever `openclaw` is on PATH.
       const agentDir = path.join(tempEnv.openclawDir, 'agents', 'main', 'agent');
       mkdirSync(agentDir, { recursive: true });
       writeFileSync(path.join(agentDir, 'openclaw-agent.sqlite'), '');
-      const { stdout } = runDoctor(tempEnv);
+      const { stdout } = runDoctor(tempEnv, { AQUAMAN_OPENCLAW_VERSION: '2026.7.33' });
 
       expect(stdout).toContain('Config exists');
       expect(stdout).toContain('Plugin installed');

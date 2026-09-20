@@ -38,6 +38,7 @@ export {
   type BrokerClientOptions,
   BrokerClient,
   BrokerError,
+  aquamanConfigDir,
   defaultSocketPath,
   sandboxSocketHint,
 } from './broker-client.js';

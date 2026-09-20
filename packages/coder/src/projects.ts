@@ -14,7 +14,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { parse as yamlParse, stringify as yamlStringify } from 'yaml';
-import { defaultProjectsPath as proxyDefaultProjectsPath } from 'aquaman-proxy';
+import { aquamanConfigDir } from './broker-client.js';
 
 export interface ProjectConfig {
   /** Filesystem paths this project owns. Longest-prefix wins. */
@@ -39,7 +39,7 @@ const POSIX_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * declared refs from (honors AQUAMAN_CONFIG_DIR, like the rest of aquaman).
  */
 export function defaultProjectsPath(): string {
-  return proxyDefaultProjectsPath();
+  return path.join(aquamanConfigDir(), 'projects.yaml');
 }
 
 /**

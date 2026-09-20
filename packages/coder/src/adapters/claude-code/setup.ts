@@ -80,7 +80,11 @@ function realpathLoose(p: string): string {
 export function socketAllowedByEntry(entry: string, socketPath: string): boolean {
   if (typeof entry !== 'string' || entry.length === 0 || /[*?[]/.test(entry)) return false;
   const want = realpathLoose(socketPath);
-  const have = realpathLoose(expandHome(entry)).replace(/\/+$/, '');
+  // Trim trailing slashes without a regex: /\/+$/ backtracks polynomially on
+  // an entry ending in many slashes, and entries come from a settings file
+  // (CodeQL js/polynomial-redos).
+  let have = realpathLoose(expandHome(entry));
+  while (have.length > 1 && have.endsWith('/')) have = have.slice(0, -1);
   return want === have || want.startsWith(have + '/');
 }
 

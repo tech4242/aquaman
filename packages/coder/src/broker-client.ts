@@ -6,8 +6,18 @@
  */
 
 import * as http from 'node:http';
+import * as os from 'node:os';
 import * as path from 'node:path';
-import { getConfigDir } from 'aquaman-proxy';
+
+/**
+ * aquaman's config dir, same rule as the proxy's getConfigDir(). Duplicated
+ * rather than imported from aquaman-proxy on purpose: this CLI is spawned
+ * from source (`npx tsx .../cli/index.ts`) in tests and dev, where the proxy's
+ * dist build may not exist yet, and a runtime import would fail there.
+ */
+export function aquamanConfigDir(): string {
+  return process.env['AQUAMAN_CONFIG_DIR'] || path.join(os.homedir(), '.aquaman');
+}
 
 export interface BrokerResolveOptions {
   service: string;
@@ -27,7 +37,7 @@ export interface BrokerClientOptions {
 
 /** Same socket the daemon binds: `<configDir>/proxy.sock` (honors AQUAMAN_CONFIG_DIR). */
 export function defaultSocketPath(): string {
-  return path.join(getConfigDir(), 'proxy.sock');
+  return path.join(aquamanConfigDir(), 'proxy.sock');
 }
 
 /**
