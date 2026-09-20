@@ -1,0 +1,220 @@
+name: Release Preflight
+
+# Validates every publishing credential WITHOUT publishing anything.
+#
+# Run this before cutting a release. CD publishes to four places in sequence
+# (npm x3 -> PyPI -> ClawHub) and a credential that expired since the last
+# release fails partway through, after npm has already accepted some of the
+# packages. Unpublishing npm packages is heavily restricted, so a half-done
+# release is expensive. Checking first is cheap.
+#
+# Nothing here uploads an artifact, creates a tag, or mutates a registry.
+#
+# THIS REPOSITORY IS PUBLIC, so Actions logs are world-readable. Never print
+# raw output from an authenticated command: it can carry token prefixes, ids
+# or request context. Emit only fields chosen by name. Actions masks exact
+# `secrets.*` values automatically, but it cannot mask a derived or partial
+# form, so do not rely on that.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  npm:
+    name: npm (NPM_TOKEN)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Secret is set
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NPM_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN is not set on this repository"
+            exit 1
+          fi
+
+      - name: Token authenticates
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          who=$(npm whoami)
+          echo "npm: authenticated as ${who}"
+          echo "- **npm**: authenticated as \`${who}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Token can publish each package
+        # `npm access list packages` reports the permission level the current
+        # token holds per package. read-only authenticates fine above and then
+        # fails at publish time, which is the surprise worth catching.
+        #
+        # Severity is deliberate: only a package we can SEE with the wrong
+        # permission fails the job. A token that cannot read this metadata at
+        # all (granular tokens may lack the scope, and 2FA-bypass tokens lost
+        # account-read powers on 2026-07-31) is a warning. This check must
+        # never block a release over its own inability to introspect.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -uo pipefail
+          # stderr to /dev/null and the body never echoed: public logs.
+          #
+          # The `|| rc=$?` matters: Actions runs steps as `bash -e`, so a bare
+          # failing assignment aborts the step before the exit code can be
+          # inspected, and the job dies with no diagnostic at all.
+          rc=0
+          access=$(npm access list packages --json 2>/dev/null) || rc=$?
+
+          if [ "$rc" -ne 0 ] || ! echo "$access" | jq -e 'type == "object" and length > 0' >/dev/null 2>&1; then
+            echo "::warning::this token cannot list package permissions, so publish rights were not verified. npm whoami passed, and the last release published fine with this token."
+            echo "- **npm permissions**: not verifiable with this token (\`npm whoami\` passed)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          fail=0
+          for pkg in aquaman-proxy aquaman-plugin aquaman-coder; do
+            perm=$(echo "$access" | jq -r --arg p "$pkg" '.[$p] // "not-listed"')
+            case "$perm" in
+              read-write)
+                echo "ok   $pkg = $perm" ;;
+              not-listed)
+                # Scoped tokens legitimately list only what they cover.
+                echo "::warning::$pkg is not in this token's package list; publish rights unverified"
+                perm="unverified" ;;
+              *)
+                echo "::error::$pkg = $perm (expected read-write; publish would fail)"; fail=1 ;;
+            esac
+            echo "- \`$pkg\`: $perm" >> "$GITHUB_STEP_SUMMARY"
+          done
+          exit $fail
+
+      - name: Token expiry horizon
+        # Surfaces the date that silently ends a release pipeline.
+        #
+        # `npm token list` prints token ids AND a prefix of each token value,
+        # which must never reach a public log, so the raw output is discarded
+        # and only the count and the expiry dates are emitted. Best effort:
+        # since 2026-07-31 a 2FA-bypass token may not list tokens at all, and
+        # that says nothing about whether it can still publish.
+        continue-on-error: true
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -uo pipefail
+          raw=$(npm token list --json 2>/dev/null) || {
+            echo "token inventory unavailable to this token type (expected for 2FA-bypass tokens)"
+            exit 0
+          }
+          # Field allowlist: only `length` and `expires` can be emitted here.
+          summary=$(echo "$raw" | jq -r '
+            if type == "array"
+            then "\(length) token(s) on this account; expiries: " +
+                 ([.[] | .expires // "never"] | sort | join(", "))
+            else "unrecognized shape" end' 2>/dev/null)
+          echo "${summary:-unrecognized shape}"
+          echo "- **npm tokens**: ${summary:-unreadable}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deadline reminder
+        run: |
+          echo "::notice::npm 2FA-bypass tokens lose direct publish in January 2027 (github.blog changelog 2026-07-31). Moving npm to Trusted Publishing removes NPM_TOKEN entirely; CD already requests id-token: write for provenance."
+
+  clawhub:
+    name: ClawHub (CLAWHUB_TOKEN)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v7
+        with: { node-version: 24 }
+
+      - name: Secret is set
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+        run: |
+          if [ -z "${CLAWHUB_TOKEN}" ]; then
+            echo "::error::CLAWHUB_TOKEN is not set on this repository"
+            exit 1
+          fi
+
+      # CD installs the latest CLI too: the hardened server rejects old ones.
+      - run: npm install -g clawhub@latest
+
+      - name: Token authenticates
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Output suppressed on purpose: public logs, and login echoes
+          # account context on some CLI versions.
+          if ! clawhub login --token "$CLAWHUB_TOKEN" >/dev/null 2>&1; then
+            echo "::error::ClawHub login failed (token rejected, expired, or the CLI contract changed)"
+            exit 1
+          fi
+          out=$(clawhub whoami)
+          echo "clawhub: ${out}"
+          echo "- **ClawHub**: ${out}" >> "$GITHUB_STEP_SUMMARY"
+
+  pypi:
+    name: PyPI (Trusted Publishing, no token)
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - name: OIDC exchange with PyPI
+        # PyPI needs no stored secret, so there is nothing to expire. What CAN
+        # break is the trusted-publisher binding on PyPI's side. This performs
+        # the same OIDC exchange the real publish does, and throws away the
+        # minted token without uploading anything.
+        #
+        # A trusted publisher is bound to one workflow FILENAME. The release
+        # binding names cd.yml, so preflight.yml is rejected unless a second
+        # publisher for `preflight.yml` is added on PyPI. That case is reported
+        # as a notice, not a failure: it means the check could not run, not
+        # that the release is broken.
+        run: |
+          set -uo pipefail
+          # `|| true` guards against `bash -e` aborting on a transport error
+          # before the explicit check below can report something useful.
+          oidc=$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+                   "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=pypi" | jq -r '.value // empty' || true)
+          if [ -z "$oidc" ]; then
+            echo "::error::GitHub would not mint an OIDC token (id-token: write missing, or the API changed)"
+            exit 1
+          fi
+
+          code=$(curl -sS -o /tmp/mint.json -w '%{http_code}' \
+                   -X POST https://pypi.org/_/oidc/mint-token \
+                   -H 'Content-Type: application/json' \
+                   -d "{\"token\":\"${oidc}\"}" || echo "000")
+
+          if [ "$code" = "200" ] && jq -e '.token' /tmp/mint.json >/dev/null 2>&1; then
+            echo "PyPI accepted the OIDC identity; trusted publishing is live."
+            echo "- **PyPI**: trusted publishing verified (no token needed)" >> "$GITHUB_STEP_SUMMARY"
+            rm -f /tmp/mint.json
+            exit 0
+          fi
+
+          # Never echo the raw body: on success it carries a usable token.
+          # Named fields only, and truncated: never let an unexpected body
+          # shape spill into a public log.
+          reason=$(jq -r '[.message // empty, (.errors // [] | map(.description) | join("; "))] | map(select(. != "")) | join(" - ")' /tmp/mint.json 2>/dev/null | head -c 300 || echo '')
+          rm -f /tmp/mint.json
+
+          # PyPI's exact wording, captured from a real 422 on 2026-09-20:
+          #   "valid token, but no corresponding publisher
+          #    (Publisher with matching claims was not found)"
+          case "$reason" in
+            *"no corresponding publisher"*|*"matching claims was not found"*|*"no matching publisher"*|*"not configured"*|*"invalid-publisher"*)
+              echo "::notice::PyPI validated the OIDC identity but has no trusted publisher bound to preflight.yml, so publish rights were not exercised. The release binding is cd.yml and is unaffected. To make this a real check, add a second trusted publisher on PyPI for aquaman-hermes with workflow 'preflight.yml'."
+              echo "- **PyPI**: not checked (no publisher bound to preflight.yml; cd.yml binding untouched)" >> "$GITHUB_STEP_SUMMARY"
+              exit 0 ;;
+            *)
+              echo "::error::PyPI rejected the OIDC exchange (HTTP ${code}): ${reason:-no reason given}"
+              echo "- **PyPI**: OIDC exchange FAILED (HTTP ${code})" >> "$GITHUB_STEP_SUMMARY"
+              exit 1 ;;
+          esac
