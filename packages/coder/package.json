@@ -41,7 +41,7 @@
   "dependencies": {
     "aquaman-proxy": "0.15.0",
     "commander": "^11.0.0",
-    "yaml": "^2.3.4"
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
