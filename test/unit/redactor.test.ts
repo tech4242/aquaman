@@ -114,6 +114,18 @@ describe('redact (single string)', () => {
       const { output } = redact('GL=glpat-abcdefghijklmnopqrstuv');
       expect(output).toContain('[REDACTED:gitlab-pat]');
     });
+
+    it('redacts glrt- runner tokens', () => {
+      const { output } = redact('RUNNER=glrt-t1_abcdefghijklmnopqrstuv');
+      expect(output).toContain('[REDACTED:gitlab-runner-token]');
+      expect(output).not.toContain('glrt-');
+    });
+
+    it('redacts gloas- OAuth application secrets', () => {
+      const { output } = redact('SECRET=gloas-' + 'f'.repeat(64));
+      expect(output).toContain('[REDACTED:gitlab-oauth-secret]');
+      expect(output).not.toContain('gloas-');
+    });
   });
 
   describe('npm token', () => {

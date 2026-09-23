@@ -97,6 +97,16 @@ export const BUILTIN_PATTERNS: readonly SecretPattern[] = [
     regex: /\bglpat-[A-Za-z0-9_-]{20,}\b/g,
   },
   {
+    kind: 'gitlab-runner-token',
+    description: 'GitLab runner authentication token (glrt-)',
+    regex: /\bglrt-[A-Za-z0-9_.-]{20,}\b/g,
+  },
+  {
+    kind: 'gitlab-oauth-secret',
+    description: 'GitLab OAuth application secret (gloas-)',
+    regex: /\bgloas-[A-Za-z0-9_-]{20,}\b/g,
+  },
+  {
     kind: 'npm-token',
     description: 'npm automation/granular token (npm_)',
     regex: /\bnpm_[A-Za-z0-9]{36,}\b/g,

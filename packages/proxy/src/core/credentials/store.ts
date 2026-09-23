@@ -50,6 +50,9 @@ export interface CredentialStoreOptions {
   bitwardenCollectionId?: string;
   // systemd-creds options
   systemdCredsDir?: string;
+  // Keeper options
+  keeperFolderUid?: string;
+  keeperConfigPath?: string;
 }
 
 /**
@@ -383,6 +386,14 @@ export async function createCredentialStore(options: CredentialStoreOptions): Pr
         folder: options.bitwardenFolder,
         organizationId: options.bitwardenOrganizationId,
         collectionId: options.bitwardenCollectionId
+      });
+    }
+
+    case 'keeper': {
+      const { KeeperStore } = await import('./backends/keeper.js');
+      return new KeeperStore({
+        folderUid: options.keeperFolderUid || process.env['AQUAMAN_KEEPER_FOLDER_UID'] || '',
+        configPath: options.keeperConfigPath || process.env['AQUAMAN_KEEPER_CONFIG'],
       });
     }
 

@@ -53,13 +53,13 @@ export interface ServiceConfig {
 }
 
 export interface CredentialsConfig {
-  backend: 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc' | 'systemd-creds' | 'bitwarden';
+  backend: 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc' | 'systemd-creds' | 'bitwarden' | 'keeper';
   proxiedServices: string[];
   encryptionPassword?: string;
   /**
    * TTL (seconds) for the daemon's in-memory credential cache (v0.13.1+).
    * Unset → backend-conditional default via resolveCacheTtl(): 900 s for
-   * backends with per-access cost (1password, bitwarden, vault), 0 (disabled)
+   * backends with per-access cost (1password, bitwarden, vault, keeper), 0 (disabled)
    * for the rest. Explicit 0 disables for any backend; explicit >0 enables
    * for any backend. Only long-lived daemon processes cache — one-shot CLI
    * commands never do.
@@ -82,6 +82,9 @@ export interface CredentialsConfig {
   bitwardenFolder?: string;
   bitwardenOrganizationId?: string;
   bitwardenCollectionId?: string;
+  // Keeper options (Keeper Commander, v0.16.0+)
+  keeperFolderUid?: string;
+  keeperConfigPath?: string;
 }
 
 export interface AuditConfig {
@@ -149,4 +152,4 @@ export interface WrapperConfig {
   policy?: Record<string, { defaultAction: 'allow' | 'deny'; rules: Array<{ method: string; path: string; action: 'allow' | 'deny' }> }>;
 }
 
-export type CredentialBackend = 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc' | 'systemd-creds' | 'bitwarden';
+export type CredentialBackend = 'keychain' | '1password' | 'vault' | 'encrypted-file' | 'keepassxc' | 'systemd-creds' | 'bitwarden' | 'keeper';
