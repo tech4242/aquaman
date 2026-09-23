@@ -78,7 +78,7 @@ The Telegram Bot API has no auth header, so there the token travels in the `/bot
 
 Trade-off: any local process can reach a loopback port, including other users, where the socket's `0600` shuts them out. The token is the gate there, so the listener stays off until `aquaman hermes setup` or `aquaman openclaw setup` turns it on.
 
-**Bring your own vault.** Aquaman has no house vault. It injects credentials from the secret store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds, or encrypted-file. No new store to adopt, no migration.
+**Bring your own vault.** Aquaman has no house vault. It injects credentials from the secret store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, Keeper, KeePassXC, systemd-creds, or encrypted-file. No new store to adopt, no migration.
 
 ## Broker endpoint (v0.12.0+)
 

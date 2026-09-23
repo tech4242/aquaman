@@ -33,7 +33,7 @@ CSA's own MAESTRO commentary explicitly endorses the **ephemeral credential brok
 | **L4 Deployment Infrastructure** | UDS-only socket, file-mode access control, no network exposure. |
 | **L5 Evaluation & Observability** | Hash-chained audit log; runnable conformance tests at `test/compliance/`. |
 | **L6 Security & Compliance** | This document set: MITRE ATLAS + NIST SP 800-53 mappings + this guidance alignment. |
-| **L7 Agent Ecosystem** | Per-agent adapters (OpenClaw shipping; Claude Code via `aquaman-coder` in v0.12.0; Codex / OpenCode / Cursor coming) — the same vault, audit, and policy engine across every supported agent. |
+| **L7 Agent Ecosystem** | Per-agent adapters (OpenClaw shipping; Claude Code via `aquaman-coder` since v0.12.0, Codex since v0.16.0): the same vault, audit, and policy engine across every supported agent. |
 
 ## OWASP Top 10 for Agentic Applications (canonical Dec 2025 list)
 

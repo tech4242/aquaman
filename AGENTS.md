@@ -2,12 +2,12 @@
 
 ## What this is
 
-Credential isolation for AI agents. API keys, channel tokens and `.env`-grade secrets never enter the agent's process. They live in a vault backend (Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, encrypted-file, systemd-creds) and a separate proxy injects them at egress. A compromised agent holds a marker, not a key.
+Credential isolation for AI agents. API keys, channel tokens and `.env`-grade secrets never enter the agent's process. They live in a vault backend (Keychain, 1Password, HashiCorp Vault, Bitwarden, Keeper, KeePassXC, encrypted-file, systemd-creds) and a separate proxy injects them at egress. A compromised agent holds a marker, not a key.
 
 Three integration paths:
 
 1. **OpenClaw Gateway** (`aquaman-plugin`, npm + ClawHub). LLM providers and channel credentials, 25 builtin services across 5 auth modes.
-2. **Coding agents** (`aquaman-coder`, v0.12.0+, npm). Claude Code today; Codex, OpenCode and Cursor planned. Per-tool-call materialization through `/broker/resolve`.
+2. **Coding agents** (`aquaman-coder`, v0.12.0+, npm). Claude Code, and Codex since v0.16.0. Per-tool-call materialization through `/broker/resolve`.
 3. **Hermes** (`aquaman-hermes`, v0.13.0+, PyPI). A Python host with no transport hook, so isolation is proxy-side: a token-gated loopback listener plus (v0.14.0+) an `aquaman` secret source for project secrets.
 
 Target platform: Unix-like (Linux, macOS, WSL2).
@@ -147,9 +147,9 @@ SecretRef is OpenClaw's canonical credential surface (#82326); auth-profiles.jso
               BrokerClient ─> /broker/resolve ─> vault ─> inject env, redact output
 ```
 
-Key files in `packages/coder/src/`: `projects.ts` (projects.yaml resolver, longest-prefix match, realpath on both sides for macOS `/var` → `/private/var`), `broker-client.ts` (UDS client, typed `BrokerError` with the daemon's `code`), `adapters/claude-code/{hook,setup}.ts`, `cli/index.ts`.
+Key files in `packages/coder/src/`: `projects.ts` (projects.yaml resolver, longest-prefix match, realpath on both sides for macOS `/var` → `/private/var`), `broker-client.ts` (UDS client, typed `BrokerError` with the daemon's `code`), `adapters/claude-code/{hook,setup}.ts`, `adapters/codex/{hook,setup}.ts`, `cli/index.ts`.
 
-A project maps paths to env vars keyed by `aquaman://service/key`. The hook rewrites `Bash` commands to run under `aquaman-coder exec --`, which resolves each ref, injects values into the subprocess only, and pipes output through the redactor. The redactor scrubs each injected value verbatim (any shape), then applies BUILTIN_PATTERNS for secrets the child surfaced itself. Those patterns do not yet cover GitLab token families, which Claude Code added first-party redaction for in 2.1.232.
+A project maps paths to env vars keyed by `aquaman://service/key`. The hook rewrites `Bash` commands to run under `aquaman-coder exec --`, which resolves each ref, injects values into the subprocess only, and pipes output through the redactor. The redactor scrubs each injected value verbatim (any shape), then applies BUILTIN_PATTERNS for secrets the child surfaced itself. They cover the GitLab `glpat-`, `glrt-` and `gloas-` families (v0.16.0), matching Claude Code 2.1.232's first-party redaction.
 
 ### Claude Code hook contract (verified 2026-09-18 at 2.1.276)
 
@@ -158,6 +158,14 @@ A project maps paths to env vars keyed by `aquaman://service/key`. The hook rewr
 - `updatedToolOutput` is adopted (v0.14.0): the redactor rewrites every tool's output before it reaches the transcript. `AQUAMAN_DISABLE_OUTPUT_REWRITE=1` degrades to warning-only. Caveats: a shape-mismatched output is ignored, and OTel spans record the pre-hook output, so redaction does not reach telemetry.
 - Hook stdout must be schema-valid JSON: 2.1.214 fixed exit-2 not blocking on invalid JSON, and 2.1.248 made JSON-looking-but-invalid stdout a hook error. `test/unit/coder-hook.test.ts` pins this.
 - Verify against the live docs when extending, not from memory.
+
+### Codex hook contract (verified 2026-09-23 against openai/codex main)
+
+- Hooks are `Stage::Stable`, default on, in `$CODEX_HOME/hooks.json` (`{"hooks":{...}}`, unknown fields rejected) or an inline `[hooks]` table. The shell tool reports `tool_name: "Bash"`, `tool_input: {command}`.
+- A rewrite is `permissionDecision: "allow"` plus `updatedInput.command`; only `command` is read. Invalid output fails OPEN (the unwrapped command runs), so the Codex handler strips everything else, including `additionalContext`.
+- New or changed user hooks are skipped until trusted in the startup review (`[hooks.state."<path>:pre_tool_use:<g>:<h>"] trusted_hash` in config.toml). Setup does not write that entry; doctor reports it.
+- PostToolUse has no shell output rewrite (`updatedMCPToolOutput` is rejected), so the Codex handler only warns. `continue:false` + `reason` replaces model-visible output but was not verified end to end; do not adopt it without a live check.
+- The rewritten command runs in Codex's sandbox. Verified with `codex sandbox` on 0.156.1 (macOS): default is `EPERM`; `sandbox_workspace_write.network_access = true` reaches the socket; a permissions profile (`extends = ":workspace"`) reaches it only with `network.enabled = true` plus `unix_sockets = { "<abs path>" = "allow" }`, and `unix_sockets` alone stays `EPERM`. What `network.enabled` does to other egress is not yet characterised. Hook trust and a full model-driven loop are not verified live.
 
 ### Claude Code sandbox
 
@@ -187,7 +195,7 @@ The Python plugin registers an `aquaman` `SecretSource` through `ctx.register_se
 - `protected_env_vars()` covers the token var and wired placeholders. Every surfaced string is scrubbed of the token.
 - v0.15.0: each bound ref must also be declared with `aquaman broker allow <ref>`. `aquaman hermes doctor` reads `$HERMES_HOME/config.yaml` and lists undeclared bindings.
 - Env reads on the fetch path go through `_source_env()` because the orchestrator installs a per-fetch environment view under profile multiplexing.
-- Hermes' own conformance kit is vendored at `packages/hermes/tests/_hermes_conformance.py`; CI runs it against the real host pinned by `HERMES_VERSION`. PyPI serves 0.19.0 only (0.20.x and later are GitHub tags), and `SECRET_SOURCE_API_VERSION` is still 1 as of 0.21.3.
+- Hermes' own conformance kit is vendored at `packages/hermes/tests/_hermes_conformance.py`; CI runs it against two real hosts: the last PyPI build (`HERMES_PYPI_VERSION`, 0.19.0) and the pinned git tag (`HERMES_REF`), installed editable because tagged releases refuse wheel builds. Hermes removed PyPI publishing in PR #68217, and `SECRET_SOURCE_API_VERSION` is still 1 as of 0.21.3.
 
 ## CLI shape
 
@@ -197,19 +205,21 @@ Gotchas the help text doesn't tell you:
 
 - `aquaman openclaw plugin-mode` and `aquaman coder hook` are hidden. They are spawned by the plugin and by Claude Code, never run by hand.
 - `aquaman coder *` delegates to the separate `aquaman-coder` binary, so it can be missing while the rest of the CLI works.
+- `aquaman get <ref>` (v0.16.0) prints a declared credential for host credential-helper slots (`sbx secret set --command`, Codex `auth.command`, Claude Code `apiKeyHelper`, OpenClaw exec providers, Hermes command sources). It only talks to the running daemon, never the vault, so it is scope-checked and audited as `operation: read`; it refuses a TTY without `--show` and prints no trailing newline when piped. It hands the value to the calling process, so it is not isolation, and with the OpenClaw plugin's proxy on the socket it gets `broker_disabled`.
 - `--non-interactive` reads `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AQUAMAN_ENCRYPTION_PASSWORD`, `AQUAMAN_KEEPASS_PASSWORD`, `VAULT_ADDR`, `VAULT_TOKEN`, `BW_SESSION`.
 - `aquaman openclaw setup` does far more than the vault wizard: plugin install, openclaw.json merge, SecretRef plus loopback wiring, optional credential migration.
 - Errors carry fixes. A proxy 401 returns `{ error, fix: "Run: aquaman credentials add <service> <key>" }`; keep that convention when adding failure paths.
 
 ## Credential backends
 
-Seven backends; the list and their trade-offs are in the root README, the internals in OPERATIONS.md. Setup auto-detects: macOS → keychain; Linux → keychain with libsecret, else systemd-creds (systemd ≥ 256), else encrypted-file.
+Eight backends; the list and their trade-offs are in the root README, the internals in OPERATIONS.md. Setup auto-detects: macOS → keychain; Linux → keychain with libsecret, else systemd-creds (systemd ≥ 256), else encrypted-file.
 
 Gotchas:
 
 - `keepassxc` needs `npm i -g kdbxweb argon2`, which are optional peers rather than dependencies (see Dependency posture).
 - `keepassxc`, `systemd-creds` and `encrypted-file` cache internally for the daemon's lifetime with no TTL, so a credential added while the daemon runs is invisible until restart.
-- `CachingStore` (`core/credentials/caching-store.ts`) is a TTL'd in-memory decorator applied only in daemon contexts, because 1Password prompts biometrics per `op` spawn, Bitwarden spawns `bw`, and Vault does an HTTP round-trip. Default 900 s for `1password`/`bitwarden`/`vault`, off elsewhere; `credentials.cacheTtlSeconds` or `AQUAMAN_CACHE_TTL` overrides, `0` disables. No negative caching, write-through invalidation, errors never cached, memory only, audit stays per-request. Conformance: `test/compliance/cache-residency.test.ts`.
+- `CachingStore` (`core/credentials/caching-store.ts`) is a TTL'd in-memory decorator applied only in daemon contexts, because 1Password prompts biometrics per `op` spawn, Bitwarden spawns `bw`, Keeper spawns Commander (login plus vault sync per run), and Vault does an HTTP round-trip. Default 900 s for `1password`/`bitwarden`/`vault`/`keeper`, off elsewhere; `credentials.cacheTtlSeconds` or `AQUAMAN_CACHE_TTL` overrides, `0` disables. No negative caching, write-through invalidation, errors never cached, memory only, audit stays per-request. Conformance: `test/compliance/cache-residency.test.ts`.
+- `keeper` (v0.16.0, issue #67) drives Keeper Commander, not the Secrets Manager SDK, because KSM needs the Business add-on and the requester uses the standard password manager. Records are `aquaman::<service>::<key>` in one folder addressed by UID (`keeperFolderUid` / `AQUAMAN_KEEPER_FOLDER_UID`). Writes go over stdin (`keeper --batch-mode -`) with values as `$BASE64:`, because Commander treats `$GEN`/`$JSON` as macros and folds a leading `=` into the field name. Every write first does a stdin-closed read, since a lapsed login would read the first stdin line as the account email. Verified against Commander v18.1.5 source and `test/helpers/fake-keeper.mjs`, not a live account.
 - For zero prompts with 1Password use `OP_SERVICE_ACCOUNT_TOKEN`; doctor prints the hint. `OP_CONNECT_HOST`/`OP_CONNECT_TOKEN` win if both are set.
 
 ## Dependency posture
