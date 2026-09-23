@@ -1,7 +1,7 @@
 /**
  * aquaman-coder
  *
- * Vault adapter for AI coding agents (Claude Code, Codex, OpenCode, Cursor).
+ * Vault adapter for AI coding agents (Claude Code, Codex).
  *
  * This package is the user-facing layer for the v0.12.0 coding-agent pivot.
  * It depends on `aquaman-proxy` (the canonical core daemon) for vault access
@@ -63,3 +63,18 @@ export {
   socketAllowedByEntry,
   sandboxSocketStatus,
 } from './adapters/claude-code/setup.js';
+
+export {
+  type CodexHooksFile,
+  type CodexSetupOptions,
+  type CodexSetupResult,
+  type CodexHookStatus,
+  CODEX_HOOK_COMMAND,
+  codexHome,
+  defaultCodexHooksPath,
+  installCodexHooks,
+  uninstallCodexHooks,
+  codexHookStatus,
+} from './adapters/codex/setup.js';
+
+export { handleCodexPreToolUse, handleCodexPostToolUse } from './adapters/codex/hook.js';
