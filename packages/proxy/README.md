@@ -97,6 +97,8 @@ Scoped since v0.15.0, because it hands out values rather than injecting them:
 - Over the loopback listener the LLM provider keys are never materialized, declared or not (`404 broker_ref_isolated`). They stay on the proxy path.
 - Declaring a ref is an explicit opt-in to handing that value to processes running as you. Refusals and resolves are both audited.
 
+`aquaman get <aquaman://service/key>` (v0.16.0+) is the command-line form, for tools that take a command printing a secret: Docker Sandboxes (`sbx secret set <svc> --command`), Codex (`model_providers.<id>.auth.command`), Claude Code (`apiKeyHelper`), OpenClaw exec secret providers and Hermes command secret sources. It only talks to the running daemon, so the same scope applies and every read is audited. It refuses to print to an interactive terminal without `--show`, and prints no trailing newline when another program reads it. The value goes to the program that runs the command.
+
 ## Documentation
 
 - **[Root README](https://github.com/tech4242/aquaman#readme)**: value prop, three-path Quick Start, security model

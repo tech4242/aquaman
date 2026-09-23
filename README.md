@@ -10,7 +10,7 @@
 
 🔱 The only independent credential proxy for AI agents: bring-your-own-vault isolation & least-privilege request policies. Your keys stay where you already keep them, never in the agent's memory. Compatible with 1Password, keychain, keepassxc and many others.
 
-You set up Claude Code, Codex, OpenClaw, or Hermes, and now you're staring at `.env` files with your precious API keys sitting there in plaintext. You read the articles. You know what happens when an agent gets prompt-injected. We get it.
+You set up Claude Code, Codex, OpenClaw, Hermes, or Docker Sandboxes, and now you're staring at `.env` files with your precious API keys sitting there in plaintext. You read the articles. You know what happens when an agent gets prompt-injected. We get it.
 
 Aquaman fixes this with three layers of defense:
 
@@ -30,6 +30,8 @@ Aquaman ships as four coordinated packages, sharing one vault + one daemon. Inst
 | **[`aquaman-hermes`](packages/hermes/)** | Hermes agent-host plugin (Python, on PyPI). Points Hermes at an opt-in, token-gated loopback listener via its native `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`; adds an in-session `/aquaman-status` command, tool, and health probe. Isolation is proxy-side; the plugin holds no credentials. | If you run the Hermes agent host. `pip install aquaman-hermes` |
 
 A single `aquaman` CLI surfaces all four: top-level commands for vault and audit, `aquaman openclaw ...` for the OpenClaw integration, `aquaman coder ...` for the coding-agent integration (delegates to `aquaman-coder` under the hood) as well as `aquaman hermes ...` for the Hermes Python package.
+
+Running agents in Docker Sandboxes? You only need `aquaman-proxy`; see [Quick Start 5](#5-docker-sandboxes).
 
 ## Quick Start
 
@@ -136,6 +138,26 @@ hermes plugins enable aquaman
 
 The plugin also registers an `aquaman` **secret source** (Hermes ≥ 0.18.1) for project secrets like `GITHUB_TOKEN`. Bind them under `secrets.aquaman.env` in Hermes' `config.yaml`, then declare each ref with `aquaman broker allow aquaman://github/token` (required since v0.15.0; `aquaman hermes doctor` lists any you missed). Unlike the LLM keys above, these values do enter Hermes' env. See [`packages/hermes/README.md`](packages/hermes/README.md).
 
+### 5. Docker Sandboxes
+
+Docker Sandboxes already keeps credentials out of the sandbox: a proxy on your machine injects them into requests, and the agent inside the VM sees a placeholder. By default the values come from your OS keychain. Point them at aquaman instead to get every vault aquaman supports, the ref allow-list, and a tamper-evident audit entry each time sbx reads a secret.
+
+```bash
+npm install -g aquaman-proxy
+aquaman setup                                        # 1. vault wizard
+aquaman daemon &                                     # 2. start the proxy
+aquaman credentials add github token                 # 3. store the secret (if not already there)
+aquaman broker allow aquaman://github/token          # 4. allow it to be handed out
+
+sbx secret set github \
+  --command "$(command -v node) $(command -v aquaman) get aquaman://github/token" \
+  --refresh on-demand                                # 5. sbx reads it from aquaman
+```
+
+sbx runs that command from its own background service, which does not have your shell's `PATH`, so step 5 stores absolute paths. Repeat steps 4 and 5 for each service your sandbox uses.
+
+The same `aquaman get` command works anywhere a tool asks for a command that prints a secret: Codex (`model_providers.<id>.auth.command`), Claude Code (`apiKeyHelper`), OpenClaw exec secret providers and Hermes command secret sources.
+
 ## How It Works
 
 ```
@@ -165,7 +187,7 @@ Agent / OpenClaw / Coding Agent             Aquaman Proxy
 1. **Store**: Credentials live in the vault backend you already run - no house vault (Keychain, 1Password, HashiCorp Vault, Bitwarden, Keeper, KeePassXC, systemd-creds, encrypted-file).
 2. **Policy**: Proxy checks method + path rules *before* touching credentials. Denied requests get a `403`, never real auth headers.
 3. **Inject**: Proxy looks up the credential and adds the auth header before forwarding. 25 builtin services, 4 injecting auth modes (header, URL-path, HTTP Basic, OAuth); a 5th, `none`, is at-rest-only (proxy rejects traffic).
-4. **Broker (coder + Hermes secret source)**: `POST /broker/resolve` materializes a credential per tool call, scoped to a single command's env. Only `aquaman daemon` serves it, and only for refs you declared (`projects.yaml` or `aquaman broker allow`). The OpenClaw plugin's proxy never serves it (v0.15.0+).
+4. **Broker (coder, Hermes secret source, `aquaman get`)**: `POST /broker/resolve` materializes a credential per tool call, scoped to a single command's env. Only `aquaman daemon` serves it, and only for refs you declared (`projects.yaml` or `aquaman broker allow`). The OpenClaw plugin's proxy never serves it (v0.15.0+).
 5. **Audit**: Every credential use is logged with SHA-256 hash chains.
 
 On the proxy paths the agent sees a local endpoint plus a marker: the `aquaman-proxy-managed` placeholder, or the loopback token, which only works against your local proxy. Never a real key. On the coder path the *child* command gets the declared values and the agent sees redacted output.
