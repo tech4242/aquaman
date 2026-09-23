@@ -12,7 +12,11 @@ permissions:
 env:
   # Agent-host pins are deliberate, never dependabot-driven (see ROADMAP:
   # agent-host dependabot policy). OpenClaw is pinned separately per job.
-  HERMES_VERSION: "0.19.0"
+  # Hermes stopped publishing to PyPI after 0.19.0 (hermes-agent PR #68217);
+  # current releases are calendar-versioned git tags that refuse wheel
+  # builds, so CI tests the last PyPI build and the pinned tag, editable.
+  HERMES_PYPI_VERSION: "0.19.0"
+  HERMES_REF: "v2026.9.21"
 
 jobs:
   lint:
@@ -240,10 +244,22 @@ jobs:
           echo "Only expected findings: dangerous-exec on proxy-manager.ts, tools_reachable_permissive_policy (env advisory)"
 
   e2e-hermes:
-    name: Hermes Python plugin
+    name: Hermes Python plugin (${{ matrix.hermes }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        hermes: ['pypi', 'tag']
     steps:
       - uses: actions/checkout@v7
+      - name: Check out hermes-agent at the pinned tag
+        if: matrix.hermes == 'tag'
+        uses: actions/checkout@v7
+        with:
+          repository: NousResearch/hermes-agent
+          ref: ${{ env.HERMES_REF }}
+          path: hermes-agent-src
+          persist-credentials: false
       - name: Install uv
         uses: astral-sh/setup-uv@v7
       - name: Run aquaman-hermes plugin tests
@@ -258,5 +274,9 @@ jobs:
         # "review bar" for a contract-compliant backend. Pinned so a host
         # release changes this job deliberately, not silently.
         run: |
-          uv run --with pytest --with hermes-agent==${{ env.HERMES_VERSION }} \
-            python -m pytest tests/test_conformance.py -q
+          if [ "${{ matrix.hermes }}" = "tag" ]; then
+            HOST=(--with-editable ../../hermes-agent-src)
+          else
+            HOST=(--with "hermes-agent==${{ env.HERMES_PYPI_VERSION }}")
+          fi
+          uv run --with pytest "${HOST[@]}" python -m pytest tests/test_conformance.py -q
