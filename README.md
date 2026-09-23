@@ -28,10 +28,9 @@ Aquaman ships as four coordinated packages, sharing one vault + one daemon. Inst
 | **[`aquaman-plugin`](packages/plugin/)** | OpenClaw Gateway adapter. Spawns the proxy on Gateway startup; routes model and Telegram traffic through it; 25 builtin services across 5 auth modes. | If you run an OpenClaw Gateway. Also available at https://clawhub.ai/plugins/aquaman-plugin |
 | **[`aquaman-coder`](packages/coder/)** | AI coding-agent adapter. Project-scoped `aquaman://service/key` references resolved per Bash tool call. | If you use Claude Code or Codex. |
 | **[`aquaman-hermes`](packages/hermes/)** | Hermes agent-host plugin (Python, on PyPI). Points Hermes at an opt-in, token-gated loopback listener via its native `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`; adds an in-session `/aquaman-status` command, tool, and health probe. Isolation is proxy-side; the plugin holds no credentials. | If you run the Hermes agent host. `pip install aquaman-hermes` |
+| **Docker Sandboxes** | Not a package: a separate path that needs only `aquaman-proxy`. Docker's own proxy injects the secrets; `aquaman get` supplies them from your vault, with the allow-list and audit log. | If you run agents in Docker Sandboxes. See [Quick Start 5](#5-docker-sandboxes). |
 
 A single `aquaman` CLI surfaces all four: top-level commands for vault and audit, `aquaman openclaw ...` for the OpenClaw integration, `aquaman coder ...` for the coding-agent integration (delegates to `aquaman-coder` under the hood) as well as `aquaman hermes ...` for the Hermes Python package.
-
-Running agents in Docker Sandboxes? You only need `aquaman-proxy`; see [Quick Start 5](#5-docker-sandboxes).
 
 ## Quick Start
 
