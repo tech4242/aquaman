@@ -3149,7 +3149,7 @@ program
   .option('--timeout <ms>', 'How long to wait for the daemon (vaults that prompt may need longer)', '15000')
   .addHelpText('after', `
 Examples:
-  sbx secret set github --command 'aquaman get aquaman://github/token'
+  sbx secret set github --command "$(command -v node) $(command -v aquaman) get aquaman://github/token"
   Codex config.toml:  [model_providers.openai.auth]  command = "aquaman"  args = ["get", "aquaman://openai/api_key"]
   Claude Code:        "apiKeyHelper": "aquaman get aquaman://anthropic/api_key"
 
