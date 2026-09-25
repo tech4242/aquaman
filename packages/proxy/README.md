@@ -78,7 +78,7 @@ The Telegram Bot API has no auth header, so there the token travels in the `/bot
 
 Trade-off: any local process can reach a loopback port, including other users, where the socket's `0600` shuts them out. The token is the gate there, so the listener stays off until `aquaman hermes setup` or `aquaman openclaw setup` turns it on.
 
-**Bring your own vault.** Aquaman has no house vault. It injects credentials from the secret store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds, or encrypted-file. No new store to adopt, no migration.
+**Bring your own vault.** Aquaman has no house vault. It injects credentials from the secret store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, Keeper, KeePassXC, systemd-creds, or encrypted-file. No new store to adopt, no migration.
 
 ## Broker endpoint (v0.12.0+)
 
@@ -96,6 +96,8 @@ Scoped since v0.15.0, because it hands out values rather than injecting them:
 - Only refs you declared resolve: the `env` refs in `~/.aquaman/projects.yaml`, plus anything added with `aquaman broker allow`. Everything else is `404 broker_ref_not_declared`, decided before the vault is consulted, so a refusal reveals nothing about what you store.
 - Over the loopback listener the LLM provider keys are never materialized, declared or not (`404 broker_ref_isolated`). They stay on the proxy path.
 - Declaring a ref is an explicit opt-in to handing that value to processes running as you. Refusals and resolves are both audited.
+
+`aquaman get <aquaman://service/key>` (v0.16.0+) is the command-line form, for tools that take a command printing a secret: Docker Sandboxes (`sbx secret set <svc> --command`), Codex (`model_providers.<id>.auth.command`), Claude Code (`apiKeyHelper`), OpenClaw exec secret providers and Hermes command secret sources. It only talks to the running daemon, so the same scope applies and every read is audited. It refuses to print to an interactive terminal without `--show`, and prints no trailing newline when another program reads it. The value goes to the program that runs the command.
 
 ## Documentation
 

@@ -4,13 +4,12 @@
  *
  * Subcommands:
  *   setup <agent>      Install hook configuration for a coding agent
- *                      (currently: claude-code; codex/opencode/cursor planned)
+ *                      (claude-code, codex)
  *   project list       List configured projects
  *   project add        Add a project (interactive or flags)
  *   project remove     Remove a project
- *   get <ref>          Resolve an aquaman:// ref via the broker and print
  *   exec <cmd...>      Run a command with the matching project env injected
- *   hook               Stdio hook handler (invoked by Claude Code)
+ *   hook               Stdio hook handler (invoked by Claude Code or Codex)
  *   doctor             Diagnostics
  */
 
@@ -35,6 +34,13 @@ import {
   defaultSettingsPath,
   sandboxSocketStatus,
 } from '../adapters/claude-code/setup.js';
+import {
+  installCodexHooks,
+  uninstallCodexHooks,
+  codexHookStatus,
+  defaultCodexHooksPath,
+  codexHome,
+} from '../adapters/codex/setup.js';
 
 /** Claude Code's managed (enterprise) settings file for this platform. */
 function managedSettingsPath(): string {
@@ -46,6 +52,23 @@ function managedSettingsPath(): string {
 /** One-line statement of the Linux/WSL2 sandbox limitation (README carries the same line). */
 const LINUX_SANDBOX_LIMITATION =
   'On Linux/WSL2 Claude Code ignores sandbox.network.allowUnixSockets, so sandboxed commands can reach the broker only with sandbox.network.allowAllUnixSockets: true, which opens every Unix socket to them.';
+
+/**
+ * Codex runs the rewritten command inside its own sandbox, which denies AF_UNIX
+ * connects by default (verified with `codex sandbox`, 0.156.1: EPERM). A
+ * permissions profile that extends ":workspace" and lists the socket works,
+ * but only with `network.enabled = true`; `unix_sockets` alone stays EPERM.
+ * Setup does not edit config.toml, so it prints this instead.
+ */
+function codexSandboxNote(): string {
+  return `Codex's sandbox blocks the proxy socket by default. To allow it, add to ${path.join(codexHome(), 'config.toml')}:\n` +
+    `  default_permissions = "aquaman"\n` +
+    `  [permissions.aquaman]\n` +
+    `  extends = ":workspace"\n` +
+    `  [permissions.aquaman.network]\n` +
+    `  enabled = true\n` +
+    `  unix_sockets = { "${defaultSocketPath()}" = "allow" }`;
+}
 
 // ANSI color helpers — aquamarine theme. Mirrors packages/proxy/src/cli/index.ts
 // so `aquaman coder doctor` matches `aquaman openclaw doctor`.
@@ -65,12 +88,22 @@ program
 
 program
   .command('setup <agent>')
-  .description('Install hook configuration for a coding agent (claude-code)')
+  .description('Install hook configuration for a coding agent (claude-code, codex)')
   .option('--uninstall', 'Remove aquaman hooks from the agent config', false)
   .action((agent: string, opts: { uninstall?: boolean }) => {
+    if (agent === 'codex') {
+      const result = opts.uninstall ? uninstallCodexHooks() : installCodexHooks();
+      console.log(result.changed
+        ? `${opts.uninstall ? 'Removed' : 'Installed'} aquaman-coder hook -> ${result.path}`
+        : `No changes needed (${result.path})`);
+      if (!opts.uninstall) {
+        console.log('\nCodex runs a new hook only after you approve it: start `codex` and choose to trust the aquaman hooks in the startup hook review.');
+        console.log(`\n${codexSandboxNote()}`);
+      }
+      return;
+    }
     if (agent !== 'claude-code') {
-      console.error(`Unsupported agent "${agent}". Supported: claude-code`);
-      console.error('(codex / opencode / cursor adapters are planned for v0.13.0+)');
+      console.error(`Unsupported agent "${agent}". Supported: claude-code, codex`);
       process.exit(1);
     }
 
@@ -124,10 +157,11 @@ project
 
 project
   .command('add <name>')
-  .description('Add a project to ~/.aquaman/projects.yaml')
+  .description('Add a project to ~/.aquaman/projects.yaml, or add paths/env bindings to an existing one')
   .option('--path <path>', 'Filesystem path (repeat for multiple)', collect, [])
   .option('--env <name=ref>', 'Env binding (repeat for multiple)', collect, [])
-  .action((name: string, opts: { path: string[]; env: string[] }) => {
+  .option('--replace', 'Replace an existing project instead of merging into it', false)
+  .action((name: string, opts: { path: string[]; env: string[]; replace?: boolean }) => {
     const file = loadProjects();
     const env: Record<string, string> = {};
     for (const e of opts.env) {
@@ -144,47 +178,51 @@ project
       }
       env[key] = ref;
     }
+    // Through v0.15.x this replaced an existing project, silently dropping its
+    // bindings (issue #67). It now merges: new paths are appended, and an env
+    // name that already exists takes the new ref. --replace keeps the old behavior.
+    const existing = opts.replace ? undefined : file.projects[name];
+    if (existing) {
+      const paths = [...existing.paths];
+      for (const p of opts.path) if (!paths.includes(p)) paths.push(p);
+      file.projects[name] = { ...existing, paths, env: { ...existing.env, ...env } };
+      saveProjects(file);
+      console.log(`Updated project "${name}" -> ${defaultProjectsPath()}`);
+      return;
+    }
     const paths = opts.path.length > 0 ? opts.path : [process.cwd()];
     const cfg: ProjectConfig = { paths, env };
     file.projects[name] = cfg;
     saveProjects(file);
-    console.log(`Added project "${name}" -> ${defaultProjectsPath()}`);
+    console.log(`${opts.replace ? 'Replaced' : 'Added'} project "${name}" -> ${defaultProjectsPath()}`);
   });
 
 project
   .command('remove <name>')
-  .description('Remove a project')
-  .action((name: string) => {
+  .description('Remove a project, or only some of its env bindings with --env')
+  .option('--env <name>', 'Remove only this env binding (repeat for multiple)', collect, [])
+  .action((name: string, opts: { env: string[] }) => {
     const file = loadProjects();
     if (!file.projects[name]) {
       console.error(`Project "${name}" not found`);
       process.exit(1);
     }
+    if (opts.env.length > 0) {
+      const env = { ...file.projects[name].env };
+      const missing = opts.env.filter((e) => !(e in env));
+      if (missing.length > 0) {
+        console.error(`Project "${name}" has no env binding: ${missing.join(', ')}`);
+        process.exit(1);
+      }
+      for (const e of opts.env) delete env[e];
+      file.projects[name] = { ...file.projects[name], env };
+      saveProjects(file);
+      console.log(`Removed ${opts.env.join(', ')} from project "${name}"`);
+      return;
+    }
     delete file.projects[name];
     saveProjects(file);
     console.log(`Removed project "${name}"`);
-  });
-
-// ---------------- get ----------------
-
-program
-  .command('get <ref>')
-  .description('Resolve a declared aquaman:// ref via the broker and print the value')
-  .action(async (ref: string) => {
-    const parsed = parseRef(ref);
-    if (!parsed) {
-      console.error(`Bad reference "${ref}". Expected aquaman://service/key`);
-      process.exit(1);
-    }
-    const broker = new BrokerClient();
-    try {
-      const result = await broker.resolve({ service: parsed.service, key: parsed.key });
-      process.stdout.write(result.value);
-      if (process.stdout.isTTY) process.stdout.write('\n');
-    } catch (err) {
-      console.error((err as Error).message);
-      process.exit(1);
-    }
   });
 
 // ---------------- exec ----------------
@@ -253,9 +291,14 @@ program
 
 program
   .command('hook')
-  .description('Stdio hook handler (invoked by Claude Code, not directly)')
-  .action(async () => {
-    const code = await runHookFromStdin(process.argv);
+  .description('Stdio hook handler (invoked by Claude Code or Codex, not directly)')
+  .option('--host <host>', 'Which agent invoked the hook: claude-code or codex', 'claude-code')
+  .action(async (opts: { host: string }) => {
+    if (opts.host !== 'claude-code' && opts.host !== 'codex') {
+      process.stderr.write(`aquaman-coder: unknown --host ${opts.host}\n`);
+      process.exit(2);
+    }
+    const code = await runHookFromStdin(process.argv, { host: opts.host });
     process.exit(code);
   });
 
@@ -337,24 +380,32 @@ program
       }
     }
 
-    // 5. Claude Code hooks installed (match both legacy and current command form)
+    // 5. Agent hooks installed. At least one host must be wired; each wired
+    // host is checked on its own terms.
     const settingsPath = defaultSettingsPath();
-    if (fs.existsSync(settingsPath)) {
-      const raw = fs.readFileSync(settingsPath, 'utf-8');
-      const installed = raw.includes('aquaman-coder hook') || raw.includes('aquaman coder hook');
+    const claudeInstalled = fs.existsSync(settingsPath) &&
+      /aquaman(-| )coder hook/.test(fs.readFileSync(settingsPath, 'utf-8'));
+    const codexHooksPath = defaultCodexHooksPath();
+    const codex = codexHookStatus(codexHooksPath);
+    if (!claudeInstalled && !codex.installed) {
       checks.push({
-        name: 'Claude Code hooks',
-        ok: installed,
-        detail: installed ? settingsPath : 'not configured',
-        fix: installed ? undefined : 'aquaman coder setup claude-code',
-      });
-    } else {
-      checks.push({
-        name: 'Claude Code hooks',
+        name: 'agent hooks',
         ok: false,
-        detail: `${settingsPath} does not exist`,
-        fix: 'aquaman coder setup claude-code',
+        detail: 'no coding agent is wired to aquaman',
+        fix: 'aquaman coder setup claude-code   (or: aquaman coder setup codex)',
       });
+    }
+    if (claudeInstalled) {
+      checks.push({ name: 'Claude Code hooks', ok: true, detail: settingsPath });
+    }
+    if (codex.installed) {
+      checks.push({
+        name: 'Codex hooks',
+        ok: codex.trusted,
+        detail: codex.trusted ? codexHooksPath : `${codexHooksPath} (installed, not yet trusted, so Codex skips them)`,
+        fix: codex.trusted ? undefined : 'Start `codex` and trust the aquaman hooks in the startup hook review',
+      });
+      checks.push({ name: 'Codex sandbox', ok: true, detail: 'blocks the proxy socket unless allowed; see `aquaman coder setup codex` output or the aquaman-coder README' });
     }
 
     // 6. Claude Code sandbox can reach the proxy socket. Merge user, managed,
@@ -446,6 +497,9 @@ program
     } else {
       console.log('  Claude Code hooks: not configured (settings.json missing)');
     }
+    const codexStatus = codexHookStatus();
+    console.log(`  Codex hooks: ${codexStatus.installed ? (codexStatus.trusted ? 'installed, trusted' : 'installed, not yet trusted') : 'not configured'}`);
+    if (codexStatus.installed) console.log(`    ${defaultCodexHooksPath()}`);
 
     // Broker connectivity
     console.log('');

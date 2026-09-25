@@ -32,6 +32,7 @@
 import { redact, redactDeep } from 'aquaman-proxy';
 import { findProjectForCwd, loadProjects } from '../../projects.js';
 import { BrokerClient } from '../../broker-client.js';
+import { handleCodexPreToolUse, handleCodexPostToolUse } from '../codex/hook.js';
 
 export interface HookEvent {
   hook_event_name?: string;
@@ -63,6 +64,11 @@ export interface HookContext {
    * Defaults to the AQUAMAN_DISABLE_OUTPUT_REWRITE env var.
    */
   disableOutputRewrite?: boolean;
+  /**
+   * Which host invoked the hook. Codex (v0.16.0+) shares the event shape but
+   * not every output field, so its handlers live in adapters/codex/hook.ts.
+   */
+  host?: 'claude-code' | 'codex';
 }
 
 // Default wrapper uses the direct binary form (`aquaman-coder exec`) rather
@@ -213,12 +219,13 @@ export async function runHookFromStdin(
 
   let decision: HookDecision | null = null;
   try {
+    const codex = ctx.host === 'codex';
     switch (event.hook_event_name) {
       case 'PreToolUse':
-        decision = await handlePreToolUse(event, ctx);
+        decision = codex ? await handleCodexPreToolUse(event, ctx) : await handlePreToolUse(event, ctx);
         break;
       case 'PostToolUse':
-        decision = handlePostToolUse(event, ctx);
+        decision = codex ? handleCodexPostToolUse(event) : handlePostToolUse(event, ctx);
         break;
       default:
         return 0;

@@ -10,7 +10,7 @@ Pair with [`aquaman-proxy`](../proxy) (the vault + daemon + audit core). Togethe
 2. **Redact secrets from tool output.** `aquaman-coder exec` pipes stdout/stderr through a pattern redactor before printing - secret-shaped strings (AWS, GitHub, Stripe, Slack, OpenAI, Anthropic, JWTs, PEM private keys) become `[REDACTED:kind]` before they enter the agent's transcript.
 3. **Stay isolated from the proxy.** `aquaman-coder` only talks to `aquaman-proxy` over `~/.aquaman/proxy.sock` (UDS, `chmod 0o600`) via the broker endpoint `POST /broker/resolve`. No shared memory, no network exposure.
 
-**Bring your own vault.** Aquaman has no house vault. It injects credentials from the secret store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds, or encrypted-file. No new store to adopt, no migration.
+**Bring your own vault.** Aquaman has no house vault. It injects credentials from the secret store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, Keeper, KeePassXC, systemd-creds, or encrypted-file. No new store to adopt, no migration.
 
 ## Install
 
@@ -20,7 +20,7 @@ npm install -g aquaman-proxy aquaman-coder
 
 Requires `aquaman-proxy` (same version) running as a daemon. Start it once per machine session with `aquaman daemon &` (or have it managed by your shell's init).
 
-## Quick Start (Claude Code)
+## Quick Start (Claude Code, Codex)
 
 ```bash
 aquaman setup                                # vault wizard (one-time)
@@ -30,10 +30,13 @@ aquaman coder project add my-app --path ~/code/my-app \
   --env ANTHROPIC_API_KEY=aquaman://anthropic/api_key \
   --env GITHUB_TOKEN=aquaman://github/token
 aquaman coder setup claude-code              # install hook in ~/.claude/settings.json
+# or: aquaman coder setup codex              # install hook in ~/.codex/hooks.json
 aquaman coder doctor                         # verify
 ```
 
-**See it for yourself (the 30-second aha):** restart Claude Code, open a new session inside `~/code/my-app`, and ask the agent to run:
+Running `project add` again on the same name adds to the project: new paths are appended and new `--env` bindings are merged in (an existing name takes the new ref). `--replace` overwrites the project instead, and `project remove my-app --env GITHUB_TOKEN` drops a single binding.
+
+**See it for yourself (the 30-second aha):** restart Claude Code (or Codex), open a new session inside `~/code/my-app`, and ask the agent to run:
 
 ```
 printenv | grep ANTHROPIC_API_KEY
@@ -58,7 +61,7 @@ aquaman-coder exec -- python app/scripts/import.py
 
 Same env injection, same redaction on stdout/stderr. Drop it into Makefile targets, shell aliases, or CI runners - anywhere you'd otherwise reach for a `.env` file.
 
-When Claude Code runs a Bash tool in `~/code/my-app`, aquaman's hook rewrites the command via `updatedInput.command` to wrap it under `aquaman-coder exec`. That wrapper:
+When Claude Code or Codex runs a shell command in `~/code/my-app`, aquaman's hook rewrites the command via `updatedInput.command` to wrap it under `aquaman-coder exec`. That wrapper:
 
 - Resolves each `aquaman://service/key` reference via the broker (`POST /broker/resolve` over UDS). Credentials are materialized for one command, not for the agent's lifetime.
 - Pipes stdout/stderr through a redactor that prepends a value-based pattern for each resolved value: **whatever string was injected gets redacted, regardless of shape** (Atlassian tokens, Notion secrets, internal-API keys - none of them need to match a known provider format). Generic shape-based patterns (sk-ant-, ghp_, sk_live_, AKIA…, JWTs, PEM blocks, ATATT3xF…) still run after as defense-in-depth for secrets the child surfaces that we did NOT inject.
@@ -84,21 +87,21 @@ The unified CLI lives in `aquaman-proxy` and delegates `coder` subcommands here:
 
 ```
 aquaman coder
-├── setup <agent>             Install hooks for an agent (claude-code today)
+├── setup <agent>             Install hooks for an agent (claude-code, codex)
 ├── doctor                    Deep diagnostic - projects, broker, per-project vault checks
 ├── status                    Configured projects + hook wiring + broker connectivity
 ├── project list/add/remove   ~/.aquaman/projects.yaml CRUD
 ├── get <ref>                 Resolve a declared aquaman://service/key reference once
 ├── exec <cmd> [args...]      Run a command with project env injected + output redacted
-└── hook                      Stdio hook handler (invoked by Claude Code; not user-facing)
+└── hook                      Stdio hook handler (invoked by Claude Code or Codex; not user-facing)
 ```
 
-The `aquaman-coder` binary works directly too. `aquaman coder X` ≡ `aquaman-coder X`. The unified form is the documented one; the standalone binary is what Claude Code's hook contract executes per tool call (faster, skips the shim).
+The `aquaman-coder` binary works directly too. `aquaman coder X` ≡ `aquaman-coder X`. The unified form is the documented one; the standalone binary is what the agent's hook runs per tool call (faster, skips the shim).
 
 ## Architecture
 
 ```
-Claude Code / Codex / OpenCode / Cursor
+Claude Code / Codex
         │  hook stdin/stdout JSON
         ▼
   aquaman-coder (this package)
@@ -108,7 +111,7 @@ Claude Code / Codex / OpenCode / Cursor
         │
         ▼
   Vault backends (Keychain, 1Password, HashiCorp Vault, KeePassXC,
-                  encrypted-file, systemd-creds, Bitwarden)
+                  encrypted-file, systemd-creds, Bitwarden, Keeper)
 ```
 
 The hook uses Claude Code's real protocol (verified against the live docs):
@@ -116,6 +119,29 @@ The hook uses Claude Code's real protocol (verified against the live docs):
 - **PreToolUse** on Bash: emits `{ hookSpecificOutput: { permissionDecision: "allow", updatedInput: { command: "aquaman-coder exec -- sh -c '...'" } } }`. Claude Code runs the rewritten command in its child shell; the wrapper does the broker resolve.
 - **PostToolUse**: runs the redactor over every tool's output and rewrites it via `updatedToolOutput` (v0.14.0+) before it reaches the transcript. That covers Read/Grep surfacing on-disk secrets, MCP tools, and unwrapped Bash. `aquaman-coder exec` still owns value-based redaction of what it injected. Set `AQUAMAN_DISABLE_OUTPUT_REWRITE=1` on Claude Code < 2.1.170 to fall back to a warning via `additionalContext`. Caveat from Claude Code's docs: OpenTelemetry tool spans record the original output before hooks run, so this redaction doesn't reach OTel exports.
 - Credentials are never passed through hook output. The hook contract has no env-injection field for PreToolUse, and we wouldn't use one: hook stdout transits Claude Code's process, which is what the broker + `exec` wrapper exists to avoid.
+
+### Codex
+
+`aquaman coder setup codex` writes `PreToolUse` and `PostToolUse` handlers for the shell tool (`matcher: "Bash"`) into `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`). Codex's hook contract has the same shape as Claude Code's, with three differences that matter here:
+
+- **Codex runs a new hook only after you approve it.** Start `codex` after setup and trust the aquaman hooks in the startup hook review. `aquaman coder doctor` reports hooks that are installed but not yet trusted.
+- **Codex's sandbox blocks the proxy socket by default** (`EPERM`). The rewritten command runs inside it. Allow the socket with a permissions profile in `config.toml`; `unix_sockets` alone is not enough, the profile also needs `network.enabled = true`. Setup prints this snippet with your paths filled in and does not edit `config.toml` itself:
+
+  ```toml
+  default_permissions = "aquaman"
+
+  [permissions.aquaman]
+  extends = ":workspace"
+
+  [permissions.aquaman.network]
+  enabled = true
+  unix_sockets = { "/Users/you/.aquaman/proxy.sock" = "allow" }
+  ```
+
+  `network.enabled = true` also affects other outbound traffic from sandboxed commands, so check it against your own network policy.
+- **Output redaction happens inside the wrapper only.** Codex gives hooks no way to rewrite shell output, so `PostToolUse` only warns when it sees secret patterns. Commands run under `aquaman-coder exec` are still scrubbed before Codex sees them.
+
+Codex fails open on invalid hook output (the original command runs), so the rewrite sends only `permissionDecision` and `updatedInput.command`.
 
 See [`docs/PACKAGES.md`](../../docs/PACKAGES.md) for cross-package import rules.
 
@@ -143,9 +169,7 @@ The file is `chmod 0o600`. Both the service and key components are validated aga
 | Adapter | Status | Release |
 |---|---|---|
 | Claude Code | shipped | v0.12.0 |
-| Codex CLI | planned | v0.13.0 |
-| OpenCode (sst) | planned | v0.14.0 |
-| Cursor | planned | v0.15.0 |
+| Codex CLI | shipped | v0.16.0 |
 
 ## License
 

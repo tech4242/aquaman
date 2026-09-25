@@ -31,7 +31,7 @@ Agent / OpenClaw Gateway              Aquaman Proxy
 
 ## What it does
 
-1. **Bring your own vault**: aquaman has no house vault; secrets stay in the store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds, or encrypted-file.
+1. **Bring your own vault**: aquaman has no house vault; secrets stay in the store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, Keeper, KeePassXC, systemd-creds, or encrypted-file.
 2. **Agent gets a proxy URL**: requests route through `~/.aquaman/proxy.sock` (UDS, `chmod 0o600`); the proxy injects auth headers on the fly.
 3. **Dangerous endpoints blocked**: request policies deny admin APIs, prevent deletions, block sends - *before* credentials are even injected.
 4. **Tamper-evident audit log**: every credential use logged with SHA-256 hash chains.
@@ -159,7 +159,7 @@ Slash commands in chat: `/aquaman-status`, `/aquaman list`, `/aquaman doctor`.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` \| `"keepassxc"` \| `"systemd-creds"` \| `"bitwarden"` | `"keychain"` | Credential store |
+| `backend` | `"keychain"` \| `"1password"` \| `"vault"` \| `"encrypted-file"` \| `"keepassxc"` \| `"systemd-creds"` \| `"bitwarden"` \| `"keeper"` | `"keychain"` | Credential store |
 | `services` | `string[]` | `["anthropic", "openai"]` | Services to proxy (also gates which hostnames the interceptor redirects, v0.11.4+) |
 | `autoGenerateAuthProfiles` | `boolean` | `true` | Auto-generate `auth-profiles.json` with placeholder anthropic/openai entries when the file is absent. Set `false` to manage your own (v0.11.4+) |
 
@@ -169,7 +169,7 @@ Advanced settings (audit, vault, request policies) go in `~/.aquaman/config.yaml
 
 - **[Root README](https://github.com/tech4242/aquaman#readme)**: value prop, three-path Quick Start, security model
 - **[`aquaman-proxy`](../proxy)**: core CLI and daemon
-- **[`aquaman-coder`](../coder)**: coding-agent adapter (Claude Code, Codex/OpenCode/Cursor planned)
+- **[`aquaman-coder`](../coder)**: coding-agent adapter (Claude Code, Codex)
 
 ## License
 

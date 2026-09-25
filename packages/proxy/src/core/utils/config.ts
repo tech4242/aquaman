@@ -27,13 +27,14 @@ export const DEFAULT_CACHE_TTL_SECONDS = 900;
 /**
  * Backends where the cache defaults ON: every read has a per-access cost
  * (1Password: a biometric prompt per `op` spawn in desktop-app mode;
- * Bitwarden: ~1-2s `bw` spawn; Vault: an HTTP round-trip). The remaining
+ * Bitwarden: ~1-2s `bw` spawn; Vault: an HTTP round-trip; Keeper: a
+ * Commander spawn that logs in and syncs the vault). The remaining
  * backends are already fast (keychain) or cache internally for the daemon
  * lifetime (keepassxc, systemd-creds, encrypted-file), so the default there
  * is OFF — an explicit cacheTtlSeconds still applies to any backend.
  */
 export const CACHED_BY_DEFAULT_BACKENDS: ReadonlyArray<WrapperConfig['credentials']['backend']> =
-  ['1password', 'bitwarden', 'vault'];
+  ['1password', 'bitwarden', 'vault', 'keeper'];
 
 /**
  * Resolve the effective credential-cache TTL (seconds) for daemon contexts.
@@ -154,7 +155,7 @@ export function applyEnvOverrides(config: WrapperConfig): WrapperConfig {
 
   if (env['AQUAMAN_BACKEND']) {
     const b = env['AQUAMAN_BACKEND'] as WrapperConfig['credentials']['backend'];
-    if (['keychain', '1password', 'vault', 'encrypted-file', 'keepassxc', 'systemd-creds', 'bitwarden'].includes(b)) {
+    if (['keychain', '1password', 'vault', 'encrypted-file', 'keepassxc', 'systemd-creds', 'bitwarden', 'keeper'].includes(b)) {
       config.credentials.backend = b;
     }
   }
@@ -193,6 +194,14 @@ export function applyEnvOverrides(config: WrapperConfig): WrapperConfig {
 
   if (env['AQUAMAN_BITWARDEN_COLLECTION_ID']) {
     config.credentials.bitwardenCollectionId = env['AQUAMAN_BITWARDEN_COLLECTION_ID'];
+  }
+
+  if (env['AQUAMAN_KEEPER_FOLDER_UID']) {
+    config.credentials.keeperFolderUid = env['AQUAMAN_KEEPER_FOLDER_UID'];
+  }
+
+  if (env['AQUAMAN_KEEPER_CONFIG']) {
+    config.credentials.keeperConfigPath = env['AQUAMAN_KEEPER_CONFIG'];
   }
 
   // Credential-cache TTL override (v0.13.1+). Integer seconds; 0 disables.

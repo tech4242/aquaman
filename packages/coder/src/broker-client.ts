@@ -70,7 +70,9 @@ export function sandboxSocketHint(socketPath: string): string {
     `Claude Code's sandbox, which denies Unix sockets by default. On macOS run ` +
     `\`aquaman coder setup claude-code\` (it allowlists this socket in sandbox.network.allowUnixSockets). ` +
     `On Linux/WSL2 the sandbox can only allow it with sandbox.network.allowAllUnixSockets: true, ` +
-    `which opens every Unix socket to sandboxed commands.`
+    `which opens every Unix socket to sandboxed commands. Under Codex, its sandbox blocks the ` +
+    `socket unless a permissions profile allows it (network.enabled = true plus ` +
+    `unix_sockets); run \`aquaman coder setup codex\` for the snippet.`
   );
 }
 

@@ -15,7 +15,7 @@ Aquaman is a monorepo with three packages. Each has a sharp, named role. We keep
 - Broker endpoint (`POST /broker/resolve`, v0.12.0+) — `src/broker/`
 - Base CLI: `init`, `daemon`, `status`, `doctor`, `credentials`, `audit`, `policy`, `migrate` — `src/cli/`
 
-**Does not know about:** OpenClaw, Claude Code, Codex, OpenCode, Cursor, or any other specific agent / runtime. If a feature only makes sense for one ecosystem, **it does not belong here**.
+**Does not know about:** OpenClaw, Claude Code, Codex, or any other specific agent / runtime. If a feature only makes sense for one ecosystem, **it does not belong here**.
 
 **Transitional exception (v0.12.0):** OpenClaw-aware helpers in `src/openclaw/` and the OpenClaw-aware branches in the proxy CLI (the `aquaman openclaw` namespace — `setup`, `doctor`, `status`, `start`, `configure`, `migrate`, `plugin-mode`) are inherited from the v0.11.x architecture. The carve-out into `packages/plugin` is a v0.13.0+ refactor. The `aquaman coder` namespace is a **shim** that execs the `aquaman-coder` binary, not an import — so the boundary holds. **No new agent-aware code is imported into proxy under any circumstances.**
 
@@ -35,7 +35,7 @@ Aquaman is a monorepo with three packages. Each has a sharp, named role. We keep
 
 ## packages/coder — `aquaman-coder` on npm (NEW v0.12.0)
 
-**Role:** the coding-agent adapter — Claude Code, Codex, OpenCode, Cursor, and any future coding agent.
+**Role:** the coding-agent adapter for Claude Code, Codex, and any future coding agent.
 
 **Owns:**
 - Per-agent hook handlers (`src/adapters/<agent>/hook.ts`)

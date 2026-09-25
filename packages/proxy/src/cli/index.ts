@@ -111,7 +111,9 @@ function storeOptionsFromConfig(config: WrapperConfig): CredentialStoreOptions {
     keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
     bitwardenFolder: config.credentials.bitwardenFolder,
     bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
-    bitwardenCollectionId: config.credentials.bitwardenCollectionId
+    bitwardenCollectionId: config.credentials.bitwardenCollectionId,
+    keeperFolderUid: config.credentials.keeperFolderUid,
+    keeperConfigPath: config.credentials.keeperConfigPath
   };
 }
 
@@ -178,6 +180,63 @@ function updateBrokerAllowedRefs(refs: string[], mode: 'allow' | 'revoke'): void
   if (raw.broker.enabled === false) {
     console.log('Note: broker.enabled is false in config.yaml, so the broker is off regardless.');
   }
+}
+
+/**
+ * `POST /broker/resolve` against the running daemon over UDS. Always goes
+ * through the daemon (never the vault directly), so `aquaman get` is
+ * scope-checked and audited exactly like a coding-agent or Hermes resolve.
+ */
+function brokerResolve(
+  socketPath: string,
+  service: string,
+  key: string,
+  timeoutMs: number,
+): Promise<{ value: string } | { error: string; fix?: string; code?: string }> {
+  const body = JSON.stringify({ service, key });
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        socketPath,
+        path: '/broker/resolve',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        let payload = '';
+        res.on('data', (chunk) => { payload += chunk; });
+        res.on('end', () => {
+          let json: any;
+          try {
+            json = JSON.parse(payload);
+          } catch {
+            resolve({ error: `Proxy returned a non-JSON response (HTTP ${res.statusCode})` });
+            return;
+          }
+          if (res.statusCode === 200 && typeof json.value === 'string') {
+            resolve({ value: json.value });
+          } else {
+            resolve({ error: json.error || `Broker error (HTTP ${res.statusCode})`, fix: json.fix, code: json.code });
+          }
+        });
+      },
+    );
+    req.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'ENOENT' || err.code === 'ECONNREFUSED') {
+        resolve({ error: `Cannot reach the aquaman proxy at ${socketPath}`, fix: 'Start it with: aquaman daemon', code: 'proxy_unreachable' });
+      } else if (err.code === 'EPERM' || err.code === 'EACCES') {
+        resolve({ error: `Connecting to ${socketPath} was denied (${err.code})`, fix: 'If this runs inside a sandbox, allowlist the socket; otherwise check its owner and 0600 mode', code: 'socket_blocked' });
+      } else {
+        resolve({ error: err.message });
+      }
+    });
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ error: `Broker request timed out after ${timeoutMs}ms`, fix: 'A vault that prompts (e.g. 1Password biometrics) may need longer: pass --timeout <ms>' });
+    });
+    req.end(body);
+  });
 }
 
 function describeBroker(scope: BrokerScope | undefined): string {
@@ -349,7 +408,7 @@ program
       }
       lines.push('');
       lines.push(aqua('Vault management'));
-      for (const name of ['credentials', 'audit', 'services', 'policy']) {
+      for (const name of ['credentials', 'get', 'broker', 'audit', 'services', 'policy']) {
         const c = byName.get(name);
         if (c) lines.push(renderCmd(c));
       }
@@ -374,13 +433,12 @@ program
 
       // --- Coder namespace (shim \u2014 list documented subcommands) ---
       if (byName.has('coder')) {
-        lines.push(aqua('AI coding-agent integration (Claude Code today)'));
+        lines.push(aqua('AI coding-agent integration (Claude Code, Codex)'));
         const coderSubs: Array<[string, string]> = [
-          ['coder setup <agent>', 'Install hooks for an agent (claude-code today)'],
+          ['coder setup <agent>', 'Install hooks for an agent (claude-code, codex)'],
           ['coder doctor', 'Deep diagnostic \u2014 projects, broker, per-project vault'],
           ['coder status', 'Configured projects + hook wiring + broker activity'],
           ['coder project list/add/remove', 'Manage ~/.aquaman/projects.yaml'],
-          ['coder get <ref>', 'Resolve an aquaman://service/key reference'],
           ['coder exec <cmd>', 'Run command with project env injected + output redacted'],
         ];
         for (const [term, desc] of coderSubs) {
@@ -432,7 +490,7 @@ program
 program
   .command('setup')
   .description('Vault-only setup wizard \u2014 backend + credentials (use `aquaman openclaw setup` or `aquaman coder setup` for full bundles)')
-  .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, keepassxc, 1password, vault, systemd-creds, bitwarden)')
+  .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, keepassxc, 1password, vault, systemd-creds, bitwarden, keeper)')
   .option('--no-policy', 'Skip request policy preset configuration')
   .option('--non-interactive', 'Use environment variables instead of prompts (for CI)')
   .action(async (options) => {
@@ -655,7 +713,7 @@ async function runVaultSetup(opts: { backend?: string; policy: boolean; nonInter
       }
     }
   }
-  const validBackends = ['keychain', 'encrypted-file', 'keepassxc', '1password', 'vault', 'systemd-creds', 'bitwarden'];
+  const validBackends = ['keychain', 'encrypted-file', 'keepassxc', '1password', 'vault', 'systemd-creds', 'bitwarden', 'keeper'];
   if (!validBackends.includes(backend)) {
     console.error(`  Invalid backend: ${backend}. Valid: ${validBackends.join(', ')}`);
     process.exit(1);
@@ -673,6 +731,9 @@ async function runVaultSetup(opts: { backend?: string; policy: boolean; nonInter
     config = loadConfig();
   }
   config.credentials.backend = backend as any;
+  if (backend === 'keeper' && process.env['AQUAMAN_KEEPER_FOLDER_UID']) {
+    config.credentials.keeperFolderUid = process.env['AQUAMAN_KEEPER_FOLDER_UID'];
+  }
   fs.writeFileSync(configPath, yamlStringify(config), { encoding: 'utf-8', mode: 0o600 });
 
   const auditDir = path.join(configDir, 'audit');
@@ -811,7 +872,8 @@ openclaw
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
-          operation: 'use',
+          // A broker resolve hands the value out; everything else injects it.
+          operation: info.method === 'BROKER' ? 'read' : 'use',
           success: !info.error,
           error: info.error
         });
@@ -979,7 +1041,8 @@ program
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
-          operation: 'use',
+          // A broker resolve hands the value out; everything else injects it.
+          operation: info.method === 'BROKER' ? 'read' : 'use',
           success: !info.error,
           error: info.error
         });
@@ -1057,7 +1120,8 @@ openclaw
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
-          operation: 'use',
+          // A broker resolve hands the value out; everything else injects it.
+          operation: info.method === 'BROKER' ? 'read' : 'use',
           success: !info.error,
           error: info.error
         });
@@ -1449,7 +1513,7 @@ program
 openclaw
   .command('setup')
   .description('Full setup for OpenClaw — vault + plugin + auth profiles + (optional) auto-migrate')
-  .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, keepassxc, 1password, vault, systemd-creds, bitwarden)')
+  .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, keepassxc, 1password, vault, systemd-creds, bitwarden, keeper)')
   .option('--no-openclaw', 'Skip OpenClaw plugin installation step (run vault setup only)')
   .option('--no-policy', 'Skip request policy preset configuration')
   .option('--non-interactive', 'Use environment variables instead of prompts (for CI)')
@@ -1498,7 +1562,7 @@ openclaw
     }
 
     // Validate backend
-    const validBackends = ['keychain', 'encrypted-file', 'keepassxc', '1password', 'vault', 'systemd-creds', 'bitwarden'];
+    const validBackends = ['keychain', 'encrypted-file', 'keepassxc', '1password', 'vault', 'systemd-creds', 'bitwarden', 'keeper'];
     if (!validBackends.includes(backend)) {
       console.error(`  Invalid backend: ${backend}`);
       console.error(`  Valid options: ${validBackends.join(', ')}`);
@@ -1607,12 +1671,30 @@ openclaw
         console.error('  Then: bw login && export BW_SESSION=$(bw unlock --raw)');
         process.exit(1);
       }
+    } else if (backend === 'keeper') {
+      const { KeeperStore } = await import('../core/credentials/backends/keeper.js');
+      if (!KeeperStore.isAvailable()) {
+        console.error('  Keeper Commander (keeper) not found.');
+        console.error('  Install: pip install keepercommander');
+        console.error('  Then, once: keeper shell -> login -> this-device register -> this-device persistent-login on');
+        process.exit(1);
+      }
+      if (!process.env['AQUAMAN_KEEPER_FOLDER_UID']) {
+        console.error('  Keeper backend needs the folder that will hold aquaman records.');
+        console.error('  Create one in Keeper, then: export AQUAMAN_KEEPER_FOLDER_UID=<folder UID>');
+        console.error('  (find the UID with: keeper get "<folder name>" --format json)');
+        process.exit(1);
+      }
     }
 
     // 2. Run init internally (create dirs, config)
     ensureConfigDir();
     const config = getDefaultConfig();
     config.credentials.backend = backend;
+    if (backend === 'keeper') {
+      config.credentials.keeperFolderUid = process.env['AQUAMAN_KEEPER_FOLDER_UID'];
+      if (process.env['AQUAMAN_KEEPER_CONFIG']) config.credentials.keeperConfigPath = process.env['AQUAMAN_KEEPER_CONFIG'];
+    }
     fs.writeFileSync(configPath, yamlStringify(config), { encoding: 'utf-8', mode: 0o600 });
 
     // Create audit directory
@@ -2092,6 +2174,13 @@ openclaw
         }
       }
 
+      if (config.credentials.backend === 'keeper') {
+        const { KeeperStore } = await import('../core/credentials/backends/keeper.js');
+        if (!KeeperStore.isAvailable()) {
+          throw new Error('Keeper Commander (keeper) not found. Install: pip install keepercommander');
+        }
+      }
+
       if (config.credentials.backend === 'bitwarden') {
         const { BitwardenStore } = await import('../core/credentials/backends/bitwarden.js');
         if (!BitwardenStore.isAvailable()) {
@@ -2113,7 +2202,9 @@ openclaw
         keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
         bitwardenFolder: config.credentials.bitwardenFolder,
         bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
-        bitwardenCollectionId: config.credentials.bitwardenCollectionId
+        bitwardenCollectionId: config.credentials.bitwardenCollectionId,
+        keeperFolderUid: config.credentials.keeperFolderUid,
+        keeperConfigPath: config.credentials.keeperConfigPath
       });
 
       // 3. Count credentials
@@ -2668,7 +2759,9 @@ credentials
         keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
         bitwardenFolder: config.credentials.bitwardenFolder,
         bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
-        bitwardenCollectionId: config.credentials.bitwardenCollectionId
+        bitwardenCollectionId: config.credentials.bitwardenCollectionId,
+        keeperFolderUid: config.credentials.keeperFolderUid,
+        keeperConfigPath: config.credentials.keeperConfigPath
       });
     } catch (error) {
       console.error('Credential store not available:', error instanceof Error ? error.message : error);
@@ -2755,7 +2848,9 @@ credentials
         keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
         bitwardenFolder: config.credentials.bitwardenFolder,
         bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
-        bitwardenCollectionId: config.credentials.bitwardenCollectionId
+        bitwardenCollectionId: config.credentials.bitwardenCollectionId,
+        keeperFolderUid: config.credentials.keeperFolderUid,
+        keeperConfigPath: config.credentials.keeperConfigPath
       });
     } catch {
       console.error('Credential store not available.');
@@ -2796,7 +2891,9 @@ credentials
         keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
         bitwardenFolder: config.credentials.bitwardenFolder,
         bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
-        bitwardenCollectionId: config.credentials.bitwardenCollectionId
+        bitwardenCollectionId: config.credentials.bitwardenCollectionId,
+        keeperFolderUid: config.credentials.keeperFolderUid,
+        keeperConfigPath: config.credentials.keeperConfigPath
       });
     } catch {
       console.error('Credential store not available.');
@@ -2814,7 +2911,7 @@ credentials
 credentials
   .command('guide')
   .description('Show setup commands for seeding credentials based on your backend')
-  .option('--backend <backend>', 'Override backend (keychain, encrypted-file, keepassxc, 1password, vault, systemd-creds, bitwarden)')
+  .option('--backend <backend>', 'Override backend (keychain, encrypted-file, keepassxc, 1password, vault, systemd-creds, bitwarden, keeper)')
   .option('--service <name>', 'Show commands for a single service only')
   .action(async (options) => {
     const config = loadConfig();
@@ -3037,6 +3134,63 @@ broker
   .argument('<refs...>', 'one or more aquaman://service/key refs')
   .action((refs: string[]) => {
     updateBrokerAllowedRefs(refs, 'revoke');
+  });
+
+// v0.16.0: fills the "run a command, read the secret from stdout" slot every
+// host now has (sbx secret set --command, Codex model_providers.*.auth.command,
+// Claude Code apiKeyHelper, OpenClaw exec providers, Hermes command sources).
+// This materializes the value into the CALLING process, so it is not process
+// isolation; it is scope-checked and audited because it goes through the daemon.
+program
+  .command('get')
+  .description('Print a declared credential to stdout, via the running daemon (for host credential-helper commands)')
+  .argument('<ref>', 'aquaman://service/key, declared with `aquaman broker allow` or in projects.yaml')
+  .option('--show', 'Allow printing to an interactive terminal')
+  .option('--timeout <ms>', 'How long to wait for the daemon (vaults that prompt may need longer)', '15000')
+  .addHelpText('after', `
+Examples:
+  sbx secret set github --command "$(command -v node) $(command -v aquaman) get aquaman://github/token"
+  Codex config.toml:  [model_providers.openai.auth]  command = "aquaman"  args = ["get", "aquaman://openai/api_key"]
+  Claude Code:        "apiKeyHelper": "aquaman get aquaman://anthropic/api_key"
+
+The value lands in whichever process runs this command. Every read is checked
+against the broker scope and written to the audit log.`)
+  .action(async (ref: string, opts: { show?: boolean; timeout: string }) => {
+    const parsed = parseAquamanRef(ref);
+    if (!parsed) {
+      console.error(`Invalid ref: ${ref}`);
+      console.error('Refs look like aquaman://<service>/<key>, e.g. aquaman://github/token');
+      process.exit(1);
+    }
+    const timeoutMs = Number(opts.timeout);
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1) {
+      console.error(`Invalid --timeout: ${opts.timeout} (milliseconds, a positive integer)`);
+      process.exit(1);
+    }
+    // Refuse before resolving, so an accidental run at a prompt neither
+    // prints the secret into scrollback nor spends an audited read.
+    if (process.stdout.isTTY && !opts.show) {
+      console.error('Refusing to print a credential to a terminal.');
+      console.error('This command is meant to be run by another program. To print it anyway, pass --show.');
+      process.exit(1);
+    }
+
+    const result = await brokerResolve(path.join(getConfigDir(), 'proxy.sock'), parsed.service, parsed.key, timeoutMs);
+    if ('value' in result) {
+      // No trailing newline when piped: credential-helper consumers differ on
+      // whether they trim, and a stray "\n" in an auth header breaks requests.
+      process.stdout.write(process.stdout.isTTY ? `${result.value}\n` : result.value);
+      return;
+    }
+    console.error(`Error: ${result.error}`);
+    if (result.code === 'broker_ref_not_declared') {
+      console.error(`Fix: aquaman broker allow ${ref}`);
+    } else if (result.code === 'broker_disabled') {
+      console.error('Fix: the proxy on this socket does not serve the broker. If the OpenClaw plugin started it, run `aquaman daemon` instead (the last proxy started owns the socket).');
+    } else if (result.fix) {
+      console.error(`Fix: ${result.fix}`);
+    }
+    process.exit(1);
   });
 
 // Migration commands
@@ -3525,7 +3679,9 @@ openclaw
         keepassxcKeyFilePath: config.credentials.keepassxcKeyFilePath,
         bitwardenFolder: config.credentials.bitwardenFolder,
         bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
-        bitwardenCollectionId: config.credentials.bitwardenCollectionId
+        bitwardenCollectionId: config.credentials.bitwardenCollectionId,
+        keeperFolderUid: config.credentials.keeperFolderUid,
+        keeperConfigPath: config.credentials.keeperConfigPath
       });
       const creds = await store.list();
       console.log(`\nStored credentials: ${creds.length}`);

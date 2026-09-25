@@ -24,6 +24,8 @@ describe('NIST SI-10 — Information Input Validation (redactor)', () => {
       'aws-secret-access-key',
       'google-api-key',
       'gitlab-pat',
+      'gitlab-runner-token',
+      'gitlab-oauth-secret',
       'npm-token',
       'jwt',
       'bearer-token',

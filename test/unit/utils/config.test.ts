@@ -170,7 +170,7 @@ describe('config utilities', () => {
       return config;
     };
 
-    it.each(['1password', 'bitwarden', 'vault'])('defaults ON (%s → 900s) for per-access-cost backends', (backend) => {
+    it.each(['1password', 'bitwarden', 'vault', 'keeper'])('defaults ON (%s → 900s) for per-access-cost backends', (backend) => {
       expect(resolveCacheTtl(withBackend(backend))).toBe(DEFAULT_CACHE_TTL_SECONDS);
     });
 
@@ -178,8 +178,8 @@ describe('config utilities', () => {
       expect(resolveCacheTtl(withBackend(backend))).toBe(0);
     });
 
-    it('CACHED_BY_DEFAULT_BACKENDS matches the documented trio', () => {
-      expect([...CACHED_BY_DEFAULT_BACKENDS].sort()).toEqual(['1password', 'bitwarden', 'vault']);
+    it('CACHED_BY_DEFAULT_BACKENDS matches the documented per-access-cost backends', () => {
+      expect([...CACHED_BY_DEFAULT_BACKENDS].sort()).toEqual(['1password', 'bitwarden', 'keeper', 'vault']);
     });
 
     it('explicit cacheTtlSeconds: 0 disables even for a default-on backend', () => {
