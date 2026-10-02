@@ -99,6 +99,15 @@ Scoped since v0.15.0, because it hands out values rather than injecting them:
 
 `aquaman get <aquaman://service/key>` (v0.16.0+) is the command-line form, for tools that take a command printing a secret: Docker Sandboxes (`sbx secret set <svc> --command`), Codex (`model_providers.<id>.auth.command`), Claude Code (`apiKeyHelper`), OpenClaw exec secret providers and Hermes command secret sources. It only talks to the running daemon, so the same scope applies and every read is audited. It refuses to print to an interactive terminal without `--show`, and prints no trailing newline when another program reads it. The value goes to the program that runs the command.
 
+## OpenShell credential driver (v0.17.0+)
+
+`aquaman daemon` can serve NVIDIA OpenShell's external credential driver protocol (`credential_driver.proto`, extension protocol 1.0) on `<configDir>/openshell.sock` (0600). Enable it with `aquaman openshell setup`, which prints the gateway TOML.
+
+- **Reference mode:** `openshell provider create --credential KEY=aquaman://svc/key`. The ref must be declared (`aquaman broker allow`) and exist in the vault; nothing is stored, the ref is the handle, and deleting the provider never deletes the vault item.
+- **Copy mode:** a plain value is written to the vault under the `openshell` service.
+- Every resolve is audited as a `read` (agent `openshell`), without the value. Handles are interpreted by namespace, never by gateway-supplied metadata, so a reference can't bypass the allow-list.
+- `@grpc/grpc-js` and `@grpc/proto-loader` are optional peer dependencies, loaded only when the driver is on. The vendored protocol files live in `proto/openshell/`.
+
 ## Documentation
 
 - **[Root README](https://github.com/tech4242/aquaman#readme)**: value prop, three-path Quick Start, security model
