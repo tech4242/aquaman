@@ -464,6 +464,15 @@ program
         lines.push('');
       }
 
+      const os_ = byName.get('openshell');
+      if (os_) {
+        lines.push(aqua('NVIDIA OpenShell integration'));
+        for (const sub of helper.visibleCommands(os_).filter((s: any) => s.name() !== 'help')) {
+          lines.push(renderRow(`openshell ${sub.name()}`, sub.description() || ''));
+        }
+        lines.push('');
+      }
+
       // --- Other ---
       const helpCmd = byName.get('help');
       if (helpCmd) {
@@ -1050,11 +1059,26 @@ program
     });
     await credentialProxy.start();
 
+    // OpenShell external credential driver (v0.17.0+). Opt-in; a failure here
+    // is reported but never takes the proxy down.
+    let openshellDriver: { socketPath: string; stop(): Promise<void> } | undefined;
+    let openshellDriverError: string | undefined;
+    if (config.openshell?.driver?.enabled) {
+      try {
+        const { startOpenShellDriver } = await import('../openshell/integration.js');
+        openshellDriver = await startOpenShellDriver({ config, store: credentialStore, scope: brokerScope, audit: auditLogger, version: VERSION });
+      } catch (err) {
+        openshellDriverError = err instanceof Error ? err.message : String(err);
+      }
+    }
+
     // Write PID file
     writePidFile();
 
     console.log(`Credential proxy: ${socketPath}`);
     console.log(`Credential broker: ${describeBroker(brokerScope)}`);
+    if (openshellDriver) console.log(`OpenShell credential driver: ${openshellDriver.socketPath}`);
+    if (openshellDriverError) console.error(`  ⚠ OpenShell credential driver not started: ${openshellDriverError}`);
     if (brokerScope?.declarationError()) {
       console.error(`  ⚠ ${brokerScope.declarationError()} — refs declared there are refused until it parses`);
     }
@@ -1067,6 +1091,7 @@ program
     // Handle shutdown
     const shutdown = async () => {
       console.log('\nShutting down daemon...');
+      await openshellDriver?.stop();
       await credentialProxy.stop();
       removePidFile();
       try { fs.unlinkSync(socketPath); } catch { /* already removed */ }
@@ -3090,6 +3115,135 @@ policy
       const rule = result.matchedRule!;
       console.log(`  \u2717 DENIED by rule: ${rule.method} ${rule.path} \u2192 ${rule.action}`);
     }
+  });
+
+// ── aquaman openshell …: NVIDIA OpenShell external credential driver (v0.17.0+) ──
+const openshell = program
+  .command('openshell')
+  .description('NVIDIA OpenShell integration: aquaman as the gateway credential driver');
+
+/** Edit config.yaml `openshell.driver` in the raw file so env overrides are never persisted. */
+function updateOpenShellDriverConfig(enabled: boolean, socketPath?: string): void {
+  ensureConfigDir();
+  const configPath = getConfigPath();
+  let raw: Record<string, any> = {};
+  if (fs.existsSync(configPath)) {
+    const parsed = yamlParse(fs.readFileSync(configPath, 'utf-8'));
+    if (parsed && typeof parsed === 'object') raw = parsed;
+  }
+  const current = raw.openshell?.driver && typeof raw.openshell.driver === 'object' ? raw.openshell.driver : {};
+  raw.openshell = { ...(raw.openshell && typeof raw.openshell === 'object' ? raw.openshell : {}), driver: { ...current, enabled } };
+  if (socketPath) raw.openshell.driver.socketPath = socketPath;
+  fs.writeFileSync(configPath, yamlStringify(raw), { encoding: 'utf-8', mode: 0o600 });
+}
+
+openshell
+  .command('setup')
+  .description('Serve the OpenShell credential driver from `aquaman daemon` and print the gateway config')
+  .option('--socket <path>', 'Absolute Unix socket path for the driver (default: <configDir>/openshell.sock)')
+  .option('--disable', 'Turn the driver off again')
+  .action(async (opts: { socket?: string; disable?: boolean }) => {
+    const { grpcAvailable, gatewayConfigSnippet, openshellDriverSocketPath, MAX_SOCKET_PATH } = await import('../openshell/integration.js');
+    const { GRPC_INSTALL_HINT } = await import('../openshell/grpc-server.js');
+
+    if (opts.disable) {
+      updateOpenShellDriverConfig(false);
+      console.log('OpenShell credential driver disabled. Restart the daemon: aquaman stop && aquaman daemon');
+      console.log('Remove the [openshell.credential_drivers.aquaman] table from your gateway config too.');
+      return;
+    }
+    if (opts.socket && !path.isAbsolute(opts.socket)) {
+      console.error('--socket must be an absolute path (the gateway config needs one).');
+      process.exit(1);
+    }
+
+    updateOpenShellDriverConfig(true, opts.socket);
+    const socketPath = openshellDriverSocketPath(loadConfig());
+
+    console.log(`OpenShell credential driver enabled in ${getConfigPath()}`);
+    if (Buffer.byteLength(socketPath) > MAX_SOCKET_PATH) {
+      console.error(`  ⚠ ${socketPath} is longer than the ${MAX_SOCKET_PATH}-byte Unix socket limit. Rerun with --socket <shorter path>.`);
+    }
+    if (!(await grpcAvailable())) {
+      console.log(`\n  The driver needs two optional packages: ${aqua(GRPC_INSTALL_HINT)}`);
+    }
+    console.log('\n1. Add this to your OpenShell gateway config (TOML):\n');
+    console.log(gatewayConfigSnippet(socketPath).split('\n').map((l) => `   ${l}`).join('\n'));
+    console.log('\n2. Restart aquaman, then the gateway:');
+    console.log('   aquaman stop; aquaman daemon');
+    console.log('\n3. Create providers by reference. The secret stays in your vault; nothing is copied:');
+    console.log(`   ${aqua('aquaman broker allow aquaman://anthropic/api_key')}`);
+    console.log(`   openshell provider create --name claude --type anthropic --credential ANTHROPIC_API_KEY=aquaman://anthropic/api_key`);
+    console.log('\n   A plain value (--credential KEY=sk-...) is stored in your vault under the "openshell" service instead.');
+    console.log(`\nCheck everything with: ${aqua('aquaman openshell doctor')}`);
+  });
+
+openshell
+  .command('doctor')
+  .description('Check the OpenShell credential driver: packages, config, socket, declared refs')
+  .option('--gateway-config <path>', 'Also check an OpenShell gateway TOML file points at this driver')
+  .action(async (opts: { gatewayConfig?: string }) => {
+    const net = await import('node:net');
+    const { grpcAvailable, openshellDriverSocketPath, MAX_SOCKET_PATH } = await import('../openshell/integration.js');
+    const { GRPC_INSTALL_HINT } = await import('../openshell/grpc-server.js');
+    const config = loadConfig();
+    const socketPath = openshellDriverSocketPath(config);
+    let failed = 0;
+    const pass = (m: string) => console.log(`  ✓ ${m}`);
+    const fail = (m: string, fix?: string) => { failed++; console.log(`  ✗ ${m}`); if (fix) console.log(`    → ${fix}`); };
+
+    console.log(`\n  ${aqua('OpenShell credential driver')}\n`);
+    if (await grpcAvailable()) pass('gRPC packages installed (@grpc/grpc-js, @grpc/proto-loader)');
+    else fail('gRPC packages missing', GRPC_INSTALL_HINT);
+
+    if (config.openshell?.driver?.enabled) pass('Driver enabled in config.yaml');
+    else fail('Driver not enabled', 'aquaman openshell setup');
+
+    if (Buffer.byteLength(socketPath) <= MAX_SOCKET_PATH) pass(`Socket path ${socketPath}`);
+    else fail(`Socket path over ${MAX_SOCKET_PATH} bytes: ${socketPath}`, 'aquaman openshell setup --socket <shorter absolute path>');
+
+    let isSocket = false;
+    try { isSocket = fs.statSync(socketPath).isSocket(); } catch { /* absent */ }
+    if (!isSocket) {
+      fail('Driver socket not present (daemon not running, or started before setup)', 'aquaman stop; aquaman daemon');
+    } else {
+      const mode = fs.statSync(socketPath).mode & 0o777;
+      if (mode === 0o600) pass('Socket is owner-only (0600)');
+      else fail(`Socket mode is ${mode.toString(8)}, expected 600`, 'aquaman stop; aquaman daemon');
+      const reachable = await new Promise<boolean>((resolve) => {
+        const c = net.connect(socketPath, () => { c.end(); resolve(true); });
+        c.on('error', () => resolve(false));
+        setTimeout(() => { c.destroy(); resolve(false); }, 2000);
+      });
+      if (reachable) pass('Driver socket accepts connections');
+      else fail('Driver socket does not accept connections', 'aquaman stop; aquaman daemon');
+    }
+
+    const scope = daemonBrokerScope(config);
+    if (!scope) {
+      fail('Broker disabled (broker.enabled: false): references cannot resolve', 'set broker.enabled: true in config.yaml');
+    } else {
+      const n = scope.declared().length;
+      if (n > 0) pass(`${n} declared ref${n === 1 ? '' : 's'} usable by reference (aquaman broker list)`);
+      else console.log('  • No declared refs yet: reference-mode providers will be refused until you run aquaman broker allow <ref>');
+    }
+
+    if (opts.gatewayConfig) {
+      let toml = '';
+      try { toml = fs.readFileSync(opts.gatewayConfig, 'utf-8'); } catch { fail(`Cannot read ${opts.gatewayConfig}`); }
+      if (toml) {
+        const listsDriver = /credential_drivers\s*=\s*\[[^\]]*"aquaman"[^\]]*\]/.test(toml);
+        const table = /\[openshell\.credential_drivers\.aquaman\]([\s\S]*?)(?=\n\[|$)/.exec(toml)?.[1] ?? '';
+        const uds = /transport\s*=\s*"uds"/.test(table);
+        const sock = /socket_path\s*=\s*"([^"]*)"/.exec(table)?.[1];
+        if (listsDriver && uds && sock === socketPath) pass(`Gateway config ${opts.gatewayConfig} points at this driver`);
+        else fail(`Gateway config ${opts.gatewayConfig} does not point at this driver`, 'paste the snippet from: aquaman openshell setup');
+      }
+    }
+
+    console.log('');
+    if (failed > 0) { console.log(`  ${failed} check${failed === 1 ? '' : 's'} failed.\n`); process.exit(1); }
+    console.log('  All checks passed.\n');
   });
 
 // Credential broker scope (v0.15.0+)

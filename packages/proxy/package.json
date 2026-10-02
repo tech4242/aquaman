@@ -51,13 +51,21 @@
   },
   "peerDependencies": {
     "argon2": "^0.45.1",
-    "kdbxweb": "^2.1.1"
+    "kdbxweb": "^2.1.1",
+    "@grpc/grpc-js": "^1.14.5",
+    "@grpc/proto-loader": "^0.8.1"
   },
   "peerDependenciesMeta": {
     "argon2": {
       "optional": true
     },
     "kdbxweb": {
+      "optional": true
+    },
+    "@grpc/grpc-js": {
+      "optional": true
+    },
+    "@grpc/proto-loader": {
       "optional": true
     }
   },
@@ -68,6 +76,7 @@
   },
   "files": [
     "dist",
+    "proto",
     "LICENSE",
     "README.md"
   ],
