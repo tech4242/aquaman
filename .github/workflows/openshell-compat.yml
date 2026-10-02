@@ -1,0 +1,65 @@
+name: OpenShell compat
+
+# aquaman as the credential driver of a real NVIDIA OpenShell gateway, against
+# the latest and the previous OpenShell release. OpenShell ships weekly, so this
+# also runs nightly to catch protocol drift without a change on our side.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/proxy/src/openshell/**'
+      - 'packages/proxy/proto/**'
+      - 'packages/proxy/src/broker-scope.ts'
+      - 'packages/proxy/src/core/utils/config.ts'
+      - 'scripts/e2e-openshell.sh'
+      - '.github/workflows/openshell-compat.yml'
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  versions:
+    name: Resolve OpenShell releases
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tags=$(gh release list -R NVIDIA/OpenShell --exclude-pre-releases --limit 2 --json tagName --jq '[.[].tagName]')
+          echo "OpenShell releases under test: $tags"
+          echo "matrix=$tags" >> "$GITHUB_OUTPUT"
+
+  e2e:
+    name: E2E OpenShell ${{ matrix.openshell }}
+    needs: versions
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        openshell: ${{ fromJSON(needs.versions.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Check the runner kernel meets OpenShell's Kernel Requirements
+        run: |
+          uname -r
+          docker run --rm --privileged ubuntu:24.04 sh -c \
+            'mount -t securityfs securityfs /sys/kernel/security 2>/dev/null; echo "LSMs: $(cat /sys/kernel/security/lsm)"' \
+            | tee /dev/stderr | grep -q landlock || { echo "::error::runner kernel has no Landlock; OpenShell sandboxes cannot start"; exit 1; }
+      - name: Install npm dependencies
+        run: npm ci --legacy-peer-deps --ignore-scripts
+      - name: Build
+        run: npm run build
+      - name: aquaman driver against a live OpenShell gateway
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/e2e-openshell.sh "${{ matrix.openshell }}"
