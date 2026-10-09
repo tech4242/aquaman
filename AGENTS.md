@@ -4,11 +4,12 @@
 
 Credential isolation for AI agents. API keys, channel tokens and `.env`-grade secrets never enter the agent's process. They live in a vault backend (Keychain, 1Password, HashiCorp Vault, Bitwarden, Keeper, KeePassXC, encrypted-file, systemd-creds) and a separate proxy injects them at egress. A compromised agent holds a marker, not a key.
 
-Three integration paths:
+Four integration paths:
 
 1. **OpenClaw Gateway** (`aquaman-plugin`, npm + ClawHub). LLM providers and channel credentials, 25 builtin services across 5 auth modes.
 2. **Coding agents** (`aquaman-coder`, v0.12.0+, npm). Claude Code, and Codex since v0.16.0. Per-tool-call materialization through `/broker/resolve`.
 3. **Hermes** (`aquaman-hermes`, v0.13.0+, PyPI). A Python host with no transport hook, so isolation is proxy-side: a token-gated loopback listener plus (v0.14.0+) an `aquaman` secret source for project secrets.
+4. **NVIDIA OpenShell** (v0.17.0+, no extra package). `aquaman daemon` serves OpenShell's external credential driver protocol; OpenShell isolates, aquaman sources, scopes and audits.
 
 Target platform: Unix-like (Linux, macOS, WSL2).
 
@@ -197,6 +198,24 @@ The Python plugin registers an `aquaman` `SecretSource` through `ctx.register_se
 - Env reads on the fetch path go through `_source_env()` because the orchestrator installs a per-fetch environment view under profile multiplexing.
 - Hermes' own conformance kit is vendored at `packages/hermes/tests/_hermes_conformance.py`; CI runs it against two real hosts: the last PyPI build (`HERMES_PYPI_VERSION`, 0.19.0) and the pinned git tag (`HERMES_REF`), installed editable because tagged releases refuse wheel builds. Hermes removed PyPI publishing in PR #68217, and `SECRET_SOURCE_API_VERSION` is still 1 as of 0.21.3.
 
+## OpenShell credential driver (v0.17.0+)
+
+OpenShell (NVIDIA) keeps provider credentials behind driver-owned opaque handles and injects them at egress from its supervisor; the sandbox sees `openshell:resolve:env:...`. `aquaman daemon` serves `openshell.credentials.v1.CredentialDriver` on `<configDir>/openshell.sock` (0600) when `openshell.driver.enabled` (set by `aquaman openshell setup`, env `AQUAMAN_OPENSHELL_DRIVER`). Files: `packages/proxy/src/openshell/{credential-driver,grpc-server,integration}.ts`, protos vendored at `packages/proxy/proto/openshell/` (v0.1.2).
+
+- Reference mode: a submitted value that is an `aquaman://` ref must be declared (broker scope, `uds` caller) and exist in the vault; the ref becomes the handle and nothing is stored. Copy mode: anything else goes to the vault as `openshell/<objectId>.<credentialKey>`.
+- A handle's meaning comes from its namespace (`aquaman://openshell/...` = copy), never from metadata the gateway echoes back. References are re-checked on every Resolve, so `aquaman broker revoke` takes effect. Delete on a reference is a no-op.
+- Audit: resolves log `read` (agent `openshell`), copy writes and deletes log `rotate`, successful reference validation logs nothing. No values anywhere.
+- gRPC deps are lazily loaded optional peers (packaging-posture test pins it). protobufjs's install script is not needed at runtime.
+
+Verified against live gateways v0.1.1 and v0.1.2 (2026-10-02, `scripts/e2e-openshell.sh`, CI `openshell-compat.yml` runs it nightly on latest + previous):
+
+- Handshake: extension protocol 1.0, capability `openshell.credentials.contract`; the gateway names itself `openshell/gateway`. External driver config: `credential_drivers = ["aquaman"]` plus `[openshell.credential_drivers.aquaman] transport = "uds"`, `socket_path` (absolute).
+- The gateway authenticates nothing on the socket (only `user-agent` metadata); 0600 is the boundary.
+- The gateway does not validate the submitted value's format, which is what makes reference mode work with the stock CLI. Driver error messages reach the CLI user verbatim.
+- Resolves happen about once per sandbox start, not per request; `ListCredentials` is never called (so no "use an existing vault item" flow upstream yet).
+- Injection is placeholder rewrite: it only happens where the client sends the placeholder.
+- Local gateway gotchas: TOML schema v2, Docker sandboxes require `[openshell.gateway.gateway_jwt]` with an Ed25519 key, `allow_unauthenticated_users = true` for local CLI use. On macOS, Docker Desktop's VM kernel must have Landlock (4.55.0 does not, 4.93.0 does) and host networking must be on; OpenShell's `doctor check` verifies neither (reported upstream as NVIDIA/OpenShell#4133).
+
 ## CLI shape
 
 Run `aquaman --help` (and `aquaman <namespace> --help`) rather than duplicating the surface here. The shape: vault-level commands at the top, then `openclaw`, `coder` and `hermes` namespaces, with `setup`/`doctor`/`status` at every level (top-level is an overview, namespaced goes deep). Doctor exits 1 if any check fails.
@@ -262,6 +281,8 @@ Manual smoke recipes (install paths, all auth modes, policy denials, real-gatewa
 | `packages/proxy/src/openclaw/secretref.ts` | SecretRef + loopback baseUrl wiring |
 | `packages/proxy/src/openclaw/integration.ts` | Version gates, detection, launch |
 | `packages/proxy/src/hermes/config-writer.ts` | `~/.hermes/.env` block, managed-scope detection |
+| `packages/proxy/src/openshell/credential-driver.ts` | OpenShell credential driver core (reference/copy modes) |
+| `scripts/e2e-openshell.sh` | Live OpenShell gateway end-to-end (CI: `openshell-compat.yml`) |
 | `packages/plugin/index.ts` | Plugin entry the Gateway loads |
 | `packages/plugin/openclaw.plugin.json` | Manifest (allowlisted keys) |
 | `packages/plugin/secrets-resolver.mjs` | SecretRef exec resolver |

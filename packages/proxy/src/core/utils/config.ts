@@ -237,6 +237,12 @@ export function applyEnvOverrides(config: WrapperConfig): WrapperConfig {
     config.broker.enabled = env['AQUAMAN_BROKER_ENABLED'] !== 'false';
   }
 
+  // OpenShell credential driver switch (v0.17.0+). Off unless 'true'.
+  if (env['AQUAMAN_OPENSHELL_DRIVER']) {
+    config.openshell = config.openshell ?? { driver: { enabled: false } };
+    config.openshell.driver.enabled = env['AQUAMAN_OPENSHELL_DRIVER'] === 'true';
+  }
+
   return config;
 }
 
@@ -277,7 +283,10 @@ function mergeConfig(
     broker: override.broker !== undefined
       ? { ...base.broker, ...override.broker } as WrapperConfig['broker']
       : base.broker,
-    policy: override.policy !== undefined ? { ...base.policy, ...override.policy } : base.policy
+    policy: override.policy !== undefined ? { ...base.policy, ...override.policy } : base.policy,
+    openshell: override.openshell !== undefined
+      ? { driver: { ...(base.openshell?.driver ?? { enabled: false }), ...override.openshell?.driver } }
+      : base.openshell
   };
 }
 
