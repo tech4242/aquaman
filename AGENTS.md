@@ -200,14 +200,14 @@ The Python plugin registers an `aquaman` `SecretSource` through `ctx.register_se
 
 ## OpenShell credential driver (v0.17.0+)
 
-OpenShell (NVIDIA) keeps provider credentials behind driver-owned opaque handles and injects them at egress from its supervisor; the sandbox sees `openshell:resolve:env:...`. `aquaman daemon` serves `openshell.credentials.v1.CredentialDriver` on `<configDir>/openshell.sock` (0600) when `openshell.driver.enabled` (set by `aquaman openshell setup`, env `AQUAMAN_OPENSHELL_DRIVER`). Files: `packages/proxy/src/openshell/{credential-driver,grpc-server,integration}.ts`, protos vendored at `packages/proxy/proto/openshell/` (v0.1.2).
+OpenShell (NVIDIA) keeps provider credentials behind driver-owned opaque handles and injects them at egress from its supervisor; the sandbox sees `openshell:resolve:env:...`. `aquaman daemon` serves `openshell.credentials.v1.CredentialDriver` on `<configDir>/openshell.sock` (0600) when `openshell.driver.enabled` (set by `aquaman openshell setup`, env `AQUAMAN_OPENSHELL_DRIVER`). Files: `packages/proxy/src/openshell/{credential-driver,grpc-server,integration}.ts`, protos vendored at `packages/proxy/proto/openshell/` (v0.1.4).
 
 - Reference mode: a submitted value that is an `aquaman://` ref must be declared (broker scope, `uds` caller) and exist in the vault; the ref becomes the handle and nothing is stored. Copy mode: anything else goes to the vault as `openshell/<objectId>.<credentialKey>`.
 - A handle's meaning comes from its namespace (`aquaman://openshell/...` = copy), never from metadata the gateway echoes back. References are re-checked on every Resolve, so `aquaman broker revoke` takes effect. Delete on a reference is a no-op.
 - Audit: resolves log `read` (agent `openshell`), copy writes and deletes log `rotate`, successful reference validation logs nothing. No values anywhere.
 - gRPC deps are lazily loaded optional peers (packaging-posture test pins it). protobufjs's install script is not needed at runtime.
 
-Verified against live gateways v0.1.1 and v0.1.2 (2026-10-02, `scripts/e2e-openshell.sh`, CI `openshell-compat.yml` runs it nightly on latest + previous):
+Verified against live gateways v0.1.1 through v0.1.4 (2026-10-02, re-run on v0.1.3/v0.1.4 2026-10-14, `scripts/e2e-openshell.sh`, CI `openshell-compat.yml` runs it nightly on latest + previous):
 
 - Handshake: extension protocol 1.0, capability `openshell.credentials.contract`; the gateway names itself `openshell/gateway`. External driver config: `credential_drivers = ["aquaman"]` plus `[openshell.credential_drivers.aquaman] transport = "uds"`, `socket_path` (absolute).
 - The gateway authenticates nothing on the socket (only `user-agent` metadata); 0600 is the boundary.
