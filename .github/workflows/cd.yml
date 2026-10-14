@@ -56,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write            # npm provenance
+      id-token: write            # npm Trusted Publishing (OIDC) + provenance
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -72,12 +72,17 @@ jobs:
       - run: npm test            # ship only what passes
       # Order matters: proxy first — plugin & coder pin it at an exact version.
       # Each publish runs its own prepublishOnly (clean && build), so dist is fresh.
+      # Trusted Publishing: no token. npm exchanges this job's OIDC identity for a
+      # short-lived publish credential, which needs npm >= 11.5.1. Each package's
+      # trusted publisher on npmjs.com must name tech4242/aquaman + cd.yml.
+      - name: npm supports Trusted Publishing
+        run: |
+          v=$(npm --version)
+          echo "npm $v"
+          printf '%s\n' 11.5.1 "$v" | sort -V -C || { echo "::error::npm $v < 11.5.1, no Trusted Publishing"; exit 1; }
       - run: npm publish --workspace=aquaman-proxy --access public --provenance
-        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
       - run: npm publish --workspace=aquaman-plugin --access public --provenance
-        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
       - run: npm publish --workspace=aquaman-coder --access public --provenance
-        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
 
   pypi-publish:
     name: Publish to PyPI (aquaman-hermes)
