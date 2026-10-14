@@ -141,6 +141,16 @@ export interface BrokerConfig {
   allowedRefs?: string[];
 }
 
+/** NVIDIA OpenShell integration (v0.17.0+). */
+export interface OpenShellConfig {
+  driver: {
+    /** Serve the external credential driver from `aquaman daemon`. Default false; `aquaman openshell setup` turns it on. */
+    enabled: boolean;
+    /** Unix socket the OpenShell gateway dials. Default `<configDir>/openshell.sock`. */
+    socketPath?: string;
+  };
+}
+
 export interface WrapperConfig {
   credentials: CredentialsConfig;
   audit: AuditConfig;
@@ -149,6 +159,7 @@ export interface WrapperConfig {
   loopback?: LoopbackConfig;
   hermes?: HermesConfig;
   broker?: BrokerConfig;
+  openshell?: OpenShellConfig;
   policy?: Record<string, { defaultAction: 'allow' | 'deny'; rules: Array<{ method: string; path: string; action: 'allow' | 'deny' }> }>;
 }
 

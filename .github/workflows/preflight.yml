@@ -24,7 +24,13 @@ permissions:
 
 jobs:
   npm:
-    name: npm (NPM_TOKEN)
+    name: npm (Trusted Publishing)
+    # CD publishes to npm through Trusted Publishing: no token, so there is no
+    # credential to check here. npm only exchanges the OIDC identity at publish
+    # time, so whether each package's trusted publisher names tech4242/aquaman +
+    # cd.yml cannot be verified without publishing. What can be checked: the
+    # runner's npm is new enough, and every package already exists (Trusted
+    # Publishing cannot create a package).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-node@v7
@@ -32,98 +38,19 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - name: Secret is set
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: npm supports Trusted Publishing
         run: |
-          if [ -z "${NPM_TOKEN}" ]; then
-            echo "::error::NPM_TOKEN is not set on this repository"
-            exit 1
-          fi
+          v=$(npm --version)
+          printf '%s\n' 11.5.1 "$v" | sort -V -C || { echo "::error::npm $v < 11.5.1, no Trusted Publishing"; exit 1; }
+          echo "- **npm**: CLI $v supports Trusted Publishing" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Token authenticates
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Every package exists on npm
         run: |
           set -euo pipefail
-          who=$(npm whoami)
-          echo "npm: authenticated as ${who}"
-          echo "- **npm**: authenticated as \`${who}\`" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Token can publish each package
-        # `npm access list packages` reports the permission level the current
-        # token holds per package. read-only authenticates fine above and then
-        # fails at publish time, which is the surprise worth catching.
-        #
-        # Severity is deliberate: only a package we can SEE with the wrong
-        # permission fails the job. A token that cannot read this metadata at
-        # all (granular tokens may lack the scope, and 2FA-bypass tokens lost
-        # account-read powers on 2026-07-31) is a warning. This check must
-        # never block a release over its own inability to introspect.
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -uo pipefail
-          # stderr to /dev/null and the body never echoed: public logs.
-          #
-          # The `|| rc=$?` matters: Actions runs steps as `bash -e`, so a bare
-          # failing assignment aborts the step before the exit code can be
-          # inspected, and the job dies with no diagnostic at all.
-          rc=0
-          access=$(npm access list packages --json 2>/dev/null) || rc=$?
-
-          if [ "$rc" -ne 0 ] || ! echo "$access" | jq -e 'type == "object" and length > 0' >/dev/null 2>&1; then
-            echo "::warning::this token cannot list package permissions, so publish rights were not verified. npm whoami passed, and the last release published fine with this token."
-            echo "- **npm permissions**: not verifiable with this token (\`npm whoami\` passed)" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          fail=0
           for pkg in aquaman-proxy aquaman-plugin aquaman-coder; do
-            perm=$(echo "$access" | jq -r --arg p "$pkg" '.[$p] // "not-listed"')
-            case "$perm" in
-              read-write)
-                echo "ok   $pkg = $perm" ;;
-              not-listed)
-                # Scoped tokens legitimately list only what they cover.
-                echo "::warning::$pkg is not in this token's package list; publish rights unverified"
-                perm="unverified" ;;
-              *)
-                echo "::error::$pkg = $perm (expected read-write; publish would fail)"; fail=1 ;;
-            esac
-            echo "- \`$pkg\`: $perm" >> "$GITHUB_STEP_SUMMARY"
+            v=$(npm view "$pkg" version) || { echo "::error::$pkg is not on npm; Trusted Publishing cannot create it"; exit 1; }
+            echo "- **npm**: \`$pkg\` latest $v" >> "$GITHUB_STEP_SUMMARY"
           done
-          exit $fail
-
-      - name: Token expiry horizon
-        # Surfaces the date that silently ends a release pipeline.
-        #
-        # `npm token list` prints token ids AND a prefix of each token value,
-        # which must never reach a public log, so the raw output is discarded
-        # and only the count and the expiry dates are emitted. Best effort:
-        # since 2026-07-31 a 2FA-bypass token may not list tokens at all, and
-        # that says nothing about whether it can still publish.
-        continue-on-error: true
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -uo pipefail
-          raw=$(npm token list --json 2>/dev/null) || {
-            echo "token inventory unavailable to this token type (expected for 2FA-bypass tokens)"
-            exit 0
-          }
-          # Field allowlist: only `length` and `expires` can be emitted here.
-          summary=$(echo "$raw" | jq -r '
-            if type == "array"
-            then "\(length) token(s) on this account; expiries: " +
-                 ([.[] | .expires // "never"] | sort | join(", "))
-            else "unrecognized shape" end' 2>/dev/null)
-          echo "${summary:-unrecognized shape}"
-          echo "- **npm tokens**: ${summary:-unreadable}" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Deadline reminder
-        run: |
-          echo "::notice::npm 2FA-bypass tokens lose direct publish in January 2027 (github.blog changelog 2026-07-31). Moving npm to Trusted Publishing removes NPM_TOKEN entirely; CD already requests id-token: write for provenance."
 
   clawhub:
     name: ClawHub (CLAWHUB_TOKEN)

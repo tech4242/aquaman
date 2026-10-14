@@ -1,6 +1,6 @@
 {
   "name": "aquaman-proxy",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "🔱 API key protection for AI agents. Bring your own vault. Credentials stay where you already keep them, never in the agent's memory.",
   "type": "module",
   "main": "dist/index.js",
@@ -51,13 +51,21 @@
   },
   "peerDependencies": {
     "argon2": "^0.45.1",
-    "kdbxweb": "^2.1.1"
+    "kdbxweb": "^2.1.1",
+    "@grpc/grpc-js": "^1.14.5",
+    "@grpc/proto-loader": "^0.8.1"
   },
   "peerDependenciesMeta": {
     "argon2": {
       "optional": true
     },
     "kdbxweb": {
+      "optional": true
+    },
+    "@grpc/grpc-js": {
+      "optional": true
+    },
+    "@grpc/proto-loader": {
       "optional": true
     }
   },
@@ -68,6 +76,7 @@
   },
   "files": [
     "dist",
+    "proto",
     "LICENSE",
     "README.md"
   ],

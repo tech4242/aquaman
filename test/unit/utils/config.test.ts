@@ -16,7 +16,8 @@ import {
   DEFAULT_LOOPBACK_PORT,
   DEFAULT_CACHE_TTL_SECONDS,
   CACHED_BY_DEFAULT_BACKENDS,
-  resolveCacheTtl
+  resolveCacheTtl,
+  loadConfig
 } from 'aquaman-core';
 
 describe('config utilities', () => {
@@ -260,6 +261,17 @@ describe('config utilities', () => {
       const configFile = path.join(tmpDir, 'config.yaml');
       const stat = fs.statSync(configFile);
       expect(stat.mode & 0o777).toBe(0o600);
+    });
+
+    // v0.17.0: mergeConfig listed sections explicitly and silently dropped
+    // `openshell`, so `aquaman openshell setup` enabled a driver the daemon
+    // never saw. Caught by scripts/e2e-openshell.sh.
+    it('loadConfig keeps the openshell driver section', () => {
+      tmpDir = path.join(os.tmpdir(), `aquaman-perm-test-${Date.now()}`);
+      process.env['AQUAMAN_CONFIG_DIR'] = tmpDir;
+      fs.mkdirSync(tmpDir, { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'config.yaml'), 'openshell:\n  driver:\n    enabled: true\n    socketPath: /tmp/x.sock\n');
+      expect(loadConfig().openshell).toEqual({ driver: { enabled: true, socketPath: '/tmp/x.sock' } });
     });
 
     it('saveConfig never persists the env-only encryptionPassword', () => {

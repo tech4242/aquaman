@@ -1,6 +1,6 @@
 {
   "name": "aquaman",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "private": true,
   "description": "🔱 API key protection for AI agents. Bring your own vault. Credentials stay where you already keep them, never in the agent's memory.",
   "type": "module",
@@ -41,6 +41,8 @@
   "author": "tech4242",
   "license": "MIT",
   "devDependencies": {
+    "@grpc/grpc-js": "^1.14.5",
+    "@grpc/proto-loader": "^0.8.1",
     "@types/node": "^20.19.43",
     "@types/ws": "^8.18.2",
     "@vitest/coverage-v8": "^4.1.11",

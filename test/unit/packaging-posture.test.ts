@@ -27,7 +27,9 @@ describe('aquaman-proxy dependency surface', () => {
   // regular dependency it shipped a vulnerable resolution to every consumer.
   // optionalDependencies would not help: npm installs those by default.
   // Optional peers are the only form npm skips.
-  it.each(['kdbxweb', 'argon2'])('declares %s as an optional peer, not a dependency', (dep) => {
+  // @grpc/grpc-js + @grpc/proto-loader (v0.17.0) serve the OpenShell credential
+  // driver only: 33 packages a consumer who never enables it should not carry.
+  it.each(['kdbxweb', 'argon2', '@grpc/grpc-js', '@grpc/proto-loader'])('declares %s as an optional peer, not a dependency', (dep) => {
     expect(proxyPkg.dependencies?.[dep]).toBeUndefined();
     expect(proxyPkg.optionalDependencies?.[dep]).toBeUndefined();
     expect(proxyPkg.peerDependencies?.[dep]).toBeDefined();
@@ -46,6 +48,19 @@ describe('aquaman-proxy dependency surface', () => {
     // The failure path must stay actionable — it is the only install docs a
     // user hits at the moment the peer is missing.
     expect(backend).toMatch(/npm install kdbxweb argon2/);
+  });
+
+  it('keeps the OpenShell driver gRPC imports lazy and ships its protos', () => {
+    const server = fs.readFileSync(path.join(ROOT, 'packages/proxy/src/openshell/grpc-server.ts'), 'utf8');
+    expect(server).toMatch(/await import\('@grpc\/grpc-js'\)/);
+    expect(server).toMatch(/await import\('@grpc\/proto-loader'\)/);
+    expect(server).not.toMatch(/^import .*from '@grpc\//m);
+    // Nothing else in the proxy may import gRPC statically.
+    const core = fs.readFileSync(path.join(ROOT, 'packages/proxy/src/openshell/credential-driver.ts'), 'utf8');
+    expect(core).not.toMatch(/@grpc\//);
+    expect(server).toMatch(/npm install -g @grpc\/grpc-js/);
+    expect(proxyPkg.files).toContain('proto');
+    expect(fs.existsSync(path.join(ROOT, 'packages/proxy/proto/openshell/credential_driver.proto'))).toBe(true);
   });
 });
 

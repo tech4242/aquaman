@@ -29,6 +29,7 @@ Aquaman ships as four coordinated packages, sharing one vault + one daemon. Inst
 | **[`aquaman-coder`](packages/coder/)** | AI coding-agent adapter. Project-scoped `aquaman://service/key` references resolved per Bash tool call. | If you use Claude Code or Codex. |
 | **[`aquaman-hermes`](packages/hermes/)** | Hermes agent-host plugin (Python, on PyPI). Points Hermes at an opt-in, token-gated loopback listener via its native `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`; adds an in-session `/aquaman-status` command, tool, and health probe. Isolation is proxy-side; the plugin holds no credentials. | If you run the Hermes agent host. `pip install aquaman-hermes` |
 | **Docker Sandboxes** | Not a package: a separate path that needs only `aquaman-proxy`. Docker's own proxy injects the secrets; `aquaman get` supplies them from your vault, with the allow-list and audit log. | If you run agents in Docker Sandboxes. See [Quick Start 5](#5-docker-sandboxes). |
+| **NVIDIA OpenShell** | Not a package: `aquaman daemon` becomes the OpenShell gateway's credential driver. OpenShell isolates the key from the sandbox; aquaman supplies it from your vault by reference, with the allow-list and audit log. | If you run agents in OpenShell sandboxes. See [Quick Start 6](#6-nvidia-openshell). |
 
 A single `aquaman` CLI surfaces all four: top-level commands for vault and audit, `aquaman openclaw ...` for the OpenClaw integration, `aquaman coder ...` for the coding-agent integration (delegates to `aquaman-coder` under the hood) as well as `aquaman hermes ...` for the Hermes Python package.
 
@@ -156,6 +157,34 @@ sbx secret set github \
 sbx runs that command from its own background service, which does not have your shell's `PATH`, so step 5 stores absolute paths. Repeat steps 4 and 5 for each service your sandbox uses.
 
 The same `aquaman get` command works anywhere a tool asks for a command that prints a secret: Codex (`model_providers.<id>.auth.command`), Claude Code (`apiKeyHelper`), OpenClaw exec secret providers and Hermes command secret sources.
+
+### 6. NVIDIA OpenShell
+
+OpenShell keeps credentials out of its sandboxes: the sandbox sees a placeholder and OpenShell's supervisor swaps in the real value on the way out. aquaman can be the gateway's **credential driver**, so OpenShell takes each key from your vault by reference instead of storing its own copy, and every read is checked against the allow-list and written to the audit log.
+
+```bash
+npm install -g aquaman-proxy @grpc/grpc-js @grpc/proto-loader   # gRPC is an optional add-on
+aquaman setup                                        # 1. vault wizard
+aquaman broker allow aquaman://anthropic/api_key     # 2. allow the key to be handed to OpenShell
+aquaman openshell setup                              # 3. enable the driver, prints the gateway config
+aquaman daemon &                                     # 4. start (or restart) the daemon
+```
+
+Add the printed `[openshell.credential_drivers.aquaman]` snippet to your OpenShell gateway config and restart the gateway. Then create providers with a reference instead of a value:
+
+```bash
+openshell provider create --name claude --type anthropic \
+  --credential ANTHROPIC_API_KEY=aquaman://anthropic/api_key
+```
+
+The key never leaves your vault until a sandbox starts. A plain value (`--credential KEY=sk-...`) still works: aquaman stores it in your vault under the `openshell` service. Removing a provider never deletes a key it referenced.
+
+Good to know:
+- OpenShell resolves credentials when a sandbox starts, not on every request, so the audit log records one read per sandbox start.
+- OpenShell substitutes the placeholder wherever the client sends it. Agents that read their key from the environment get this automatically.
+- On macOS with Docker Desktop, OpenShell needs a Docker Desktop version whose VM kernel has Landlock, and host networking enabled.
+
+`aquaman openshell doctor [--gateway-config <file>]` checks the packages, the driver socket, your declared refs and, optionally, that the gateway config points at aquaman.
 
 ## How It Works
 
