@@ -12,11 +12,11 @@ permissions:
 env:
   # Agent-host pins are deliberate, never dependabot-driven (see ROADMAP:
   # agent-host dependabot policy). OpenClaw is pinned separately per job.
-  # Hermes stopped publishing to PyPI after 0.19.0 (hermes-agent PR #68217);
-  # current releases are calendar-versioned git tags that refuse wheel
-  # builds, so CI tests the last PyPI build and the pinned tag, editable.
+  # Hermes stopped publishing to PyPI after 0.19.0 (hermes-agent PR #68217),
+  # so CI tests the last PyPI build and a pinned git tag. Tags are `v0.x.y`
+  # since v0.21.6; the calendar scheme ended at v2026.9.24.
   HERMES_PYPI_VERSION: "0.19.0"
-  HERMES_REF: "v2026.9.21"
+  HERMES_REF: "v0.23.1"
 
 jobs:
   lint:
@@ -120,11 +120,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Host-compat lanes. extended-stable is the conservative line users
-        # sit on; the second lane tracks the OpenClaw 2.0 (2026.8.1+) line at
-        # the newest release clawstat.us doesn't flag (9.4 is "skip"). Bumps
-        # are manual compat events — see .github/dependabot.yml.
-        openclaw: ['2026.7.33', '2026.9.1']
+        # Host-compat lanes: OpenClaw's one supported extended-stable line
+        # (npm dist-tag `extended-stable`) and `latest`. 2026.7.33 was retired
+        # upstream. Bumps are manual compat events, see .github/dependabot.yml.
+        # 2026.9.37 needs Node >= 24.22.1; `node-version: 24` floats past it.
+        openclaw: ['2026.9.37', '2026.11.3']
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -275,7 +275,12 @@ jobs:
         # release changes this job deliberately, not silently.
         run: |
           if [ "${{ matrix.hermes }}" = "tag" ]; then
-            HOST=(--with-editable ../../hermes-agent-src)
+            # Run inside Hermes's own locked environment. Its pyproject pins
+            # Pillow 13 over browser-harness's exact pin through
+            # [tool.uv] override-dependencies, which only applies when Hermes
+            # is the project: as a `--with-editable` dependency of ours the
+            # resolve fails (verified on v0.23.1).
+            HOST=(--project ../../hermes-agent-src --frozen)
           else
             HOST=(--with "hermes-agent==${{ env.HERMES_PYPI_VERSION }}")
           fi
