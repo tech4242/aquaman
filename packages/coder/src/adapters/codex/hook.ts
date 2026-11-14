@@ -25,7 +25,7 @@ export async function handleCodexPreToolUse(
   event: HookEvent,
   ctx: HookContext = {}
 ): Promise<HookDecision | null> {
-  const decision = await handlePreToolUse(event, ctx);
+  const decision = await handlePreToolUse(event, { ...ctx, host: 'codex' });
   const out = decision?.hookSpecificOutput;
   if (!out) return decision;
 

@@ -80,6 +80,30 @@ const DEFAULT_WRAPPER = 'aquaman-coder exec --';
 const AQUAMAN_WRAPPER_MARKS = ['aquaman-coder exec', 'aquaman coder exec'];
 
 /**
+ * Keep the user's Bash permission rules working on a rewritten command.
+ *
+ * Since Claude Code 2.1.290 permission rules are evaluated against the input
+ * the hook returns, not the command Claude wrote, and a rule never looks
+ * inside `sh -c '...'`. A bare wrapper therefore hid the real command from
+ * every deny and ask rule: verified live on 2.1.325, `Bash(echo forbidden*)`
+ * in `deny` stopped the command outside an aquaman project and let it run
+ * inside one.
+ *
+ * The fix is to leave the original command in the rewritten text as its own
+ * top-level statement, after an unconditional `exit`. Claude Code splits the
+ * text into subcommands and matches its rules against each, so a deny or ask
+ * rule on the original fires exactly as the host would have applied it, from
+ * every rule source (settings files, managed policy, CLI flags, session
+ * rules) and with the host's own matcher. The shell never reaches the tail:
+ * `exit` is a builtin, runs whether the wrapper succeeded or could not start,
+ * and with no argument carries the wrapper's status. (Not `exit $?`: Claude
+ * Code refuses to pre-check a command with a variable in it when a rule asks.)
+ */
+export function withPermissionTail(wrapped: string, original: string): string {
+  return `${wrapped}\nexit\n${original}`;
+}
+
+/**
  * If the project map has env bindings AND this is a Bash tool call AND
  * the command isn't already wrapped, rewrite it to run under the
  * `aquaman-coder exec` wrapper. The wrapper resolves env via the broker
@@ -123,7 +147,9 @@ export async function handlePreToolUse(
   }
 
   const wrapper = ctx.wrapperPrefix ?? DEFAULT_WRAPPER;
-  const wrapped = `${wrapper} sh -c ${shellQuote(command)}`;
+  const wrapped = ctx.host === 'codex'
+    ? `${wrapper} sh -c ${shellQuote(command)}`
+    : withPermissionTail(`${wrapper} sh -c ${shellQuote(command)}`, command);
 
   return {
     hookSpecificOutput: {

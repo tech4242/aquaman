@@ -50,6 +50,7 @@ export {
   handlePreToolUse,
   handlePostToolUse,
   runHookFromStdin,
+  withPermissionTail,
 } from './adapters/claude-code/hook.js';
 
 export {
@@ -62,6 +63,9 @@ export {
   uninstallClaudeCodeHooks,
   socketAllowedByEntry,
   sandboxSocketStatus,
+  claudeHookFailsClosed,
+  versionAtLeast,
+  ON_FAILURE_MIN_VERSION,
 } from './adapters/claude-code/setup.js';
 
 export {
@@ -69,12 +73,14 @@ export {
   type CodexSetupOptions,
   type CodexSetupResult,
   type CodexHookStatus,
+  type CodexSandboxStatus,
   CODEX_HOOK_COMMAND,
   codexHome,
   defaultCodexHooksPath,
   installCodexHooks,
   uninstallCodexHooks,
   codexHookStatus,
+  codexSandboxStatus,
 } from './adapters/codex/setup.js';
 
 export { handleCodexPreToolUse, handleCodexPostToolUse } from './adapters/codex/hook.js';

@@ -15,7 +15,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { Command } from 'commander';
 import { VERSION } from '../index.js';
 import {
@@ -33,11 +33,15 @@ import {
   uninstallClaudeCodeHooks,
   defaultSettingsPath,
   sandboxSocketStatus,
+  claudeHookFailsClosed,
+  versionAtLeast,
+  ON_FAILURE_MIN_VERSION,
 } from '../adapters/claude-code/setup.js';
 import {
   installCodexHooks,
   uninstallCodexHooks,
   codexHookStatus,
+  codexSandboxStatus,
   defaultCodexHooksPath,
   codexHome,
 } from '../adapters/codex/setup.js';
@@ -55,11 +59,23 @@ const LINUX_SANDBOX_LIMITATION =
 
 /**
  * Codex runs the rewritten command inside its own sandbox, which denies AF_UNIX
- * connects by default (verified with `codex sandbox`, 0.156.1: EPERM). A
- * permissions profile that extends ":workspace" and lists the socket works,
- * but only with `network.enabled = true`; `unix_sockets` alone stays EPERM.
- * Setup does not edit config.toml, so it prints this instead.
+ * connects by default (verified with `codex sandbox`, 0.156.1 and 0.169.0:
+ * EPERM). A permissions profile with `network.enabled = true` works;
+ * `unix_sockets` alone stays EPERM. 0.156.1 also needed the socket listed, and
+ * 0.169.0 ignores the list once network is enabled, so the snippet carries
+ * both. Setup does not edit config.toml, so it prints this instead, and
+ * doctor checks the file (`codexSandboxStatus`).
  */
+/** `claude --version`, or null when Claude Code is not on PATH. */
+function claudeCodeVersion(): string | null {
+  try {
+    const out = execFileSync('claude', ['--version'], { encoding: 'utf-8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
+    return /\d+\.\d+\.\d+/.exec(out)?.[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function codexSandboxNote(): string {
   return `Codex's sandbox blocks the proxy socket by default. To allow it, add to ${path.join(codexHome(), 'config.toml')}:\n` +
     `  default_permissions = "aquaman"\n` +
@@ -67,7 +83,8 @@ function codexSandboxNote(): string {
     `  extends = ":workspace"\n` +
     `  [permissions.aquaman.network]\n` +
     `  enabled = true\n` +
-    `  unix_sockets = { "${defaultSocketPath()}" = "allow" }`;
+    `  unix_sockets = { "${defaultSocketPath()}" = "allow" }\n` +
+    `Note: enabled = true also gives sandboxed commands outbound network access, and on Codex 0.169 every Unix socket, not only this one.`;
 }
 
 // ANSI color helpers — aquamarine theme. Mirrors packages/proxy/src/cli/index.ts
@@ -90,7 +107,9 @@ program
   .command('setup <agent>')
   .description('Install hook configuration for a coding agent (claude-code, codex)')
   .option('--uninstall', 'Remove aquaman hooks from the agent config', false)
-  .action((agent: string, opts: { uninstall?: boolean }) => {
+  .option('--fail-closed', `claude-code: block the tool call when the hook cannot run (Claude Code >= ${ON_FAILURE_MIN_VERSION})`)
+  .option('--no-fail-closed', 'claude-code: let the tool call run when the hook cannot run (the default)')
+  .action((agent: string, opts: { uninstall?: boolean; failClosed?: boolean }) => {
     if (agent === 'codex') {
       const result = opts.uninstall ? uninstallCodexHooks() : installCodexHooks();
       console.log(result.changed
@@ -107,9 +126,20 @@ program
       process.exit(1);
     }
 
+    if (opts.failClosed && !opts.uninstall) {
+      const version = claudeCodeVersion();
+      if (version && !versionAtLeast(version, ON_FAILURE_MIN_VERSION)) {
+        console.error(`--fail-closed needs Claude Code ${ON_FAILURE_MIN_VERSION} or later (found ${version}). Update Claude Code and re-run.`);
+        process.exit(1);
+      }
+      if (!version) {
+        console.log(`Could not find \`claude\` to check its version; --fail-closed needs Claude Code ${ON_FAILURE_MIN_VERSION} or later.`);
+      }
+    }
+
     const result = opts.uninstall
       ? uninstallClaudeCodeHooks()
-      : installClaudeCodeHooks();
+      : installClaudeCodeHooks({ failClosed: opts.failClosed });
 
     if (result.changed) {
       console.log(`${opts.uninstall ? 'Removed' : 'Installed'} aquaman-coder hook -> ${result.path}`);
@@ -396,7 +426,13 @@ program
       });
     }
     if (claudeInstalled) {
-      checks.push({ name: 'Claude Code hooks', ok: true, detail: settingsPath });
+      checks.push({
+        name: 'Claude Code hooks',
+        ok: true,
+        detail: claudeHookFailsClosed(settingsPath)
+          ? `${settingsPath} (a hook that cannot run blocks the tool call)`
+          : `${settingsPath} (a hook that cannot run lets the command through without credentials; \`aquaman coder setup claude-code --fail-closed\` blocks instead)`,
+      });
     }
     if (codex.installed) {
       checks.push({
@@ -405,7 +441,13 @@ program
         detail: codex.trusted ? codexHooksPath : `${codexHooksPath} (installed, not yet trusted, so Codex skips them)`,
         fix: codex.trusted ? undefined : 'Start `codex` and trust the aquaman hooks in the startup hook review',
       });
-      checks.push({ name: 'Codex sandbox', ok: true, detail: 'blocks the proxy socket unless allowed; see `aquaman coder setup codex` output or the aquaman-coder README' });
+      const codexSandbox = codexSandboxStatus(defaultSocketPath());
+      checks.push({
+        name: 'Codex sandbox',
+        ok: codexSandbox.ok,
+        detail: codexSandbox.detail,
+        fix: codexSandbox.ok ? undefined : codexSandboxNote(),
+      });
     }
 
     // 6. Claude Code sandbox can reach the proxy socket. Merge user, managed,

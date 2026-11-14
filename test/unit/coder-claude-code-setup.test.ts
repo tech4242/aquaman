@@ -6,7 +6,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { installClaudeCodeHooks, uninstallClaudeCodeHooks, socketAllowedByEntry, sandboxSocketStatus } from 'aquaman-coder';
+import {
+  installClaudeCodeHooks, uninstallClaudeCodeHooks, socketAllowedByEntry, sandboxSocketStatus,
+  claudeHookFailsClosed, versionAtLeast, ON_FAILURE_MIN_VERSION,
+} from 'aquaman-coder';
 
 describe('aquaman-coder / claude-code setup', () => {
   let tmpDir: string;
@@ -29,6 +32,39 @@ describe('aquaman-coder / claude-code setup', () => {
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
     expect(settings.hooks.PreToolUse[0].hooks[0].command).toBe('aquaman coder hook');
     expect(settings.hooks.PostToolUse[0].hooks[0].command).toBe('aquaman coder hook');
+  });
+
+  // `onFailure: "block"` (Claude Code >= 2.1.295) is opt-in: verified live on
+  // 2.1.325 that with it a hook that cannot start blocks the Bash call, and
+  // without it the call runs.
+  it('fail-closed is off by default, set on PreToolUse only, and reversible', () => {
+    installClaudeCodeHooks({ settingsPath });
+    expect(claudeHookFailsClosed(settingsPath)).toBe(false);
+    expect(fs.readFileSync(settingsPath, 'utf-8')).not.toContain('onFailure');
+
+    // Applies to an existing install, and leaves a foreign hook alone.
+    const withForeign = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    withForeign.hooks.PreToolUse.unshift({ matcher: 'Bash', hooks: [{ type: 'command', command: 'other-tool check' }] });
+    fs.writeFileSync(settingsPath, JSON.stringify(withForeign));
+    expect(installClaudeCodeHooks({ settingsPath, failClosed: true }).changed).toBe(true);
+    const on = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    expect(on.hooks.PreToolUse[0].hooks[0]).toEqual({ type: 'command', command: 'other-tool check' });
+    expect(on.hooks.PreToolUse[1].hooks[0]).toEqual({ type: 'command', command: 'aquaman coder hook', onFailure: 'block' });
+    expect(on.hooks.PostToolUse[0].hooks[0]).toEqual({ type: 'command', command: 'aquaman coder hook' });
+    expect(claudeHookFailsClosed(settingsPath)).toBe(true);
+
+    // A plain re-run keeps the choice; --no-fail-closed removes it.
+    expect(installClaudeCodeHooks({ settingsPath }).changed).toBe(false);
+    installClaudeCodeHooks({ settingsPath, failClosed: false });
+    expect(claudeHookFailsClosed(settingsPath)).toBe(false);
+  });
+
+  it('versionAtLeast compares dotted versions numerically', () => {
+    expect(versionAtLeast('2.1.325', ON_FAILURE_MIN_VERSION)).toBe(true);
+    expect(versionAtLeast('2.1.295', ON_FAILURE_MIN_VERSION)).toBe(true);
+    expect(versionAtLeast('2.1.99', ON_FAILURE_MIN_VERSION)).toBe(false);
+    expect(versionAtLeast('2.2.0', ON_FAILURE_MIN_VERSION)).toBe(true);
+    expect(versionAtLeast('garbage', ON_FAILURE_MIN_VERSION)).toBe(false);
   });
 
   it('preserves unrelated settings keys', () => {
