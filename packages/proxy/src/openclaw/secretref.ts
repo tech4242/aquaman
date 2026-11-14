@@ -95,7 +95,7 @@ function isAquamanBaseUrl(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   return (
     /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d+\/(anthropic|openai)(\/v1)?\/?$/.test(value) ||
-    /^http:\/\/aquaman\.local\//.test(value)
+    value.startsWith('http://aquaman.local/')
   );
 }
 
