@@ -10,9 +10,11 @@
  * Routing therefore has to use whatever endpoint override the host exposes.
  * Telegram has one (`channels.telegram.apiRoot`, a documented reverse-proxy
  * and self-hosted Bot API knob), so it is pointed at the loopback listener.
- * No other bundled channel has an equivalent: Discord and Slack expose none,
- * and Matrix, Mattermost and Nextcloud Talk already point at the user's own
- * server rather than a vendor API. Those stay at-rest-only, and
+ * No other bundled channel has a config-level equivalent. Discord has only a
+ * process-wide `DISCORD_API_URL` env var that also moves its WebSocket
+ * (OpenClaw 2026.9.7+), which the proxy does not carry; Matrix, Mattermost
+ * and Nextcloud Talk already point at the user's own server rather than a
+ * vendor API. Those stay at-rest-only, and
  * `aquaman openclaw doctor` says so instead of implying coverage.
  *
  * The Bot API has no auth header: the token IS the `/bot<TOKEN>` path segment.

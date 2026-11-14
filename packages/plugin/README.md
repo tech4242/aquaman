@@ -72,7 +72,7 @@ Telegram is the one bundled channel with an endpoint override. `aquaman openclaw
 
 The Bot API carries its token in the URL path rather than a header, so the loopback token travels in the `/bot<TOKEN>` segment. The proxy accepts it there, strips it, and injects your real bot token from the vault. Setup leaves a channel untouched and says why when it uses a self-hosted `apiRoot`, a `tokenFile`, multiple accounts, or has no vault credential yet.
 
-Other channels are vault storage and `aquaman openclaw migrate` only: OpenClaw uses the token directly, so the proxy is not in the path and those calls are not audited. Discord and Slack expose no override; Matrix, Mattermost and Nextcloud Talk already point at your own server. `aquaman openclaw doctor` reports which of your channels are in which group.
+Other channels are vault storage and `aquaman openclaw migrate` only: OpenClaw uses the token directly, so the proxy is not in the path and those calls are not audited. Discord can be pointed elsewhere only through a process-wide `DISCORD_API_URL` that also moves its WebSocket, which the proxy does not carry; Matrix, Mattermost and Nextcloud Talk already point at your own server. `aquaman openclaw doctor` reports which of your channels are in which group.
 
 ### Transports and access control
 
