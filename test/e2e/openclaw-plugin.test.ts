@@ -73,7 +73,7 @@ function runPluginsDoctor(): string {
       .slice(out.indexOf('Diagnostics:'))
       .split('\n')
       .filter((line) => line.startsWith('- '));
-    const unexpected = diagnostics.filter((line) => !/^- aquaman-plugin: OpenClaw can't verify where this plugin came from/.test(line));
+    const unexpected = diagnostics.filter((line) => !line.startsWith("- aquaman-plugin: OpenClaw can't verify where this plugin came from"));
     if (!out.includes('Diagnostics:') || diagnostics.length === 0 || unexpected.length > 0) throw err;
     return out;
   }
