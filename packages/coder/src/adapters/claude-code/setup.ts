@@ -22,7 +22,7 @@ import * as path from 'node:path';
 import { defaultSocketPath } from '../../broker-client.js';
 
 export interface ClaudeSettings {
-  hooks?: Record<string, Array<{ matcher?: string; hooks: Array<{ type: 'command'; command: string }> }>>;
+  hooks?: Record<string, Array<{ matcher?: string; hooks: Array<{ type: 'command'; command: string; onFailure?: 'block' | 'continue' }> }>>;
   apiKeyHelper?: string;
   [key: string]: unknown;
 }
@@ -38,6 +38,42 @@ export interface SetupOptions {
   socketPath?: string;
   /** Override for tests. Default: process.platform. */
   platform?: NodeJS.Platform;
+  /**
+   * Set `onFailure: "block"` on the PreToolUse hook (Claude Code >= 2.1.295),
+   * so a hook that cannot start or times out blocks the tool call instead of
+   * letting it run unwrapped. Opt-in: with it set, an uninstalled or broken
+   * `aquaman` blocks every tool call until the hook is removed. `false`
+   * removes the field again; `undefined` leaves the entry as it is.
+   */
+  failClosed?: boolean;
+}
+
+/** First Claude Code release that understands a hook's `onFailure` field. */
+export const ON_FAILURE_MIN_VERSION = '2.1.295';
+
+/** `a >= b` for dotted numeric versions; false if either does not parse. */
+export function versionAtLeast(a: string, b: string): boolean {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  if (pa.length === 0 || pa.some(Number.isNaN) || pb.some(Number.isNaN)) return false;
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d > 0;
+  }
+  return true;
+}
+
+const isAquamanHook = (h: { command?: string }) =>
+  !!h.command && (h.command.includes('aquaman coder hook') || h.command.includes('aquaman-coder hook'));
+
+/** Does the installed PreToolUse hook block the tool call when it fails? */
+export function claudeHookFailsClosed(settingsPath: string = defaultSettingsPath()): boolean {
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as ClaudeSettings;
+    return (settings.hooks?.['PreToolUse'] ?? []).some((g) => g.hooks?.some((h) => isAquamanHook(h) && h.onFailure === 'block'));
+  } catch {
+    return false;
+  }
 }
 
 export interface SetupResult {
@@ -185,6 +221,18 @@ export function installClaudeCodeHooks(opts: SetupOptions = {}): SetupResult {
       hooks: [{ type: 'command', command: hookCommand }],
     });
     settings.hooks[event] = list;
+  }
+
+  // Fail-closed switch on our PreToolUse handler only: PostToolUse runs after
+  // the tool, so blocking there withholds nothing.
+  if (opts.failClosed !== undefined) {
+    for (const group of settings.hooks['PreToolUse'] ?? []) {
+      for (const h of group.hooks ?? []) {
+        if (!isAquamanHook(h)) continue;
+        if (opts.failClosed) h.onFailure = 'block';
+        else delete h.onFailure;
+      }
+    }
   }
 
   // Sandbox socket allowance (macOS only; see the header comment).

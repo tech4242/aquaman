@@ -8,7 +8,7 @@
  * command runs), so the rewrite payload carries nothing Codex might reject.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, afterAll } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -18,6 +18,7 @@ import {
   installCodexHooks,
   uninstallCodexHooks,
   codexHookStatus,
+  codexSandboxStatus,
   CODEX_HOOK_COMMAND,
 } from 'aquaman-coder';
 
@@ -138,5 +139,62 @@ describe('Codex hooks.json setup', () => {
 
     fs.writeFileSync(configPath, `[hooks.state."${hooksPath}:pre_tool_use:0:0"]\ntrusted_hash = "sha256:abc"\n`);
     expect(codexHookStatus(hooksPath, configPath)).toEqual({ installed: true, trusted: true });
+  });
+});
+
+// Every expectation here was checked against `codex sandbox` 0.169.0 on macOS
+// (2026-11-14) by connecting to a real socket under each config: the states
+// marked ok connected, the others returned EPERM.
+describe('codexSandboxStatus', () => {
+  // A real directory: the match resolves symlinks (macOS /tmp -> /private/tmp).
+  const socketDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-codex-sock-'));
+  const socket = path.join(socketDir, 'proxy.sock');
+  afterAll(() => fs.rmSync(socketDir, { recursive: true, force: true }));
+  const status = (toml: string | null) => {
+    const configPath = path.join(tmpDir(), 'config.toml');
+    if (toml !== null) fs.writeFileSync(configPath, toml);
+    return codexSandboxStatus(socket, configPath);
+  };
+  const profile = (network: string) =>
+    `default_permissions = "aquaman"\n[permissions.aquaman]\nextends = ":workspace"\n[permissions.aquaman.network]\n${network}\n`;
+
+  it('fails when config.toml is missing, empty or unparseable', () => {
+    expect(status(null)).toMatchObject({ ok: false, detail: expect.stringContaining('does not exist') });
+    expect(status('')).toMatchObject({ ok: false, detail: expect.stringContaining('no permissions profile') });
+    expect(status('default_permissions = ')).toMatchObject({ ok: false, detail: expect.stringContaining('cannot parse') });
+  });
+
+  it('fails for a profile that lists the socket without enabling network', () => {
+    expect(status(profile(`unix_sockets = { "${socket}" = "allow" }`))).toMatchObject({
+      ok: false, detail: expect.stringContaining('enabled = true'),
+    });
+  });
+
+  it('passes for the snippet setup prints', () => {
+    expect(status(profile(`enabled = true\nunix_sockets = { "${socket}" = "allow" }`))).toMatchObject({
+      ok: true, detail: expect.stringContaining('allows the proxy socket'),
+    });
+    // A parent directory covers the socket, as in the sandbox itself.
+    expect(status(profile(`enabled = true\nunix_sockets = { "${socketDir}" = "allow" }`)).detail).toContain('allows the proxy socket');
+    expect(status(profile('enabled = true\ndangerously_allow_all_unix_sockets = true')).detail).toContain('allows the proxy socket');
+  });
+
+  it('passes with a caveat when network is enabled but the socket is not listed', () => {
+    expect(status(profile('enabled = true'))).toMatchObject({ ok: true, detail: expect.stringContaining('older Codex') });
+  });
+
+  it('fails for built-in profiles, an undefined profile and a profile that is not the default', () => {
+    expect(status('default_permissions = ":workspace"\n').ok).toBe(false);
+    expect(status('default_permissions = "nope"\n')).toMatchObject({ ok: false, detail: expect.stringContaining('not defined') });
+    expect(status(`[permissions.aquaman.network]\nenabled = true\nunix_sockets = { "${socket}" = "allow" }\n`).ok).toBe(false);
+  });
+
+  it('accepts the legacy sandbox_mode settings and says they are legacy', () => {
+    expect(status('sandbox_mode = "danger-full-access"\n').ok).toBe(true);
+    expect(status('sandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\n')).toMatchObject({
+      ok: true, detail: expect.stringContaining('0.156.1'),
+    });
+    expect(status('sandbox_mode = "workspace-write"\n').ok).toBe(false);
+    expect(status('[sandbox_workspace_write]\nnetwork_access = true\n').ok).toBe(false);
   });
 });

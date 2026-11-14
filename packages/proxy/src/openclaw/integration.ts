@@ -89,6 +89,20 @@ export function pluginInstallNeedsCapabilityConsent(version: string | undefined 
   return calendarAtLeast(version, [2026, 8, 1]);
 }
 
+/**
+ * OpenClaw 2026.11+ makes `openclaw plugins doctor` exit 1, and warns at load,
+ * for a non-bundled plugin whose install provenance it cannot verify. Verified
+ * live on 2026.11.3 with the published 0.17.0 plugin: a `clawhub:` install and
+ * a plain copy into `extensions/` are both reported ("OpenClaw can't verify
+ * where this plugin came from", trust reason `provenance-invalid` /
+ * `record-missing`); an `npm:` install is classed `third-party-npm` and passes.
+ * The plugin loads and registers its tool in every case. 2026.9.37 computes the
+ * same trust reason but does not fail doctor on it.
+ */
+export function pluginProvenanceIsReported(version: string | undefined | null): boolean {
+  return calendarAtLeast(version, [2026, 11, 0]);
+}
+
 export class OpenClawIntegration {
   private config: WrapperConfig;
   private services: ServiceConfig[];

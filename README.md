@@ -154,7 +154,7 @@ sbx secret set github \
   --refresh on-demand                                # 5. sbx reads it from aquaman
 ```
 
-sbx runs that command from its own background service, which does not have your shell's `PATH`, so step 5 stores absolute paths. Repeat steps 4 and 5 for each service your sandbox uses.
+sbx runs that command from its own background service, which does not have your shell's `PATH`, so step 5 stores absolute paths. Repeat steps 4 and 5 for each service your sandbox uses. For a service sbx has no built-in definition for, give the secret its destination hosts as well: since sbx 0.51 a custom secret without them is not substituted. In a script, pass `--force` instead of piping a confirmation (sbx 0.48+).
 
 The same `aquaman get` command works anywhere a tool asks for a command that prints a secret: Codex (`model_providers.<id>.auth.command`), Claude Code (`apiKeyHelper`), OpenClaw exec secret providers and Hermes command secret sources.
 

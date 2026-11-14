@@ -10,7 +10,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { handlePreToolUse, handlePostToolUse, type HookContext } from 'aquaman-coder';
+import { spawnSync } from 'node:child_process';
+import { handlePreToolUse, handlePostToolUse, withPermissionTail, type HookContext } from 'aquaman-coder';
 
 class StubBroker {
   values: Record<string, string>;
@@ -87,6 +88,41 @@ describe('handlePreToolUse', () => {
     expect(out.additionalContext).toContain('ANTHROPIC_API_KEY');
     expect(out.additionalContext).toContain('GITHUB_TOKEN');
     fs.rmSync(cwdDir, { recursive: true, force: true });
+  });
+
+  // Claude Code >= 2.1.290 matches permission rules against the rewritten
+  // command and never looks inside `sh -c`. Verified live on 2.1.325: without
+  // the tail a `deny` rule on the original command stopped applying inside an
+  // aquaman project. The original must stay in the text as its own statement,
+  // after an `exit` that keeps the shell from ever running it.
+  it('keeps the original command visible to permission rules, after an exit', async () => {
+    const cwdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-project-'));
+    const yaml = `projects:\n  my-app:\n    paths: ["${cwdDir}"]\n    env:\n      GITHUB_TOKEN: aquaman://github/token\n`;
+    const { ctx } = ctxWithProjects(yaml, new StubBroker({}));
+    tmp = path.dirname(ctx.projectsPath!);
+    const original = `git push origin main && echo "it's done"`;
+    const result = await handlePreToolUse({ tool_name: 'Bash', tool_input: { command: original, timeout: 5000 }, cwd: cwdDir }, ctx);
+    const out = result?.hookSpecificOutput as any;
+    const lines = (out.updatedInput.command as string).split('\n');
+    expect(lines[0]).toBe(`aquaman-coder exec -- sh -c 'git push origin main && echo "it'\\''s done"'`);
+    // A bare `exit`: `exit $?` makes Claude Code refuse to pre-check the command.
+    expect(lines[1]).toBe('exit');
+    expect(lines.slice(2).join('\n')).toBe(original);
+    // Other input fields survive: updatedInput replaces the whole object.
+    expect(out.updatedInput.timeout).toBe(5000);
+    fs.rmSync(cwdDir, { recursive: true, force: true });
+  });
+
+  it('the shell never runs the tail, and the wrapper status is the exit status', () => {
+    const run = (wrapped: string) =>
+      spawnSync('sh', ['-c', withPermissionTail(wrapped, 'echo TAIL-RAN')], { encoding: 'utf-8' });
+    const ok = run(`sh -c 'echo wrapped; exit 7'`);
+    expect(ok.stdout).toBe('wrapped\n');
+    expect(ok.status).toBe(7);
+    // A wrapper that cannot start must not fall through to the original.
+    const missing = run('aquaman-no-such-binary exec -- true');
+    expect(missing.stdout).toBe('');
+    expect(missing.status).toBe(127);
   });
 
   it('does not re-wrap a command already running under the wrapper', async () => {

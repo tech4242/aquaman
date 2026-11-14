@@ -21,6 +21,8 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { parse as parseToml } from 'smol-toml';
+import { socketAllowedByEntry } from '../claude-code/setup.js';
 
 type HookHandler = { type: 'command'; command: string; timeout?: number; [k: string]: unknown };
 type HookGroup = { matcher?: string; hooks: HookHandler[] };
@@ -147,4 +149,87 @@ export function codexHookStatus(
     config = fs.readFileSync(configPath, 'utf-8');
   } catch { /* no config.toml: nothing trusted yet */ }
   return { installed: true, trusted: config.includes(`"${key}"`) };
+}
+
+export interface CodexSandboxStatus {
+  /** The rewritten command can reach the proxy socket from Codex's sandbox. */
+  ok: boolean;
+  /** What in config.toml decided it, in one line. */
+  detail: string;
+}
+
+/**
+ * Does `$CODEX_HOME/config.toml` let a sandboxed command connect to the proxy
+ * socket? Reads the file only; a `-c` override, `--permission-profile` or a
+ * layered `-p` profile on the command line can still change the answer.
+ *
+ * Ground truth, `codex sandbox` on macOS:
+ *   - 0.169.0 (2026-11-14): only a `default_permissions` profile with
+ *     `network.enabled = true` reaches the socket. `enabled` alone is enough
+ *     and it opens EVERY Unix socket: a `unix_sockets` entry is not consulted,
+ *     not even `"deny"`. `unix_sockets` without `enabled` stays EPERM.
+ *   - 0.156.1 (2026-09-23): `enabled = true` needed the socket listed too.
+ *   So the snippet setup prints keeps both, and a profile that lists the
+ *   socket is reported without a caveat.
+ *   - Legacy `sandbox_mode` is not evaluated by `codex sandbox` on 0.169.0, so
+ *     `workspace-write` + `network_access = true` (reached the socket on
+ *     0.156.1) and `danger-full-access` are accepted here but say so.
+ *
+ * Anything this cannot read or does not recognise is `ok: false`: a doctor
+ * line must not be green over a property it did not establish.
+ */
+export function codexSandboxStatus(
+  socketPath: string,
+  configPath: string = path.join(codexHome(), 'config.toml'),
+): CodexSandboxStatus {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(configPath, 'utf-8');
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { ok: false, detail: `${configPath} does not exist, so Codex uses its default sandbox, which blocks the proxy socket` }
+      : { ok: false, detail: `cannot read ${configPath} (${(err as Error).message}), so the sandbox setting is unknown` };
+  }
+  let config: Record<string, unknown>;
+  try {
+    config = parseToml(raw) as Record<string, unknown>;
+  } catch (err) {
+    return { ok: false, detail: `cannot parse ${configPath} (${(err as Error).message.split('\n')[0]}), so the sandbox setting is unknown` };
+  }
+
+  const table = (v: unknown): Record<string, unknown> | undefined =>
+    v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+
+  const profileName = config['default_permissions'];
+  if (typeof profileName === 'string' && profileName.length > 0) {
+    if (profileName.startsWith(':')) {
+      return { ok: false, detail: `default_permissions = "${profileName}" is a built-in profile; none is known to allow the proxy socket` };
+    }
+    const profile = table(table(config['permissions'])?.[profileName]);
+    if (!profile) {
+      return { ok: false, detail: `default_permissions = "${profileName}" but [permissions.${profileName}] is not defined` };
+    }
+    const network = table(profile['network']);
+    if (network?.['enabled'] !== true) {
+      return { ok: false, detail: `[permissions.${profileName}.network] does not set enabled = true, so Unix-socket connects are denied` };
+    }
+    const sockets = table(network['unix_sockets']) ?? {};
+    const listed = Object.entries(sockets).some(([entry, v]) => v === 'allow' && socketAllowedByEntry(entry, socketPath));
+    if (listed || network['dangerously_allow_all_unix_sockets'] === true) {
+      return { ok: true, detail: `permissions profile "${profileName}" enables network and allows the proxy socket` };
+    }
+    return {
+      ok: true,
+      detail: `permissions profile "${profileName}" enables network, which on Codex 0.169 allows every Unix socket; older Codex also needs the proxy socket under unix_sockets`,
+    };
+  }
+
+  const mode = config['sandbox_mode'];
+  if (mode === 'danger-full-access') {
+    return { ok: true, detail: 'sandbox_mode = "danger-full-access": commands are not sandboxed' };
+  }
+  if (mode === 'workspace-write' && table(config['sandbox_workspace_write'])?.['network_access'] === true) {
+    return { ok: true, detail: 'sandbox_workspace_write.network_access = true (reached the socket on Codex 0.156.1; not re-verifiable with `codex sandbox` on 0.169)' };
+  }
+  return { ok: false, detail: `${configPath} has no permissions profile with network enabled, so the sandbox blocks the proxy socket` };
 }

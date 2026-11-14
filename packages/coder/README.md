@@ -116,7 +116,9 @@ Claude Code / Codex
 
 The hook uses Claude Code's real protocol (verified against the live docs):
 
-- **PreToolUse** on Bash: emits `{ hookSpecificOutput: { permissionDecision: "allow", updatedInput: { command: "aquaman-coder exec -- sh -c '...'" } } }`. Claude Code runs the rewritten command in its child shell; the wrapper does the broker resolve.
+- **PreToolUse** on Bash: emits `{ hookSpecificOutput: { permissionDecision: "allow", updatedInput: { command: "aquaman-coder exec -- sh -c '...'" } } }`. Claude Code runs the rewritten command in its child shell; the wrapper does the broker resolve. The rewritten text ends with `exit` and then your original command on its own lines. The shell stops at `exit` and never runs that tail; it is there because Claude Code (2.1.290+) matches your `deny` and `ask` permission rules against the rewritten command and does not look inside `sh -c`, so without it a rule like `Bash(git push *)` would stop applying inside an aquaman project. A command no deny or ask rule matches is allowed by the hook without a prompt.
+- **If the hook itself cannot run** (binary missing, timeout), Claude Code runs the command anyway, without credentials. `aquaman coder setup claude-code --fail-closed` (Claude Code 2.1.295+) makes it block the call instead; that also means an uninstalled `aquaman` blocks every tool call until you run `setup claude-code --uninstall`.
+- **Monitor commands are not wrapped.** Commands Claude starts with the Monitor tool run without injected credentials.
 - **PostToolUse**: runs the redactor over every tool's output and rewrites it via `updatedToolOutput` (v0.14.0+) before it reaches the transcript. That covers Read/Grep surfacing on-disk secrets, MCP tools, and unwrapped Bash. `aquaman-coder exec` still owns value-based redaction of what it injected. Set `AQUAMAN_DISABLE_OUTPUT_REWRITE=1` on Claude Code < 2.1.170 to fall back to a warning via `additionalContext`. Caveat from Claude Code's docs: OpenTelemetry tool spans record the original output before hooks run, so this redaction doesn't reach OTel exports.
 - Credentials are never passed through hook output. The hook contract has no env-injection field for PreToolUse, and we wouldn't use one: hook stdout transits Claude Code's process, which is what the broker + `exec` wrapper exists to avoid.
 
@@ -125,7 +127,7 @@ The hook uses Claude Code's real protocol (verified against the live docs):
 `aquaman coder setup codex` writes `PreToolUse` and `PostToolUse` handlers for the shell tool (`matcher: "Bash"`) into `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`). Codex's hook contract has the same shape as Claude Code's, with three differences that matter here:
 
 - **Codex runs a new hook only after you approve it.** Start `codex` after setup and trust the aquaman hooks in the startup hook review. `aquaman coder doctor` reports hooks that are installed but not yet trusted.
-- **Codex's sandbox blocks the proxy socket by default** (`EPERM`). The rewritten command runs inside it. Allow the socket with a permissions profile in `config.toml`; `unix_sockets` alone is not enough, the profile also needs `network.enabled = true`. Setup prints this snippet with your paths filled in and does not edit `config.toml` itself:
+- **Codex's sandbox blocks the proxy socket by default** (`EPERM`). The rewritten command runs inside it. Allow the socket with a permissions profile in `config.toml`; `unix_sockets` alone is not enough, the profile also needs `network.enabled = true`. Setup prints this snippet with your paths filled in and does not edit `config.toml` itself, and `aquaman coder doctor` reads `config.toml` and fails until a profile like it is the default:
 
   ```toml
   default_permissions = "aquaman"
@@ -138,7 +140,7 @@ The hook uses Claude Code's real protocol (verified against the live docs):
   unix_sockets = { "/Users/you/.aquaman/proxy.sock" = "allow" }
   ```
 
-  `network.enabled = true` also affects other outbound traffic from sandboxed commands, so check it against your own network policy.
+  `network.enabled = true` is broader than the socket: on Codex 0.169 it gives sandboxed commands outbound network access and every Unix socket, whatever `unix_sockets` lists (older Codex needed the socket listed, so the snippet keeps it). Check it against your own network policy.
 - **Output redaction happens inside the wrapper only.** Codex gives hooks no way to rewrite shell output, so `PostToolUse` only warns when it sees secret patterns. Commands run under `aquaman-coder exec` are still scrubbed before Codex sees them.
 
 Codex fails open on invalid hook output (the original command runs), so the rewrite sends only `permissionDecision` and `updatedInput.command`.

@@ -11,7 +11,7 @@ import { execSync } from 'node:child_process';
 // Every test here shells out to the openclaw CLI (multi-second cold spawns).
 // Under vitest 4's forks pool + full-suite parallelism these regularly exceed
 // the 5s default and flake; scope a realistic timeout to this file only.
-vi.setConfig({ testTimeout: 30_000 });
+vi.setConfig({ testTimeout: 90_000 });
 import { mkdtempSync, mkdirSync, cpSync, writeFileSync, rmSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
@@ -54,6 +54,29 @@ function runOpenClaw(args: string): string {
       PATH: `${testBinDir}:${process.env.PATH}`
     }
   });
+}
+
+/**
+ * `openclaw plugins doctor`, tolerating exactly one failure: the unverified
+ * source diagnostic. Since 2026.11 doctor exits 1 for a non-bundled plugin
+ * whose install provenance it cannot verify, and this fixture is a plain copy
+ * into `extensions/` with no install record, so it always is. (A real
+ * `clawhub:` install is reported the same way on 2026.11.3; an `npm:` install
+ * is not. See AGENTS.md.) Any other diagnostic still fails the test.
+ */
+function runPluginsDoctor(): string {
+  try {
+    return runOpenClaw('plugins doctor');
+  } catch (err) {
+    const out = String((err as { stdout?: unknown }).stdout ?? '');
+    const diagnostics = out
+      .slice(out.indexOf('Diagnostics:'))
+      .split('\n')
+      .filter((line) => line.startsWith('- '));
+    const unexpected = diagnostics.filter((line) => !/^- aquaman-plugin: OpenClaw can't verify where this plugin came from/.test(line));
+    if (!out.includes('Diagnostics:') || diagnostics.length === 0 || unexpected.length > 0) throw err;
+    return out;
+  }
 }
 
 
@@ -145,7 +168,7 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
     });
 
     it('plugin doctor reports no aquaman-attributed issues', () => {
-      const result = runOpenClaw('plugins doctor');
+      const result = runPluginsDoctor();
 
       // Strip path tokens so file paths in unrelated bundled-plugin errors
       // (paths often contain "aquaman" on the dev box) aren't falsely
@@ -169,7 +192,7 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
 
     it('discovery-mode loads write no legacy auth-profiles.json', () => {
       runOpenClaw('plugins inspect aquaman-plugin --runtime');
-      runOpenClaw('plugins doctor');
+      runPluginsDoctor();
       expect(existsSync(path.join(testStateDir, 'agents', 'main', 'agent', 'auth-profiles.json'))).toBe(false);
     });
 
@@ -248,7 +271,7 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
     });
 
     it('plugin name passes install path validation', () => {
-      const result = runOpenClaw('plugins doctor');
+      const result = runPluginsDoctor();
       // No path traversal or invalid name warnings attributed to aquaman.
       expect(result).not.toMatch(/aquaman[\s\S]{0,100}?invalid.*path/i);
       expect(result).not.toMatch(/aquaman[\s\S]{0,100}?traversal/i);
@@ -260,7 +283,7 @@ describe.skipIf(!OPENCLAW_AVAILABLE)('OpenClaw Plugin E2E', () => {
     });
 
     it('plugin code passes safety scanner', () => {
-      const result = runOpenClaw('plugins doctor');
+      const result = runPluginsDoctor();
       // No safety/security warnings about fetch interceptor or child process
       expect(result).not.toMatch(/unsafe|blocked|security.*warning/i);
     });

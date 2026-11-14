@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createCredentialProxy } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
-import { createOpenClawIntegration, authProfilesAreSqliteOnly, legacyAuthProfilesBlockProviders, pluginInstallNeedsCapabilityConsent } from '../openclaw/integration.js';
+import { createOpenClawIntegration, authProfilesAreSqliteOnly, legacyAuthProfilesBlockProviders, pluginInstallNeedsCapabilityConsent, pluginProvenanceIsReported } from '../openclaw/integration.js';
 import { supportsSecretRefIntegrations, wireSecretRefProviders, secretRefWiringStatus } from '../openclaw/secretref.js';
 import {
   CHANNEL_ROUTING_SUPPORTED,
@@ -344,7 +344,7 @@ function describeChannelSkip(reason: ChannelSkipReason, channel: string): string
     case 'not-wired':
       return 'routable but not wired yet (re-run: aquaman openclaw setup)';
     case 'unroutable':
-      return 'this OpenClaw exposes no endpoint override for it, so its traffic cannot be routed';
+      return 'this OpenClaw has no per-channel endpoint override in its config for it, so aquaman does not route its traffic';
   }
 }
 
@@ -2401,6 +2401,9 @@ openclaw
         } catch { /* ok */ }
         const verLabel = pluginVer ? ` v${pluginVer}` : '';
         console.log(`  \u2713 ${aqua('Plugin')} installed${verLabel} (${pluginPath})`);
+        if (pluginProvenanceIsReported(openclawVersion)) {
+          console.log(`  \u2192 ${aqua('Plugin source')} OpenClaw 2026.11+ reports "can't verify where this plugin came from" for it and \`openclaw plugins doctor\` exits 1. The plugin still loads; this is how that OpenClaw classes a plugin installed from ClawHub or copied by setup.`);
+        }
         if (pluginVer && pluginVer !== VERSION) {
           console.log(`  \u2717 ${aqua('Version mismatch:')} CLI v${VERSION} \u2260 plugin v${pluginVer}`);
           console.log('    \u2192 Update: openclaw plugins install aquaman-plugin');
@@ -2487,6 +2490,18 @@ openclaw
               issues++;
             } else if (status.baseUrlProviders.length > 0) {
               console.log(`  ✓ ${aqua('Model routing')} through the proxy for ${status.baseUrlProviders.join(', ')}`);
+              // A provider key exported in the gateway's environment wins over
+              // the configured SecretRef: verified live on OpenClaw 2026.11.3,
+              // the gateway sent $OPENAI_API_KEY itself to the loopback
+              // listener, which rejected it (401, no loopback token). The
+              // real key is then in the agent process, and model calls fail.
+              // Doctor can only see its own environment, so this is a note.
+              const exported = status.baseUrlProviders
+                .map((svc) => `${svc.toUpperCase()}_API_KEY`)
+                .filter((name) => !!process.env[name]);
+              if (exported.length > 0) {
+                console.log(`  \u2192 ${aqua('Environment')} ${exported.join(', ')} ${exported.length > 1 ? 'are' : 'is'} set in this shell. If OpenClaw starts with ${exported.length > 1 ? 'them' : 'it'}, it sends that key instead of the proxy token: the key is in the agent process and the proxy answers 401. Unset ${exported.length > 1 ? 'them' : 'it'} where OpenClaw runs.`);
+              }
             }
           } else if (status.providerConfigured) {
             // Half-migrated: the provider block exists but some providers still
@@ -2536,7 +2551,7 @@ openclaw
           if (routing.unroutable.length > 0) {
             // Not a failure: nothing the user can do, and the credentials can
             // still live in the vault. Stated so nobody assumes coverage.
-            console.log(`  \u2192 ${aqua('Channel routing')} not available for ${routing.unroutable.join(', ')} on this OpenClaw (no endpoint override)`);
+            console.log(`  \u2192 ${aqua('Channel routing')} not available for ${routing.unroutable.join(', ')} on this OpenClaw (no config-level endpoint override)`);
             console.log('    (their tokens can live in the vault, but the proxy is not in their egress path)');
           }
         } catch {
