@@ -94,7 +94,8 @@ Routing therefore needs whatever endpoint override the host exposes, and only Te
 - `aquaman openclaw setup` writes `channels.telegram.apiRoot = http://127.0.0.1:<port>/telegram` and sets `botToken` to the loopback token. Verified end to end on a live 2026.9.1 gateway: `getMe` went through the proxy, the vault token was injected, and the call was audited.
 - The Bot API has no auth header, so the loopback token arrives in the `/bot<TOKEN>` segment. `findUrlPathCredentialSlot()` in `daemon.ts` accepts it there, strips it before the policy check and the request log, and puts the real token back at the same index. Index matters: media downloads are `/file/bot<TOKEN>/<path>`, so prefixing blindly would build `/bot<real>/file/...`.
 - Wiring is all-or-nothing per channel. A self-hosted `apiRoot`, a `tokenFile`, multi-account config, or an empty vault means the channel is left untouched and reported, because a half-wired channel is a dead bot.
-- Everything else stays at-rest only (vault storage plus `aquaman openclaw migrate`). Discord and Slack expose no override; Matrix, Mattermost and Nextcloud Talk already point at the user's own server. `aquaman openclaw doctor` lists them as unroutable rather than implying coverage.
+- Everything else stays at-rest only (vault storage plus `aquaman openclaw migrate`). Matrix, Mattermost and Nextcloud Talk already point at the user's own server. `aquaman openclaw doctor` lists the rest as not routed rather than implying coverage.
+- Discord is not routed, but not because the host lacks an override (earlier notes here said it had none). OpenClaw reads `DISCORD_API_URL` (openclaw#118067; in the 2026.9.37 and 2026.11.3 bundles and `docs/channels/discord.md`, absent in 2026.6.10): a process-wide env var, not config, that also moves Gateway discovery, the WebSocket, media, webhooks and OAuth to that origin, accepts plain HTTP/WS on loopback, and disables voice. Routing through it means proxying the Discord WebSocket, which the proxy does not do. Untested; a feature of its own if it is ever built. Slack is reported to read `SLACK_API_URL`; not found in the 2026.11.3 core bundle (the Slack channel ships separately), so treat that as unverified.
 
 Gotchas, all verified against the 2026.9.4 bundle:
 
@@ -134,7 +135,8 @@ SecretRef is OpenClaw's canonical credential surface (#82326); auth-profiles.jso
 - Capability consent gates third-party install/enable: `--accept-capabilities`, plus `--force` for npm/local specs (`clawhub:` specs need only the consent flag). Setup uses the `clawhub:` source, lets OpenClaw prompt interactively, and passes the flag only with `--non-interactive`.
 - `plugins.installs` in openclaw.json is rejected on 9.x; install records moved to `state/openclaw.sqlite`.
 - `plugins.allow` governs OpenClaw's own plugins too, so a list containing only `aquaman-plugin` blocks the stock `anthropic`/`openai` providers ("Unknown model"). Setup only appends to an existing list and never creates one; doctor flags lists that exclude the configured providers.
-- CI lanes: 2026.7.33 (extended-stable) and 2026.9.1 (clawstat.us flags 9.4 as skip). 2026.7.33's shrinkwrap omits `@openclaw/ai` (openclaw#151657), so CI installs it alongside when missing. Node ≥ 24.15 required.
+- CI lanes: 2026.9.37 (the `extended-stable` dist-tag) and 2026.11.3 (`latest`), since v0.17.1. OpenClaw supports one extended-stable line at a time, so 2026.7.33 is retired. CI still installs `@openclaw/ai` alongside when a shrinkwrap omits it (openclaw#151657, seen on 2026.7.33). Node ≥ 24.22.1 for 2026.9.37 (it warns "unsupported Node" below that); 2026.11.3 declares ≥ 24.16.
+- 2026.6.10 is still 73% of OpenClaw's npm downloads (2026-11-14) and is not a CI lane; the plugin e2e suite passed against it (35/35) when run by hand for v0.17.1.
 
 ## Coding agents (aquaman-coder)
 
@@ -152,12 +154,17 @@ Key files in `packages/coder/src/`: `projects.ts` (projects.yaml resolver, longe
 
 A project maps paths to env vars keyed by `aquaman://service/key`. The hook rewrites `Bash` commands to run under `aquaman-coder exec --`, which resolves each ref, injects values into the subprocess only, and pipes output through the redactor. The redactor scrubs each injected value verbatim (any shape), then applies BUILTIN_PATTERNS for secrets the child surfaced itself. They cover the GitLab `glpat-`, `glrt-` and `gloas-` families (v0.16.0), matching Claude Code 2.1.232's first-party redaction.
 
-### Claude Code hook contract (verified 2026-09-18 at 2.1.276)
+### Claude Code hook contract (verified live 2026-11-14 at 2.1.325)
 
 - Supported and stable since 2.1.203: `permissionDecision`, `permissionDecisionReason`, `updatedInput`, `additionalContext` for PreToolUse; `additionalContext` and `updatedToolOutput` for PostToolUse; exit 2 via stderr.
 - There is no `PreToolUse.additionalEnvVars`. Earlier notes here claimed one; it appears nowhere in the docs, changelog or tracker. The only hook env mechanism is SessionStart's `CLAUDE_ENV_FILE`. Credentials must never transit hook output regardless.
 - `updatedToolOutput` is adopted (v0.14.0): the redactor rewrites every tool's output before it reaches the transcript. `AQUAMAN_DISABLE_OUTPUT_REWRITE=1` degrades to warning-only. Caveats: a shape-mismatched output is ignored, and OTel spans record the pre-hook output, so redaction does not reach telemetry.
 - Hook stdout must be schema-valid JSON: 2.1.214 fixed exit-2 not blocking on invalid JSON, and 2.1.248 made JSON-looking-but-invalid stdout a hook error. `test/unit/coder-hook.test.ts` pins this.
+- **Permission rules see the rewritten command (2.1.290+).** Rules are matched against the input the hook returns, and a Bash rule never looks inside `sh -c '...'`. A bare wrapper therefore hid the real command from every `deny` and `ask` rule while the hook answered `allow`: verified live on 2.1.325, a denied command ran inside an aquaman project (v0.17.0 and earlier). The rewrite now ends with `exit` and then the original command on its own lines (`withPermissionTail()` in `hook.ts`). Claude Code splits the text into subcommands and applies its own matcher to the original, from every rule source; the shell stops at `exit`, with the wrapper's status. Use a bare `exit`, not `exit $?`: a variable makes Claude Code refuse to pre-check the command when a rule asks. Codex rewrites do not get the tail.
+- The hook still answers `allow` for a command it wraps, so in an aquaman project a Bash command that no deny or ask rule matches runs without a prompt. That predates this note and is a design question, not a bug fix; see ROADMAP.
+- 2.1.300 validates `updatedInput` like native input (unknown keys dropped, rejected input denies the call). The hook spreads `tool_input` and replaces `command`, which passes.
+- `onFailure: "block"` (2.1.295+) makes a hook that cannot start, times out or prints invalid JSON block the call; unset, the call goes ahead. `coder setup claude-code --fail-closed` sets it on the PreToolUse handler only (PostToolUse runs after the tool, so blocking there withholds nothing). Opt-in, because with it an uninstalled `aquaman` blocks every tool call, and a hook that fails open runs the command without credentials rather than leaking any. The hook's own errors already exit 2.
+- Monitor-tool commands (2.1.314+): with our `*` matcher the hook receives the Monitor call's own input (`tool_name: "Monitor"`), which the handler ignores, so they run unwrapped and without credentials.
 - Verify against the live docs when extending, not from memory.
 
 ### Codex hook contract (verified 2026-09-23 against openai/codex main)
@@ -166,7 +173,11 @@ A project maps paths to env vars keyed by `aquaman://service/key`. The hook rewr
 - A rewrite is `permissionDecision: "allow"` plus `updatedInput.command`; only `command` is read. Invalid output fails OPEN (the unwrapped command runs), so the Codex handler strips everything else, including `additionalContext`.
 - New or changed user hooks are skipped until trusted in the startup review (`[hooks.state."<path>:pre_tool_use:<g>:<h>"] trusted_hash` in config.toml). Setup does not write that entry; doctor reports it.
 - PostToolUse has no shell output rewrite (`updatedMCPToolOutput` is rejected), so the Codex handler only warns. `continue:false` + `reason` replaces model-visible output but was not verified end to end; do not adopt it without a live check.
-- The rewritten command runs in Codex's sandbox. Verified with `codex sandbox` on 0.156.1 (macOS): default is `EPERM`; `sandbox_workspace_write.network_access = true` reaches the socket; a permissions profile (`extends = ":workspace"`) reaches it only with `network.enabled = true` plus `unix_sockets = { "<abs path>" = "allow" }`, and `unix_sockets` alone stays `EPERM`. What `network.enabled` does to other egress is not yet characterised. Hook trust and a full model-driven loop are not verified live.
+- The rewritten command runs in Codex's sandbox. Verified with `codex sandbox` on macOS by connecting to a real socket under each config:
+  - 0.169.0 (2026-11-14): default is `EPERM`. Only a `default_permissions` profile with `network.enabled = true` reaches the socket, and `enabled` alone is enough: it opens every Unix socket (a `unix_sockets` entry is not consulted, not even `"deny"`) and outbound HTTPS. `unix_sockets` alone stays `EPERM`. A `[permissions]` table without `default_permissions` is a config error. `codex sandbox` no longer evaluates legacy `sandbox_mode`, so `network_access = true` and `danger-full-access` could not be re-verified.
+  - 0.156.1 (2026-09-23): `network.enabled = true` needed the socket listed too, and `sandbox_workspace_write.network_access = true` reached it.
+  - `codexSandboxStatus()` (`adapters/codex/setup.ts`) reads `config.toml` with `smol-toml` and `coder doctor` reports it: anything it cannot read, parse or recognise fails rather than passing. It sees the file only, not `-c`, `-p` or `--permission-profile`.
+  - Hook trust and a full model-driven loop are still not verified live.
 
 ### Claude Code sandbox
 
@@ -196,7 +207,8 @@ The Python plugin registers an `aquaman` `SecretSource` through `ctx.register_se
 - `protected_env_vars()` covers the token var and wired placeholders. Every surfaced string is scrubbed of the token.
 - v0.15.0: each bound ref must also be declared with `aquaman broker allow <ref>`. `aquaman hermes doctor` reads `$HERMES_HOME/config.yaml` and lists undeclared bindings.
 - Env reads on the fetch path go through `_source_env()` because the orchestrator installs a per-fetch environment view under profile multiplexing.
-- Hermes' own conformance kit is vendored at `packages/hermes/tests/_hermes_conformance.py`; CI runs it against two real hosts: the last PyPI build (`HERMES_PYPI_VERSION`, 0.19.0) and the pinned git tag (`HERMES_REF`), installed editable because tagged releases refuse wheel builds. Hermes removed PyPI publishing in PR #68217, and `SECRET_SOURCE_API_VERSION` is still 1 as of 0.21.3.
+- Hermes' own conformance kit is vendored at `packages/hermes/tests/_hermes_conformance.py`; CI runs it against two real hosts: the last PyPI build (`HERMES_PYPI_VERSION`, 0.19.0) and the pinned git tag (`HERMES_REF`, `v0.23.1`; tags are `v0.x.y` since v0.21.6). The tag lane runs inside Hermes's own locked environment (`uv run --project <checkout> --frozen`), because Hermes pins Pillow through `[tool.uv] override-dependencies`, which does not apply when it is someone else's `--with-editable` dependency. Hermes removed PyPI publishing in PR #68217, and `SECRET_SOURCE_API_VERSION` is still 1 as of 0.23.1.
+- `plugins.isolation: host` (Hermes 0.22+, opt-in) runs third-party plugins in a separate process. `hermes plugins validate` on v0.23.1 reports our plugin as host-ready (it uses only `register_command`, `register_tool`, `register_hook`, `register_secret_source`), and checks registrations against `provides_tools` / `provides_hooks` in `plugin.yaml`. A live host-mode session was not run.
 
 ## OpenShell credential driver (v0.17.0+)
 
@@ -207,7 +219,9 @@ OpenShell (NVIDIA) keeps provider credentials behind driver-owned opaque handles
 - Audit: resolves log `read` (agent `openshell`), copy writes and deletes log `rotate`, successful reference validation logs nothing. No values anywhere.
 - gRPC deps are lazily loaded optional peers (packaging-posture test pins it). protobufjs's install script is not needed at runtime.
 
-Verified against live gateways v0.1.1 through v0.1.4 (2026-10-02, re-run on v0.1.3/v0.1.4 2026-10-14, `scripts/e2e-openshell.sh`, CI `openshell-compat.yml` runs it nightly on latest + previous):
+Verified against live gateways v0.1.1 through v0.1.4 (2026-10-02, re-run on v0.1.3/v0.1.4 2026-10-14, `scripts/e2e-openshell.sh`, CI `openshell-compat.yml` runs it nightly on latest + previous and was green on v0.1.7/v0.1.8 on 2026-11-14; protos have no non-comment change from v0.1.4 to v0.1.8):
+
+- v0.1.8 (#4886): a static credential without placement metadata resolves only in `Authorization`. `x-api-key`, query and path slots need explicit placement in the provider profile, as the e2e profile has (`auth_style: header`, `header_name`).
 
 - Handshake: extension protocol 1.0, capability `openshell.credentials.contract`; the gateway names itself `openshell/gateway`. External driver config: `credential_drivers = ["aquaman"]` plus `[openshell.credential_drivers.aquaman] transport = "uds"`, `socket_path` (absolute).
 - The gateway authenticates nothing on the socket (only `user-agent` metadata); 0600 is the boundary.
@@ -247,7 +261,8 @@ A consumer's `npm audit` of our tarball is a published security signal: it is wh
 
 - `kdbxweb` and `argon2` are optional **peer** deps of the proxy, not dependencies. `optionalDependencies` would not work (npm installs those); optional peers are the only form npm skips. Both are lazily imported.
 - `openclaw` is an optional peer of the plugin, so `npm i aquaman-plugin` doesn't pull an 86 MB gateway into consumer trees.
-- `undici` and `@sinclair/typebox` are exact-pinned in the plugin; Dependabot bumps them.
+- `undici` and `@sinclair/typebox` are exact-pinned in the plugin; Dependabot bumps them. An exact pin means consumers cannot pick up a fixed version on their own: `undici` 7.30.0 collected 8 advisories two weeks after v0.17.0 shipped and stayed in the published plugin until v0.17.1. Merge those bumps and cut a patch promptly.
+- `smol-toml` (exact-pinned, zero dependencies) is a dependency of `aquaman-coder` since v0.17.1, to read Codex's `config.toml`.
 - The gateway is not in the lockfile (v0.15.0+). It was only the e2e harness, and 2026.7.33 ships a shrinkwrap pinning vulnerable transitives that root `overrides` cannot reach. CI installs it globally per lane and the e2e test calls `$OPENCLAW_BIN`. Never use `npx openclaw` there: with no local install it silently downloads `latest`. `packaging-posture.test.ts` fails if it comes back.
 - Lockfile regeneration uses `--legacy-peer-deps`, pinned by the root `.npmrc`. Without it npm follows the optional peer edges and marks those subtrees `devOptional`, which `npm audit --omit=dev` keeps, so the shipped-deps gate audits the wrong tree. Whether Dependabot honors the `.npmrc` is not yet confirmed.
 - npm ≥ 11.19 no longer runs install scripts unless allowlisted; `npm rebuild <pkg>` still does, which is what CI relies on for keytar.
