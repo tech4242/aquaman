@@ -298,19 +298,30 @@ program
       // matter what shape they happen to have. Generic BUILTIN_PATTERNS still
       // run after as defense-in-depth for any secrets the child surfaces that
       // we did NOT inject (hardcoded tokens, env vars leaked from parent, ...).
-      const { redact, buildValuePatterns, BUILTIN_PATTERNS } = await import('aquaman-proxy');
+      // A value can arrive split across two chunks, so each stream goes
+      // through a redactor that holds back enough text to see it whole.
+      const { createStreamRedactor, buildValuePatterns, BUILTIN_PATTERNS } = await import('aquaman-proxy');
       const patterns = [...buildValuePatterns(injectedValues), ...BUILTIN_PATTERNS];
+      const longestValue = injectedValues.reduce((n, v) => Math.max(n, v.length), 0);
       const pipeRedacted = (src: NodeJS.ReadableStream, dst: NodeJS.WritableStream) => {
+        const redactor = createStreamRedactor(patterns, longestValue);
         src.setEncoding('utf-8');
         src.on('data', (chunk: string) => {
-          dst.write(redact(chunk, patterns).output);
+          const out = redactor.push(chunk);
+          if (out) dst.write(out);
+        });
+        src.on('end', () => {
+          const out = redactor.end();
+          if (out) dst.write(out);
         });
       };
       if (child.stdout) pipeRedacted(child.stdout, process.stdout);
       if (child.stderr) pipeRedacted(child.stderr, process.stderr);
     }
 
-    child.on('exit', (code) => process.exit(code ?? 0));
+    // `close` fires after the child's output streams have ended, so the held
+    // back tail is written before this process exits.
+    child.on('close', (code) => process.exit(code ?? 0));
     child.on('error', (err) => {
       console.error(`Failed to spawn "${cmd}": ${err.message}`);
       process.exit(1);
