@@ -134,5 +134,12 @@ export {
   getDefaultPolicyPresets
 } from './request-policy.js';
 
+export {
+  type RequestTarget,
+  parseRequestTarget,
+  policyPathInterpretations,
+  policyMethods,
+} from './request-target.js';
+
 // Core (merged from aquaman-core)
 export * from './core/index.js';

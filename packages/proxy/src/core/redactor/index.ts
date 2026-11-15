@@ -207,6 +207,55 @@ export function redact(
   return { output, findings };
 }
 
+/** How much trailing text a stream redactor keeps back while waiting for a line to finish. */
+const STREAM_LINE_HOLDBACK = 4096;
+
+export interface StreamRedactor {
+  /** Feed the next chunk; returns the text that is now safe to write. */
+  push(chunk: string): string;
+  /** The stream ended; returns whatever was still held back, redacted. */
+  end(): string;
+}
+
+/**
+ * Redact a stream that arrives in chunks.
+ *
+ * A secret can straddle two chunks (a pipe delivers whatever the writer
+ * flushed, and a 64 KB buffer boundary can fall anywhere), and redacting each
+ * chunk on its own would let both halves through. This keeps back the end of
+ * what it has seen until more arrives: at least one character less than the
+ * longest literal value (`longestValue`), so a value split anywhere is whole
+ * again before it is written, and the unfinished last line (up to
+ * STREAM_LINE_HOLDBACK), so shape-based patterns see whole lines.
+ *
+ * Text is redacted before it is cut, so a match is never split by the cut
+ * itself; only a redaction marker can be, and that is harmless.
+ */
+export function createStreamRedactor(
+  patterns: readonly SecretPattern[] = BUILTIN_PATTERNS,
+  longestValue = 0,
+): StreamRedactor {
+  let pending = '';
+  return {
+    push(chunk: string): string {
+      pending = redact(pending + chunk, patterns).output;
+      const unfinishedLine = pending.length - (pending.lastIndexOf('\n') + 1);
+      const hold = Math.min(
+        pending.length,
+        Math.max(longestValue - 1, Math.min(unfinishedLine, STREAM_LINE_HOLDBACK)),
+      );
+      const out = pending.slice(0, pending.length - hold);
+      pending = pending.slice(pending.length - hold);
+      return out;
+    },
+    end(): string {
+      const out = redact(pending, patterns).output;
+      pending = '';
+      return out;
+    },
+  };
+}
+
 /**
  * Convenience: returns true iff any pattern matches the input.
  * Use when you only need to decide "block / pass" without rewriting.

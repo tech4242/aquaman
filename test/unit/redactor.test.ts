@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { redact, redactDeep, containsSecret, BUILTIN_PATTERNS, buildValuePatterns } from 'aquaman-core';
+import { redact, redactDeep, containsSecret, BUILTIN_PATTERNS, buildValuePatterns, createStreamRedactor } from 'aquaman-core';
 
 describe('redact (single string)', () => {
   describe('Anthropic API key', () => {
@@ -355,5 +355,47 @@ describe('redactDeep', () => {
     ]);
     const gh = findings.find((f) => f.kind === 'github-token');
     expect(gh?.count).toBe(3);
+  });
+});
+
+describe('createStreamRedactor', () => {
+  const value = 'vault-value-that-must-not-appear-0042';
+  const patterns = [...buildValuePatterns([value]), ...BUILTIN_PATTERNS];
+  const run = (chunks: string[]) => {
+    const r = createStreamRedactor(patterns, value.length);
+    return chunks.map((c) => r.push(c)).join('') + r.end();
+  };
+
+  it('redacts a value split across chunks at every possible position', () => {
+    const text = `before ${value} after\n`;
+    for (let cut = 1; cut < text.length; cut++) {
+      const out = run([text.slice(0, cut), text.slice(cut)]);
+      expect(out, `cut at ${cut}`).toBe('before [REDACTED:injected-value] after\n');
+    }
+  });
+
+  it('redacts a value delivered one character at a time', () => {
+    const out = run([...`x=${value};y=${value}\n`]);
+    expect(out).toBe('x=[REDACTED:injected-value];y=[REDACTED:injected-value]\n');
+  });
+
+  it('redacts a shape-based secret split inside a line', () => {
+    const key = 'sk-ant-api03-' + 'A'.repeat(95);
+    const out = run([`key=${key.slice(0, 40)}`, `${key.slice(40)}\nnext line\n`]);
+    expect(out).not.toContain(key.slice(0, 40));
+    expect(out).toContain('next line');
+  });
+
+  it('writes nothing it has not finished checking, and loses nothing', () => {
+    const r = createStreamRedactor(patterns, value.length);
+    const first = r.push('line one\nline t');
+    expect(first.startsWith('line one\n') || first === '').toBe(true);
+    expect(first + r.push('wo\n') + r.end()).toBe('line one\nline two\n');
+  });
+
+  it('passes long output through unchanged when there is nothing to redact', () => {
+    const text = Array.from({ length: 2000 }, (_, i) => `row ${i} ${'x'.repeat(50)}`).join('\n') + '\n';
+    const chunks = text.match(/[\s\S]{1,777}/g)!;
+    expect(run(chunks)).toBe(text);
   });
 });

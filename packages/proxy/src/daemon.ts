@@ -14,6 +14,7 @@ import { type CredentialStore, generateId } from './core/index.js';
 import { ServiceRegistry, createServiceRegistry, type ServiceDefinition, type AuthMode } from './service-registry.js';
 import { OAuthTokenCache, createOAuthTokenCache } from './oauth-token-cache.js';
 import { matchPolicy, type PolicyConfig } from './request-policy.js';
+import { parseRequestTarget, policyPathInterpretations, policyMethods } from './request-target.js';
 import type { BrokerScope } from './broker-scope.js';
 
 // Service name validation: lowercase alphanum, dots, hyphens, underscores
@@ -258,7 +259,9 @@ export class CredentialProxy {
    * placeholder bot token; the placeholder it sends is the loopback token.
    */
   private urlPathTokenCandidate(url: string): string | undefined {
-    const segments = url.split('/').filter(p => p);
+    const target = parseRequestTarget(url);
+    if (!target.ok) return undefined;
+    const segments = target.segments;
     const service = segments[0];
     if (!service || !SAFE_SERVICE_NAME.test(service)) return undefined;
     if (!this.options.allowedServices.includes(service)) return undefined;
@@ -319,8 +322,23 @@ export class CredentialProxy {
       return;
     }
 
+    // One strict reading of the request target, used for the service name,
+    // the policy check AND the upstream path. Anything a server could read
+    // two ways (backslashes, dot segments, encoded separators) is refused
+    // here; request-target.ts explains each case.
+    const target = parseRequestTarget(url);
+    if (!target.ok) {
+      res.setHeader('Content-Type', 'application/json');
+      res.statusCode = 400;
+      res.end(JSON.stringify({
+        error: `Request rejected: ${target.reason}`,
+        fix: 'Send a plain path: no backslashes, no "." or ".." segments, no encoded separators'
+      }));
+      return;
+    }
+
     // Parse service from path: /anthropic/v1/messages -> anthropic
-    const pathParts = url.split('/').filter(p => p);
+    const pathParts = target.segments;
     const service = pathParts[0];
 
     // Validate service name to prevent path traversal / injection
@@ -380,10 +398,15 @@ export class CredentialProxy {
       authenticated: false
     };
 
-    // Policy check — before credential retrieval
+    // Policy check — before credential retrieval. The request must be allowed
+    // under every reading an upstream might apply: each path interpretation
+    // (encoded slashes, `;params`) and each method a method-override header
+    // names. One denied combination denies the request.
     if (this.options.policyConfig) {
-      const policyResult = matchPolicy(service, req.method || 'GET', remainingPath, this.options.policyConfig);
-      if (!policyResult.allowed) {
+      const policyConfig = this.options.policyConfig;
+      const denied = policyMethods(req.method || 'GET', req.headers).some((method) =>
+        policyPathInterpretations(canonicalSegments).some((p) => !matchPolicy(service, method, p, policyConfig).allowed));
+      if (denied) {
         requestInfo.error = `Policy denied: ${req.method || 'GET'} ${remainingPath}`;
         requestInfo.statusCode = 403;
         this.emitRequest(requestInfo);
@@ -449,7 +472,23 @@ export class CredentialProxy {
         upstreamPath = remainingPath;
       }
 
-      const upstreamUrl = new URL(upstreamPath, config.upstream);
+      // Host and scheme come from the service definition and nothing else.
+      // Never resolve a client-supplied path against the upstream with
+      // `new URL(path, base)`: a path that parses as scheme-relative
+      // (`//host`, or `/\host`) replaces the host, and the credential follows.
+      const upstreamBase = new URL(config.upstream);
+      const upstreamUrl = new URL(upstreamBase.origin);
+      upstreamUrl.pathname = upstreamPath;
+      upstreamUrl.search = target.search;
+      if (upstreamUrl.origin !== upstreamBase.origin || upstreamUrl.username || upstreamUrl.password) {
+        requestInfo.error = 'Upstream origin mismatch';
+        requestInfo.statusCode = 400;
+        this.emitRequest(requestInfo);
+        res.setHeader('Content-Type', 'application/json');
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: 'Request rejected: path does not resolve to the service upstream', fix: 'Send a plain path' }));
+        return;
+      }
 
       // Forward the request with auth mode context
       await this.proxyRequest(req, res, upstreamUrl, serviceDef, credential, requestInfo);

@@ -55,7 +55,9 @@ export {
   redact,
   redactDeep,
   containsSecret,
-  buildValuePatterns
+  buildValuePatterns,
+  createStreamRedactor,
+  type StreamRedactor,
 } from './redactor/index.js';
 
 // Utils
