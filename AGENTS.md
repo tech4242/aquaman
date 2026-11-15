@@ -53,6 +53,13 @@ Hermes and OpenClaw each build their own HTTP client and cannot dial a socket. T
    - `none`: at-rest storage only, traffic rejected (Nostr, Tlon)
 5. Forward upstream, pipe the response back, append a hash-chained audit entry.
 
+The request target is read once, by `parseRequestTarget()` in `packages/proxy/src/request-target.ts`, and that one reading supplies the service name, the path policy sees and the path sent upstream. It refuses (400) anything two parsers could read differently: backslashes, `.`/`..` segments in any encoding, encoded backslashes and control characters, double-encoded separators, malformed escapes, fragments. The query is split off and never part of policy matching. Rules for anyone touching this path:
+
+- Never build the upstream URL with `new URL(clientPath, upstream)`. A client path that parses as scheme-relative (`//host`, or `/\host`, since WHATWG URL treats `\` as `/`) replaces the host, and the injected credential goes with it. The daemon sets `pathname` and `search` on the upstream origin and checks the origin did not change.
+- Policy must allow every reading an upstream might apply: `policyPathInterpretations()` adds the path as seen by a server that decodes `%2F` or drops `;params`, and `policyMethods()` adds any method named by `X-HTTP-Method-Override`, `X-Method-Override` or `X-HTTP-Method`. One denied combination denies the request.
+- The proxy does not follow upstream redirects; the client gets the 3xx.
+- Conformance: `test/compliance/request-target-integrity.test.ts` sends raw bytes to a real proxy with a second upstream standing in for an attacker's host. Add a case there for any new way of spelling a path.
+
 Builtin service definitions cannot be overridden through `services.yaml` or `register()`, so a poisoned config can't redirect real credentials to an attacker's host. `override()` is test-only; `ServiceRegistry.isBuiltinService()` is the check.
 
 ## Credential broker scope (v0.15.0+)
@@ -152,7 +159,7 @@ SecretRef is OpenClaw's canonical credential surface (#82326); auth-profiles.jso
 
 Key files in `packages/coder/src/`: `projects.ts` (projects.yaml resolver, longest-prefix match, realpath on both sides for macOS `/var` → `/private/var`), `broker-client.ts` (UDS client, typed `BrokerError` with the daemon's `code`), `adapters/claude-code/{hook,setup}.ts`, `adapters/codex/{hook,setup}.ts`, `cli/index.ts`.
 
-A project maps paths to env vars keyed by `aquaman://service/key`. The hook rewrites `Bash` commands to run under `aquaman-coder exec --`, which resolves each ref, injects values into the subprocess only, and pipes output through the redactor. The redactor scrubs each injected value verbatim (any shape), then applies BUILTIN_PATTERNS for secrets the child surfaced itself. They cover the GitLab `glpat-`, `glrt-` and `gloas-` families (v0.16.0), matching Claude Code 2.1.232's first-party redaction.
+A project maps paths to env vars keyed by `aquaman://service/key`. The hook rewrites `Bash` commands to run under `aquaman-coder exec --`, which resolves each ref, injects values into the subprocess only, and pipes output through the redactor. The redactor scrubs each injected value verbatim (any shape), then applies BUILTIN_PATTERNS for secrets the child surfaced itself. Output is redacted as a stream (`createStreamRedactor()`), which holds back the unfinished tail so a value split across two chunks is still caught; redacting chunk by chunk would let both halves through. It does not catch a value the command deliberately transforms (base64, reversed, one character per line): the wrapped command holds the real value, so redaction guards against accidents, not against the command itself. They cover the GitLab `glpat-`, `glrt-` and `gloas-` families (v0.16.0), matching Claude Code 2.1.232's first-party redaction.
 
 ### Claude Code hook contract (verified live 2026-11-14 at 2.1.325)
 

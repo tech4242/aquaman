@@ -84,13 +84,11 @@ const AQUAMAN_WRAPPER_MARKS = ['aquaman-coder exec', 'aquaman coder exec'];
  *
  * Since Claude Code 2.1.290 permission rules are evaluated against the input
  * the hook returns, not the command Claude wrote, and a rule never looks
- * inside `sh -c '...'`. A bare wrapper therefore hid the real command from
- * every deny and ask rule: verified live on 2.1.325, `Bash(echo forbidden*)`
- * in `deny` stopped the command outside an aquaman project and let it run
- * inside one.
+ * inside `sh -c '...'`. A bare wrapper would hide the real command from every
+ * deny and ask rule (verified live on 2.1.325).
  *
- * The fix is to leave the original command in the rewritten text as its own
- * top-level statement, after an unconditional `exit`. Claude Code splits the
+ * So the original command stays in the rewritten text as its own top-level
+ * statement, after an unconditional `exit`. Claude Code splits the
  * text into subcommands and matches its rules against each, so a deny or ask
  * rule on the original fires exactly as the host would have applied it, from
  * every rule source (settings files, managed policy, CLI flags, session
