@@ -97,7 +97,8 @@ describe('Service name validation', () => {
 
   it('rejects path traversal in service name', async () => {
     const res = await udsFetch(socketPath, '/../etc/passwd');
-    expect(res.status).toBe(404);
+    // A dot segment is refused before the service name is even looked at.
+    expect(res.status).toBe(400);
   });
 
   it('rejects service names with special characters', async () => {
@@ -107,6 +108,6 @@ describe('Service name validation', () => {
 
   it('rejects service names with null bytes', async () => {
     const res = await udsFetch(socketPath, '/slack%00evil/api');
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(400);
   });
 });
