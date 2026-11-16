@@ -362,12 +362,16 @@ print('wrote', len(SPRITES), 'sprites and the favicon')
 
 # ---- The README banner: the home page's scene as one standalone SVG ----------------
 
+#: Which variant docs/assets/banner.svg is: 'a' day, 'b' dusk, 'c' underwater only, 'd' wide and sparse.
+BANNER = 'a'
+
+# Nine rows: two above the x-height, five for it, two below for the q's tail.
 GLYPHS = {
-    'a': ['.....', '.....', '.###.', '....#', '.####', '#...#', '.####'],
-    'q': ['.....', '.####', '#...#', '#...#', '.####', '....#', '....#'],
-    'u': ['.....', '.....', '#...#', '#...#', '#...#', '#..##', '.##.#'],
-    'm': ['.....', '.....', '##.#.', '#.#.#', '#.#.#', '#.#.#', '#.#.#'],
-    'n': ['.....', '.....', '#.##.', '##..#', '#...#', '#...#', '#...#'],
+    'a': ['.....', '.....', '.###.', '....#', '.####', '#...#', '.####', '.....', '.....'],
+    'q': ['.....', '.....', '.####', '#...#', '#...#', '#...#', '.####', '....#', '....#'],
+    'u': ['.....', '.....', '#...#', '#...#', '#...#', '#..##', '.##.#', '.....', '.....'],
+    'm': ['.....', '.....', '##.#.', '#.#.#', '#.#.#', '#.#.#', '#.#.#', '.....', '.....'],
+    'n': ['.....', '.....', '#.##.', '##..#', '#...#', '#...#', '#...#', '.....', '.....'],
 }
 HEX = {'#': '#0b2a3a', 'd': '#136f7a', 'm': '#3fc1c0', 'l': '#d9f5ec', 'c': '#ff6b4a', 's': '#c9412a',
        'p': '#ffa38a', 'y': '#ffd23f', 'g': '#d99a1c', 'w': '#ffffff'}
@@ -388,63 +392,147 @@ def runs(rows, swap=None):
 def group(rows, x, y, cls='', swap=None):
     return f'<g transform="translate({x} {y})"><g class="{cls}">{runs(rows, swap)}</g></g>'
 
-def banner():
-    W, H, SEA = 320, 132, 46
-    lit = {'#': HEX['l']}
-    parts = [f'<rect width="{W}" height="{SEA}" fill="{HEX["l"]}"/>',
-             f'<rect y="{SEA}" width="{W}" height="30" fill="{HEX["m"]}"/>',
-             f'<rect y="{SEA + 30}" width="{W}" height="26" fill="{HEX["d"]}"/>',
-             f'<rect y="{SEA + 56}" width="{W}" height="{H - SEA - 56}" fill="{HEX["#"]}"/>']
-    # Waves along the surface, and a dithered row where each depth meets the next.
-    for x in range(0, W, 8):
-        parts.append(f'<path fill="{HEX["m"]}" d="M{x + 2} {SEA - 3}h2v1h-2zM{x + 1} {SEA - 2}h4v1h-4zM{x} {SEA - 1}h6v1h-6z"/>')
-    for y, colour in ((SEA + 28, HEX['d']), (SEA + 54, HEX['#'])):
-        for row in (0, 1):
-            cells = ''.join(f'M{x} {y + row}h1v1h-1z' for x in range(row, W, 2))
-            parts.append(f'<path fill="{colour}" d="{cells}"/>')
-    # The wordmark, drawn in pixels because a README cannot load a font.
-    word = []
+BAYER = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]]
+
+def dither_defs(colours):
+    """One 4x4 pattern per colour and density, so a band can fade the way a four-shade screen does."""
+    out = []
+    for name, colour in colours.items():
+        for k in range(1, 16):
+            cells = ''.join(f'M{x} {y}h1v1h-1z' for y in range(4) for x in range(4) if BAYER[y][x] < k)
+            out.append(f'<pattern id="{name}{k}" width="4" height="4" patternUnits="userSpaceOnUse"><path fill="{colour}" d="{cells}"/></pattern>')
+    return '<defs>' + ''.join(out) + '</defs>'
+
+def fade(name, y, h, W, down=True):
+    """Rows of `name`, thickening toward the bottom (or the top)."""
+    rows = []
+    for r in range(h):
+        k = max(1, min(15, round((r + 1) * 16 / (h + 1))))
+        if not down: k = 16 - k
+        rows.append(f'<rect y="{y + r}" width="{W}" height="1" fill="url(#{name}{k})"/>')
+    return ''.join(rows)
+
+def wordmark(x, y, size, colour):
+    out = []
     for i, letter in enumerate('aquaman'):
         for gy, row in enumerate(GLYPHS[letter]):
             for gx, ch in enumerate(row):
                 if ch == '#':
-                    word.append(f'<rect x="{14 + i * 18 + gx * 3}" y="{8 + gy * 3}" width="3" height="3" fill="{HEX["#"]}"/>')
-    parts.append(''.join(word))
-    parts.append(group(sun(), 198, 2))
-    parts.append(group(cloud(), 150, 16, 'drift'))
-    parts.append(group(cloud(), 262, 6, 'drift slow'))
-    # The agent on its raft, and the line it lowers to the tag.
-    rob = robot()
-    rx = 232
-    parts.append(f'<rect x="{rx + 23}" y="{SEA}" width="1" height="48" fill="{HEX["#"]}"/>')
-    parts.append(f'<rect x="{rx + 23}" y="{SEA + 48}" width="1" height="18" fill="{HEX["l"]}"/>')
-    parts.append(group(tag(), rx + 11, SEA + 64, swap=lit))
-    parts.append(group(rob, rx, SEA - len(rob) + 5, 'bob'))
-    parts.append(group(fish(), 96, SEA + 10, 'swim'))
-    # aquaman, the octopus, and what it guards.
-    octo = octopus()
-    parts.append(group(octo, 18, H - len(octo) - 4, 'bob late', swap=lit))
-    che = chest()
-    parts.append(group(che, 92, H - len(che) - 4, swap=lit))
-    parts.append(group(key(), 104, H - len(che) - 18, swap=lit))
-    parts.append(group(weed(22, 0.4), 168, H - 24))
-    parts.append(group(anchor(), 196, H - 32))
-    parts.append(group(weed(18, 1.9), 296, H - 20))
-    style = ('<style>'
-             '@media (prefers-reduced-motion: no-preference){'
-             '.bob{animation:bob 1.6s steps(2,jump-none) infinite}.late{animation-duration:2.4s}'
-             '.drift{animation:drift 40s steps(40) infinite alternate}.slow{animation-duration:70s}'
-             '.swim{animation:swim 30s steps(60) infinite}}'
-             '@keyframes bob{50%{transform:translateY(1px)}}'
-             '@keyframes drift{to{transform:translateX(-24px)}}'
-             '@keyframes swim{from{transform:translateX(230px)}to{transform:translateX(-130px)}}'
-             '</style>')
+                    out.append(f'<rect x="{x + i * 6 * size + gx * size}" y="{y + gy * size}" width="{size}" height="{size}" fill="{colour}"/>')
+    return ''.join(out)
+
+STYLE = ('<style>'
+         '@media (prefers-reduced-motion: no-preference){'
+         '.bob{animation:bob 1.6s steps(2,jump-none) infinite}.late{animation-duration:2.4s}'
+         '.drift{animation:drift 40s steps(40) infinite alternate}.slow{animation-duration:70s}'
+         '.swim{animation:swim 30s steps(60) infinite}.rise{animation:rise 7s steps(28) infinite}.r2{animation-duration:11s;animation-delay:-3s}}'
+         '@keyframes bob{50%{transform:translateY(1px)}}'
+         '@keyframes drift{to{transform:translateX(-24px)}}'
+         '@keyframes swim{from{transform:translateX(230px)}to{transform:translateX(-130px)}}'
+         '@keyframes rise{from{transform:translateY(0);opacity:1}to{transform:translateY(-46px);opacity:0}}'
+         '</style>')
+TITLE = ('aquaman: an AI agent on a raft at the surface lowers a line; far below, an octopus guards the vault and the key')
+
+def wrap(W, H, defs, parts):
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" shape-rendering="crispEdges" role="img" '
-            f'aria-labelledby="t"><title id="t">aquaman: an AI agent on a raft at the surface lowers a line; far below, '
-            f'an octopus guards the vault and the key</title>{style}{"".join(parts)}</svg>\n')
+            f'aria-labelledby="t"><title id="t">{TITLE}</title>{STYLE}{defs}{"".join(parts)}</svg>\n')
+
+def silhouette(rows, x, y, colour):
+    return group(rows, x, y, swap={ch: colour for ch in HEX})
+
+def seafloor(W, H, parts, depth=7):
+    """Sand along the bottom, with a ragged top edge and a few pebbles."""
+    parts.append(f'<rect y="{H - depth}" width="{W}" height="{depth}" fill="{HEX["y"]}"/>')
+    bumps = ''.join(f'M{x} {H - depth - 1}h{3 + (x * 7) % 4}v1h-{3 + (x * 7) % 4}z' for x in range(0, W, 11))
+    parts.append(f'<path fill="{HEX["y"]}" d="{bumps}"/>')
+    pebbles = ''.join(f'M{(x * 37) % W} {H - 1 - (x * 5) % (depth - 1)}h2v1h-2z' for x in range(1, 40))
+    parts.append(f'<path fill="{HEX["g"]}" d="{pebbles}"/>')
+
+def banner(variant='a'):
+    lit = {'#': HEX['l']}
+    if variant == 'c':
+        # All underwater: aquaman large, the name beside it, the line coming down from above.
+        W, H = 260, 104
+        parts = [f'<rect width="{W}" height="{H}" fill="{HEX["#"]}"/>', f'<rect width="{W}" height="10" fill="{HEX["d"]}"/>', fade('ink', 10, 22, W)]
+        parts.append(silhouette(rock(), 150, H - 19, HEX['d'])); parts.append(silhouette(rock(), 214, H - 17, HEX['d']))
+        seafloor(W, H, parts, 6)
+        parts.append(f'<rect x="244" y="0" width="1" height="60" fill="{HEX["l"]}"/>')
+        parts.append(group(tag(), 232, 58, swap=lit))
+        parts.append(wordmark(100, 24, 3, HEX['l']))
+        for bx, by, cls in ((96, 60, 'rise'), (236, 70, 'rise r2'), (30, 30, 'rise r2')):
+            parts.append(group(bubble(), bx, by, cls))
+        parts.append(group(fish(), 60, 16, 'swim', swap=lit))
+        octo = octopus(); parts.append(group(octo, 14, H - len(octo) - 8, 'bob late', swap=lit))
+        che = chest(); parts.append(group(che, 150, H - len(che) - 5, swap=lit))
+        parts.append(group(weed(20, 0.4), 242, H - 26)); parts.append(group(weed(16, 1.6), 122, H - 22))
+        return wrap(W, H, dither_defs({'ink': HEX['#']}), parts)
+
+    dusk = variant == 'b'
+    W, H, SEA = (360, 110, 40) if variant == 'd' else (320, 136, 46)
+    sky = '#ffc6a0' if dusk else HEX['l']
+    shallow, mid = ('#2f9aa6', '#125a6b') if dusk else (HEX['m'], HEX['d'])
+    defs = dither_defs({'mid': mid, 'ink': HEX['#'], 'ray': HEX['l'], 'sun': HEX['y'], 'rose': '#ff8f7a'})
+    floor = H - 7
+    b1 = SEA + (22 if variant == 'd' else 30)       # where the shallows end
+    b2 = b1 + (20 if variant == 'd' else 26)        # where the deep begins
+    parts = [f'<rect width="{W}" height="{SEA}" fill="{sky}"/>',
+             f'<rect y="{SEA}" width="{W}" height="{b1 - SEA}" fill="{shallow}"/>',
+             f'<rect y="{b1}" width="{W}" height="{b2 - b1}" fill="{mid}"/>',
+             f'<rect y="{b2}" width="{W}" height="{H - b2}" fill="{HEX["#"]}"/>',
+             fade('mid', b1 - 9, 9, W), fade('ink', b2 - 9, 9, W)]
+    if dusk:
+        parts.append(fade('rose', 4, SEA - 12, W))
+        parts.append(f'<circle cx="150" cy="{SEA}" r="16" fill="{HEX["y"]}"/><rect y="{SEA}" width="{W}" height="20" fill="{shallow}"/>')
+        parts.append(f'<rect x="136" y="{SEA + 2}" width="28" height="1" fill="url(#sun8)"/><rect x="140" y="{SEA + 5}" width="20" height="1" fill="url(#sun6)"/><rect x="144" y="{SEA + 8}" width="12" height="1" fill="url(#sun4)"/>')
+    else:
+        parts.append(group(sun(), W - 122, 2))
+    # Shafts of light through the shallows.
+    for x0 in ((60, 150, 250) if variant != 'd' else (90, 220)):
+        parts.append(f'<path fill="url(#ray3)" d="M{x0} {SEA}h16l-26 {b1 - SEA}h-16z"/>')
+        parts.append(f'<path fill="url(#ray2)" d="M{x0 + 26} {SEA}h7l-26 {b1 - SEA}h-7z"/>')
+    for x in range(0, W, 8):
+        parts.append(f'<path fill="{shallow}" d="M{x + 2} {SEA - 3}h2v1h-2zM{x + 1} {SEA - 2}h4v1h-4zM{x} {SEA - 1}h6v1h-6z"/>')
+        if not dusk:
+            parts.append(f'<rect x="{x + 2}" y="{SEA - 3}" width="2" height="1" fill="{HEX["w"]}"/>')
+    parts.append(wordmark(14, 5, 3, HEX['#']))
+    cloud_tint = {'w': '#ffe3cf', 'm': '#ff8f7a'} if dusk else None
+    parts.append(group(cloud(), 150 if not dusk else 196, 16 if not dusk else 6, 'drift', swap=cloud_tint))
+    parts.append(group(cloud(), W - 58, 6, 'drift slow', swap=cloud_tint))
+    # Far rocks, then the sand.
+    for rx_, w_ in ((70, 0), (170, 1), (270, 0)):
+        if variant == 'd' and w_: continue
+        parts.append(silhouette(rock(), rx_, floor - 13, mid))
+    seafloor(W, H, parts)
+    # The agent on its raft, and the line it lowers to the tag.
+    rob = robot(); rx = W - 88
+    parts.append(f'<rect x="{rx + 23}" y="{SEA}" width="1" height="{b2 - SEA - 6}" fill="{HEX["#"]}"/>')
+    parts.append(f'<rect x="{rx + 23}" y="{b2 - 6}" width="1" height="14" fill="{HEX["l"]}"/>')
+    parts.append(group(tag(), rx + 11, b2 + 6, swap=lit))
+    parts.append(group(rob, rx, SEA - len(rob) + 5, 'bob'))
+    parts.append(group(fish(), 96, SEA + 8, 'swim'))
+    if variant != 'd':
+        parts.append(group(fish(), 40, b1 + 6, 'swim', swap=lit))
+        for bx, by, cls in ((84, b2 - 4, 'rise'), (300, b2 + 10, 'rise r2'), (190, b1 + 12, 'rise r2')):
+            parts.append(group(bubble(), bx, by, cls))
+    octo = octopus(); parts.append(group(octo, 18, floor - len(octo) + 3, 'bob late', swap=lit))
+    che = chest(); parts.append(group(che, 92, floor - len(che) + 2, swap=lit))
+    parts.append(group(key(), 106, floor - len(che) - 10, swap=lit))
+    if variant != 'd':
+        parts.append(group(weed(22, 0.4), 168, floor - 22)); parts.append(group(anchor(), 196, floor - 28)); parts.append(group(coral(), 150, floor - 24, swap=lit))
+    parts.append(group(weed(18, 1.9), W - 22, floor - 18))
+    return wrap(W, H, defs, parts)
 
 assets = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'docs', 'assets')
 os.makedirs(assets, exist_ok=True)
-open(os.path.join(assets, 'banner.svg'), 'w').write(banner())
+open(os.path.join(assets, 'banner.svg'), 'w').write(banner(BANNER))
 print('wrote docs/assets/banner.svg')
+
+# `--options DIR` writes every variant there, to compare before choosing one.
+import sys
+if '--options' in sys.argv:
+    out_dir = sys.argv[sys.argv.index('--options') + 1]
+    os.makedirs(out_dir, exist_ok=True)
+    for v in 'abcd':
+        open(os.path.join(out_dir, f'banner-{v}.svg'), 'w').write(banner(v))
+    print('wrote four options to', out_dir)
 

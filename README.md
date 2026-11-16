@@ -1,6 +1,6 @@
 # aquaman: credential proxy for AI agents
 
-<p align="center"><img src="docs/assets/banner.svg" width="880" alt="Pixel art: an AI agent, drawn as a small robot on a raft, floats at the surface and lowers a line. Far below, an octopus guards a treasure chest and a key. The agent gets a tag on its line, never the key."></p>
+<img src="docs/assets/banner.svg" width="880" alt="Pixel art: an AI agent, drawn as a small robot on a raft, floats at the surface and lowers a line. Far below, an octopus guards a treasure chest and a key. The agent gets a tag on its line, never the key.">
 
 [![CI](https://github.com/tech4242/aquaman/actions/workflows/ci.yml/badge.svg)](https://github.com/tech4242/aquaman/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/tech4242/aquaman/branch/main/graph/badge.svg)](https://codecov.io/gh/tech4242/aquaman)
