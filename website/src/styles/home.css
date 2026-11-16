@@ -96,7 +96,7 @@
 
 /* 200 m */
 .deep { background: var(--ink); color: var(--foam); padding-top: 9rem; }
-.keeper { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3.5rem; align-items: center; }
+.guard { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3.5rem; align-items: center; }
 .octo { position: relative; width: 440px; height: 260px; }
 .octo .open, .octo .shut { position: absolute; left: 0; top: 0; }
 .octo .shut { opacity: 0; }
@@ -218,7 +218,7 @@
   .flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .proof { grid-template-columns: minmax(0, 1fr); }
   .proof .box p { min-height: 0; }
-  .keeper { grid-template-columns: minmax(0, 1fr); gap: 2rem; }
+  .guard { grid-template-columns: minmax(0, 1fr); gap: 2rem; }
   .vaults { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .trust { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .line, .swim, .gauge, .sky { display: none !important; }

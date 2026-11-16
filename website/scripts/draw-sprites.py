@@ -421,7 +421,7 @@ def banner():
     parts.append(group(tag(), rx + 11, SEA + 64, swap=lit))
     parts.append(group(rob, rx, SEA - len(rob) + 5, 'bob'))
     parts.append(group(fish(), 96, SEA + 10, 'swim'))
-    # The keeper and what it keeps.
+    # aquaman, the octopus, and what it guards.
     octo = octopus()
     parts.append(group(octo, 18, H - len(octo) - 4, 'bob late', swap=lit))
     che = chest()
