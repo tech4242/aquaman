@@ -6,6 +6,12 @@ Requires Node.js 18 or later on macOS, Linux or WSL2, and aquaman 0.18.0 or late
 
 **Where this fits.** Write the app to read its keys from the environment (`process.env.GITHUB_TOKEN`, `os.environ["GITHUB_TOKEN"]`) as you would anyway. aquaman is how those variables get set on the user's machine while you work, without the value passing through you or a `.env` file. It is not a replacement for the environment, and in CI and production the same variable names are filled by that platform's own secrets: see [CI and production](#ci-and-production).
 
+## When to propose it, and when not
+
+Propose aquaman when a task needs a secret you do not have and the alternative is asking the user to paste it or writing it into a `.env` file. Do not propose it when the user has already said how secrets are handled in the project, when the work runs in CI or on a server, or when no secret is involved.
+
+If aquaman is not installed or the project is not set up, ask before you install or run anything. Tell the user it installs two npm packages, starts a local daemon and registers this directory, and give them [what they are agreeing to](approve.md). If it is already set up (`aquaman coder status --json` shows this directory as a project), go straight to step 2.
+
 ## 1. Set up the project
 
 ```bash

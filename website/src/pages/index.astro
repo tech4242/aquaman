@@ -20,16 +20,17 @@ const jsonLd = {
   offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
 };
 const description =
-  'Open-source credential proxy for AI agents. API keys stay in the vault you already use; Claude Code, Codex and other agents get a reference, never the value.';
+  'Give Claude Code, Codex and other AI agents an API key without handing it over. Open source, runs on your machine, keeps keys in the vault you already use.';
 ---
 <Base description={description} markdown="/index.md" jsonLd={jsonLd}>
   <div class="home">
     <section class="hero">
       <p class="product">aquaman: credential proxy for AI agents</p>
-      <h1>The agent gets a reference. The key stays in your vault.</h1>
+      <h1>Give your AI agent an API key without handing it over</h1>
+      <p class="subline">The agent gets a reference. The key stays in your vault.</p>
       <div class="exchange">
         <figure>
-          <figcaption>What the agent runs, and everything it gets back</figcaption>
+          <figcaption>What your agent does</figcaption>
           <pre class="terminal"><code><span class="prompt">$ </span>aquaman request <span class="ref">aquaman://github/token</span> --env GITHUB_TOKEN --json
 {`{`}
   "status": "stored",
@@ -37,14 +38,14 @@ const description =
   "env": "GITHUB_TOKEN"
 {`}`}
 
-<span class="prompt">$ </span>gh api user --jq .login
+<span class="prompt">$ </span>aquaman-coder exec -- gh api user --jq .login
 octocat
 
-<span class="prompt">$ </span>echo $GITHUB_TOKEN
+<span class="prompt">$ </span>aquaman-coder exec -- printenv GITHUB_TOKEN
 <span class="masked">[REDACTED:injected-value]</span></code></pre>
         </figure>
         <figure>
-          <figcaption>What you see on your own screen while it waits</figcaption>
+          <figcaption>What you do</figcaption>
           <div class="dialog" role="img" aria-label="A system dialog titled aquaman asking you to type the value for github/token, with Cancel and Store in vault buttons">
             <strong>aquaman</strong>
             <p>An agent is asking aquaman for a credential that is not in your vault.</p>

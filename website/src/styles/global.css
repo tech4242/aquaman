@@ -160,3 +160,7 @@ h1, h2, h3 { line-height: 1.15; letter-spacing: -0.015em; text-wrap: balance; }
 .sidebar .group a { border-left: 0; padding-left: 0; display: inline; color: inherit; }
 .sidebar .group a[aria-current='page'] { color: var(--accent); }
 .old-version { border: 1px solid var(--secret); border-radius: 6px; padding: 0.6rem 0.9rem; font-size: 0.95rem; }
+
+.hero h1 { max-width: 20ch; margin-bottom: 0.9rem; }
+.hero .subline { font-size: 1.35rem; color: var(--muted); margin: 0; max-width: 40ch; }
+.home-body strong:only-child { font-size: 1.05rem; }

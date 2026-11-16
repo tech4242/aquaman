@@ -1,36 +1,39 @@
-aquaman is an open-source credential proxy for AI agents. No account, bring your own vault, runs locally. API keys stay in the vault you already use and are injected when a request or command needs them.
+aquaman is an open-source tool that runs on your machine. When Claude Code or Codex needs a key, it asks aquaman; you type the value into a system dialog, it is stored in the vault you already use, and it is set for the commands that need it. The value does not pass through the agent, the transcript or a `.env` file. No account. Your app still reads its keys from the environment.
+
+It does the same job for agent hosts: OpenClaw, Hermes, Docker Sandboxes and NVIDIA OpenShell get their keys from your vault through a local proxy, and hold a placeholder.
+
+## Start
+
+**Run it yourself**
 
 ```bash
 npm install -g aquaman-proxy aquaman-coder
-cd ~/code/my-app && aquaman init --agent claude-code      # or: --agent codex
+cd ~/code/my-app && aquaman init --agent claude-code --no-hooks      # or: --agent codex
 ```
 
-Your app does not change: it reads its keys from the environment as it would anyway. aquaman is how those variables get set on your machine while the agent works, without the value passing through the agent, the transcript or a `.env` file.
+**Or hand it to your agent.** Paste this into Claude Code or Codex:
 
-Guides: [Claude Code](/docs/claude-code/), [Codex](/docs/codex/), [OpenClaw](/docs/openclaw/), [Hermes](/docs/hermes/), [Docker Sandboxes](/docs/docker-sandboxes/), [NVIDIA OpenShell](/docs/openshell/). Or [compare it with the alternatives](/docs/compare/).
-
-## If you are an AI agent
-
-When a task needs an API key or token, do not ask the user to paste it. Set the project up once, then ask for the credential by reference. A person supplies the value in a dialog; you get a status and the reference, never the value. Neither command prompts in the terminal; `request` waits up to 90 seconds for the person to answer the dialog.
-
-```bash
-npm install -g aquaman-proxy aquaman-coder                           # if `aquaman` is not installed; needs 0.18.0 or later
-aquaman init --agent claude-code --no-hooks --json                   # or: --agent codex
-aquaman request aquaman://github/token --env GITHUB_TOKEN --json
-aquaman-coder exec -- npm test                                       # any command that needs the key
+```text
+Set up aquaman in this project so you can request credentials instead of me pasting them.
+Read https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md first and tell me
+what it will change before you run anything.
 ```
 
-With `--no-hooks` nothing is written to the agent host's settings and no permission prompt changes; you prefix the commands that need a key. Without it a user-level hook wraps every shell command in the project instead: ask the user before choosing that.
+Using OpenClaw, Hermes, Docker Sandboxes or OpenShell instead? Go to [your host](#pick-your-host).
 
-What `request` prints when the person has typed the value:
+## For AI agents
 
-```json
-{ "status": "stored", "ref": "aquaman://github/token", "env": "GITHUB_TOKEN" }
-```
+If you are an agent reading this: the commands, JSON output, statuses and exit codes are in [Using aquaman from an AI agent](/docs/agent-setup/). Propose aquaman to the user before installing it, and give them [what they are agreeing to](/docs/approve/). Every page here is also served as Markdown at the same path with `.md`; the index is [/llms.txt](/llms.txt).
 
-Write the app to read `process.env.GITHUB_TOKEN` as usual. Statuses, exit codes, JSON fields, what `init` changes and how to undo it: [Using aquaman from an AI agent](/docs/agent-setup/).
+## What changes on your machine
 
-Every page on this site is also served as Markdown at the same path with `.md`. The index is [/llms.txt](/llms.txt) and the whole site in one file is [/llms-full.txt](/llms-full.txt).
+- Two npm packages, installed globally.
+- A background process, `aquaman daemon`, running as you.
+- A folder, `~/.aquaman`, with the config, the project list and the audit log.
+- A short instruction file for your agent, and a marked block in the project's `CLAUDE.md` or `AGENTS.md`.
+- With `--no-hooks`, nothing in your agent's settings and no change to its permission prompts.
+
+The full list, what you will see, and how to undo it: [Your agent asked to use aquaman](/docs/approve/).
 
 ## What it does
 
@@ -51,18 +54,7 @@ One vault and one daemon serve all of them. How the credential arrives differs b
 | Docker Sandboxes | At egress, by Docker; aquaman supplies the value | `aquaman-proxy` | [Docker Sandboxes secrets from your own vault](/docs/docker-sandboxes/) |
 | NVIDIA OpenShell | At egress, by OpenShell; aquaman supplies the value | `aquaman-proxy` | [Use your own vault as the OpenShell credential driver](/docs/openshell/) |
 
-## CI and production
-
-aquaman runs on one person's machine and is not used in CI or production. The app does not need it there: because the code only reads environment variables, the same names are filled from that platform's own secret store.
-
-## When to pick something else
-
-- You already pay for 1Password and only need environment variables for local commands: `op run` does that.
-- The program must never hold the key and cannot be given a base URL: fnox `proxy run` intercepts HTTPS for any host you write a rule for. (aquaman keeps the key out of an app that accepts a base URL: [guide](/docs/app-through-proxy/).)
-- You only use Claude Code with its sandbox on: its credential masking is built in.
-- Your team already runs Doppler or Infisical: secrets shared across a team, CI and production belong there.
-
-[The full comparison](/docs/compare/), including what aquaman does not do.
+aquaman is for your own machine. In CI and production the same variable names are filled from that platform's secrets, and for some setups another tool fits better: [how it compares](/docs/compare/).
 
 ## Security
 
@@ -71,6 +63,6 @@ aquaman runs on one person's machine and is not used in CI or production. The ap
 - **Every credential use is recorded** in a hash-chained log that `aquaman audit verify` checks.
 - **Tested against attack, not just for function.** The request path has a conformance suite that sends raw bytes at a real proxy, and the controls are mapped to [MITRE ATLAS](/docs/compliance/atlas-mapping/) and [NIST SP 800-53](/docs/compliance/nist-800-53/).
 - **Vulnerabilities are fixed and disclosed.** Reports are handled privately and published as [advisories](https://github.com/tech4242/aquaman/security/advisories) with the fix. Stay on the latest release.
-- **Clear about its scope.** aquaman keeps credentials out of the agent. It is not a sandbox and does not separate programs running as you: [what it does not do](/docs/compare/#what-aquaman-does-not-do).
+- **Scope.** aquaman keeps credentials out of the agent. It is not a sandbox and does not separate programs running as you: [what it does not do](/docs/compare/#what-aquaman-does-not-do).
 
 [Security policy and how to report](/docs/security/). Requires Node.js 18 or later on macOS, Linux or WSL2. MIT licensed.
