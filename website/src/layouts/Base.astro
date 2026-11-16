@@ -1,6 +1,9 @@
 ---
 import '../styles/global.css';
 import { SITE_NAME, HOME_TITLE } from '../lib/site';
+import { githubStars, formatStars } from '../lib/stars';
+import Sprite from '../components/Sprite.astro';
+import { STAR } from '../lib/sprites';
 
 interface Props {
   title?: string;
@@ -16,6 +19,7 @@ interface Props {
   look?: string;
 }
 const { title, description, markdown, jsonLd, canonicalPath, wide, look } = Astro.props;
+const stars = await githubStars();
 const fullTitle = title ? `${title} | ${SITE_NAME}` : HOME_TITLE;
 const canonical = new URL(canonicalPath ?? Astro.url.pathname, Astro.site).href;
 const at = (p: string) => (Astro.url.pathname.replace(/\/?$/, '/') === p ? 'page' : undefined);
@@ -49,7 +53,11 @@ const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/',
           <a href="/docs/agent-setup/" aria-current={at('/docs/agent-setup/')}>For agents</a>
           <a href="/docs/compare/" aria-current={at('/docs/compare/')}>Compare</a>
           <a href="/docs/security/" aria-current={at('/docs/security/')}>Security</a>
-          <a href="https://github.com/tech4242/aquaman">GitHub</a>
+          <a class="stars" href="https://github.com/tech4242/aquaman" aria-label={stars === null ? 'Star aquaman on GitHub' : `Star aquaman on GitHub: ${stars} stars`}>
+            <Sprite rows={STAR} px={2} />
+            <span>GitHub</span>
+            {stars !== null && <b>{formatStars(stars)}</b>}
+          </a>
         </nav>
       </div>
     </header>

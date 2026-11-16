@@ -2,7 +2,7 @@
 import Base from '../layouts/Base.astro';
 import '../styles/home.css';
 import Sprite from '../components/Sprite.astro';
-import { OCTOPUS, OCTOPUS_BLINK, ROBOT, KEY, CHEST, FISH, BUBBLE, TAG, WEED, INK } from '../lib/sprites';
+import { OCTOPUS, OCTOPUS_BLINK, ROBOT, KEY, CHEST, CHEST_OPEN, FISH, BUBBLE, TAG, WEED, WEED_TALL, INK, ANCHOR, STARFISH, SHELL, CRAB, CORAL, ROCK, SUN, CLOUD } from '../lib/sprites';
 import { HOSTS, AGENT_PROMPT } from '../lib/hosts';
 import { docUrl } from '../lib/links.mjs';
 import { SUMMARY, HOME_TITLE, packageVersion } from '../lib/site';
@@ -54,15 +54,20 @@ const description =
           <a class="btn b" href="/docs/approve/">My agent asked to install it</a>
         </div>
         <div class="raft">
-          <Sprite rows={ROBOT} px={7} label="A small robot on a raft: your agent, on the surface" />
+          <Sprite rows={ROBOT} px={4} label="A small robot on a raft: your agent, on the surface" />
         </div>
+      </div>
+      <div class="sky" aria-hidden="true">
+        <Sprite rows={SUN} px={4} class="sun" />
+        <Sprite rows={CLOUD} px={4} class="cloud c1" />
+        <Sprite rows={CLOUD} px={3} class="cloud c2" />
       </div>
       <div class="waves" aria-hidden="true"></div>
     </section>
 
     <section class="zone shallow">
       <div class="line" aria-hidden="true"></div>
-      <div class="swim f1" aria-hidden="true"><Sprite rows={FISH} px={5} /></div>
+      <div class="swim f1" aria-hidden="true"><Sprite rows={FISH} px={3} /></div>
       <div class="wrap">
         <p class="depth">Depth 005 m: the ask</p>
         <h2>The agent asks. You answer. It gets a tag, not the key.</h2>
@@ -98,8 +103,8 @@ const description =
 
     <section class="zone mid">
       <div class="line" aria-hidden="true"></div>
-      <div class="rise b1" aria-hidden="true"><Sprite rows={BUBBLE} px={5} /></div>
-      <div class="rise b2" aria-hidden="true"><Sprite rows={BUBBLE} px={3} /></div>
+      <div class="rise b1" aria-hidden="true"><Sprite rows={BUBBLE} px={3} /></div>
+      <div class="rise b2" aria-hidden="true"><Sprite rows={BUBBLE} px={2} /></div>
       <div class="wrap">
         <p class="depth">Depth 040 m: on the way down</p>
         <h2>Three things it does, shown not told</h2>
@@ -109,7 +114,7 @@ const description =
             <p>The agent never sees the key. Commands get it; the transcript gets ink.</p>
             <pre><code><span class="prompt">&gt; </span>printenv STRIPE_SECRET_KEY
 <span class="masked">[REDACTED:injected-value]</span></code></pre>
-            <Sprite rows={INK} px={5} class="deco" />
+            <Sprite rows={INK} px={3} class="deco" />
           </article>
           <article class="box">
             <h3>Depth limits</h3>
@@ -137,16 +142,16 @@ const description =
     </section>
 
     <section class="zone deep">
-      <div class="line end" aria-hidden="true"><Sprite rows={TAG} px={5} /></div>
-      <div class="swim f2" aria-hidden="true"><Sprite rows={FISH} px={4} /></div>
+      <div class="line end" aria-hidden="true"><Sprite rows={TAG} px={3} swap={LIT} /></div>
+      <div class="swim f2" aria-hidden="true"><Sprite rows={FISH} px={3} swap={LIT} /></div>
       <div class="wrap">
         <p class="depth">Depth 200 m: the keeper</p>
         <h2>Eight arms. Eight vaults. Bring the one you already have.</h2>
         <div class="keeper">
           <div class="octo">
-            <Sprite rows={OCTOPUS} px={11} class="open" swap={LIT} label="An octopus guarding a chest: your vault keeps the key" />
-            <Sprite rows={OCTOPUS_BLINK} px={11} class="shut" swap={LIT} />
-            <div class="loot"><Sprite rows={CHEST} px={8} swap={LIT} /><Sprite rows={KEY} px={6} class="key" swap={LIT} /></div>
+            <Sprite rows={OCTOPUS} px={6} class="open" swap={LIT} label="An octopus guarding a chest: your vault keeps the key" />
+            <Sprite rows={OCTOPUS_BLINK} px={6} class="shut" swap={LIT} />
+            <div class="loot"><Sprite rows={CHEST} px={4} swap={LIT} /><Sprite rows={KEY} px={4} class="key" swap={LIT} /></div>
           </div>
           <ul class="vaults">
             {VAULTS.map((v) => <li><b>{v.name}</b><span>{v.note}</span></li>)}
@@ -157,7 +162,6 @@ const description =
     </section>
 
     <section class="zone floor" id="start" aria-labelledby="start-heading">
-      <div class="weeds" aria-hidden="true"><Sprite rows={WEED} px={6} /><Sprite rows={WEED} px={8} /><Sprite rows={WEED} px={5} /></div>
       <div class="wrap">
         <p class="depth">Sea floor: press start</p>
         <h2 id="start-heading">Pick your host</h2>
@@ -192,6 +196,19 @@ const description =
     </section>
 
     <section class="zone sand">
+      <div class="seabed" aria-hidden="true">
+        <Sprite rows={ROCK} px={4} swap={LIT} />
+        <Sprite rows={WEED_TALL} px={4} />
+        <Sprite rows={CHEST_OPEN} px={5} swap={LIT} class="treasure" />
+        <Sprite rows={STARFISH} px={3} swap={LIT} />
+        <Sprite rows={WEED} px={4} />
+        <Sprite rows={ANCHOR} px={5} />
+        <Sprite rows={SHELL} px={3} swap={LIT} />
+        <Sprite rows={CRAB} px={4} swap={LIT} class="crab" />
+        <Sprite rows={CORAL} px={4} swap={LIT} />
+        <Sprite rows={WEED_TALL} px={3} />
+        <Sprite rows={ROCK} px={3} swap={LIT} />
+      </div>
       <div class="wrap">
         <h2>Built to be checked</h2>
         <ul class="trust">
