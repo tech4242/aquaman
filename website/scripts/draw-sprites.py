@@ -44,78 +44,88 @@ class Canvas:
         return [r[left:len(r) - right] for r in rows]
 
 def octopus(blink=False):
-    c = Canvas(48, 44)
-    cx = 24
+    c = Canvas(72, 66)
+    cx, cy, rx, ry = 36, 22, 20, 17
     # Eight arms first, so the head overlaps where they join.
     for i in range(8):
         side = i - 3.5
-        x0 = cx + side * 3.1
-        length = 15 - abs(side) * 1.1
-        for t in range(int(length) + 1):
-            curl = math.sin(t / 2.6 + i * 0.9) * (1.2 + abs(side) * 0.25)
+        x0 = cx + side * 4.4
+        length = 22 - abs(side) * 1.6
+        steps = int(length * 2)
+        for n in range(steps + 1):
+            t = n / 2
+            curl = math.sin(t / 3.6 + i * 0.9) * (1.7 + abs(side) * 0.35)
             x = x0 + side * t * 0.34 + curl
-            y = 24 + t
-            thick = 3 if t < length - 3 else 2
+            y = 35 + t
+            thick = 4 if t < length - 7 else 3 if t < length - 3 else 2
             for k in range(thick):
                 c.set(x + k, y, 's' if k == thick - 1 else 'c')
-            if t % 3 == 1 and t > 2:
-                c.set(x, y, 'p')  # suckers catch the light
-    c.ellipse(cx, 15, 14, 12, 'c')
-    # Shadow low on the right, a highlight high on the left.
+            if n % 8 == 3 and t > 3:
+                c.set(x, y, 'p'); c.set(x, y + 1, 'p')  # suckers catch the light
+    c.ellipse(cx, cy, rx, ry, 'c')
+    # Shadow low on the right, dithered where it meets the light.
     for y in range(c.h):
         for x in range(c.w):
-            if c.get(x, y) == 'c' and y < 27:
-                d = ((x - cx) / 14) ** 2 + ((y - 15) / 12) ** 2
-                if d <= 1.0 and (x - cx) / 14 + (y - 15) / 12 > 1.02:
+            if c.get(x, y) == 'c' and ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1.0:
+                v = (x - cx) / rx + (y - cy) / ry
+                if v > 1.04 or (v > 0.86 and (x + y) % 2 == 0):
                     c.set(x, y, 's')
-    c.ellipse(17, 8, 4, 2, 'p', only='c')
-    c.set(13, 11, 'p'); c.set(13, 12, 'p')
+    c.ellipse(25, 11, 6.5, 3.2, 'p', only='c')
+    c.rect(22, 10, 3, 1, 'w'); c.set(21, 11, 'w')
+    for x, y in ((45, 9), (49, 13), (42, 6), (51, 18)):
+        c.set(x, y, 's'); c.set(x + 1, y, 's')              # freckles
     if blink:
-        for ex in (15, 27):
-            c.rect(ex, 16, 6, 1, 's')
+        for ex in (22, 41):
+            c.rect(ex, 24, 9, 2, 's')
     else:
-        for ex in (15, 27):
-            c.rect(ex, 12, 6, 7, 'w')
-            c.rect(ex + 2, 14, 3, 4, 'd')
-            c.set(ex + 2, 14, 'w')
-    for x, y in ((21, 21), (22, 22), (23, 22), (24, 22), (25, 22), (26, 21)):
+        for ex in (22, 41):
+            c.rect(ex, 17, 9, 11, 'w')
+            c.rect(ex, 17, 9, 1, 's')                        # the lid's shadow
+            c.rect(ex + 3, 20, 5, 7, 'd'); c.rect(ex + 4, 22, 3, 4, '#')
+            c.rect(ex + 3, 20, 2, 2, 'w')
+    for x, y in ((30, 31), (31, 32), (32, 33), (33, 33), (34, 33), (35, 33), (36, 33), (37, 33), (38, 33), (39, 32), (40, 31)):
         c.set(x, y, 's')
-    c.set(11, 18, 'p'); c.set(12, 19, 'p'); c.set(36, 18, 'p'); c.set(35, 19, 'p')  # cheeks
+    for bx in (15, 53):
+        c.rect(bx, 28, 4, 2, 'p')                            # cheeks
     c.outline()
     return c.rows()
 
 def chest(open_lid=False):
-    c = Canvas(40, 34)
+    c = Canvas(56, 46)
     if open_lid:
-        c.rect(6, 4, 28, 9, 's')          # inside of the raised lid
-        c.rect(6, 4, 28, 2, 'y'); c.rect(6, 11, 28, 2, 'g')
-        c.rect(6, 4, 2, 9, 'y'); c.rect(32, 4, 2, 9, 'y')
+        c.rect(8, 4, 40, 13, 's')                            # inside of the raised lid
+        c.rect(8, 4, 40, 2, 'y'); c.rect(8, 15, 40, 2, 'g')
+        c.rect(8, 4, 3, 13, 'y'); c.rect(45, 4, 3, 13, 'y')
+        for x in range(13, 44, 6):
+            c.rect(x, 7, 1, 7, '#' if x % 12 == 1 else 's')
         # A heap of coins, with a few sparkles.
-        for x in range(8, 32):
-            top = 15 - int(2.5 * math.sin((x - 8) / 24 * math.pi)) - (1 if x % 5 == 0 else 0)
-            for y in range(top, 18):
-                c.set(x, y, 'y' if (x + y) % 4 else 'g')
-        for x, y in ((12, 12), (20, 11), (27, 13)):
-            c.set(x, y, 'w')
-        c.set(16, 12, 'm'); c.set(17, 12, 'm'); c.set(16, 13, 'm')  # a gem
-        c.set(24, 12, 'c'); c.set(25, 12, 'c')
-        top = 18
+        for x in range(11, 45):
+            top = 21 - int(4 * math.sin((x - 11) / 34 * math.pi)) - (1 if x % 5 == 0 else 0)
+            for y in range(top, 25):
+                c.set(x, y, 'g' if (x * 3 + y * 2) % 7 == 0 else 'y')
+        for x, y in ((16, 18), (27, 15), (37, 18), (22, 20)):
+            c.set(x, y, 'w'); c.set(x + 1, y, 'w')
+        c.rect(30, 17, 3, 2, 'm'); c.set(31, 16, 'm')        # a gem
+        c.rect(19, 17, 3, 2, 'c')
+        top = 25
     else:
-        c.ellipse(20, 12, 14.5, 7, 'c')
-        c.rect(5, 12, 30, 8, '.')
-        c.ellipse(15, 8, 5, 1.5, 'p', only='c')
-        for bx in (9, 19, 29):
-            for y in range(4, 12):
+        c.ellipse(28, 17, 20.5, 10, 'c')
+        c.rect(6, 17, 44, 12, '.')
+        c.ellipse(20, 11, 7, 2, 'p', only='c')
+        for bx in (12, 26, 40):
+            for y in range(6, 17):
                 if c.get(bx, y) != '.':
-                    c.set(bx, y, 'y'); c.set(bx + 1, y, 'g')
-        top = 12
-    c.rect(6, top, 28, 12, 'c')
-    c.rect(6, top, 28, 2, 'y'); c.rect(6, top + 10, 28, 2, 'g')
-    c.rect(6, top + 6, 28, 1, 's')
-    for bx in (9, 19, 29):
-        c.rect(bx, top, 2, 12, 'y'); c.rect(bx + 1, top + 2, 1, 8, 'g')
-    c.rect(31, top + 2, 3, 8, 's')
-    c.rect(18, top + 3, 4, 5, 'y'); c.rect(19, top + 5, 2, 2, '#')  # the lock
+                    c.rect(bx, y, 2, 1, 'y'); c.set(bx + 2, y, 'g')
+        top = 17
+    c.rect(8, top, 40, 17, 'c')
+    for y in range(top + 5, top + 15, 4):
+        c.rect(8, y, 40, 1, 's')                             # planks
+    c.rect(8, top, 40, 3, 'y'); c.rect(8, top + 2, 40, 1, 'g'); c.rect(8, top + 14, 40, 3, 'g'); c.rect(8, top + 14, 40, 1, 'y')
+    for bx in (12, 26, 40):
+        c.rect(bx, top, 3, 17, 'y'); c.rect(bx + 2, top + 3, 1, 11, 'g')
+        c.set(bx + 1, top + 5, 'w'); c.set(bx + 1, top + 11, 'w')   # rivets
+    c.rect(44, top + 3, 4, 11, 's')
+    c.rect(25, top + 4, 6, 8, 'y'); c.rect(25, top + 11, 6, 1, 'g'); c.rect(27, top + 6, 2, 2, '#'); c.rect(27, top + 8, 1, 2, '#')  # the lock
     c.outline()
     return c.rows()
 
@@ -129,22 +139,26 @@ def key():
     return c.rows()
 
 def robot():
-    c = Canvas(34, 34)
-    c.rect(16, 1, 2, 3, '#'); c.rect(15, 0, 4, 2, 'y')            # antenna
-    c.rect(8, 4, 18, 12, 'l'); c.rect(24, 5, 2, 11, 'm'); c.rect(9, 14, 16, 2, 'm')
-    for ex in (11, 19):
-        c.rect(ex, 7, 4, 5, '#'); c.set(ex, 7, 'w'); c.set(ex + 1, 7, 'w')
-    c.rect(13, 13, 8, 1, '#')
-    c.rect(6, 8, 2, 4, 'm'); c.rect(26, 8, 2, 4, 'm')             # ears
-    c.rect(11, 17, 12, 7, 'm'); c.rect(21, 17, 2, 7, 'd'); c.rect(14, 19, 6, 3, 'y')
-    c.rect(7, 18, 4, 2, 'l'); c.rect(23, 18, 4, 2, 'l')           # arms
+    c = Canvas(48, 46)
+    c.rect(23, 3, 2, 4, '#'); c.ellipse(24, 2, 2.6, 2.2, 'y'); c.set(23, 1, 'w')      # antenna
+    c.rect(11, 7, 26, 16, 'l'); c.rect(34, 8, 3, 15, 'm'); c.rect(12, 21, 24, 2, 'm')  # head
+    c.rect(14, 10, 20, 8, '#')                                                          # visor
+    for ex in (17, 26):
+        c.rect(ex, 12, 5, 4, 'm'); c.rect(ex, 12, 2, 1, 'w'); c.set(ex + 4, 15, 'd')
+    c.rect(19, 19, 10, 1, '#'); c.set(21, 19, 'l'); c.set(24, 19, 'l'); c.set(27, 19, 'l')
+    c.rect(8, 12, 3, 6, 'm'); c.rect(37, 12, 3, 6, 'm'); c.set(8, 12, 'l'); c.set(37, 12, 'l')
+    c.rect(21, 23, 6, 2, 'd')                                                           # neck
+    c.rect(14, 25, 20, 10, 'm'); c.rect(31, 25, 3, 10, 'd'); c.rect(14, 25, 20, 1, 'l')
+    c.rect(18, 27, 11, 6, 'y'); c.rect(18, 32, 11, 1, 'g'); c.rect(20, 29, 2, 2, 'c'); c.rect(24, 29, 3, 1, '#'); c.rect(24, 31, 3, 1, '#')
+    c.rect(9, 26, 5, 3, 'l'); c.rect(34, 26, 5, 3, 'l'); c.rect(7, 26, 2, 4, 'm'); c.rect(39, 26, 2, 4, 'm')
     # The raft: three logs lashed together.
-    c.rect(1, 25, 32, 5, 'y')
-    for x in range(1, 33):
-        c.set(x, 29, 'g')
-        if x % 11 == 0:
-            c.rect(x, 25, 1, 5, 'g')
-    c.rect(4, 25, 1, 5, '#'); c.rect(28, 25, 1, 5, '#')
+    c.rect(1, 36, 46, 6, 'y'); c.rect(1, 36, 46, 1, 'w'); c.rect(1, 41, 46, 1, 'g')
+    for x in (16, 32):
+        c.rect(x, 36, 1, 6, 'g')
+    for x in (5, 41):
+        c.rect(x, 36, 2, 6, '#')
+    for x in (2, 18, 34):
+        c.set(x, 38, 'g'); c.set(x + 1, 39, 'g'); c.set(x, 39, 'g')                     # the logs' end grain
     c.outline()
     return c.rows()
 
