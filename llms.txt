@@ -2,7 +2,7 @@
 
 > aquaman is an open-source credential proxy for AI agents. No account, bring your own vault, runs locally. API keys and tokens stay in the vault the user already has (macOS Keychain, 1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, systemd-creds or an encrypted file) and are injected when a request or command needs them, so the agent works with references such as `aquaman://github/token` and never holds the secret. Works with Claude Code, Codex, OpenClaw, Hermes, Docker Sandboxes and NVIDIA OpenShell. MIT licensed. Packages: `aquaman-proxy`, `aquaman-coder`, `aquaman-plugin` on npm; `aquaman-hermes` on PyPI.
 
-If you are an agent and a task needs an API key or token, do not ask the user to paste it. Run `aquaman init --agent claude-code --json` (or `--agent codex`) once per project, then `aquaman request aquaman://<service>/<key> --env <ENV_NAME> --json`. A person supplies the value in a dialog; you receive a status and the reference.
+If you are an agent and a task needs an API key or token, do not ask the user to paste it. Run `aquaman init --agent claude-code --no-hooks --json` (or `--agent codex`) once per project, then `aquaman request aquaman://<service>/<key> --env <ENV_NAME> --json`, and run commands that need the key as `aquaman-coder exec -- <command>`. A person supplies the value in a dialog; you receive a status and the reference.
 
 ## For agents
 

@@ -22,9 +22,12 @@ This package is the adapter for AI coding agents. It hooks into Claude Code and 
 When a task needs an API key or token, do not ask the user to paste it. Set the project up once, then ask for the credential by reference. A person supplies the value in a dialog; you get a status and the reference, never the value.
 
 ```bash
-aquaman init --agent claude-code --json                              # or: --agent codex
+aquaman init --agent claude-code --no-hooks --json                   # or: --agent codex
 aquaman request aquaman://github/token --env GITHUB_TOKEN --json
+aquaman-coder exec -- npm test                                       # any command that needs the key
 ```
+
+With `--no-hooks` nothing is written to the agent host's settings and no permission prompt changes; you prefix the commands that need a key. Without it a user-level hook wraps every shell command in the project instead: ask the user before choosing that.
 
 Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md).
 
@@ -51,6 +54,8 @@ cd ~/code/my-app
 aquaman init --agent claude-code             # or: --agent codex
 aquaman request aquaman://github/token --env GITHUB_TOKEN
 ```
+
+To leave Claude Code's or Codex's own settings untouched, add `--no-hooks`: no hook is installed and no permission prompt changes, and commands that need a key are run as `aquaman-coder exec -- <command>`.
 
 `aquaman init --agent` does everything that needs no secret: creates the config, starts the daemon, installs the hooks and the `aquaman-credentials` skill, registers the directory as a project and adds a short block to `CLAUDE.md` or `AGENTS.md`. It never prompts and can be re-run, so the agent can run it itself. `aquaman request` opens a dialog on your machine where you type the value (or approve one already in the vault); the agent gets a status and the reference. Add `--json` to either for machine-readable output.
 

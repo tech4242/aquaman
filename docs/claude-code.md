@@ -12,6 +12,14 @@ aquaman init --agent claude-code
 
 That starts the aquaman daemon, installs a `PreToolUse`/`PostToolUse` hook in `~/.claude/settings.json` (user level, so it loads in every project and acts only in ones registered with aquaman), installs the `aquaman-credentials` skill, registers the directory as a project and adds a short block to `CLAUDE.md`. Restart Claude Code afterwards so it loads the hook. You can also just ask Claude to run it: the command never prompts, and until the restart Claude can run a command that needs a key as `aquaman-coder exec -- <command>`. The full list of what it changes, and how to undo it, is in [Using aquaman from an AI agent](agent-setup.md#what-init-changes).
 
+## Without the hook
+
+```bash
+aquaman init --agent claude-code --no-hooks
+```
+
+This writes nothing to `~/.claude/settings.json` and changes no permission prompt. Claude then runs the commands that need a key as `aquaman-coder exec -- <command>`; the skill and the block in `CLAUDE.md` tell it so. You give up automatic wrapping and the redaction of other tools' output. It is the form an agent can run without asking you first.
+
 ## Add a credential
 
 Either let Claude ask for it when a task needs one:

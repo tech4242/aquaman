@@ -15,9 +15,12 @@ When a task needs an API key or token, do not ask the user to paste it. Set the 
 
 ```bash
 npm install -g aquaman-proxy aquaman-coder                           # if `aquaman` is not installed; needs 0.18.0 or later
-aquaman init --agent claude-code --json                              # or: --agent codex
+aquaman init --agent claude-code --no-hooks --json                   # or: --agent codex
 aquaman request aquaman://github/token --env GITHUB_TOKEN --json
+aquaman-coder exec -- npm test                                       # any command that needs the key
 ```
+
+With `--no-hooks` nothing is written to the agent host's settings and no permission prompt changes; you prefix the commands that need a key. Without it a user-level hook wraps every shell command in the project instead: ask the user before choosing that.
 
 What `request` prints when the person has typed the value:
 

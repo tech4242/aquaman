@@ -11,8 +11,17 @@ Requires Node.js 18 or later on macOS, Linux or WSL2, and aquaman 0.18.0 or late
 ```bash
 npm install -g aquaman-proxy aquaman-coder    # if `aquaman` is not installed
 cd <the project directory>
-aquaman init --agent claude-code --json       # or: --agent codex
+aquaman init --agent claude-code --no-hooks --json       # or: --agent codex
 ```
+
+There are two forms, and which one you run decides how commands get their credentials later:
+
+| Form | What it installs in the agent host | How a command gets the variables | `mode` in the output |
+|---|---|---|---|
+| `--no-hooks` | Nothing. No setting of Claude Code or Codex is changed and no permission prompt changes | You run it as `aquaman-coder exec -- <command>` | `exec` |
+| without it | A user-level hook that wraps every shell command in registered projects, and answers the permission prompt for the commands it wraps | Automatically, after the session is restarted | `hook` |
+
+Use `--no-hooks` unless the user has asked for the hook: it is the form that changes nothing outside aquaman's own files, the skill and the project. Propose the hook when they want commands to work without a prefix. If hooks are already installed from an earlier run, `--no-hooks` leaves them in place and reports `mode: hook`.
 
 `init` never asks for a secret and is safe to run again. It refuses to register the home directory, or a directory that contains it, as a project. Tell the user what it is about to change before you run it: the list is under [What init changes](#what-init-changes).
 
@@ -24,7 +33,10 @@ Output fields:
 | `config` | `path`, `created`, and the vault `backend` in use |
 | `daemon` | `running`, `started` (by this run), `socket`, and `log` when it was started |
 | `project` | `name`, `path`, `created` |
-| `hooks`, `skill`, `agents_file` | The file each was written to, and whether it changed |
+| `mode` | `exec` or `hook`: how commands in this project get their variables (see above) |
+| `run` | With `mode: exec`, the prefix to use: `aquaman-coder exec -- <command>` |
+| `hooks` | The host's settings file, whether aquaman's hook is `installed` in it, and whether this run `changed` it |
+| `skill`, `agents_file` | The file each was written to, and whether it changed |
 | `human_steps` | Things only a person can do as a result of this run, such as restarting the session or trusting the hooks in Codex. Pass them on. Empty when a repeat run changed nothing |
 | `next` | The command to ask for a credential |
 | `error`, `fix` | Present when `ok` is `false` |
@@ -85,9 +97,9 @@ The daemon shows one dialog at a time and at most six in ten minutes, and does n
 
 ## 3. Use it
 
-**In the session that ran `init`, the hooks are not loaded yet.** `init` says so in `human_steps` (Claude Code: restart or start a new session; Codex: trust the hooks at startup). Until the user has done that, run a command that needs a credential as `aquaman-coder exec -- <command>`, which does the same injection and redaction without the hook.
+**With `mode: exec`**, run a command that needs a credential as `aquaman-coder exec -- <command>`, for example `aquaman-coder exec -- npm test`. It sets the project's variables for that command only and redacts them in its output. A command you run without the prefix does not have them. If the user wants to stop being asked about each such command, a permission rule for `aquaman-coder exec` is theirs to add; it would cover every command run that way.
 
-Once the hooks are loaded, run commands as usual. The hook wraps each shell command so the project's variables are present for that command only. In output a value appears as `[REDACTED:injected-value]`: that means it is set. Do not try to print or decode it.
+**With `mode: hook`**, the hooks are not loaded in the session that installed them. `init` says so in `human_steps` (Claude Code: restart or start a new session; Codex: trust the hooks at startup). Until the user has done that, use `aquaman-coder exec -- <command>` as above. Once the hooks are loaded, run commands as usual: the hook wraps each shell command so the project's variables are present for that command only. In output a value appears as `[REDACTED:injected-value]`: that means it is set. Do not try to print or decode it.
 
 Outside an agent session, or in a script: `aquaman-coder exec -- <command>`. That is also how the user starts the app themselves, for example `aquaman-coder exec -- npm start`.
 
@@ -98,11 +110,11 @@ A variable whose credential is not in the vault yet is left unset as long as ano
 ## Example: a service that needs three keys
 
 ```bash
-aquaman init --agent claude-code --json
+aquaman init --agent claude-code --no-hooks --json
 aquaman request aquaman://github/token --env GITHUB_TOKEN --json
 aquaman request aquaman://openai/api_key --env OPENAI_API_KEY --json
 aquaman request aquaman://stripe/secret_key --env STRIPE_SECRET_KEY --json
-aquaman-coder exec -- npm test          # until the session is restarted; afterwards plain `npm test`
+aquaman-coder exec -- npm test
 ```
 
 The code reads `process.env.GITHUB_TOKEN`, `process.env.OPENAI_API_KEY` and `process.env.STRIPE_SECRET_KEY` and knows nothing about aquaman. Commit a `.env.example` that lists the three names with empty values, so the next person and the deployment know what to supply.
@@ -124,7 +136,7 @@ aquaman coder doctor --json    # { ok, issues, checks: [{ name, ok, detail, fix 
 
 `init` starts the daemon in the background. It is not installed as a system service, so it is gone after a reboot or logout.
 
-While it is down, in a project that has bindings, the hook refuses shell commands instead of running them without their credentials. The refusal names the fix. aquaman's own commands (`aquaman ...`, `aquaman-coder ...`) are never refused, so:
+While it is down, `aquaman-coder exec` stops before running the command and names the fix. In hook mode, in a project that has bindings, the hook refuses shell commands instead of running them without their credentials. The refusal names the fix. aquaman's own commands (`aquaman ...`, `aquaman-coder ...`) are never refused, so:
 
 ```bash
 aquaman init --agent claude-code --json    # starts the daemon again; changes nothing else
@@ -138,13 +150,15 @@ Do not run `aquaman daemon` yourself: it stays in the foreground and your comman
 |---|---|---|
 | `~/.aquaman/` | `config.yaml` if missing, `projects.yaml`, the audit log, the daemon's socket and log | This user |
 | A background process | `aquaman daemon`, started if not already running | Until logout or reboot |
-| `~/.claude/settings.json` or `~/.codex/hooks.json` | A `PreToolUse` and a `PostToolUse` hook. On macOS with Claude Code, also one sandbox allowlist entry for the aquaman socket | **User level: the hook runs in every project**, and does nothing outside directories registered with aquaman, apart from redacting secret-shaped strings in tool output |
+| `~/.claude/settings.json` or `~/.codex/hooks.json` | **Not with `--no-hooks`.** A `PreToolUse` and a `PostToolUse` hook. On macOS with Claude Code, also one sandbox allowlist entry for the aquaman socket | **User level: the hook runs in every project**, and does nothing outside directories registered with aquaman, apart from redacting secret-shaped strings in tool output |
 | `~/.claude/skills/aquaman-credentials/` or `~/.agents/skills/aquaman-credentials/` | The skill that tells an agent to use `aquaman request` | User level |
 | `CLAUDE.md` or `AGENTS.md` in the project | A short block between `<!-- aquaman:start -->` and `<!-- aquaman:end -->` | The project. `--no-instructions` skips it |
 
 Two things the user should know before agreeing:
 
-- **Permission prompts change in the project (Claude Code).** Once the project has a binding with a credential behind it, the hook answers `allow` for each shell command it wraps. A project whose bindings all point at nothing is left alone: commands run unwrapped, with the usual prompts. The user's `deny` and `ask` rules still apply to the original command, but a command that no rule matches runs without a prompt. A user who relies on being asked should add `ask` rules.
+- **Permission prompts change in the project (Claude Code, hook mode only).** Once the project has a binding with a credential behind it, the hook answers `allow` for each shell command it wraps. A project whose bindings all point at nothing is left alone: commands run unwrapped, with the usual prompts. The user's `deny` and `ask` rules still apply to the original command, but a command that no rule matches runs without a prompt. A user who relies on being asked should add `ask` rules.
+- **Without the hook, output of other tools is not scrubbed.** `aquaman-coder exec` redacts the output of the command it runs. The hook additionally redacts secret-shaped strings in every tool's output on Claude Code; `--no-hooks` gives that up.
+- **A sandboxed command must be able to reach the daemon's socket.** On macOS the hook setup allowlists it for Claude Code's sandbox; with `--no-hooks` the user does that themselves (`aquaman coder doctor` says how) or runs without the sandbox.
 - **Codex needs its sandbox opened to reach the daemon.** `init` does not do this; it returns it in `human_steps`. On Codex 0.169 the setting that allows it also gives sandboxed commands outbound network access.
 
 **Vault backend.** A new config gets the macOS Keychain on macOS; on Linux the keyring if libsecret is present, otherwise systemd-creds, otherwise an encrypted file. The encrypted file needs a password from a person: `AQUAMAN_ENCRYPTION_PASSWORD`, 12 characters or more, set where the daemon starts. `init` stops with that instruction in `fix` and `human_steps`. Do not make up a password: the user needs it to open the vault later. To use 1Password, Bitwarden, HashiCorp Vault, KeePassXC or Keeper, the user runs `aquaman setup` first, in their own terminal: it asks questions.

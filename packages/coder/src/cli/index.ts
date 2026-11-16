@@ -31,6 +31,7 @@ import { BrokerClient, BrokerError, defaultSocketPath } from '../broker-client.j
 import { runHookFromStdin } from '../adapters/claude-code/hook.js';
 import {
   installClaudeCodeHooks,
+  claudeCodeHooksInstalled,
   uninstallClaudeCodeHooks,
   defaultSettingsPath,
   sandboxSocketStatus,
@@ -46,7 +47,7 @@ import {
   defaultCodexHooksPath,
   codexHome,
 } from '../adapters/codex/setup.js';
-import { writeAgentsBlock, installSkill, type CodingAgent } from '../agent-setup.js';
+import { writeAgentsBlock, installSkill, type CodingAgent, type RunMode } from '../agent-setup.js';
 
 /** Claude Code's managed (enterprise) settings file for this platform. */
 function managedSettingsPath(): string {
@@ -374,11 +375,12 @@ function ensureProjectForCwd(cwd: string): { name: string; created: boolean; fil
 program
   .command('init')
   .description('Set up a coding agent for the current directory: project, hooks, skill, instructions block. Never prompts')
+  .option('--no-hooks', 'Install no hooks; commands that need credentials are then run as `aquaman-coder exec -- <command>`')
   .requiredOption('--agent <agent>', 'claude-code or codex')
   .option('--json', 'Print one JSON object and nothing else')
   .option('--no-instructions', 'Do not write the aquaman block into CLAUDE.md / AGENTS.md')
   .option('--no-skill', 'Do not install the aquaman-credentials skill')
-  .action((opts: { agent: string; json?: boolean; instructions: boolean; skill: boolean }) => {
+  .action((opts: { agent: string; json?: boolean; instructions: boolean; skill: boolean; hooks: boolean }) => {
     const result: Record<string, any> = { ok: false, agent: opts.agent, human_steps: [] as string[] };
     const finish = (code: number): never => {
       if (opts.json) {
@@ -387,7 +389,7 @@ program
         console.error(result.error);
       } else {
         console.log(`Project "${result.project.name}" covers ${result.project.path}`);
-        console.log(`Hooks: ${result.hooks.path}`);
+        console.log(result.mode === 'hook' ? `Hooks: ${result.hooks.path}` : 'Hooks: none. Run commands that need credentials as: aquaman-coder exec -- <command>');
         if (result.skill) console.log(`Skill: ${result.skill.path}`);
         if (result.agents_file) console.log(`Instructions: ${result.agents_file.path}`);
         for (const step of result.human_steps) console.log(`A person needs to: ${step}`);
@@ -405,21 +407,32 @@ program
       const project = ensureProjectForCwd(cwd);
       result.project = { name: project.name, path: cwd, created: project.created };
 
-      if (agent === 'claude-code') {
+      if (!opts.hooks) {
+        // Nothing is written to the host's settings. Hooks someone installed
+        // earlier are user-level and still wrap commands here, so say so.
+        const hooksPath = agent === 'claude-code' ? defaultSettingsPath() : defaultCodexHooksPath();
+        const installed = agent === 'claude-code' ? claudeCodeHooksInstalled(hooksPath) : codexHookStatus(hooksPath).installed;
+        result.hooks = { path: hooksPath, installed, changed: false };
+      } else if (agent === 'claude-code') {
         const hooks = installClaudeCodeHooks();
-        result.hooks = { path: hooks.path, changed: hooks.changed };
+        result.hooks = { path: hooks.path, installed: true, changed: hooks.changed };
         if (hooks.changed) result.human_steps.push('restart Claude Code (or start a new session) so it loads the hooks');
       } else {
         const hooks = installCodexHooks();
-        result.hooks = { path: hooks.path, changed: hooks.changed };
+        result.hooks = { path: hooks.path, installed: true, changed: hooks.changed };
         if (!codexHookStatus(hooks.path).trusted) {
           result.human_steps.push('start `codex` and trust the aquaman hooks in the startup hook review');
         }
+      }
+      const mode: RunMode = result.hooks.installed ? 'hook' : 'exec';
+      result.mode = mode;
+      if (mode === 'exec') result.run = 'aquaman-coder exec -- <command>';
+      if (agent === 'codex') {
         const sandbox = codexSandboxStatus(defaultSocketPath());
         if (!sandbox.ok) result.human_steps.push(`let Codex's sandbox reach the proxy socket: ${sandbox.detail}. Run \`aquaman coder setup codex\` for the config.toml snippet`);
       }
       if (opts.skill) result.skill = installSkill(agent);
-      if (opts.instructions) result.agents_file = writeAgentsBlock(agent, cwd);
+      if (opts.instructions) result.agents_file = writeAgentsBlock(agent, cwd, mode);
       result.ok = true;
     } catch (err) {
       result.error = (err as Error).message;
@@ -565,8 +578,7 @@ program
     // 5. Agent hooks installed. At least one host must be wired; each wired
     // host is checked on its own terms.
     const settingsPath = defaultSettingsPath();
-    const claudeInstalled = fs.existsSync(settingsPath) &&
-      /aquaman(-| )coder hook/.test(fs.readFileSync(settingsPath, 'utf-8'));
+    const claudeInstalled = claudeCodeHooksInstalled(settingsPath);
     const codexHooksPath = defaultCodexHooksPath();
     const codex = codexHookStatus(codexHooksPath);
     if (!claudeInstalled && !codex.installed) {
@@ -683,8 +695,7 @@ program
     } catch { /* no projects file, or invalid */ }
 
     const settingsPath = defaultSettingsPath();
-    const claudeInstalled = fs.existsSync(settingsPath) &&
-      /aquaman(-| )coder hook/.test(fs.readFileSync(settingsPath, 'utf-8'));
+    const claudeInstalled = claudeCodeHooksInstalled(settingsPath);
     const codexStatus = codexHookStatus();
 
     const socketPath = defaultSocketPath();

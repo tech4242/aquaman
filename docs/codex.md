@@ -30,6 +30,10 @@ Two things only you can do, and `init` lists them:
 
    On Codex 0.169 `enabled = true` gives sandboxed commands outbound network access and every Unix socket, not only this one. Check that against your own policy.
 
+## Without the hooks
+
+`aquaman init --agent codex --no-hooks` writes no `hooks.json`, so there is nothing to trust at startup. Codex then runs the commands that need a key as `aquaman-coder exec -- <command>`. The sandbox still has to reach the daemon (step 2 above).
+
 ## Add a credential
 
 ```bash

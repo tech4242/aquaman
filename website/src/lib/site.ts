@@ -16,8 +16,9 @@ export const SUMMARY =
   '`aquaman-coder`, `aquaman-plugin` on npm; `aquaman-hermes` on PyPI.';
 export const AGENT_NOTE =
   'If you are an agent and a task needs an API key or token, do not ask the user to paste it. Run ' +
-  '`aquaman init --agent claude-code --json` (or `--agent codex`) once per project, then ' +
-  '`aquaman request aquaman://<service>/<key> --env <ENV_NAME> --json`. A person supplies the value in a dialog; ' +
+  '`aquaman init --agent claude-code --no-hooks --json` (or `--agent codex`) once per project, then ' +
+  '`aquaman request aquaman://<service>/<key> --env <ENV_NAME> --json`, and run commands that need the key as ' +
+  '`aquaman-coder exec -- <command>`. A person supplies the value in a dialog; ' +
   'you receive a status and the reference.';
 
 export const HOME_TITLE = 'aquaman: credential proxy for AI agents';

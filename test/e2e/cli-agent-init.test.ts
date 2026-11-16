@@ -51,7 +51,8 @@ describe('agent-run setup commands', () => {
       ok: true,
       agent: 'claude-code',
       project: { name: 'my-app', path: project, created: true },
-      hooks: { path: path.join(home, '.claude', 'settings.json'), changed: true },
+      mode: 'hook',
+      hooks: { path: path.join(home, '.claude', 'settings.json'), installed: true, changed: true },
       skill: { path: path.join(home, '.claude', 'skills', 'aquaman-credentials', 'SKILL.md'), changed: true },
       agents_file: { path: path.join(project, 'CLAUDE.md'), action: 'created' },
     });
@@ -85,6 +86,39 @@ describe('agent-run setup commands', () => {
     expect(out.agents_file.path).toBe(path.join(project, 'AGENTS.md'));
     expect(out.human_steps.join(' ')).toMatch(/trust the aquaman hooks/);
     expect(out.human_steps.join(' ')).toMatch(/sandbox/);
+  }, 60_000);
+
+  it('--no-hooks writes nothing to the agent host and tells the agent to use exec', () => {
+    const out = JSON.parse(run(CODER_CLI, ['init', '--agent', 'claude-code', '--json', '--no-hooks']).stdout);
+    expect(out).toMatchObject({
+      ok: true,
+      mode: 'exec',
+      run: 'aquaman-coder exec -- <command>',
+      hooks: { installed: false, changed: false },
+      project: { name: 'my-app', created: true },
+    });
+    expect(out.human_steps).toEqual([]);
+    expect(fs.existsSync(path.join(home, '.claude', 'settings.json'))).toBe(false);
+    const block = fs.readFileSync(path.join(project, 'CLAUDE.md'), 'utf-8');
+    expect(block).toContain('aquaman-coder exec -- <command>');
+    expect(block).not.toContain('already have its variables injected');
+  }, 60_000);
+
+  it('--no-hooks with Codex writes no hooks file and asks for no hook trust', () => {
+    const out = JSON.parse(run(CODER_CLI, ['init', '--agent', 'codex', '--json', '--no-hooks']).stdout);
+    expect(out).toMatchObject({ ok: true, mode: 'exec', hooks: { installed: false } });
+    expect(fs.existsSync(path.join(home, '.codex', 'hooks.json'))).toBe(false);
+    expect(out.human_steps.join(' ')).not.toMatch(/trust the aquaman hooks/);
+  }, 60_000);
+
+  it('--no-hooks where hooks are already installed reports hook mode and leaves them', () => {
+    run(CODER_CLI, ['init', '--agent', 'claude-code', '--json']);
+    const settings = fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf-8');
+    const out = JSON.parse(run(CODER_CLI, ['init', '--agent', 'claude-code', '--json', '--no-hooks']).stdout);
+    expect(out).toMatchObject({ ok: true, mode: 'hook', hooks: { installed: true, changed: false } });
+    expect(out.run).toBeUndefined();
+    expect(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf-8')).toBe(settings);
+    expect(fs.readFileSync(path.join(project, 'CLAUDE.md'), 'utf-8')).toContain('already have its variables injected');
   }, 60_000);
 
   it('--no-skill and --no-instructions leave those alone', () => {

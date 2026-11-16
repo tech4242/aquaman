@@ -1587,7 +1587,7 @@ async function detectDefaultBackend(): Promise<string> {
  * `aquaman init --agent <agent>`: everything an agent can do on its own to get
  * a project using aquaman. No prompts, no secrets, safe to run twice.
  */
-async function initForAgent(agent: string, json: boolean): Promise<void> {
+async function initForAgent(agent: string, json: boolean, hooks: boolean): Promise<void> {
   const say = (line: string) => { if (!json) console.log(line); };
   const result: Record<string, any> = { ok: false, agent, version: VERSION, human_steps: [] as string[] };
   const finish = (code: number): never => {
@@ -1663,7 +1663,7 @@ async function initForAgent(agent: string, json: boolean): Promise<void> {
 
   // 3. The agent side lives in aquaman-coder.
   const { spawnSync } = await import('node:child_process');
-  const coder = spawnSync('aquaman-coder', ['init', '--agent', agent, '--json'], { encoding: 'utf-8' });
+  const coder = spawnSync('aquaman-coder', ['init', '--agent', agent, '--json', ...(hooks ? [] : ['--no-hooks'])], { encoding: 'utf-8' });
   if (coder.error && (coder.error as NodeJS.ErrnoException).code === 'ENOENT') {
     result.error = 'aquaman-coder is not installed';
     result.fix = 'npm install -g aquaman-coder';
@@ -1681,6 +1681,8 @@ async function initForAgent(agent: string, json: boolean): Promise<void> {
   Object.assign(result, {
     project: coderResult.project,
     hooks: coderResult.hooks,
+    mode: coderResult.mode,
+    run: coderResult.run,
     skill: coderResult.skill,
     agents_file: coderResult.agents_file,
   });
@@ -1690,7 +1692,7 @@ async function initForAgent(agent: string, json: boolean): Promise<void> {
   result.next = 'When a task needs a credential: aquaman request aquaman://<service>/<key> --env <ENV_NAME>';
 
   say(`  ✓ Project "${coderResult.project?.name}" covers ${coderResult.project?.path}`);
-  say(`  ✓ Hooks: ${coderResult.hooks?.path}`);
+  say(coderResult.mode === 'exec' ? '  ✓ Hooks: none installed. Run commands that need credentials as: aquaman-coder exec -- <command>' : `  ✓ Hooks: ${coderResult.hooks?.path}`);
   if (coderResult.skill?.path) say(`  ✓ Skill: ${coderResult.skill.path}`);
   if (coderResult.agents_file?.path) say(`  ✓ Instructions: ${coderResult.agents_file.path}`);
   for (const step of result.human_steps) say(`  → A person needs to: ${step}`);
@@ -1705,15 +1707,17 @@ program
   .option('--force', 'Overwrite existing configuration')
   .option('--agent <agent>', 'Also wire a coding agent for the current directory: claude-code or codex')
   .option('--json', 'With --agent: print one JSON object and nothing else')
+  .option('--no-hooks', 'With --agent: install no hooks; commands that need credentials are run as `aquaman-coder exec -- <command>`')
   .addHelpText('after', `
 With --agent the command never prompts and can be re-run safely. It creates the
 config if missing, starts the daemon, installs the agent's hooks and skill,
 registers the current directory as a project and writes a short block into
-CLAUDE.md or AGENTS.md. Credentials are added later, by a person:
+CLAUDE.md or AGENTS.md. With --no-hooks nothing is written to the agent host's
+settings and no permission prompt changes. Credentials are added later, by a person:
   aquaman request aquaman://github/token --env GITHUB_TOKEN`)
   .action(async (options) => {
     if (options.agent) {
-      await initForAgent(String(options.agent), Boolean(options.json));
+      await initForAgent(String(options.agent), Boolean(options.json), options.hooks !== false);
       return;
     }
     ensureConfigDir();
