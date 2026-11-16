@@ -61,12 +61,13 @@ aquaman runs on one person's machine and is not used in CI or production. The ap
 
 [The full comparison](/compare/), including what aquaman does not do.
 
-## What to know before trusting it
+## Security
 
-- One maintainer, no third-party audit. Started in February 2026, still 0.x.
-- It has had a serious bug: [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v) (high), fixed in 0.17.2 and disclosed. Use 0.17.2 or later.
-- It is not a boundary against other software running as you, and it is not a sandbox.
-- npm packages are published from GitHub Actions with provenance. No install scripts.
-- No account, no telemetry, no network service of its own. Config and logs are plain files under `~/.aquaman`.
+- **Runs entirely on your machine.** No account, no telemetry, no hosted service. Config and logs are plain files under `~/.aquaman`.
+- **Open source, verifiable releases.** MIT licensed. npm packages are published from GitHub Actions with provenance, and have no install scripts.
+- **Every credential use is recorded** in a hash-chained log that `aquaman audit verify` checks.
+- **Tested against attack, not just for function.** The request path has a conformance suite that sends raw bytes at a real proxy, and the controls are mapped to [MITRE ATLAS](/compliance/atlas-mapping/) and [NIST SP 800-53](/compliance/nist-800-53/).
+- **Vulnerabilities are fixed and disclosed.** Reports are handled privately and published as [advisories](https://github.com/tech4242/aquaman/security/advisories) with the fix. Stay on the latest release.
+- **Clear about its scope.** aquaman keeps credentials out of the agent. It is not a sandbox and does not separate programs running as you: [what it does not do](/compare/#what-aquaman-does-not-do).
 
 [Security policy and how to report](/security/). Requires Node.js 18 or later on macOS, Linux or WSL2. MIT licensed.
