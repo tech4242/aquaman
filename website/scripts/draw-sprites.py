@@ -363,7 +363,7 @@ print('wrote', len(SPRITES), 'sprites and the favicon')
 # ---- The README banner: the home page's scene as one standalone SVG ----------------
 
 #: Which variant docs/assets/banner.svg is: 'a' day, 'b' dusk, 'c' underwater only, 'd' wide and sparse.
-BANNER = 'a'
+BANNER = 'd'
 
 # Nine rows: two above the x-height, five for it, two below for the q's tail.
 GLYPHS = {
