@@ -249,9 +249,10 @@
 .sand .limits { margin: 2rem 0 0; max-width: 66ch; font-size: 1.3rem; }
 
 /* 100 m: the app itself */
-.anyapp { background: #0f5560; color: var(--foam); }
-.mid .dither { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 2' shape-rendering='crispEdges'%3E%3Cpath fill='%230f5560' d='M0 0h1v1H0zM1 1h1v1H1z'/%3E%3C/svg%3E"); }
-.anyapp .dither { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 2' shape-rendering='crispEdges'%3E%3Cpath fill='%230b2a3a' d='M0 0h1v1H0zM1 1h1v1H1z'/%3E%3C/svg%3E"); }
+.anyapp { background: var(--deep); color: var(--foam); }
+.mid { background: #0f5560; }
+.anyapp .dither { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 2' shape-rendering='crispEdges'%3E%3Cpath fill='%230f5560' d='M0 0h1v1H0zM1 1h1v1H1z'/%3E%3C/svg%3E"); }
+.mid .dither { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 2' shape-rendering='crispEdges'%3E%3Cpath fill='%230b2a3a' d='M0 0h1v1H0zM1 1h1v1H1z'/%3E%3C/svg%3E"); }
 .anyapp h2 { max-width: 40ch; }
 .route { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 3rem; align-items: start; max-width: 80%; }
 .route .big { font-size: 1.6rem; margin: 0 0 1.5rem; }
@@ -267,3 +268,6 @@
 .floor .next .how { margin: 0 0 1rem; max-width: 60ch; }
 .floor .next pre { margin: 0 0 1rem; overflow-x: auto; }
 .floor .next a { color: var(--ink); }
+
+.surface .what { font-size: 1.35rem; max-width: 46ch; margin: 0.9rem 0 0; opacity: 0.8; }
+.sand .more { list-style: none; margin: 1.75rem 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem 1.75rem; font-size: 1.3rem; }

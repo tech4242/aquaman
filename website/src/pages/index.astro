@@ -49,6 +49,7 @@ const description =
           <p class="depth" aria-hidden="true">Depth 000 m: the surface</p>
         </header>
         <p class="subline">Your agent stays up here with a reference. The key stays down there, in your vault.</p>
+        <p class="what">aquaman is an open-source credential proxy that runs on your machine. No account, no cloud.</p>
         <div class="cta">
           <a class="btn a" href="#start">Start</a>
           <a class="btn b" href="/docs/approve/">My agent asked to install it</a>
@@ -105,14 +106,46 @@ const description =
       <div class="dither" aria-hidden="true"></div>
     </section>
 
+    <section class="zone anyapp">
+      <div class="line" aria-hidden="true"></div>
+      <div class="wrap">
+        <header class="zh">
+          <h2>Any app, any SDK: point it at aquaman and it never holds the key.</h2>
+          <p class="depth" aria-hidden="true">Depth 040 m: not only agents</p>
+        </header>
+        <div class="route">
+          <div>
+            <p class="big">Your code changes in one place: the API base URL comes from the environment. aquaman hands the app a local token and its own address, adds the real key on the way out, and applies your request policies.</p>
+            <ul class="steps">
+              <li><b>The app holds</b> <span>a token that only works on your machine</span></li>
+              <li><b>aquaman holds</b> <span>the key, in your vault</span></li>
+              <li><b>The API sees</b> <span>a normal request with the real key</span></li>
+            </ul>
+            <p><a class="btn b" href="#start-app">How to set it up</a></p>
+          </div>
+          <figure class="box">
+            <figcaption>What your app sees</figcaption>
+            <pre><code><span class="prompt"># its environment, set by aquaman</span>
+OPENAI_BASE_URL=<span class="ref">http://127.0.0.1:8585/openai/v1</span>
+OPENAI_API_KEY=<span class="masked">aqm_rt_…</span>   <span class="prompt"># a local token, not the key</span>
+
+<span class="prompt">// its code, unchanged: the SDK reads both</span>
+const openai = new OpenAI();</code></pre>
+            <p class="apis">Built in: {APIS.join(', ')} and more. Any other HTTP API takes five lines of config.</p>
+          </figure>
+        </div>
+      </div>
+      <div class="dither" aria-hidden="true"></div>
+    </section>
+
     <section class="zone mid">
       <div class="line" aria-hidden="true"></div>
       <div class="rise b1" aria-hidden="true"><Sprite name="BUBBLE" px={3} /></div>
       <div class="rise b2" aria-hidden="true"><Sprite name="BUBBLE" px={2} /></div>
       <div class="wrap">
         <header class="zh">
-          <h2>Three things it does, shown not told</h2>
-          <p class="depth" aria-hidden="true">Depth 040 m: on the way down</p>
+          <h2>What aquaman does with every key</h2>
+          <p class="depth" aria-hidden="true">Depth 100 m: on the way down</p>
         </header>
         <div class="proof">
           <article class="box">
@@ -124,7 +157,7 @@ const description =
           </article>
           <article class="box">
             <h3>Depth limits: request policies</h3>
-            <p>Route your app through the proxy and your policy rules decide which calls get a key.</p>
+            <p>For an app routed through aquaman, your policy rules decide which calls get a key.</p>
             <pre><code>{`policy:
   stripe:
     rules:
@@ -142,38 +175,6 @@ const description =
 <span class="prompt">[CREDENTIAL_ACCESS] </span>github read OK
 <span class="prompt">&gt; </span>aquaman audit verify</code></pre>
           </article>
-        </div>
-      </div>
-      <div class="dither" aria-hidden="true"></div>
-    </section>
-
-    <section class="zone anyapp">
-      <div class="line" aria-hidden="true"></div>
-      <div class="wrap">
-        <header class="zh">
-          <h2>Any app, any SDK: point it at aquaman and it never holds the key.</h2>
-          <p class="depth" aria-hidden="true">Depth 100 m: not only agents</p>
-        </header>
-        <div class="route">
-          <div>
-            <p class="big">Your code changes in one place: the API base URL comes from the environment. aquaman hands the app a local token and its own address, adds the real key on the way out, and applies your request policies.</p>
-            <ul class="steps">
-              <li><b>The app holds</b> <span>a token that only works on your machine</span></li>
-              <li><b>aquaman holds</b> <span>the key, in your vault</span></li>
-              <li><b>The API sees</b> <span>a normal request with the real key</span></li>
-            </ul>
-            <p><a class="btn b" href="#start-app">How to set it up</a></p>
-          </div>
-          <figure class="box">
-            <figcaption>What your app is started with</figcaption>
-            <pre><code><span class="prompt">&gt; </span>aquaman request aquaman://openai/api_key \
-    --env OPENAI_API_KEY --via-proxy OPENAI_BASE_URL
-<span class="prompt">&gt; </span>aquaman-coder exec -- npm start
-
-OPENAI_BASE_URL=<span class="ref">http://127.0.0.1:8585/openai/v1</span>
-OPENAI_API_KEY=<span class="masked">aqm_rt_…</span>   <span class="prompt"># a local token, not the key</span></code></pre>
-            <p class="apis">Built in: {APIS.join(', ')} and more. Any other HTTP API takes five lines of config.</p>
-          </figure>
         </div>
       </div>
       <div class="dither" aria-hidden="true"></div>
@@ -272,11 +273,11 @@ aquaman-coder exec -- npm start`}</code></pre>
           <li><b>Disclosed</b> <span>Fixes ship with <a href="https://github.com/tech4242/aquaman/security/advisories">advisories</a>.</span></li>
         </ul>
         <p class="limits">What it is not: a sandbox. It keeps credentials out of the agent; a command you run still holds the key while it runs, unless you route the app through the proxy, and request policies apply only to that routed traffic.</p>
-        <p class="aside">
-          <a href="/docs/approve/">What changes on your machine</a>
-          <a href="/docs/compare/">How it compares, and what it does not do</a>
-          <a href="/docs/security/">Security policy</a>
-        </p>
+        <ul class="more">
+          <li><a href="/docs/approve/">What changes on your machine</a></li>
+          <li><a href="/docs/compare/">How it compares, and what it does not do</a></li>
+          <li><a href="/docs/security/">Security policy</a></li>
+        </ul>
         <div class="agents">
           <h2>Reading this as an AI agent?</h2>
           <p>
