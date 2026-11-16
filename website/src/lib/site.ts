@@ -3,6 +3,8 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import homeSource from '../home.md?raw';
+import homeMoreSource from '../home-more.md?raw';
+import { hostsMarkdown } from './hosts';
 import { slugForRepoPath, rewriteMarkdownLinks, docUrl, docTwin, locate } from './links.mjs';
 
 export const SITE_NAME = 'aquaman';
@@ -128,7 +130,7 @@ export function packageVersion(): string | undefined {
 
 /** The home page's Markdown: the same text the HTML home page renders. */
 export function homeMarkdown(): string {
-  return `# ${HOME_TITLE}\n\n${homeSource.trim()}\n`;
+  return `# ${HOME_TITLE}\n\n${homeSource.trim()}\n\n${hostsMarkdown((slug) => docUrl(slug))}\n${homeMoreSource.trim()}\n`;
 }
 
 /** Site routes in Markdown (`/claude-code/`) pointed at their Markdown twins (`/claude-code.md`). */

@@ -1,6 +1,9 @@
 ---
 import Base from '../layouts/Base.astro';
-import { Content } from '../home.md';
+import { Content as Intro } from '../home.md';
+import { Content as More } from '../home-more.md';
+import { HOSTS, AGENT_PROMPT } from '../lib/hosts';
+import { docUrl } from '../lib/links.mjs';
 import { SUMMARY, HOME_TITLE, packageVersion } from '../lib/site';
 
 const jsonLd = {
@@ -58,7 +61,40 @@ octocat
       </div>
     </section>
     <div class="prose home-body">
-      <Content />
+      <Intro />
+    </div>
+
+    <section class="start" aria-labelledby="start-heading">
+      <h2 id="start-heading">Start: pick your host</h2>
+      <div class="hosts">
+        {HOSTS.map((h, i) => <input type="radio" name="host" id={`host-${h.id}`} checked={i === 0} />)}
+        <div class="tabs">
+          {HOSTS.map((h) => <label for={`host-${h.id}`}>{h.name}</label>)}
+        </div>
+        {HOSTS.map((h) => (
+          <div class="panel" data-host={h.id}>
+            <h3>{h.name}</h3>
+            <p>{h.how}</p>
+            <pre><code>{h.commands}</code></pre>
+            {h.agentPrompt && (
+              <>
+                <p><strong>Or hand it to your agent.</strong> Paste this into {h.name}:</p>
+                <pre><code>{AGENT_PROMPT}</code></pre>
+              </>
+            )}
+            {h.note && <p>{h.note}</p>}
+            <p><a href={docUrl(h.guide)}>The full guide for {h.name === 'The app your agent builds' ? 'routing your app' : h.name}</a></p>
+          </div>
+        ))}
+      </div>
+      <style set:html={HOSTS.map((h) =>
+        `#host-${h.id}:checked ~ .panel[data-host="${h.id}"]{display:block}` +
+        `#host-${h.id}:checked ~ .tabs label[for="host-${h.id}"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}` +
+        `#host-${h.id}:focus-visible ~ .tabs label[for="host-${h.id}"]{outline:2px solid var(--accent);outline-offset:3px}`).join('')} />
+    </section>
+
+    <div class="prose home-body">
+      <More />
     </div>
   </div>
 </Base>

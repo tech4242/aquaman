@@ -164,3 +164,13 @@ h1, h2, h3 { line-height: 1.15; letter-spacing: -0.015em; text-wrap: balance; }
 .hero h1 { max-width: 20ch; margin-bottom: 0.9rem; }
 .hero .subline { font-size: 1.35rem; color: var(--muted); margin: 0; max-width: 40ch; }
 .home-body strong:only-child { font-size: 1.05rem; }
+
+.home .start { padding-top: 3rem; }
+.hosts > input { position: absolute; opacity: 0; pointer-events: none; }
+.hosts .tabs { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.75rem 0 1.5rem; }
+.hosts .tabs label { border: 1px solid var(--line); border-radius: 999px; padding: 0.35rem 0.95rem; cursor: pointer; font-size: 0.95rem; background: var(--surface); }
+.hosts .tabs label:hover { border-color: var(--muted); }
+.hosts .panel { display: none; max-width: 60rem; }
+.hosts .panel h3 { position: absolute; left: -999px; }
+.hosts .panel p { max-width: var(--measure); }
+.home .home-body > h2:first-child { margin-top: 0; }
