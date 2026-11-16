@@ -5,7 +5,8 @@ The site renders the repository's own Markdown (`../docs`, `../SECURITY.md`); no
 ```bash
 cd website
 npm install
-npm run dev        # http://localhost:4399
+npm run dev        # http://localhost:4399, live reload; no sitemap in this mode
+npm run build && npx astro preview   # the built site, as it will be served
 SITE_URL=https://example.org npm run build
 ```
 
@@ -19,6 +20,6 @@ The working tree is the current docs, at `/docs/`. For each release tag older th
 
 ## Pixel art
 
-The home page's sprites are text grids in `src/lib/sprites.ts`, rendered as SVG by `src/components/Sprite.astro`. They are drawn from shapes by `scripts/draw-sprites.py`; change the drawing there and run `python3 scripts/draw-sprites.py` from `website/`.
+The home page's sprites are text grids in `src/lib/sprites.ts`. Each is built into its own file under `/sprites/` (`src/pages/sprites/[file].svg.ts`) and placed with `src/components/Sprite.astro` as an image, so the page's HTML stays small and readable as text. They are drawn from shapes by `scripts/draw-sprites.py`; change the drawing there and run `python3 scripts/draw-sprites.py` from `website/`.
 
 The GitHub star count in the header is read from the GitHub API once per build (`src/lib/stars.ts`) and left out if the API cannot be reached.
