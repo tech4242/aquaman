@@ -85,16 +85,6 @@ aquaman openshell setup                              # enable the driver, prints
 aquaman daemon &                                     # start or restart the daemon`,
     guide: 'openshell',
   },
-  {
-    id: 'your-app',
-    name: 'The app your agent builds',
-    how: 'The app is sent through a local proxy and holds a local token. The proxy adds the real key, and your request policies apply to what the app sends.',
-    commands: `aquaman init --agent claude-code --no-hooks --loopback        # or: --agent codex
-aquaman request aquaman://stripe/secret_key --env STRIPE_SECRET_KEY --via-proxy STRIPE_API_BASE
-aquaman-coder exec -- npm start`,
-    guide: 'app-through-proxy',
-    note: 'The app has to read its API base URL from the environment.',
-  },
 ];
 
 /** The same picker as Markdown, for the page's `.md` version. */

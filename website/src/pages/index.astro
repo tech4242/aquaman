@@ -17,6 +17,8 @@ const VAULTS = [
   { name: 'Encrypted file', note: 'AES-256-GCM' },
 ];
 
+const APIS = ['OpenAI', 'Anthropic', 'GitHub', 'Stripe', 'xAI', 'Mistral', 'Hugging Face', 'ElevenLabs', 'Slack', 'Discord'];
+
 const jsonLd = {
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
@@ -140,6 +142,38 @@ const description =
 <span class="prompt">[CREDENTIAL_ACCESS] </span>github read OK
 <span class="prompt">&gt; </span>aquaman audit verify</code></pre>
           </article>
+        </div>
+      </div>
+      <div class="dither" aria-hidden="true"></div>
+    </section>
+
+    <section class="zone anyapp">
+      <div class="line" aria-hidden="true"></div>
+      <div class="wrap">
+        <header class="zh">
+          <h2>Any app, any SDK: point it at aquaman and it never holds the key.</h2>
+          <p class="depth" aria-hidden="true">Depth 100 m: not only agents</p>
+        </header>
+        <div class="route">
+          <div>
+            <p class="big">Your code changes in one place: the API base URL comes from the environment. aquaman hands the app a local token and its own address, adds the real key on the way out, and applies your request policies.</p>
+            <ul class="steps">
+              <li><b>The app holds</b> <span>a token that only works on your machine</span></li>
+              <li><b>aquaman holds</b> <span>the key, in your vault</span></li>
+              <li><b>The API sees</b> <span>a normal request with the real key</span></li>
+            </ul>
+            <p><a class="btn b" href="/docs/app-through-proxy/">Route your app through aquaman</a></p>
+          </div>
+          <figure class="box">
+            <figcaption>What your app is started with</figcaption>
+            <pre><code><span class="prompt">&gt; </span>aquaman request aquaman://openai/api_key \
+    --env OPENAI_API_KEY --via-proxy OPENAI_BASE_URL
+<span class="prompt">&gt; </span>aquaman-coder exec -- npm start
+
+OPENAI_BASE_URL=<span class="ref">http://127.0.0.1:8585/openai/v1</span>
+OPENAI_API_KEY=<span class="masked">aqm_rt_…</span>   <span class="prompt"># a local token, not the key</span></code></pre>
+            <p class="apis">Built in: {APIS.join(', ')} and more. Any other HTTP API takes five lines of config.</p>
+          </figure>
         </div>
       </div>
       <div class="dither" aria-hidden="true"></div>

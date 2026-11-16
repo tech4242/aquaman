@@ -93,12 +93,12 @@ function codexSandboxNote(): string {
     `Note: enabled = true also gives sandboxed commands outbound network access, and on Codex 0.169 every Unix socket, not only this one.`;
 }
 
-// ANSI color helpers — aquamarine theme. Mirrors packages/proxy/src/cli/index.ts
+// ANSI color helpers: the aqua of the website and the banner. Mirrors packages/proxy/src/cli/index.ts
 // so `aquaman coder doctor` matches `aquaman openclaw doctor`.
 // Respects NO_COLOR (https://no-color.org/) and disables in piped output.
 const noColor = process.env['NO_COLOR'] !== undefined ||
                 (!process.stdout.isTTY && process.env['FORCE_COLOR'] === undefined);
-const aqua = (s: string) => noColor ? s : `\x1b[38;2;127;255;212m${s}\x1b[0m`;
+const aqua = (s: string) => noColor ? s : `\x1b[38;2;63;193;192m${s}\x1b[0m`;
 
 const program = new Command();
 program
@@ -698,7 +698,7 @@ program
 
     // Render — matches `aquaman openclaw doctor` formatting.
     console.log('');
-    console.log(`  \u{1F531} Aquaman ${VERSION} — Welcome to the doctor’s office.`);
+    console.log(`  \u{1F419} aquaman ${VERSION} — Welcome to the doctor’s office.`);
     console.log('');
     for (const c of checks) {
       const mark = c.ok ? '✓' : '✗';

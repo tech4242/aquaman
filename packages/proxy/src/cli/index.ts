@@ -60,11 +60,11 @@ const __cliDirname = path.dirname(__cliFilename);
 const pkgJson = JSON.parse(fs.readFileSync(path.resolve(__cliDirname, '../../package.json'), 'utf-8'));
 const VERSION: string = pkgJson.version;
 
-// ANSI color helpers — aquamarine theme
+// ANSI color helpers: the aqua of the website and the banner
 // Respects NO_COLOR (https://no-color.org/) and disables in piped/redirected output
 const noColor = process.env['NO_COLOR'] !== undefined ||
                 (!process.stdout.isTTY && process.env['FORCE_COLOR'] === undefined);
-const aqua = (s: string) => noColor ? s : `\x1b[38;2;127;255;212m${s}\x1b[0m`;
+const aqua = (s: string) => noColor ? s : `\x1b[38;2;63;193;192m${s}\x1b[0m`;
 
 // Credential name validation — shared pattern from daemon.ts and systemd-creds backend
 const SAFE_CRED_NAME = /^[a-z0-9][a-z0-9._-]*$/;
@@ -373,7 +373,7 @@ const program = new Command();
 
 program
   .name('aquaman')
-  .description('Credential isolation for AI agents \u2014 vault for the proxy core, OpenClaw plugin path, coding-agent adapter path, Hermes loopback path')
+  .description('Credential proxy for AI agents: vault, daemon, audit and policy, with the OpenClaw, coding-agent, Hermes and OpenShell integrations')
   .version(VERSION)
   .configureHelp({
     subcommandTerm(cmd) {
@@ -397,7 +397,7 @@ program
 
       const lines: string[] = [];
       lines.push('');
-      lines.push(`  \u{1F531} ${aqua('Aquaman')} ${VERSION} \u2014 Credential isolation for AI agents`);
+      lines.push(`  \u{1F419} ${aqua('aquaman')} ${VERSION} \u2014 credential proxy for AI agents`);
       lines.push('');
       lines.push(`Usage: ${helper.commandUsage(cmd)}`);
       lines.push('');
@@ -550,7 +550,7 @@ program
     let issues = 0;
 
     console.log('');
-    console.log(`  \u{1F531} Aquaman ${VERSION} \u2014 health check`);
+    console.log(`  \u{1F419} aquaman ${VERSION} \u2014 health check`);
     console.log('');
     console.log(`  ${aqua('Vault')}`);
 
@@ -680,7 +680,7 @@ program
     const config = loadConfig();
 
     console.log('');
-    console.log(`  \u{1F531} ${aqua('Aquaman')} ${VERSION} — status`);
+    console.log(`  \u{1F419} ${aqua('aquaman')} ${VERSION} — status`);
     console.log('');
 
     // Proxy state (probe socket first — the headline number)
@@ -726,7 +726,7 @@ async function runVaultSetup(opts: { backend?: string; policy: boolean; nonInter
   const configDir = getConfigDir();
   const configPath = path.join(configDir, 'config.yaml');
 
-  if (!opts.quiet) console.log('\n  \u{1F531} Vault setup\n');
+  if (!opts.quiet) console.log('\n  \u{1F419} Vault setup\n');
 
   // Backend detection
   const platform = os.platform();
@@ -1854,7 +1854,7 @@ openclaw
     const isNonInteractive = options.nonInteractive || false;
     const openclawStateDir = process.env['OPENCLAW_STATE_DIR'] || path.join(os.homedir(), '.openclaw');
 
-    console.log('\n  \u{1F531} Aquaman Setup\n');
+    console.log('\n  \u{1F419} aquaman setup\n');
 
     // Check if already configured
     if (fs.existsSync(configPath) && !isNonInteractive) {
@@ -2476,7 +2476,7 @@ openclaw
     let issues = 0;
 
     console.log('');
-    console.log(`  \u{1F531} Aquaman ${VERSION} \u2014 Welcome to the doctor\u2019s office.`);
+    console.log(`  \u{1F419} aquaman ${VERSION} \u2014 Welcome to the doctor\u2019s office.`);
     console.log('');
 
     // 1. Config file
@@ -3842,7 +3842,7 @@ openclaw
         process.exit(1);
       }
 
-      console.log(`\n  \u{1F531} Aquaman ${aqua(VERSION)} \u2014 Time to put your secrets somewhere safe.\n`);
+      console.log(`\n  \u{1F419} aquaman ${aqua(VERSION)} \u2014 Time to put your secrets somewhere safe.\n`);
       console.log('  Scanning for plaintext credentials...\n');
 
       const openclawStateDir = process.env['OPENCLAW_STATE_DIR'] || path.join(os.homedir(), '.openclaw');

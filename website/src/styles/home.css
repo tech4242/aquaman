@@ -47,7 +47,7 @@
 .box { background: var(--foam); color: var(--ink); border: var(--px) solid var(--ink); box-shadow: inset 0 0 0 var(--px) var(--foam), inset 0 0 0 calc(var(--px) * 2) var(--ink), calc(var(--px) * 2) calc(var(--px) * 2) 0 var(--ink); padding: 1.4rem; margin: 0; min-width: 0; }
 .box figcaption, .box h3 { font-family: var(--pixel); font-size: 0.7rem; margin: 0 0 1rem; font-weight: 400; }
 
-.btn { font-family: var(--pixel); font-size: 0.78rem; line-height: 1.6; color: var(--ink); text-decoration: none; border: var(--px) solid var(--ink); padding: 0.95rem 1.2rem; box-shadow: var(--px) var(--px) 0 var(--ink); display: inline-block; }
+.home .btn, .btn { font-family: var(--pixel); font-size: 0.78rem; line-height: 1.6; color: var(--ink); text-decoration: none; border: var(--px) solid var(--ink); padding: 0.95rem 1.2rem; box-shadow: var(--px) var(--px) 0 var(--ink); display: inline-block; }
 .btn.a { background: var(--c); }
 .btn.b { background: var(--y); }
 .btn:hover { transform: translate(var(--px), var(--px)); box-shadow: none; }
@@ -247,3 +247,17 @@
 .hosts legend { position: absolute; left: -999px; }
 .all-hosts { margin: 1.5rem 0 0; font-size: 1.25rem; max-width: 70ch; }
 .sand .limits { margin: 2rem 0 0; max-width: 66ch; font-size: 1.3rem; }
+
+/* 100 m: the app itself */
+.anyapp { background: #0f5560; color: var(--foam); }
+.mid .dither { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 2' shape-rendering='crispEdges'%3E%3Cpath fill='%230f5560' d='M0 0h1v1H0zM1 1h1v1H1z'/%3E%3C/svg%3E"); }
+.anyapp .dither { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 2' shape-rendering='crispEdges'%3E%3Cpath fill='%230b2a3a' d='M0 0h1v1H0zM1 1h1v1H1z'/%3E%3C/svg%3E"); }
+.anyapp h2 { max-width: 40ch; }
+.route { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 3rem; align-items: start; max-width: 80%; }
+.route .big { font-size: 1.6rem; margin: 0 0 1.5rem; }
+.route .steps { list-style: none; margin: 0 0 2rem; padding: 0; }
+.route .steps li { border-left: var(--px) solid var(--y); padding: 0.2rem 0 0.2rem 0.9rem; margin-bottom: 0.7rem; }
+.route .steps b { color: var(--y); font-weight: 400; }
+.route pre { font-size: 0.74rem; overflow-x: auto; }
+.route .apis { margin: 1rem 0 0; font-size: 1.2rem; }
+@media (max-width: 62rem) { .route { grid-template-columns: minmax(0, 1fr); max-width: none; gap: 2rem; } }
