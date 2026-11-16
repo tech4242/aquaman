@@ -1,0 +1,40 @@
+---
+import { PALETTE } from '../lib/sprites';
+
+interface Props {
+  rows: string[];
+  /** Size of one pixel, in CSS pixels. */
+  px?: number;
+  class?: string;
+  label?: string;
+  /** Colours to substitute, e.g. a light outline for a sprite that sits on dark water. */
+  swap?: Record<string, string>;
+}
+const { rows, px = 6, class: className, label, swap = {} } = Astro.props;
+const colour = (ch: string) => swap[ch] ?? PALETTE[ch];
+const width = Math.max(...rows.map((r) => r.length));
+// One rectangle per horizontal run of a colour keeps the markup small.
+const runs: { x: number; y: number; w: number; fill: string }[] = [];
+rows.forEach((row, y) => {
+  let x = 0;
+  while (x < row.length) {
+    const ch = row[x];
+    let end = x;
+    while (end < row.length && row[end] === ch) end++;
+    if (colour(ch)) runs.push({ x, y, w: end - x, fill: colour(ch) });
+    x = end;
+  }
+});
+---
+<svg
+  class:list={['sprite', className]}
+  width={width * px}
+  height={rows.length * px}
+  viewBox={`0 0 ${width} ${rows.length}`}
+  shape-rendering="crispEdges"
+  role={label ? 'img' : undefined}
+  aria-label={label}
+  aria-hidden={label ? undefined : 'true'}
+>
+  {runs.map((r) => <rect x={r.x} y={r.y} width={r.w} height="1" fill={r.fill} />)}
+</svg>

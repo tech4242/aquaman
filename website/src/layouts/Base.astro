@@ -12,8 +12,10 @@ interface Props {
   canonicalPath?: string;
   /** The page lays out its own full-width sections. */
   wide?: boolean;
+  /** A page-wide look, as a class on <body>. */
+  look?: string;
 }
-const { title, description, markdown, jsonLd, canonicalPath, wide } = Astro.props;
+const { title, description, markdown, jsonLd, canonicalPath, wide, look } = Astro.props;
 const fullTitle = title ? `${title} | ${SITE_NAME}` : HOME_TITLE;
 const canonical = new URL(canonicalPath ?? Astro.url.pathname, Astro.site).href;
 const at = (p: string) => (Astro.url.pathname.replace(/\/?$/, '/') === p ? 'page' : undefined);
@@ -37,7 +39,7 @@ const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/',
     <meta property="og:url" content={canonical} />
     {jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />}
   </head>
-  <body>
+  <body class={look}>
     <a class="skip" href="#main">Skip to content</a>
     <header class="site-header">
       <div class="wrap">
