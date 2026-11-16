@@ -2,7 +2,7 @@
   "name": "aquaman",
   "version": "0.17.2",
   "private": true,
-  "description": "🔱 API key protection for AI agents. Bring your own vault. Credentials stay where you already keep them, never in the agent's memory.",
+  "description": "aquaman: credential proxy for AI agents. No account, bring your own vault, runs locally.",
   "type": "module",
   "workspaces": [
     "packages/*"
@@ -36,7 +36,16 @@
     "keychain",
     "bitwarden",
     "ai-agent",
-    "api-protection"
+    "api-protection",
+    "claude-code",
+    "codex",
+    "coding-agent",
+    "credential-proxy",
+    "ai-agents",
+    "secrets-management",
+    "claude",
+    "agent",
+    "env"
   ],
   "author": "tech4242",
   "license": "MIT",

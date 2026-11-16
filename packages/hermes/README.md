@@ -1,23 +1,39 @@
-# aquaman-hermes
+# aquaman-hermes: credential proxy for AI agents (Hermes)
 
-Credential isolation for the [Hermes](https://github.com/NousResearch/hermes-agent)
-agent host - using the vault you already have. API keys live in your existing
-backend (Keychain, 1Password, HashiCorp Vault, Bitwarden, KeePassXC, systemd-creds,
-or encrypted-file) and are injected by the **aquaman proxy**. They never enter the
-Hermes process, and you never copy them into a new store.
+**No account. Bring your own vault. Runs locally.** aquaman keeps API keys and tokens in the vault you already use (Keychain, 1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, systemd-creds or an encrypted file) and injects them when a request or command needs them. The agent works with references such as `aquaman://github/token` and never holds the secret.
 
-This is the optional, in-session "sugar" layer. The actual isolation is done by
-`aquaman-proxy`: it runs an opt-in loopback listener and Hermes is pointed at it via
-its native `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` env vars (written to
-`~/.hermes/.env`) plus a placeholder api_key that the proxy strips and replaces with
-the real credential. This plugin adds:
+This package is the plugin for the [Hermes](https://github.com/NousResearch/hermes-agent) agent host. The isolation itself is done by [`aquaman-proxy`](https://www.npmjs.com/package/aquaman-proxy), which Hermes is pointed at through its own `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` settings; this plugin adds a `/aquaman-status` command, an `aquaman_status` tool, a session-start health check and a secret source for project secrets. It holds no credentials.
 
-- **`/aquaman-status`**: slash command showing proxy reachability + wiring.
-- **`aquaman_status`**: an agent-facing tool with the same info.
-- **`on_session_start`**: a one-shot health probe that warns if the proxy is down.
-- **`aquaman` secret source** (Hermes ≥ 0.18.1): resolves project/tool secrets
-  (GitHub tokens, database URLs, anything under `secrets.aquaman.env`) from your
-  vault at startup, through the proxy's token-gated broker. See below.
+| Package | For | Install |
+|---|---|---|
+| [`aquaman-proxy`](https://github.com/tech4242/aquaman/tree/main/packages/proxy) | Everyone: the daemon, vault access, audit log, request policy and the `aquaman` CLI | `npm install -g aquaman-proxy` |
+| [`aquaman-coder`](https://github.com/tech4242/aquaman/tree/main/packages/coder) | Claude Code and Codex | `npm install -g aquaman-coder` |
+| [`aquaman-plugin`](https://github.com/tech4242/aquaman/tree/main/packages/plugin) | OpenClaw | `openclaw plugins install aquaman-plugin` |
+| **`aquaman-hermes`** (this package) | Hermes | `pip install aquaman-hermes` |
+
+**Guides:** [Claude Code](https://github.com/tech4242/aquaman/blob/main/docs/claude-code.md) · [Codex](https://github.com/tech4242/aquaman/blob/main/docs/codex.md) · [OpenClaw](https://github.com/tech4242/aquaman/blob/main/docs/openclaw.md) · [Hermes](https://github.com/tech4242/aquaman/blob/main/docs/hermes.md) · [Docker Sandboxes](https://github.com/tech4242/aquaman/blob/main/docs/docker-sandboxes.md) · [NVIDIA OpenShell](https://github.com/tech4242/aquaman/blob/main/docs/openshell.md) · [for agents](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md) · [compared with alternatives](https://github.com/tech4242/aquaman/blob/main/docs/compare.md)
+
+**Security:** [policy and how to report](https://github.com/tech4242/aquaman/blob/main/SECURITY.md) · [published advisories](https://github.com/tech4242/aquaman/security/advisories) (latest: [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v), fixed in 0.17.2) · [what to know before trusting it](https://github.com/tech4242/aquaman/blob/main/docs/compare.md#what-to-know-before-trusting-it) · [adversarial tests of the request path](https://github.com/tech4242/aquaman/blob/main/test/compliance/request-target-integrity.test.ts) · [what aquaman does not protect against](https://github.com/tech4242/aquaman/blob/main/docs/compare.md#what-aquaman-does-not-do)
+
+**Requires:** Python 3.10 or later for this plugin; the proxy it talks to needs Node.js 18 or later on macOS, Linux or WSL2.
+
+## If you are an AI agent
+
+When a task needs an API key or token, do not ask the user to paste it. Set the project up once, then ask for the credential by reference. A person supplies the value in a dialog; you get a status and the reference, never the value.
+
+```bash
+aquaman init --agent claude-code --json                              # or: --agent codex
+aquaman request aquaman://github/token --env GITHUB_TOKEN --json
+```
+
+Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md). These two commands are for coding agents; Hermes is wired by `aquaman hermes setup` below.
+
+## What this plugin adds
+
+- **`/aquaman-status`**: a slash command showing whether the proxy is reachable and how Hermes is wired.
+- **`aquaman_status`**: a tool with the same information for the agent.
+- **`on_session_start`**: a one-shot health check that warns if the proxy is down.
+- **`aquaman` secret source** (Hermes 0.18.1 and later): resolves project and tool secrets (GitHub tokens, database URLs, anything under `secrets.aquaman.env`) from your vault at startup, through the proxy's token-gated broker. See below.
 
 ## How it works
 
@@ -41,7 +57,7 @@ You need the proxy (`aquaman-proxy`, from npm) and this plugin (from PyPI):
 # 1. Proxy + vault (Node)
 npm install -g aquaman-proxy
 aquaman setup                                   # pick a backend, store keys
-aquaman credentials add anthropic api_key sk-ant-...
+aquaman credentials add anthropic api_key          # prompts for the value, input hidden
 
 # 2. This plugin (Python)
 pip install aquaman-hermes        # or: uv tool install aquaman-hermes

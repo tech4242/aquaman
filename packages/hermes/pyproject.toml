@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "aquaman-hermes"
 version = "0.17.2"
-description = "Aquaman credential-isolation plugin for the Hermes agent host — points Hermes at the aquaman loopback proxy so API keys never enter the agent process."
+description = "aquaman: credential proxy for AI agents (Hermes). Keeps provider API keys out of the Hermes process; injects them from your own vault through a local proxy."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "tech4242" }]
-keywords = ["hermes", "nousresearch", "aquaman", "credentials", "secrets", "proxy", "ai-agent"]
+keywords = ["hermes", "nousresearch", "aquaman", "credentials", "secrets", "proxy", "ai-agent", "ai-agents", "credential-proxy", "agent-security", "secrets-management", "api-keys"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: MIT License",

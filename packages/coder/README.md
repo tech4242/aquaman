@@ -1,8 +1,32 @@
-# aquaman-coder
+# aquaman-coder: credential proxy for AI agents (Claude Code, Codex)
 
-**Vault adapter for AI coding agents.** Keep API keys, secrets, and `.env` contents out of your coding agent's memory and transcripts.
+**No account. Bring your own vault. Runs locally.** aquaman keeps API keys and tokens in the vault you already use (Keychain, 1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, systemd-creds or an encrypted file) and injects them when a request or command needs them. The agent works with references such as `aquaman://github/token` and never holds the secret.
 
-Pair with [`aquaman-proxy`](../proxy) (the vault + daemon + audit core). Together: `aquaman-proxy` holds credentials in a separate process; `aquaman-coder` hooks into your coding agent so per-tool-call commands get credentials materialized over UDS, run with output redacted, and the agent never sees raw keys.
+This package is the adapter for AI coding agents. It hooks into Claude Code and Codex so each shell command gets the project's credentials from [`aquaman-proxy`](https://www.npmjs.com/package/aquaman-proxy) for that command only, and the output is redacted before the agent sees it. No `.env` files.
+
+| Package | For | Install |
+|---|---|---|
+| [`aquaman-proxy`](https://github.com/tech4242/aquaman/tree/main/packages/proxy) | Everyone: the daemon, vault access, audit log, request policy and the `aquaman` CLI | `npm install -g aquaman-proxy` |
+| **`aquaman-coder`** (this package) | Claude Code and Codex | `npm install -g aquaman-coder` |
+| [`aquaman-plugin`](https://github.com/tech4242/aquaman/tree/main/packages/plugin) | OpenClaw | `openclaw plugins install aquaman-plugin` |
+| [`aquaman-hermes`](https://github.com/tech4242/aquaman/tree/main/packages/hermes) | Hermes | `pip install aquaman-hermes` |
+
+**Guides:** [Claude Code](https://github.com/tech4242/aquaman/blob/main/docs/claude-code.md) · [Codex](https://github.com/tech4242/aquaman/blob/main/docs/codex.md) · [OpenClaw](https://github.com/tech4242/aquaman/blob/main/docs/openclaw.md) · [Hermes](https://github.com/tech4242/aquaman/blob/main/docs/hermes.md) · [Docker Sandboxes](https://github.com/tech4242/aquaman/blob/main/docs/docker-sandboxes.md) · [NVIDIA OpenShell](https://github.com/tech4242/aquaman/blob/main/docs/openshell.md) · [for agents](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md) · [compared with alternatives](https://github.com/tech4242/aquaman/blob/main/docs/compare.md)
+
+**Security:** [policy and how to report](https://github.com/tech4242/aquaman/blob/main/SECURITY.md) · [published advisories](https://github.com/tech4242/aquaman/security/advisories) (latest: [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v), fixed in 0.17.2) · [what to know before trusting it](https://github.com/tech4242/aquaman/blob/main/docs/compare.md#what-to-know-before-trusting-it) · [adversarial tests of the request path](https://github.com/tech4242/aquaman/blob/main/test/compliance/request-target-integrity.test.ts) · [what aquaman does not protect against](https://github.com/tech4242/aquaman/blob/main/docs/compare.md#what-aquaman-does-not-do)
+
+**Requires:** Node.js 18 or later on macOS, Linux or WSL2.
+
+## If you are an AI agent
+
+When a task needs an API key or token, do not ask the user to paste it. Set the project up once, then ask for the credential by reference. A person supplies the value in a dialog; you get a status and the reference, never the value.
+
+```bash
+aquaman init --agent claude-code --json                              # or: --agent codex
+aquaman request aquaman://github/token --env GITHUB_TOKEN --json
+```
+
+Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md).
 
 ## What it does
 
@@ -18,13 +42,24 @@ Pair with [`aquaman-proxy`](../proxy) (the vault + daemon + audit core). Togethe
 npm install -g aquaman-proxy aquaman-coder
 ```
 
-Requires `aquaman-proxy` (same version) running as a daemon. Start it once per machine session with `aquaman daemon &` (or have it managed by your shell's init).
+Requires `aquaman-proxy` (same version) running as a daemon. Start it once per machine session: `aquaman daemon &` in a terminal of your own, or `aquaman init --agent <agent>`, which starts it in the background and is the form an agent should use.
 
 ## Quick Start (Claude Code, Codex)
 
 ```bash
+cd ~/code/my-app
+aquaman init --agent claude-code             # or: --agent codex
+aquaman request aquaman://github/token --env GITHUB_TOKEN
+```
+
+`aquaman init --agent` does everything that needs no secret: creates the config, starts the daemon, installs the hooks and the `aquaman-credentials` skill, registers the directory as a project and adds a short block to `CLAUDE.md` or `AGENTS.md`. It never prompts and can be re-run, so the agent can run it itself. `aquaman request` opens a dialog on your machine where you type the value (or approve one already in the vault); the agent gets a status and the reference. Add `--json` to either for machine-readable output.
+
+The same steps by hand, if you want to choose the vault backend or keep the agent out of setup:
+
+```bash
 aquaman setup                                # vault wizard (one-time)
 aquaman daemon &                             # start the proxy
+aquaman credentials add github token         # store a secret yourself
 
 aquaman coder project add my-app --path ~/code/my-app \
   --env ANTHROPIC_API_KEY=aquaman://anthropic/api_key \
@@ -55,11 +90,11 @@ The *child* process saw the real key (your tests, builds, MCP servers, import sc
 **Use it from your own terminal too.** The same wrapper works without the agent. Just `cd` into a covered project and prefix your command:
 
 ```bash
-cd ~/code/
+cd ~/code/my-app
 aquaman-coder exec -- python app/scripts/import.py
 ```
 
-Same env injection, same redaction on stdout/stderr. Drop it into Makefile targets, shell aliases, or CI runners - anywhere you'd otherwise reach for a `.env` file.
+Same env injection, same redaction on stdout/stderr. Drop it into Makefile targets and shell aliases on your own machine, anywhere you'd otherwise reach for a `.env` file. For CI and production, use your team's secrets manager.
 
 When Claude Code or Codex runs a shell command in `~/code/my-app`, aquaman's hook rewrites the command via `updatedInput.command` to wrap it under `aquaman-coder exec`. That wrapper:
 
@@ -87,9 +122,11 @@ The unified CLI lives in `aquaman-proxy` and delegates `coder` subcommands here:
 
 ```
 aquaman coder
+├── init --agent <agent>      One-step setup for the current directory: project, hooks, skill, instructions block (--json)
+├── bind NAME=aquaman://s/k   Bind an env reference for the project covering the current directory (--json)
 ├── setup <agent>             Install hooks for an agent (claude-code, codex)
-├── doctor                    Deep diagnostic - projects, broker, per-project vault checks
-├── status                    Configured projects + hook wiring + broker connectivity
+├── doctor                    Deep diagnostic - projects, broker, per-project vault checks (--json)
+├── status                    Configured projects + hook wiring + broker connectivity (--json)
 ├── project list/add/remove   ~/.aquaman/projects.yaml CRUD
 ├── get <ref>                 Resolve a declared aquaman://service/key reference once
 ├── exec <cmd> [args...]      Run a command with project env injected + output redacted

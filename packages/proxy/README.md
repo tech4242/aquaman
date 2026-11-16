@@ -1,8 +1,32 @@
-# aquaman-proxy
+# aquaman-proxy: credential proxy for AI agents (core)
 
-The vault + daemon + audit core of [aquaman](https://github.com/tech4242/aquaman). API key protection for AI agents. Bring your own vault. Credentials stay where you already keep them, never in the agent's memory.
+**No account. Bring your own vault. Runs locally.** aquaman keeps API keys and tokens in the vault you already use (Keychain, 1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, systemd-creds or an encrypted file) and injects them when a request or command needs them. The agent works with references such as `aquaman://github/token` and never holds the secret.
 
-This is the **always-on piece**: every other aquaman package (`aquaman-plugin` for OpenClaw, `aquaman-coder` for AI coding agents) talks to it. If you only install one aquaman package, install this one.
+This package is the core every other aquaman package talks to: the daemon, vault access, the audit log, request policies and the `aquaman` CLI. If you install only one aquaman package, install this one.
+
+| Package | For | Install |
+|---|---|---|
+| **`aquaman-proxy`** (this package) | Everyone: the daemon, vault access, audit log, request policy and the `aquaman` CLI | `npm install -g aquaman-proxy` |
+| [`aquaman-coder`](https://github.com/tech4242/aquaman/tree/main/packages/coder) | Claude Code and Codex | `npm install -g aquaman-coder` |
+| [`aquaman-plugin`](https://github.com/tech4242/aquaman/tree/main/packages/plugin) | OpenClaw | `openclaw plugins install aquaman-plugin` |
+| [`aquaman-hermes`](https://github.com/tech4242/aquaman/tree/main/packages/hermes) | Hermes | `pip install aquaman-hermes` |
+
+**Guides:** [Claude Code](https://github.com/tech4242/aquaman/blob/main/docs/claude-code.md) · [Codex](https://github.com/tech4242/aquaman/blob/main/docs/codex.md) · [OpenClaw](https://github.com/tech4242/aquaman/blob/main/docs/openclaw.md) · [Hermes](https://github.com/tech4242/aquaman/blob/main/docs/hermes.md) · [Docker Sandboxes](https://github.com/tech4242/aquaman/blob/main/docs/docker-sandboxes.md) · [NVIDIA OpenShell](https://github.com/tech4242/aquaman/blob/main/docs/openshell.md) · [for agents](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md) · [compared with alternatives](https://github.com/tech4242/aquaman/blob/main/docs/compare.md)
+
+**Security:** [policy and how to report](https://github.com/tech4242/aquaman/blob/main/SECURITY.md) · [published advisories](https://github.com/tech4242/aquaman/security/advisories) (latest: [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v), fixed in 0.17.2) · [what to know before trusting it](https://github.com/tech4242/aquaman/blob/main/docs/compare.md#what-to-know-before-trusting-it) · [adversarial tests of the request path](https://github.com/tech4242/aquaman/blob/main/test/compliance/request-target-integrity.test.ts) · [what aquaman does not protect against](https://github.com/tech4242/aquaman/blob/main/docs/compare.md#what-aquaman-does-not-do)
+
+**Requires:** Node.js 18 or later on macOS, Linux or WSL2.
+
+## If you are an AI agent
+
+When a task needs an API key or token, do not ask the user to paste it. Set the project up once, then ask for the credential by reference. A person supplies the value in a dialog; you get a status and the reference, never the value.
+
+```bash
+aquaman init --agent claude-code --json                              # or: --agent codex
+aquaman request aquaman://github/token --env GITHUB_TOKEN --json
+```
+
+Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md).
 
 ```
 Agent / OpenClaw / Coding Agent              Aquaman Proxy
@@ -55,7 +79,7 @@ aquaman daemon &        # start the proxy on ~/.aquaman/proxy.sock
 
 ## Security
 
-Four layers of protection:
+Five layers of protection:
 
 - **Process isolation**: credentials live in a separate address space, reached over a Unix socket (`chmod 0o600`) or a token-gated loopback listener (see below)
 - **Service allowlisting**: `proxiedServices` controls which APIs the agent can reach
@@ -99,6 +123,27 @@ Scoped since v0.15.0, because it hands out values rather than injecting them:
 
 `aquaman get <aquaman://service/key>` (v0.16.0+) is the command-line form, for tools that take a command printing a secret: Docker Sandboxes (`sbx secret set <svc> --command`), Codex (`model_providers.<id>.auth.command`), Claude Code (`apiKeyHelper`), OpenClaw exec secret providers and Hermes command secret sources. It only talks to the running daemon, so the same scope applies and every read is audited. It refuses to print to an interactive terminal without `--show`, and prints no trailing newline when another program reads it. The value goes to the program that runs the command.
 
+## Credential requests: the agent asks, a person supplies
+
+```bash
+aquaman request aquaman://github/token --env GITHUB_TOKEN --json
+```
+
+`POST /broker/request` is how an agent gets a credential it must not see. The daemon shows a dialog on the machine (macOS: a native dialog; Linux: `zenity` when there is a desktop session). The person types the value, or approves one that is already stored. The value goes from the dialog into the vault, the reference is declared, and the caller receives only a status: `ready`, `stored`, `approved`, `declined` or `pending`.
+
+- The dialog is shown by the daemon, not by the command the agent ran, so the value never passes through that command or its output.
+- The command waits while the dialog is open: 90 seconds by default, `--timeout <seconds>` (10 to 600) to change it. An unanswered dialog is `pending`.
+- `--env NAME` binds the reference for the project covering the current directory, and is refused, before any dialog, where no project does.
+- A stored value is never replaced, and no value is ever returned.
+- One dialog at a time, at most six in ten minutes, and a declined reference is not asked about again for ten minutes.
+- Unix socket only, and only on `aquaman daemon`. Over the loopback listener, or on a proxy started by the OpenClaw plugin, the endpoint answers 404.
+- Every dialog outcome is written to the audit log. A decline comes back with no command to run.
+- Text the caller supplies is shown as one bounded line at the end of the dialog, with control, formatting and line-break characters removed, so it cannot reshape what the person reads.
+
+It is a way to supply a secret without the agent handling it, and a consent step. It is not a boundary against other software running as you, which can already edit the files that declare references.
+
+`aquaman init --agent claude-code|codex` is the matching one-step setup: config, daemon, hooks, skill, project and instructions block, with no prompts. See [Using aquaman from an AI agent](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md).
+
 ## OpenShell credential driver (v0.17.0+)
 
 `aquaman daemon` can serve NVIDIA OpenShell's external credential driver protocol (`credential_driver.proto`, extension protocol 1.0) on `<configDir>/openshell.sock` (0600). Enable it with `aquaman openshell setup`, which prints the gateway TOML.
@@ -110,7 +155,7 @@ Scoped since v0.15.0, because it hands out values rather than injecting them:
 
 ## Documentation
 
-- **[Root README](https://github.com/tech4242/aquaman#readme)**: value prop, three-path Quick Start, security model
+- **[Root README](https://github.com/tech4242/aquaman#readme)**: value prop, Quick Start for each host, security model
 - **[`docs/PACKAGES.md`](../../docs/PACKAGES.md)**: package boundary policy
 - **[`docs/compliance/`](../../docs/compliance/)**: MITRE ATLAS + NIST SP 800-53 mappings
 - **[`AGENTS.md`](../../AGENTS.md)**: architecture notes

@@ -1,0 +1,28 @@
+# aquaman
+
+> aquaman is an open-source credential proxy for AI agents. No account, bring your own vault, runs locally. API keys and tokens stay in the vault the user already has (macOS Keychain, 1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, systemd-creds or an encrypted file) and are injected when a request or command needs them, so the agent works with references such as `aquaman://github/token` and never holds the secret. Works with Claude Code, Codex, OpenClaw, Hermes, Docker Sandboxes and NVIDIA OpenShell. MIT licensed. Packages: `aquaman-proxy`, `aquaman-coder`, `aquaman-plugin` on npm; `aquaman-hermes` on PyPI.
+
+If you are an agent and a task needs an API key or token, do not ask the user to paste it. Run `aquaman init --agent claude-code --json` (or `--agent codex`) once per project, then `aquaman request aquaman://<service>/<key> --env <ENV_NAME> --json`. A person supplies the value in a dialog; you receive a status and the reference.
+
+## For agents
+
+- [Using aquaman from an AI agent](https://raw.githubusercontent.com/tech4242/aquaman/main/docs/agent-setup.md): the commands, JSON output, statuses and exit codes
+
+## How to
+
+- [Keep API keys out of Claude Code](https://raw.githubusercontent.com/tech4242/aquaman/main/docs/claude-code.md)
+- [Give Codex a token without a .env file](https://raw.githubusercontent.com/tech4242/aquaman/main/docs/codex.md)
+- [Docker Sandboxes secrets from 1Password, Bitwarden or your keychain](https://raw.githubusercontent.com/tech4242/aquaman/main/docs/docker-sandboxes.md)
+- [Use your own vault as the NVIDIA OpenShell credential driver](https://raw.githubusercontent.com/tech4242/aquaman/main/docs/openshell.md)
+- [Keep API keys out of the OpenClaw gateway process](https://raw.githubusercontent.com/tech4242/aquaman/main/docs/openclaw.md)
+- [Keep provider keys out of the Hermes agent process](https://raw.githubusercontent.com/tech4242/aquaman/main/docs/hermes.md)
+
+## Reference
+
+- [README](https://raw.githubusercontent.com/tech4242/aquaman/main/README.md): install paths, security model, request policies, vault backends
+- [aquaman compared with other approaches](https://raw.githubusercontent.com/tech4242/aquaman/main/docs/compare.md): when to use it and when not to
+- [Security policy](https://raw.githubusercontent.com/tech4242/aquaman/main/SECURITY.md)
+- [aquaman-coder](https://raw.githubusercontent.com/tech4242/aquaman/main/packages/coder/README.md): Claude Code and Codex adapter
+- [aquaman-proxy](https://raw.githubusercontent.com/tech4242/aquaman/main/packages/proxy/README.md): daemon, vault, audit, policy, CLI
+- [aquaman-plugin](https://raw.githubusercontent.com/tech4242/aquaman/main/packages/plugin/README.md): OpenClaw adapter
+- [aquaman-hermes](https://raw.githubusercontent.com/tech4242/aquaman/main/packages/hermes/README.md): Hermes plugin

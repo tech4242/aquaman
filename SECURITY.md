@@ -39,7 +39,7 @@ The four packages (`aquaman-proxy`, `aquaman-plugin`, `aquaman-coder` on npm; `a
 
 This file is the **process**: how to report, what's supported. It intentionally makes no design claims of its own. For those:
 
-- **Design** — the security model in the [README](README.md#security-model-in-depth) (process isolation, request policies, tamper-evident audit, credential caching trade-offs)
+- **Design** — the security model in the [README](README.md#security-model) (process isolation, request policies, tamper-evident audit, credential caching trade-offs)
 - **Control evidence** — [`docs/compliance/`](docs/compliance/): MITRE ATLAS and NIST SP 800-53 mappings, each claim backed by a runnable conformance test under [`test/compliance/`](test/compliance/) (`npx vitest run test/compliance/`)
 
 If this file and those documents ever disagree, those documents win — and please report the discrepancy.

@@ -1,7 +1,7 @@
 {
   "name": "aquaman-plugin",
   "version": "0.17.2",
-  "description": "Protect API keys and secrets for OpenClaw. Credentials stay in your vault, never in the agent's memory",
+  "description": "aquaman: credential proxy for AI agents (OpenClaw). Keeps provider API keys out of the gateway process; injects them from your own vault through a local proxy.",
   "type": "module",
   "scripts": {
     "build": "tsc -b && cp secrets-resolver.mjs dist/secrets-resolver.mjs",
@@ -36,7 +36,20 @@
     "bitwarden",
     "credential-isolation",
     "token-security",
-    "api-protection"
+    "api-protection",
+    "ai-agents",
+    "credential-proxy",
+    "agent-security",
+    "secrets-management",
+    "claude-code",
+    "codex",
+    "dotenv",
+    "api-keys",
+    "hashicorp-vault",
+    "keepassxc",
+    "claude",
+    "agent",
+    "env"
   ],
   "author": "tech4242",
   "license": "MIT",
