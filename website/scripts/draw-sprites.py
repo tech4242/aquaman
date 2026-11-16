@@ -358,3 +358,93 @@ favicon = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 18 18" shape-
            '<rect x="-1" y="-1" width="18" height="18" fill="#3fc1c0"/>' + rects + '</svg>\n')
 open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'public', 'favicon.svg'), 'w').write(favicon)
 print('wrote', len(SPRITES), 'sprites and the favicon')
+
+
+# ---- The README banner: the home page's scene as one standalone SVG ----------------
+
+GLYPHS = {
+    'a': ['.....', '.....', '.###.', '....#', '.####', '#...#', '.####'],
+    'q': ['.....', '.####', '#...#', '#...#', '.####', '....#', '....#'],
+    'u': ['.....', '.....', '#...#', '#...#', '#...#', '#..##', '.##.#'],
+    'm': ['.....', '.....', '##.#.', '#.#.#', '#.#.#', '#.#.#', '#.#.#'],
+    'n': ['.....', '.....', '#.##.', '##..#', '#...#', '#...#', '#...#'],
+}
+HEX = {'#': '#0b2a3a', 'd': '#136f7a', 'm': '#3fc1c0', 'l': '#d9f5ec', 'c': '#ff6b4a', 's': '#c9412a',
+       'p': '#ffa38a', 'y': '#ffd23f', 'g': '#d99a1c', 'w': '#ffffff'}
+
+def runs(rows, swap=None):
+    """Rectangles for a grid, one per horizontal run of a colour."""
+    out = []
+    for y, row in enumerate(rows):
+        x = 0
+        while x < len(row):
+            ch = row[x]; end = x
+            while end < len(row) and row[end] == ch: end += 1
+            colour = (swap or {}).get(ch, HEX.get(ch))
+            if colour: out.append(f'<rect x="{x}" y="{y}" width="{end - x}" height="1" fill="{colour}"/>')
+            x = end
+    return ''.join(out)
+
+def group(rows, x, y, cls='', swap=None):
+    return f'<g transform="translate({x} {y})"><g class="{cls}">{runs(rows, swap)}</g></g>'
+
+def banner():
+    W, H, SEA = 320, 132, 46
+    lit = {'#': HEX['l']}
+    parts = [f'<rect width="{W}" height="{SEA}" fill="{HEX["l"]}"/>',
+             f'<rect y="{SEA}" width="{W}" height="30" fill="{HEX["m"]}"/>',
+             f'<rect y="{SEA + 30}" width="{W}" height="26" fill="{HEX["d"]}"/>',
+             f'<rect y="{SEA + 56}" width="{W}" height="{H - SEA - 56}" fill="{HEX["#"]}"/>']
+    # Waves along the surface, and a dithered row where each depth meets the next.
+    for x in range(0, W, 8):
+        parts.append(f'<path fill="{HEX["m"]}" d="M{x + 2} {SEA - 3}h2v1h-2zM{x + 1} {SEA - 2}h4v1h-4zM{x} {SEA - 1}h6v1h-6z"/>')
+    for y, colour in ((SEA + 28, HEX['d']), (SEA + 54, HEX['#'])):
+        for row in (0, 1):
+            cells = ''.join(f'M{x} {y + row}h1v1h-1z' for x in range(row, W, 2))
+            parts.append(f'<path fill="{colour}" d="{cells}"/>')
+    # The wordmark, drawn in pixels because a README cannot load a font.
+    word = []
+    for i, letter in enumerate('aquaman'):
+        for gy, row in enumerate(GLYPHS[letter]):
+            for gx, ch in enumerate(row):
+                if ch == '#':
+                    word.append(f'<rect x="{14 + i * 18 + gx * 3}" y="{8 + gy * 3}" width="3" height="3" fill="{HEX["#"]}"/>')
+    parts.append(''.join(word))
+    parts.append(group(sun(), 198, 2))
+    parts.append(group(cloud(), 150, 16, 'drift'))
+    parts.append(group(cloud(), 262, 6, 'drift slow'))
+    # The agent on its raft, and the line it lowers to the tag.
+    rob = robot()
+    rx = 232
+    parts.append(f'<rect x="{rx + 23}" y="{SEA}" width="1" height="48" fill="{HEX["#"]}"/>')
+    parts.append(f'<rect x="{rx + 23}" y="{SEA + 48}" width="1" height="18" fill="{HEX["l"]}"/>')
+    parts.append(group(tag(), rx + 11, SEA + 64, swap=lit))
+    parts.append(group(rob, rx, SEA - len(rob) + 5, 'bob'))
+    parts.append(group(fish(), 96, SEA + 10, 'swim'))
+    # The keeper and what it keeps.
+    octo = octopus()
+    parts.append(group(octo, 18, H - len(octo) - 4, 'bob late', swap=lit))
+    che = chest()
+    parts.append(group(che, 92, H - len(che) - 4, swap=lit))
+    parts.append(group(key(), 104, H - len(che) - 18, swap=lit))
+    parts.append(group(weed(22, 0.4), 168, H - 24))
+    parts.append(group(anchor(), 196, H - 32))
+    parts.append(group(weed(18, 1.9), 296, H - 20))
+    style = ('<style>'
+             '@media (prefers-reduced-motion: no-preference){'
+             '.bob{animation:bob 1.6s steps(2,jump-none) infinite}.late{animation-duration:2.4s}'
+             '.drift{animation:drift 40s steps(40) infinite alternate}.slow{animation-duration:70s}'
+             '.swim{animation:swim 30s steps(60) infinite}}'
+             '@keyframes bob{50%{transform:translateY(1px)}}'
+             '@keyframes drift{to{transform:translateX(-24px)}}'
+             '@keyframes swim{from{transform:translateX(230px)}to{transform:translateX(-130px)}}'
+             '</style>')
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" shape-rendering="crispEdges" role="img" '
+            f'aria-labelledby="t"><title id="t">aquaman: an AI agent on a raft at the surface lowers a line; far below, '
+            f'an octopus guards the vault and the key</title>{style}{"".join(parts)}</svg>\n')
+
+assets = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'docs', 'assets')
+os.makedirs(assets, exist_ok=True)
+open(os.path.join(assets, 'banner.svg'), 'w').write(banner())
+print('wrote docs/assets/banner.svg')
+
