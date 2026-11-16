@@ -95,7 +95,8 @@ function plain(markdown: string): string {
 
 /** Whole sentences from the start of a paragraph, as many as fit in about 220 characters, and never a clipped one. */
 export function leadSentences(text: string, max = 220): string {
-  const sentences = text.match(/[^.!?]+[.!?]+(?=\s|$)|[^.!?]+$/g)?.map((x) => x.trim()) ?? [text];
+  // A sentence ends at punctuation followed by a space, so `.env` and `0.18.0` do not end one.
+  const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
   let out = sentences[0] ?? '';
   for (const next of sentences.slice(1)) {
     if (out.length + 1 + next.length > max) break;
