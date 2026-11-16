@@ -1,0 +1,63 @@
+---
+import Base from '../layouts/Base.astro';
+import { Content } from '../home.md';
+import { SUMMARY, HOME_TITLE, packageVersion } from '../lib/site';
+
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'aquaman',
+  alternateName: HOME_TITLE,
+  applicationCategory: 'DeveloperApplication',
+  operatingSystem: 'macOS, Linux, WSL2',
+  description: SUMMARY.replace(/`/g, ''),
+  url: Astro.site!.href,
+  softwareVersion: packageVersion(),
+  license: 'https://opensource.org/license/mit',
+  codeRepository: 'https://github.com/tech4242/aquaman',
+  downloadUrl: 'https://www.npmjs.com/package/aquaman-proxy',
+  sameAs: ['https://github.com/tech4242/aquaman', 'https://www.npmjs.com/package/aquaman-proxy', 'https://pypi.org/project/aquaman-hermes/'],
+  offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+};
+const description =
+  'Open-source credential proxy for AI agents. API keys stay in the vault you already use; Claude Code, Codex and other agents get a reference, never the value.';
+---
+<Base description={description} markdown="/index.md" jsonLd={jsonLd}>
+  <div class="home">
+    <section class="hero">
+      <p class="product">aquaman: credential proxy for AI agents</p>
+      <h1>The agent gets a reference. The key stays in your vault.</h1>
+      <div class="exchange">
+        <figure>
+          <figcaption>What the agent runs, and everything it gets back</figcaption>
+          <pre class="terminal"><code><span class="prompt">$ </span>aquaman request <span class="ref">aquaman://github/token</span> --env GITHUB_TOKEN --json
+{`{`}
+  "status": "stored",
+  "ref": "<span class="ref">aquaman://github/token</span>",
+  "env": "GITHUB_TOKEN"
+{`}`}
+
+<span class="prompt">$ </span>gh api user --jq .login
+octocat
+
+<span class="prompt">$ </span>echo $GITHUB_TOKEN
+<span class="masked">[REDACTED:injected-value]</span></code></pre>
+        </figure>
+        <figure>
+          <figcaption>What you see on your own screen while it waits</figcaption>
+          <div class="dialog" role="img" aria-label="A system dialog titled aquaman asking you to type the value for github/token, with Cancel and Store in vault buttons">
+            <strong>aquaman</strong>
+            <p>An agent is asking aquaman for a credential that is not in your vault.</p>
+            <p>Credential: github/token</p>
+            <p>Type the value to store it in your vault. The agent receives a reference, never the value. Cancel if you did not expect this.</p>
+            <div class="field">••••••••••••••••</div>
+            <div class="buttons"><span>Cancel</span><span>Store in vault</span></div>
+          </div>
+        </figure>
+      </div>
+    </section>
+    <div class="prose home-body">
+      <Content />
+    </div>
+  </div>
+</Base>

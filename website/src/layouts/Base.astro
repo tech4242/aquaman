@@ -1,0 +1,69 @@
+---
+import '../styles/global.css';
+import { SITE_NAME, HOME_TITLE } from '../lib/site';
+
+interface Props {
+  title?: string;
+  description: string;
+  /** Path of this page's Markdown twin, e.g. `/claude-code.md`. */
+  markdown: string;
+  jsonLd?: Record<string, unknown>;
+}
+const { title, description, markdown, jsonLd } = Astro.props;
+const fullTitle = title ? `${title} | ${SITE_NAME}` : HOME_TITLE;
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
+const at = (p: string) => (Astro.url.pathname === p ? 'page' : undefined);
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="alternate" type="text/markdown" href={new URL(markdown, Astro.site).href} title="This page as Markdown" />
+    <link rel="alternate" type="text/plain" href={new URL('/llms.txt', Astro.site).href} title="llms.txt" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonical} />
+    {jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />}
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="wordmark" href="/">aquaman</a>
+        <nav aria-label="Site">
+          <a href="/agent-setup/" aria-current={at('/agent-setup/')}>For agents</a>
+          <a href="/claude-code/" aria-current={at('/claude-code/')}>Guides</a>
+          <a href="/compare/" aria-current={at('/compare/')}>Compare</a>
+          <a href="/security/" aria-current={at('/security/')}>Security</a>
+          <a href="https://github.com/tech4242/aquaman">GitHub</a>
+        </nav>
+      </div>
+    </header>
+    <main id="main" class="wrap">
+      <slot />
+    </main>
+    <footer class="site-footer">
+      <div class="wrap">
+        <ul>
+          <li><a href={markdown}>This page as Markdown</a></li>
+          <li><a href="/llms.txt">llms.txt</a></li>
+          <li><a href="/llms-full.txt">llms-full.txt</a></li>
+          <li><a href="/sitemap-index.xml">Sitemap</a></li>
+        </ul>
+        <ul>
+          <li><a href="https://www.npmjs.com/package/aquaman-proxy">npm</a></li>
+          <li><a href="https://pypi.org/project/aquaman-hermes/">PyPI</a></li>
+          <li><a href="https://github.com/tech4242/aquaman/security/advisories">Advisories</a></li>
+          <li>MIT licensed</li>
+        </ul>
+      </div>
+    </footer>
+  </body>
+</html>
