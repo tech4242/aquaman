@@ -168,4 +168,4 @@ It is a way to supply a secret without the agent handling it, and a consent step
 
 ## License
 
-MIT
+Apache-2.0. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).

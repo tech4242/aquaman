@@ -188,4 +188,4 @@ Advanced settings (audit, vault, request policies) go in `~/.aquaman/config.yaml
 
 ## License
 
-MIT
+Apache-2.0. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).

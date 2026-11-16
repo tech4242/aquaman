@@ -14,7 +14,7 @@ export const SUMMARY =
   'API keys and tokens stay in the vault the user already has (macOS Keychain, 1Password, Bitwarden, HashiCorp Vault, ' +
   'KeePassXC, Keeper, systemd-creds or an encrypted file) and are injected when a request or command needs them, so the ' +
   'agent works with references such as `aquaman://github/token` and never holds the secret. Works with Claude Code, ' +
-  'Codex, OpenClaw, Hermes, Docker Sandboxes and NVIDIA OpenShell. MIT licensed. Packages: `aquaman-proxy`, ' +
+  'Codex, OpenClaw, Hermes, Docker Sandboxes and NVIDIA OpenShell. Apache-2.0 licensed. Packages: `aquaman-proxy`, ' +
   '`aquaman-coder`, `aquaman-plugin` on npm; `aquaman-hermes` on PyPI.';
 /** The short instruction for an agent, with the page a person reads before agreeing. */
 export const agentNote = (site: URL) =>

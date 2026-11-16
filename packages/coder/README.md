@@ -220,4 +220,4 @@ The file is `chmod 0o600`. Both the service and key components are validated aga
 
 ## License
 
-MIT - see [LICENSE](./LICENSE).
+Apache-2.0. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
