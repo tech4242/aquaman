@@ -150,7 +150,9 @@ export async function handlePreToolUse(
     if (isAquamanCommand(command)) return null;
     const agent = ctx.host === 'codex' ? 'codex' : 'claude-code';
     // The client's own hint names the foreground command; the one below is the one an agent can use.
-    const reason = (err as Error).message.replace(/\.?\s*Start it with: aquaman daemon\.?/, '');
+    const message = (err as Error).message;
+    const hint = message.indexOf('Start it with: aquaman daemon');
+    const reason = (hint === -1 ? message : message.slice(0, hint)).trim().replace(/\.$/, '');
     return {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',

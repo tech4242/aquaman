@@ -1623,10 +1623,12 @@ async function initForAgent(agent: string, json: boolean): Promise<void> {
   if (!running && result.config.backend === 'encrypted-file') {
     // This backend has no OS keystore behind it, so the daemon cannot open
     // the vault without a password from a person. Say so before starting it.
-    const strength = validatePasswordStrength(loadConfig().credentials.encryptionPassword ?? '');
-    if (!strength.valid) {
+    // Only the yes/no leaves this check. Nothing derived from the password
+    // itself, not even its length, goes into the output.
+    const passwordUsable = validatePasswordStrength(loadConfig().credentials.encryptionPassword ?? '').valid;
+    if (!passwordUsable) {
       result.daemon = { running: false, started: false, socket: socketPath };
-      result.error = `The encrypted-file vault needs a password before the daemon can start: ${strength.errors.join('; ')}`;
+      result.error = 'The encrypted-file vault needs a password of at least 12 characters before the daemon can start, and none is set or the one set is too short';
       result.fix = 'A person sets AQUAMAN_ENCRYPTION_PASSWORD (12 characters or more) in the environment the daemon starts from, then this command is run again. Do not invent one: the person needs it to open the vault later';
       result.human_steps.push('choose a vault password of at least 12 characters and export it as AQUAMAN_ENCRYPTION_PASSWORD');
       if (!json) { console.error(`  ✗ ${result.error}`); console.error(`    → ${result.fix}`); }
