@@ -130,6 +130,16 @@ const BUILTIN_SERVICES: ServiceDefinition[] = [
     authMode: 'header',
     hostPatterns: ['router.huggingface.co']
   },
+  {
+    name: 'stripe',
+    upstream: 'https://api.stripe.com',
+    authHeader: 'Authorization',
+    authPrefix: 'Bearer ',
+    credentialKey: 'secret_key',
+    description: 'Stripe API',
+    authMode: 'header',
+    hostPatterns: ['api.stripe.com']
+  },
 
   // ── Header Auth Channels ────────────────────────────────────────────
   {

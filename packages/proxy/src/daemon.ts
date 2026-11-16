@@ -261,7 +261,8 @@ export class CredentialProxy {
 
     const authz = header('authorization');
     if (authz) {
-      candidates.push(authz.replace(/^Bearer\s+/i, ''));
+      // GitHub clients send `token <value>` as well as `Bearer <value>`.
+      candidates.push(authz.replace(/^(?:Bearer|token)\s+/i, ''));
     }
 
     const pathBorne = this.urlPathTokenCandidate(req.url || '/');
@@ -282,7 +283,7 @@ export class CredentialProxy {
     const segments = target.segments;
     const service = segments[0];
     if (!service || !SAFE_SERVICE_NAME.test(service)) return undefined;
-    if (!this.options.allowedServices.includes(service)) return undefined;
+    if (!this.isServiceProxied(service)) return undefined;
 
     const serviceDef = this.serviceRegistry.get(service);
     if (!serviceDef || serviceDef.authMode !== 'url-path' || !serviceDef.authPathTemplate) {
@@ -340,6 +341,11 @@ export class CredentialProxy {
       return;
     }
 
+    if ((url === '/broker/route' || url === '/broker/route/') && req.method === 'POST') {
+      await this.handleBrokerRoute(req, res, fromLoopback);
+      return;
+    }
+
     if ((url === '/broker/available' || url === '/broker/available/') && req.method === 'POST') {
       await this.handleBrokerAvailable(req, res, fromLoopback);
       return;
@@ -376,7 +382,7 @@ export class CredentialProxy {
       return;
     }
 
-    if (!service || !this.options.allowedServices.includes(service)) {
+    if (!service || !this.isServiceProxied(service)) {
       res.statusCode = 404;
       res.end('Not found');
       return;
@@ -711,6 +717,119 @@ export class CredentialProxy {
    * before the vault, as in resolve, so an undeclared reference answers
    * `false` whatever the vault holds.
    */
+  /**
+   * Whether requests for this service are forwarded: it is in the configured
+   * list, or a project has recorded a route to it.
+   */
+  private isServiceProxied(service: string): boolean {
+    if (this.options.allowedServices.includes(service)) return true;
+    return this.options.broker?.routedServices?.().has(service) === true;
+  }
+
+  /**
+   * `POST /broker/route`: where a program should send its requests for one
+   * service so that the proxy, not the program, holds the credential. Returns
+   * the loopback listener's URL for the service and the listener's token.
+   *
+   * The token is the capability to reach the local proxy, not a credential:
+   * it works only on this machine, the proxy strips it, and request policy
+   * applies to everything sent with it. So this endpoint never touches a
+   * credential value. It answers only over the Unix socket, only for a
+   * declared reference, only for a service the proxy injects a header for,
+   * and only when the reference names the key the proxy would inject.
+   */
+  private async handleBrokerRoute(req: IncomingMessage, res: ServerResponse, fromLoopback: boolean): Promise<void> {
+    res.setHeader('Content-Type', 'application/json');
+    const reply = (statusCode: number, body: Record<string, unknown>) => {
+      res.statusCode = statusCode;
+      res.end(JSON.stringify(body));
+    };
+    let bodyBuf = '';
+    for await (const chunk of req) {
+      bodyBuf += (chunk as Buffer).toString('utf-8');
+      if (bodyBuf.length > 4096) {
+        reply(400, { error: 'Request body too large', fix: 'POST { service, key }' });
+        return;
+      }
+    }
+    let body: { service?: unknown; key?: unknown } | null;
+    try {
+      body = JSON.parse(bodyBuf);
+    } catch {
+      body = null;
+    }
+    const service = body && typeof body === 'object' ? body.service : undefined;
+    const key = body && typeof body === 'object' ? body.key : undefined;
+    if (
+      typeof service !== 'string' || !SAFE_SERVICE_NAME.test(service) ||
+      typeof key !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(key)
+    ) {
+      reply(400, { error: 'Expected { service, key }', fix: 'POST a JSON body naming one reference' });
+      return;
+    }
+    const refuse = (code: string, error: string, fix: string) => {
+      reply(404, { error, fix, code });
+      this.emitRequest({
+        id: crypto.randomUUID(),
+        service,
+        method: 'BROKER',
+        path: '/broker/route',
+        timestamp: new Date(),
+        authenticated: false,
+        statusCode: 404,
+        error: `${code}: ${service}/${key}`,
+      });
+    };
+    if (fromLoopback) {
+      refuse('route_socket_only', 'Routes are handed out over the Unix socket only', 'Ask over the proxy socket');
+      return;
+    }
+    const scope = this.options.broker;
+    if (!scope) {
+      refuse('broker_disabled', 'The credential broker is disabled on this proxy', 'OpenClaw-hosted proxies do not hand out routes. Run: aquaman daemon');
+      return;
+    }
+    const decision = scope.check(service, key, 'uds');
+    if (!decision.allowed) {
+      refuse(decision.code, decision.reason, decision.fix);
+      return;
+    }
+    const address = this.getLoopbackAddress();
+    const token = this.options.loopback?.token;
+    if (!address || !token) {
+      refuse('route_listener_off', 'The loopback listener is not running, so there is nowhere to send requests', 'Run: aquaman init --agent <agent> --loopback');
+      return;
+    }
+    const serviceDef = this.serviceRegistry.get(service);
+    if (!serviceDef) {
+      refuse('route_service_unknown', `The proxy has no definition for "${service}", so it cannot forward requests for it`, `Add "${service}" to services.yaml (see docs/app-through-proxy.md), or bind the reference without --via-proxy`);
+      return;
+    }
+    if (!this.isServiceProxied(service)) {
+      refuse('route_not_recorded', `No project routes a program to "${service}", so the proxy does not forward for it`, `Bind it with: aquaman coder bind <NAME>=aquaman://${service}/${key} --via-proxy <URL_ENV>`);
+      return;
+    }
+    if ((serviceDef.authMode ?? 'header') !== 'header') {
+      refuse('route_unsupported', `"${service}" does not take its credential in a request header, so a program cannot be routed to it this way`, 'Bind the reference without --via-proxy');
+      return;
+    }
+    if (key !== serviceDef.credentialKey) {
+      refuse('route_key_mismatch', `The proxy injects ${service}/${serviceDef.credentialKey} for this service, not ${service}/${key}`, `Use aquaman://${service}/${serviceDef.credentialKey}`);
+      return;
+    }
+    let stored = false;
+    try {
+      stored = (await this.options.store.get(service, key)) !== null;
+    } catch {
+      stored = false;
+    }
+    if (!stored) {
+      refuse('credential_not_found', `Credential not found: ${service}/${key}`, `Run: aquaman credentials add ${service} ${key}`);
+      return;
+    }
+    reply(200, { url: `http://${address}/${service}`, token });
+  }
+
   private async handleBrokerAvailable(req: IncomingMessage, res: ServerResponse, fromLoopback: boolean): Promise<void> {
     res.setHeader('Content-Type', 'application/json');
     const reply = (statusCode: number, body: Record<string, unknown>) => {

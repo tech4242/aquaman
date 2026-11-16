@@ -21,7 +21,23 @@ export interface ProjectConfig {
   paths: string[];
   /** Environment-variable name → aquaman:// reference (e.g. aquaman://anthropic/api_key). */
   env: Record<string, string>;
+  /**
+   * Env names from `env` whose program is sent through the proxy instead of
+   * being given the credential. That variable then holds the local proxy's
+   * token, and `url_env` holds the proxy's URL for the service.
+   */
+  routes?: Record<string, ProjectRoute>;
 }
+
+export interface ProjectRoute {
+  /** Variable that receives the base URL, e.g. OPENAI_BASE_URL. */
+  url_env: string;
+  /** Path appended to the service's proxy URL, e.g. `/v1`. */
+  base_path?: string;
+}
+
+/** Plain path segments only: the proxy refuses dot segments, and a route must not be able to spell one. */
+export const ROUTE_BASE_PATH = /^(\/(?!\.{1,2}(?:\/|$))[A-Za-z0-9._~-]+)*$/;
 
 export interface ProjectsFile {
   version?: number;
@@ -88,6 +104,23 @@ export function loadProjects(projectsPath: string = defaultProjectsPath()): Proj
           `Project "${name}" env ${envKey} has invalid reference: "${ref}". ` +
           `Expected aquaman://<service>/<key>`
         );
+      }
+    }
+    if (cfg.routes !== undefined) {
+      if (!cfg.routes || typeof cfg.routes !== 'object' || Array.isArray(cfg.routes)) {
+        throw new Error(`Project "${name}" has an invalid routes map`);
+      }
+      for (const [envKey, route] of Object.entries(cfg.routes)) {
+        const r = route as ProjectRoute | null;
+        if (!(envKey in cfg.env)) {
+          throw new Error(`Project "${name}" routes ${envKey}, which is not in its env map`);
+        }
+        if (!r || typeof r !== 'object' || typeof r.url_env !== 'string' || !POSIX_ENV_NAME.test(r.url_env) || r.url_env in cfg.env) {
+          throw new Error(`Project "${name}" route ${envKey} needs a url_env that is a variable name not used in env`);
+        }
+        if (r.base_path !== undefined && (typeof r.base_path !== 'string' || !ROUTE_BASE_PATH.test(r.base_path))) {
+          throw new Error(`Project "${name}" route ${envKey} has an invalid base_path: "${r.base_path}"`);
+        }
       }
     }
   }

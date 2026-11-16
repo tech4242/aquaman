@@ -153,6 +153,55 @@ projects:
     try { fs.rmSync(path.dirname(tmpHome), { recursive: true, force: true }); } catch { /* */ }
   });
 
+  it('a routed binding gives the command the proxy token and URL, never the credential', async () => {
+    const { spawn } = await import('node:child_process');
+    const coderCli = path.resolve('packages/coder/src/cli/index.ts');
+    const routedToken = 'aqm_lb_exec_route_token_0123456789';
+    await proxy.stop();
+    await store.set('stripe', 'secret_key', 'sk_live_never_in_the_command');
+    proxy = createCredentialProxy({
+      socketPath: socketPathLocal,
+      store,
+      allowedServices: ['dummysvc', 'stripe'],
+      broker: createBrokerScope({ projectsPath: path.join(tmpHome, '.aquaman', 'projects.yaml') }),
+      loopback: { port: 0, token: routedToken, host: '127.0.0.1' },
+    });
+    await proxy.start();
+    fs.writeFileSync(
+      path.join(tmpHome, '.aquaman', 'projects.yaml'),
+      `version: 1
+projects:
+  testproj:
+    paths: ["${projectDir}"]
+    env:
+      STRIPE_SECRET_KEY: aquaman://stripe/secret_key
+    routes:
+      STRIPE_SECRET_KEY:
+        url_env: STRIPE_API_BASE
+        base_path: /v1
+`
+    );
+    // The command reports the length and a hash-free fingerprint of what it got, so redaction does not hide the answer.
+    const script = 'printf "url=%s keylen=%s prefix=%s" "$STRIPE_API_BASE" "${#STRIPE_SECRET_KEY}" "$(printf %s "$STRIPE_SECRET_KEY" | cut -c1-7)"';
+    const result = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve) => {
+      const proc = spawn('npx', ['tsx', coderCli, 'exec', '--', 'sh', '-c', script], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        cwd: projectDir,
+        env: { ...process.env, HOME: tmpHome },
+      });
+      let stdout = '';
+      let stderr = '';
+      proc.stdout!.on('data', (d) => { stdout += d.toString(); });
+      proc.stderr!.on('data', (d) => { stderr += d.toString(); });
+      proc.on('exit', (code) => resolve({ stdout, stderr, code }));
+    });
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toContain(`url=http://${proxy.getLoopbackAddress()}/stripe/v1`);
+    expect(result.stdout).toContain(`keylen=${routedToken.length}`);
+    expect(result.stdout).toContain('prefix=aqm_lb_');
+    expect(result.stdout + result.stderr).not.toContain('sk_live_never_in_the_command');
+  }, 60_000);
+
   it('strips the injected value from stdout even when no builtin pattern would match it', async () => {
     const { spawn } = await import('node:child_process');
     const coderCli = path.resolve('packages/coder/src/cli/index.ts');

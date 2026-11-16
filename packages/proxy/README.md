@@ -69,11 +69,11 @@ aquaman daemon &        # start the proxy on ~/.aquaman/proxy.sock
 
 `aquaman help`, `aquaman doctor` are your friends.
 
-## 25 Builtin Services
+## 26 Builtin Services
 
 | Category | Services |
 |----------|----------|
-| **Providers** | Anthropic, OpenAI, GitHub, xAI, Cloudflare AI Gateway, Mistral, Hugging Face, ElevenLabs |
+| **Providers** | Anthropic, OpenAI, GitHub, xAI, Cloudflare AI Gateway, Mistral, Hugging Face, ElevenLabs, Stripe |
 | **Channels (header)** | Slack, Discord, Matrix, Mattermost, LINE, Twitch, Telnyx, Zalo |
 | **Channels (URL-path)** | Telegram |
 | **Channels (basic)** | Twilio, BlueBubbles, Nextcloud Talk |

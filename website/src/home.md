@@ -35,7 +35,7 @@ Every page on this site is also served as Markdown at the same path with `.md`. 
 ## What it does
 
 - **Keeps the key out of the agent.** Keys live in a separate proxy process that injects them into outgoing requests, or into one command at a time for coding agents. The agent holds a reference or a placeholder.
-- **Limits what a key can do, for traffic through the proxy.** Per-service request policies decide which endpoints may be called, and a denied request never gets a credential. A coding agent's commands receive the key in their environment instead, so policies do not apply to them.
+- **Limits what a key can do, for traffic through the proxy.** Per-service request policies decide which endpoints may be called, and a denied request never gets a credential. A coding agent's commands receive the key in their environment by default; [route the app through the proxy](/docs/app-through-proxy/) and it holds only a local token, with policies applied.
 - **Keeps evidence.** Every credential use goes into a log on your machine, chained by SHA-256, so tampering is detectable with `aquaman audit verify`.
 
 ## Pick your host
@@ -58,7 +58,7 @@ aquaman runs on one person's machine and is not used in CI or production. The ap
 ## When to pick something else
 
 - You already pay for 1Password and only need environment variables for local commands: `op run` does that.
-- The program itself must never hold the key, for any API: fnox `proxy run` injects at egress for any HTTPS host you write a rule for.
+- The program must never hold the key and cannot be given a base URL: fnox `proxy run` intercepts HTTPS for any host you write a rule for. (aquaman keeps the key out of an app that accepts a base URL: [guide](/docs/app-through-proxy/).)
 - You only use Claude Code with its sandbox on: its credential masking is built in.
 - Your team already runs Doppler or Infisical: secrets shared across a team, CI and production belong there.
 

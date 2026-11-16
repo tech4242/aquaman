@@ -139,6 +139,25 @@ export class BrokerClient {
   }
 
   /**
+   * Where a program should send requests for this reference's service so the
+   * proxy injects the credential: the proxy's URL for the service and the
+   * token it accepts in place of the key. Never a credential value.
+   */
+  async route(ref: { service: string; key: string }): Promise<{ url: string; token: string }> {
+    const { statusCode, payload } = await this.request('POST', '/broker/route', JSON.stringify(ref));
+    let json: any;
+    try {
+      json = JSON.parse(payload);
+    } catch {
+      throw new BrokerError(`Proxy returned no route (HTTP ${statusCode})`, { status: statusCode });
+    }
+    if (statusCode !== 200 || typeof json.url !== 'string' || typeof json.token !== 'string') {
+      throw new BrokerError(json.error || `Proxy returned no route (HTTP ${statusCode})`, { code: json.code, fix: json.fix, status: statusCode });
+    }
+    return { url: json.url, token: json.token };
+  }
+
+  /**
    * Check whether the proxy is up and responsive.
    */
   async health(): Promise<{ status: string; version?: string }> {

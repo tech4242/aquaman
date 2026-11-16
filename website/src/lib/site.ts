@@ -63,10 +63,11 @@ export const NAV: { heading: string; slugs: string[]; labels?: Record<string, st
   { heading: 'For agents', slugs: ['agent-setup'], labels: { 'agent-setup': 'The agent contract' } },
   {
     heading: 'Hosts',
-    slugs: ['claude-code', 'codex', 'openclaw', 'hermes', 'docker-sandboxes', 'openshell'],
+    slugs: ['claude-code', 'codex', 'app-through-proxy', 'openclaw', 'hermes', 'docker-sandboxes', 'openshell'],
     labels: {
       'claude-code': 'Claude Code',
       codex: 'Codex',
+      'app-through-proxy': 'Keep the key out of your app',
       openclaw: 'OpenClaw',
       hermes: 'Hermes',
       'docker-sandboxes': 'Docker Sandboxes',

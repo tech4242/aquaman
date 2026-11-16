@@ -57,6 +57,8 @@ export function defaultProjectsPath(): string {
 export interface DeclaredRefsResult {
   /** Set of `aquaman://service/key` strings. */
   refs: Set<string>;
+  /** Services a project sends a program to through the proxy (a `routes` entry in projects.yaml). */
+  routedServices?: Set<string>;
   /** Parse problem, if the file exists but can't be read as a project map. Fails closed. */
   error?: string;
 }
@@ -83,6 +85,7 @@ export function loadProjectRefs(projectsPath: string = defaultProjectsPath()): D
   }
 
   const refs = new Set<string>();
+  const routedServices = new Set<string>();
   const projects = parsed && typeof parsed === 'object' ? parsed.projects : undefined;
   if (!projects || typeof projects !== 'object') return { refs };
 
@@ -92,8 +95,15 @@ export function loadProjectRefs(projectsPath: string = defaultProjectsPath()): D
     for (const ref of Object.values(env)) {
       if (typeof ref === 'string' && parseAquamanRef(ref)) refs.add(ref);
     }
+    const routes = cfg.routes;
+    if (routes && typeof routes === 'object' && !Array.isArray(routes)) {
+      for (const envName of Object.keys(routes)) {
+        const parsedRef = typeof env[envName] === 'string' ? parseAquamanRef(env[envName]) : null;
+        if (parsedRef) routedServices.add(parsedRef.service);
+      }
+    }
   }
-  return { refs };
+  return { refs, routedServices };
 }
 
 /**
@@ -165,6 +175,12 @@ export interface BrokerScope {
   declared(): { ref: string; source: 'projects.yaml' | 'config.yaml' }[];
   /** Parse problems with the declaring files, if any (the broker fails closed for their refs). */
   declarationError(): string | undefined;
+  /**
+   * Services some project routes a program to. Recording a route is the
+   * instruction to proxy that service, so the daemon forwards for these in
+   * addition to its configured list.
+   */
+  routedServices?(): ReadonlySet<string>;
 }
 
 export function createBrokerScope(opts: BrokerScopeOptions = {}): BrokerScope {
@@ -216,6 +232,10 @@ export function createBrokerScope(opts: BrokerScopeOptions = {}): BrokerScope {
 
     declarationError() {
       return errors();
+    },
+
+    routedServices() {
+      return projectRefs().routedServices ?? new Set<string>();
     },
   };
 }

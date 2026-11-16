@@ -1,0 +1,103 @@
+# Keep an API key out of the app a coding agent builds
+
+By default aquaman sets a key as an environment variable for each command a coding agent runs, so the command, and the app it starts, hold the key while they run. This page is the other mode: the app is sent through aquaman's local proxy and holds only a local token. The proxy adds the real key on the way to the API, and your request policies apply to what the app sends.
+
+Requires aquaman 0.18.0 or later, and an app that reads its API base URL from the environment.
+
+## Set up
+
+```bash
+aquaman init --agent claude-code --no-hooks --loopback        # or: --agent codex
+aquaman request aquaman://stripe/secret_key --env STRIPE_SECRET_KEY --via-proxy STRIPE_API_BASE
+aquaman-coder exec -- npm start
+```
+
+- `--loopback` turns on a listener on `127.0.0.1` (port 8585 unless configured) that only answers requests carrying a token generated for your machine. It is off until you ask for it, and `init` restarts the daemon if it was running without it.
+- `--via-proxy STRIPE_API_BASE` records a route. In commands run for the project, `STRIPE_API_BASE` is the proxy's URL for the service (`http://127.0.0.1:8585/stripe`) and `STRIPE_SECRET_KEY` is the local token, not the key.
+- The app sends its requests to that URL with that token as its key, exactly as it would send the real one. The proxy checks the token, checks your policy, removes the token, adds the key from your vault and forwards the request.
+
+Binding the same variable again without `--via-proxy` goes back to setting the value.
+
+## What the app has to do
+
+Read the base URL from the environment, falling back to the vendor's address. That is the only change, and it is what makes the same code work in CI and production, where the variable is unset and the key comes from that platform's secrets.
+
+```js
+// OpenAI: the SDK already reads OPENAI_BASE_URL and OPENAI_API_KEY from the environment
+const openai = new OpenAI();
+
+// GitHub
+const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN, baseUrl: process.env.GITHUB_API_URL ?? 'https://api.github.com' });
+
+// Stripe: its SDK takes a host but not a path, so hand it a fetch that swaps the origin
+const base = process.env.STRIPE_API_BASE;
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, base
+  ? { httpClient: Stripe.createFetchHttpClient((url, init) => fetch(String(url).replace('https://api.stripe.com', base), init)) }
+  : {});
+```
+
+These three were run against a local server to confirm the path and header each sends (sdk@1.0.0, @octokit/rest@22.0.1, openai@7.57.0, stripe@23.1.0).
+
+```bash
+aquaman request aquaman://openai/api_key --env OPENAI_API_KEY --via-proxy OPENAI_BASE_URL    # URL ends in /openai/v1
+aquaman request aquaman://github/token --env GITHUB_TOKEN --via-proxy GITHUB_API_URL
+```
+
+`--base-path` adds a path to the URL when a client expects one. It defaults to `/v1` for `openai`, where the SDK's base URL includes the version, and to nothing otherwise.
+
+A client library that cannot be given a base URL cannot be routed. Bind that key without `--via-proxy`.
+
+## Which services can be routed
+
+A service the proxy has a definition for and injects a request header for. Built in:
+
+| Service | Reference | Service | Reference |
+|---|---|---|---|
+| anthropic | `aquaman://anthropic/api_key` | stripe | `aquaman://stripe/secret_key` |
+| openai | `aquaman://openai/api_key` | elevenlabs | `aquaman://elevenlabs/api_key` |
+| github | `aquaman://github/token` | slack | `aquaman://slack/bot_token` |
+| xai | `aquaman://xai/api_key` | discord | `aquaman://discord/bot_token` |
+| mistral | `aquaman://mistral/api_key` | matrix | `aquaman://matrix/access_token` |
+| huggingface | `aquaman://huggingface/api_key` | mattermost | `aquaman://mattermost/bot_token` |
+| cloudflare-ai | `aquaman://cloudflare-ai/api_token` | line, twitch, telnyx, zalo | see `aquaman services list` |
+
+The reference has to name the key the proxy injects for the service, which is the one shown. `aquaman request` checks this before anyone is asked.
+
+For any other API, add a definition to `~/.aquaman/services.yaml`:
+
+```yaml
+services:
+  - name: linear
+    upstream: https://api.linear.app
+    authHeader: Authorization
+    authPrefix: ""            # "Bearer " for bearer tokens; empty when the API takes the bare key
+    credentialKey: api_key
+```
+
+Then `aquaman request aquaman://linear/api_key --env LINEAR_API_KEY --via-proxy LINEAR_API_URL`. `aquaman services validate` checks the file. A built-in definition cannot be replaced from this file, so a changed config cannot send a built-in service's key to another host. Restart the daemon after editing it (`aquaman stop`, then `aquaman init --agent <agent> --loopback`).
+
+## Limit what the key can do
+
+Because the request passes through the proxy, the rules in `~/.aquaman/config.yaml` apply to it:
+
+```yaml
+policy:
+  stripe:
+    defaultAction: allow
+    rules:
+      - { method: DELETE, path: "/v1/customers/**", action: deny }
+      - { method: POST, path: "/v1/payouts", action: deny }
+```
+
+A denied request gets a 403 from the proxy and no key. `aquaman policy test stripe DELETE /v1/customers/cus_1` shows what a rule set decides. Each forwarded request is written to the audit log.
+
+## What this does and does not give you
+
+- The app, its dependencies and anything it logs hold a token that is useless off your machine and that the API rejects. The key is never in the app's memory or environment.
+- The token is not a secret from other software on your machine. Any local process that reads it, or that can connect to the Unix socket, can send requests through the proxy within your policy. This keeps the key from leaking; it is not a boundary between programs running as you.
+- The listener is plain HTTP on `127.0.0.1`. It never accepts connections from other machines.
+- One token covers every service the proxy forwards for. Policy rules are what narrow it.
+- Only HTTP APIs with header authentication. For everything else the variable is set to the value, as before.
+- It is for your machine. In CI and production leave the URL variable unset and supply the key from that platform's secrets.
+
+Compared with a tool that intercepts all HTTPS traffic through a local certificate authority (fnox `proxy run`, Claude Code's sandbox masking): aquaman needs no certificate in your trust store and the app's TLS to the proxy is not terminated by anything, because the app talks plain HTTP to a local address and the proxy makes the HTTPS call. The cost is that the app has to accept a base URL.

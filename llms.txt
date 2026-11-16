@@ -10,6 +10,7 @@ If you are an agent and a task needs an API key or token, do not ask the user to
 
 ## How to
 
+- [Keep an API key out of the app a coding agent builds](https://raw.githubusercontent.com/tech4242/aquaman/main/docs/app-through-proxy.md): route the app through the proxy so it holds a local token, with request policies
 - [Keep API keys out of Claude Code](https://raw.githubusercontent.com/tech4242/aquaman/main/docs/claude-code.md)
 - [Give Codex a token without a .env file](https://raw.githubusercontent.com/tech4242/aquaman/main/docs/codex.md)
 - [Docker Sandboxes secrets from 1Password, Bitwarden or your keychain](https://raw.githubusercontent.com/tech4242/aquaman/main/docs/docker-sandboxes.md)

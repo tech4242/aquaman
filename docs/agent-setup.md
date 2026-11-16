@@ -33,6 +33,7 @@ Output fields:
 | `config` | `path`, `created`, and the vault `backend` in use |
 | `daemon` | `running`, `started` (by this run), `socket`, and `log` when it was started |
 | `project` | `name`, `path`, `created` |
+| `loopback` | With `--loopback`: `enabled`, the listener's `url`, whether this run `changed` the config, and `daemon_restarted` when it had to |
 | `mode` | `exec` or `hook`: how commands in this project get their variables (see above) |
 | `run` | With `mode: exec`, the prefix to use: `aquaman-coder exec -- <command>` |
 | `hooks` | The host's settings file, whether aquaman's hook is `installed` in it, and whether this run `changed` it |
@@ -75,6 +76,7 @@ Output fields:
 | `reason` | On `declined` and `pending` | Why, in words |
 | `fix` | On `pending`, and on `error` | A command that gets past the problem. For `pending` it is one for the user to run in their own terminal. Never present on `declined` |
 | `error`, `code` | On `error` | What went wrong, and the daemon's machine-readable code when it has one |
+| `via_proxy` | With `--via-proxy`, on success | `url_env` and `base_path`: the variable that holds the proxy URL |
 | `env_error` | When the credential is usable but the binding failed | Why; `fix` then holds the `aquaman coder bind` command |
 
 ```json
@@ -105,7 +107,20 @@ Outside an agent session, or in a script: `aquaman-coder exec -- <command>`. Tha
 
 A variable whose credential is not in the vault yet is left unset as long as another one in the project is available, with a line on stderr such as `aquaman: STRIPE_SECRET_KEY is not set for this command: ...`. The command still runs, and other variables are unaffected. Once the credential is added, by `aquaman request` or by the user with `aquaman credentials add`, the next command has it; nothing needs restarting.
 
-**What this protects.** The command you run, and the app it starts, receive the real value in their environment. You, the transcript and the repository do not. This is the same kind of protection as `op run` or `doppler run`, with the value coming from the user's own vault and each read logged. aquaman's request policies apply to traffic sent through its proxy, not to these commands. If the app must not hold the key either, its HTTP client has to be pointed at the proxy; see the [README](../README.md#1-use-the-proxy-on-its-own).
+**What this protects.** The command you run, and the app it starts, receive the real value in their environment. You, the transcript and the repository do not. This is the same kind of protection as `op run` or `doppler run`, with the value coming from the user's own vault and each read logged. aquaman's request policies apply to traffic sent through its proxy, not to these commands. If the app must not hold the key either, bind it with `--via-proxy` (next section).
+
+## Keeping the key out of the app too
+
+```bash
+aquaman init --agent claude-code --no-hooks --loopback --json
+aquaman request aquaman://stripe/secret_key --env STRIPE_SECRET_KEY --via-proxy STRIPE_API_BASE --json
+```
+
+With `--via-proxy <URL_ENV>` the command gets a local token in the `--env` variable and the proxy's URL for the service in `URL_ENV`, instead of the key. Write the app to read its base URL from that variable, falling back to the vendor's address, and to send the "key" it was given as usual. The proxy swaps the token for the real key and applies the user's request policies. The reply carries `"via_proxy": { "url_env": ..., "base_path": ... }`.
+
+It stops with exit 1 before any dialog when the route cannot work: `--loopback` was not given to `init`, the proxy has no definition for the service, or the reference is not the key the proxy injects for it. `error` and `fix` say which. Services, `services.yaml` and limits: [Keep an API key out of the app a coding agent builds](app-through-proxy.md).
+
+Prefer this when the client library accepts a base URL (OpenAI and Anthropic SDKs read one from the environment; Octokit and Stripe take one as an option). Tell the user that `--loopback` opens a token-gated listener on `127.0.0.1`.
 
 ## Example: a service that needs three keys
 
@@ -150,6 +165,7 @@ Do not run `aquaman daemon` yourself: it stays in the foreground and your comman
 |---|---|---|
 | `~/.aquaman/` | `config.yaml` if missing, `projects.yaml`, the audit log, the daemon's socket and log | This user |
 | A background process | `aquaman daemon`, started if not already running | Until logout or reboot |
+| `~/.aquaman/config.yaml` and a listener on `127.0.0.1` | **Only with `--loopback`.** Turns on the token-gated loopback listener and generates its token | This user. Any local process can connect to the port; only one with the token is answered |
 | `~/.claude/settings.json` or `~/.codex/hooks.json` | **Not with `--no-hooks`.** A `PreToolUse` and a `PostToolUse` hook. On macOS with Claude Code, also one sandbox allowlist entry for the aquaman socket | **User level: the hook runs in every project**, and does nothing outside directories registered with aquaman, apart from redacting secret-shaped strings in tool output |
 | `~/.claude/skills/aquaman-credentials/` or `~/.agents/skills/aquaman-credentials/` | The skill that tells an agent to use `aquaman request` | User level |
 | `CLAUDE.md` or `AGENTS.md` in the project | A short block between `<!-- aquaman:start -->` and `<!-- aquaman:end -->` | The project. `--no-instructions` skips it |

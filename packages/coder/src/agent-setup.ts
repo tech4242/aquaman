@@ -95,6 +95,16 @@ Without \`--no-hooks\` it also installs a user-level hook that wraps every shell
 
 Either form never prompts and can be run again safely. If \`aquaman\` is not installed: \`npm install -g aquaman-proxy aquaman-coder\`. The output lists \`human_steps\` when the user has to do something; pass those on.
 
+## Keeping the key out of the app as well
+
+By default the command you run holds the real value while it runs. If the app's client library accepts a base URL, ask for the credential this way instead:
+
+\`\`\`bash
+aquaman request aquaman://stripe/secret_key --env STRIPE_SECRET_KEY --via-proxy STRIPE_API_BASE --json
+\`\`\`
+
+The app then gets a local token in \`STRIPE_SECRET_KEY\` and aquaman's proxy URL in \`STRIPE_API_BASE\`; write it to use that variable as its API base URL when set. The proxy adds the real key and applies the user's request policies. It needs \`aquaman init --agent <agent> --loopback\` once, which opens a token-gated listener on 127.0.0.1: tell the user. If the command answers with an error and a \`fix\`, follow the fix or drop \`--via-proxy\`.
+
 ## Rules
 
 - Never ask the user to paste a secret into the chat, and never write one into a file, a command line or a commit. Use \`aquaman request\`.

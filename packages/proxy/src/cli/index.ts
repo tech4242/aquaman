@@ -1587,7 +1587,7 @@ async function detectDefaultBackend(): Promise<string> {
  * `aquaman init --agent <agent>`: everything an agent can do on its own to get
  * a project using aquaman. No prompts, no secrets, safe to run twice.
  */
-async function initForAgent(agent: string, json: boolean, hooks: boolean): Promise<void> {
+async function initForAgent(agent: string, json: boolean, hooks: boolean, loopback: boolean): Promise<void> {
   const say = (line: string) => { if (!json) console.log(line); };
   const result: Record<string, any> = { ok: false, agent, version: VERSION, human_steps: [] as string[] };
   const finish = (code: number): never => {
@@ -1619,6 +1619,40 @@ async function initForAgent(agent: string, json: boolean, hooks: boolean): Promi
   // 2. Daemon
   const socketPath = path.join(getConfigDir(), 'proxy.sock');
   let running = await proxyHealthy(socketPath);
+  if (loopback) {
+    // The listener is a TCP port any local process can reach, so it is only
+    // turned on when asked for. The raw file is edited so that values which
+    // exist only as environment overrides are never written back.
+    const rawText = fs.readFileSync(configPath, 'utf-8');
+    const parsedRaw = yamlParse(rawText);
+    const raw: Record<string, any> = parsedRaw && typeof parsedRaw === 'object' ? parsedRaw : {};
+    const lb = raw.loopback && typeof raw.loopback === 'object' ? raw.loopback : {};
+    const next = { ...lb, enabled: true, port: lb.port || DEFAULT_LOOPBACK_PORT, host: lb.host || '127.0.0.1', token: lb.token || generateLoopbackToken() };
+    const changed = lb.enabled !== true || !lb.token;
+    if (changed) {
+      raw.loopback = next;
+      fs.writeFileSync(configPath, yamlStringify(raw), { encoding: 'utf-8', mode: 0o600 });
+    }
+    result.loopback = { enabled: true, url: `http://${next.host}:${next.port}`, changed };
+    if (running && !(await probeLoopbackHealth(next.host, next.port))) {
+      // A daemon started before the listener was enabled does not have it.
+      const pid = readPidFile();
+      if (pid && isProcessRunning(pid)) {
+        process.kill(pid, 'SIGTERM');
+        for (let i = 0; i < 50 && isProcessRunning(pid); i++) await new Promise((r) => setTimeout(r, 100));
+        removePidFile();
+        try { fs.unlinkSync(socketPath); } catch { /* already gone */ }
+        running = false;
+        result.loopback.daemon_restarted = true;
+      } else {
+        result.error = 'A proxy is running without the loopback listener and this command cannot restart it';
+        result.fix = 'Stop it (aquaman stop, or stop the OpenClaw gateway that started it), then run this command again';
+        if (!json) { console.error(`  ✗ ${result.error}`); console.error(`    → ${result.fix}`); }
+        finish(1);
+      }
+    }
+    say(`  ✓ Loopback listener enabled (${result.loopback.url})`);
+  }
   let started = false;
   if (!running && result.config.backend === 'encrypted-file') {
     // This backend has no OS keystore behind it, so the daemon cannot open
@@ -1708,6 +1742,7 @@ program
   .option('--agent <agent>', 'Also wire a coding agent for the current directory: claude-code or codex')
   .option('--json', 'With --agent: print one JSON object and nothing else')
   .option('--no-hooks', 'With --agent: install no hooks; commands that need credentials are run as `aquaman-coder exec -- <command>`')
+  .option('--loopback', 'With --agent: also turn on the token-gated loopback listener, so a program can be routed through the proxy (aquaman request ... --via-proxy)')
   .addHelpText('after', `
 With --agent the command never prompts and can be re-run safely. It creates the
 config if missing, starts the daemon, installs the agent's hooks and skill,
@@ -1717,7 +1752,7 @@ settings and no permission prompt changes. Credentials are added later, by a per
   aquaman request aquaman://github/token --env GITHUB_TOKEN`)
   .action(async (options) => {
     if (options.agent) {
-      await initForAgent(String(options.agent), Boolean(options.json), options.hooks !== false);
+      await initForAgent(String(options.agent), Boolean(options.json), options.hooks !== false, options.loopback === true);
       return;
     }
     ensureConfigDir();
@@ -3593,6 +3628,8 @@ program
   .description('Ask for a credential by reference; a person supplies or approves it in a dialog. Never prints the value')
   .argument('<ref>', 'aquaman://service/key')
   .option('--env <NAME>', 'Also bind the ref to this env var for the project covering the current directory')
+  .option('--via-proxy <URL_ENV>', 'With --env: route the program through the proxy. NAME gets the proxy token, URL_ENV the proxy URL; the program never holds the credential')
+  .option('--base-path <path>', 'With --via-proxy: path appended to the proxy URL (default /v1 for openai)')
   .option('--timeout <seconds>', `How long the dialog waits for an answer (${PROMPT_TIMEOUT_MIN_SECONDS}-${PROMPT_TIMEOUT_MAX_SECONDS})`, String(PROMPT_TIMEOUT_SECONDS))
   .option('--json', 'Print one JSON object and nothing else')
   .addHelpText('after', `
@@ -3611,7 +3648,7 @@ Statuses and exit codes:
 
 Example:
   aquaman request aquaman://github/token --env GITHUB_TOKEN --json`)
-  .action(async (ref: string, opts: { env?: string; json?: boolean; timeout: string }) => {
+  .action(async (ref: string, opts: { env?: string; json?: boolean; timeout: string; viaProxy?: string; basePath?: string }) => {
     const out = (result: Record<string, unknown>, code: number): never => {
       if (opts.json) {
         console.log(JSON.stringify(result, null, 2));
@@ -3619,7 +3656,7 @@ Example:
         const stream = code === 0 ? console.log : console.error;
         stream(`${result.status}: ${ref}${result.reason ? ` (${result.reason})` : ''}`);
         if (result.error) stream(String(result.error));
-        if (result.env) stream(`Bound to ${result.env} for this project`);
+        if (result.env) stream(result.via_proxy ? `Bound to ${result.env} for this project, through the proxy` : `Bound to ${result.env} for this project`);
         if (result.fix) stream(`Fix: ${result.fix}`);
       }
       process.exit(code);
@@ -3642,8 +3679,33 @@ Example:
     // for a value, so a dialog is never shown for a request that cannot finish.
     const { spawnSync } = await import('node:child_process');
     const bindSpec = opts.env ? `${opts.env}=${ref}` : '';
+    const routeArgs: string[] = [];
+    if (opts.viaProxy !== undefined || opts.basePath !== undefined) {
+      if (!opts.env || opts.viaProxy === undefined) {
+        out({ status: 'error', ref, error: '--via-proxy needs --env, and --base-path needs --via-proxy', fix: 'aquaman request aquaman://openai/api_key --env OPENAI_API_KEY --via-proxy OPENAI_BASE_URL' }, 1);
+      }
+      // A route only works for a service the proxy can forward and inject a
+      // header for, with the listener on. Say so before anyone is asked.
+      const parsedRef = parseAquamanRef(ref)!;
+      const routeConfig = loadConfig();
+      const def = createServiceRegistry({ configPath: routeConfig.services.configPath }).get(parsedRef.service);
+      if (!def) {
+        out({ status: 'error', ref, error: `The proxy has no definition for "${parsedRef.service}", so it cannot forward requests for it`, fix: `Add "${parsedRef.service}" to services.yaml (docs/app-through-proxy.md), or drop --via-proxy to have the variable set to the value instead` }, 1);
+      }
+      if ((def!.authMode ?? 'header') !== 'header') {
+        out({ status: 'error', ref, error: `"${parsedRef.service}" does not take its credential in a request header, so a program cannot be routed to it`, fix: 'Drop --via-proxy' }, 1);
+      }
+      if (def!.credentialKey !== parsedRef.key) {
+        out({ status: 'error', ref, error: `The proxy injects ${parsedRef.service}/${def!.credentialKey} for this service, not ${parsedRef.service}/${parsedRef.key}`, fix: `Use aquaman://${parsedRef.service}/${def!.credentialKey}` }, 1);
+      }
+      if (routeConfig.loopback?.enabled !== true || !routeConfig.loopback.token) {
+        out({ status: 'error', ref, error: 'The loopback listener is off, so there is nowhere for the program to send its requests', fix: 'aquaman init --agent <agent> --loopback' }, 1);
+      }
+      routeArgs.push('--via-proxy', opts.viaProxy!);
+      if (opts.basePath !== undefined) routeArgs.push('--base-path', opts.basePath);
+    }
     if (opts.env) {
-      const check = spawnSync('aquaman-coder', ['bind', bindSpec, '--check', '--json'], { encoding: 'utf-8' });
+      const check = spawnSync('aquaman-coder', ['bind', bindSpec, '--check', ...routeArgs, '--json'], { encoding: 'utf-8' });
       if (check.error) {
         out({ status: 'error', ref, error: 'aquaman-coder is not installed, so --env cannot bind anything', fix: 'npm install -g aquaman-coder' }, 1);
       }
@@ -3677,17 +3739,20 @@ Example:
     const usable = json.status === 'ready' || json.status === 'stored' || json.status === 'approved';
     if (!usable && opts.env && typeof result.fix === 'string') {
       // The by-hand route has to end in the same place this command would have.
-      result.fix = `${result.fix} && aquaman coder bind ${bindSpec}`;
+      result.fix = `${result.fix} && aquaman coder bind ${bindSpec}${routeArgs.length ? ` ${routeArgs.join(' ')}` : ''}`;
     }
     if (usable && opts.env) {
-      const bind = spawnSync('aquaman-coder', ['bind', bindSpec, '--json'], { encoding: 'utf-8' });
+      const bind = spawnSync('aquaman-coder', ['bind', bindSpec, ...routeArgs, '--json'], { encoding: 'utf-8' });
       if (bind.status === 0) {
         result.env = opts.env;
+        if (opts.viaProxy) {
+          try { result.via_proxy = JSON.parse(bind.stdout).via_proxy; } catch { result.via_proxy = { url_env: opts.viaProxy }; }
+        }
       } else {
         result.env_error = bind.error
           ? 'aquaman-coder is not installed (npm install -g aquaman-coder)'
           : (bind.stderr || bind.stdout || '').trim().split('\n').pop();
-        result.fix = `aquaman coder bind ${opts.env}=${ref}`;
+        result.fix = `aquaman coder bind ${opts.env}=${ref}${routeArgs.length ? ` ${routeArgs.join(' ')}` : ''}`;
       }
     }
     out(result, usable ? 0 : json.status === 'declined' ? 2 : 3);

@@ -23,6 +23,8 @@ import {
   defaultProjectsPath,
   loadProjects,
   saveProjects,
+  ROUTE_BASE_PATH,
+  type ProjectRoute,
   findProjectForCwd,
   parseRef,
   type ProjectConfig,
@@ -282,7 +284,18 @@ program
     for (const [envName, ref] of Object.entries(match.config.env)) {
       const parsed = parseRef(ref);
       if (!parsed) continue;
+      const route = match.config.routes?.[envName];
       try {
+        if (route) {
+          // Routed: the command gets the local proxy's address and token, and
+          // the proxy adds the credential on the way out. The value itself is
+          // never fetched, so it is never in this process or the command.
+          const target = await broker.route(parsed);
+          env[envName] = target.token;
+          env[route.url_env] = target.url + (route.base_path ?? '');
+          injectedValues.push(target.token);
+          continue;
+        }
         const result = await broker.resolve({ service: parsed.service, key: parsed.key, ttlSeconds: 60 });
         env[envName] = result.value;
         injectedValues.push(result.value);
@@ -292,7 +305,7 @@ program
         // most commands in a project need none of its credentials, and the
         // ones that do fail on their own with the variable named here.
         if (err instanceof BrokerError && err.status === 404 && err.code !== 'broker_disabled') {
-          console.error(`aquaman: ${envName} is not set for this command: ${err.message}`);
+          console.error(`aquaman: ${envName} is not set for this command: ${err.message}${route && err.fix ? `. ${err.fix}` : ''}`);
           continue;
         }
         console.error(`aquaman: failed to resolve ${envName}: ${(err as Error).message}`);
@@ -445,8 +458,10 @@ program
   .command('bind <binding>')
   .description('Bind NAME=aquaman://service/key for the project covering the current directory')
   .option('--check', 'Only check that the binding could be made; change nothing')
+  .option('--via-proxy <URL_ENV>', 'Send the program through the proxy: NAME gets the proxy token and URL_ENV the proxy URL, so the program never holds the credential')
+  .option('--base-path <path>', 'With --via-proxy: path appended to the proxy URL (default /v1 for openai, none otherwise)')
   .option('--json', 'Print one JSON object and nothing else')
-  .action((binding: string, opts: { json?: boolean; check?: boolean }) => {
+  .action((binding: string, opts: { json?: boolean; check?: boolean; viaProxy?: string; basePath?: string }) => {
     const fail = (error: string, fix?: string): never => {
       if (opts.json) console.log(JSON.stringify({ ok: false, error, fix }, null, 2));
       else { console.error(error); if (fix) console.error(`Fix: ${fix}`); }
@@ -457,6 +472,17 @@ program
     const ref = idx < 0 ? '' : binding.slice(idx + 1);
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) fail(`Bad binding "${binding}". Expected NAME=aquaman://service/key`);
     if (!parseRef(ref)) fail(`Bad reference "${ref}". Expected aquaman://service/key`);
+    let route: ProjectRoute | undefined;
+    if (opts.viaProxy !== undefined) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(opts.viaProxy) || opts.viaProxy === name) {
+        fail(`Bad --via-proxy "${opts.viaProxy}". Expected the name of the variable the program reads its base URL from, e.g. OPENAI_BASE_URL`);
+      }
+      const basePath = opts.basePath ?? (parseRef(ref)!.service === 'openai' ? '/v1' : '');
+      if (!ROUTE_BASE_PATH.test(basePath)) fail(`Bad --base-path "${basePath}". Expected a path such as /v1`);
+      route = basePath ? { url_env: opts.viaProxy, base_path: basePath } : { url_env: opts.viaProxy };
+    } else if (opts.basePath !== undefined) {
+      fail('--base-path only applies with --via-proxy');
+    }
     // A binding gives every command under the project's paths the value, so
     // the project is one somebody registered on purpose, never one made up
     // from wherever this happened to be run.
@@ -475,10 +501,22 @@ program
       else console.log(`${name} -> ${ref} can be bound in project "${project.name}"`);
       return;
     }
-    file.projects[project.name] = { ...file.projects[project.name], env: { ...file.projects[project.name].env, [name]: ref } };
+    const current = file.projects[project.name];
+    if (route && route.url_env in current.env) {
+      fail(`${route.url_env} is already bound to a credential in project "${project.name}"; pick another variable for the URL`);
+    }
+    // Binding a name again replaces how it is delivered: with a route, or without one.
+    const routes = { ...(current.routes ?? {}) };
+    if (route) routes[name] = route;
+    else delete routes[name];
+    file.projects[project.name] = { ...current, env: { ...current.env, [name]: ref } };
+    if (Object.keys(routes).length > 0) file.projects[project.name].routes = routes;
+    else delete file.projects[project.name].routes;
     saveProjects(file);
-    if (opts.json) console.log(JSON.stringify({ ok: true, project: project.name, env: name, ref }, null, 2));
-    else console.log(`${name} -> ${ref} in project "${project.name}"`);
+    if (opts.json) console.log(JSON.stringify({ ok: true, project: project.name, env: name, ref, ...(route ? { via_proxy: route } : {}) }, null, 2));
+    else console.log(route
+      ? `${name} -> ${ref} through the proxy in project "${project.name}" (${route.url_env} gets the proxy URL)`
+      : `${name} -> ${ref} in project "${project.name}"`);
   });
 
 // ---------------- hook ----------------
@@ -679,12 +717,12 @@ program
   .action(async (statusOpts: { json?: boolean }) => {
     // Gather first, then print in one of two forms.
     const projectsPath = defaultProjectsPath();
-    let projects: Array<{ name: string; paths: string[]; env: Record<string, string> }> = [];
+    let projects: Array<{ name: string; paths: string[]; env: Record<string, string>; routes?: Record<string, ProjectRoute> }> = [];
     let projectsError: string | undefined;
     if (fs.existsSync(projectsPath)) {
       try {
         const file = loadProjects();
-        projects = Object.entries(file.projects).map(([name, cfg]) => ({ name, paths: cfg.paths, env: cfg.env }));
+        projects = Object.entries(file.projects).map(([name, cfg]) => ({ name, paths: cfg.paths, env: cfg.env, ...(cfg.routes ? { routes: cfg.routes } : {}) }));
       } catch (err) {
         projectsError = (err as Error).message;
       }
