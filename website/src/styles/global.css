@@ -113,6 +113,8 @@ h1, h2, h3 { line-height: 1.15; letter-spacing: -0.015em; text-wrap: balance; }
 .sidebar .group a[aria-current='page'] { color: var(--accent); }
 .old-version { border: 1px solid var(--secret); border-radius: 6px; padding: 0.6rem 0.9rem; font-size: 0.95rem; }
 
-.site-header .stars { display: inline-flex; align-items: center; gap: 0.4rem; border: 1px solid var(--line); border-radius: 6px; padding: 0.15rem 0.6rem; text-decoration: none !important; }
+.site-header nav { align-items: center; }
+.site-header .stars .sprite { display: block; }
+.site-header .stars { display: inline-flex; align-items: center; line-height: 1; gap: 0.4rem; border: 1px solid var(--line); border-radius: 6px; padding: 0.15rem 0.6rem; text-decoration: none !important; }
 .site-header .stars:hover { border-color: var(--muted); }
 .site-header .stars b { font-weight: 650; border-left: 1px solid var(--line); padding-left: 0.5rem; }

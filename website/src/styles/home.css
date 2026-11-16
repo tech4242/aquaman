@@ -20,7 +20,7 @@
 .gb .site-header nav a:hover, .gb .site-header nav a[aria-current='page'] { text-decoration-color: var(--c); text-decoration-thickness: var(--px); }
 .gb .site-footer { background: var(--y); color: var(--ink); margin-top: 0; border-top: var(--px) solid var(--ink); font-family: var(--soft); font-size: 1.3rem; }
 .gb .site-footer a { color: var(--ink); }
-.gb .site-header .stars { border: var(--px) solid var(--ink); border-radius: 0; background: var(--y); padding: 0.2rem 0.6rem; box-shadow: 3px 3px 0 var(--ink); gap: 0.5rem; }
+.gb .site-header .stars { border: var(--px) solid var(--ink); border-radius: 0; background: var(--y); padding: 0.35rem 0.6rem; box-shadow: 3px 3px 0 var(--ink); gap: 0.5rem; }
 .gb .site-header .stars:hover { transform: translate(3px, 3px); box-shadow: none; }
 .gb .site-header .stars b { border-left: var(--px) solid var(--ink); padding-left: 0.55rem; font-weight: 400; }
 .gb .site-header .wrap { align-items: center; }
@@ -134,7 +134,7 @@
 .sky .c1 { right: 6%; top: 5rem; }
 .sky .c2 { right: 15%; top: 12rem; }
 .sky { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
-.surface .wrap { position: relative; z-index: 1; }
+.surface .wrap > :not(.raft) { position: relative; z-index: 1; }
 .trust { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2rem; }
 .trust b { display: block; font-size: 1.8rem; line-height: 1.05; margin-bottom: 0.3rem; font-weight: 400; }
 .trust span { font-size: 1.3rem; }
