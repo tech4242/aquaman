@@ -118,3 +118,17 @@ h1, h2, h3 { line-height: 1.15; letter-spacing: -0.015em; text-wrap: balance; }
 .site-header .stars { display: inline-flex; align-items: center; line-height: 1; gap: 0.4rem; border: 1px solid var(--line); border-radius: 6px; padding: 0.15rem 0.6rem; text-decoration: none !important; }
 .site-header .stars:hover { border-color: var(--muted); }
 .site-header .stars b { font-weight: 650; border-left: 1px solid var(--line); padding-left: 0.5rem; }
+
+/* Phone: the links fold behind a Menu button. No script; a checkbox holds the state. */
+.nav-toggle { position: absolute; opacity: 0; pointer-events: none; }
+.nav-button { display: none; }
+@media (max-width: 46rem) {
+  .site-header .wrap { align-items: center; }
+  .nav-button { display: inline-block; margin-left: auto; border: 1px solid var(--line); border-radius: 6px; padding: 0.3rem 0.8rem; cursor: pointer; font-size: 0.95rem; }
+  .nav-toggle:focus-visible + .nav-button { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .nav-toggle:checked + .nav-button { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .site-header nav { display: none; flex-basis: 100%; flex-direction: column; align-items: stretch; gap: 0; margin: 0.5rem 0 0; border-top: 1px solid var(--line); }
+  .nav-toggle:checked ~ nav { display: flex; }
+  .site-header nav a { padding: 0.8rem 0; border-bottom: 1px solid var(--line); font-size: 1.05rem; }
+  .site-header nav .stars { align-self: flex-start; margin-top: 0.9rem; padding: 0.4rem 0.7rem; border-bottom: 1px solid var(--line); }
+}

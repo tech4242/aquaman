@@ -48,6 +48,8 @@ const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/',
     <header class="site-header">
       <div class="wrap">
         <a class="wordmark" href="/">aquaman</a>
+        <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Show the menu" />
+        <label for="nav-toggle" class="nav-button" aria-hidden="true">Menu</label>
         <nav aria-label="Site">
           <a href="/docs/" aria-current={inDocs ? 'page' : undefined}>Docs</a>
           <a href="/docs/agent-setup/" aria-current={at('/docs/agent-setup/')}>For agents</a>
