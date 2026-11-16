@@ -238,3 +238,12 @@
   .gb .site-header nav a { border-bottom: 2px solid var(--ink); font-size: 1.6rem; }
   .gb .site-header nav .stars { border: var(--px) solid var(--ink); margin-bottom: 0.6rem; font-size: 1.4rem; }
 }
+
+/* The depth label reads above its heading but comes after it in the markup, so the heading is what a text reader meets first. */
+.zh { display: flex; flex-direction: column; }
+.zh .depth { order: -1; }
+.agent-link { font-size: 1.3rem; align-self: center; }
+.hosts { border: 0; padding: 0; margin: 0; min-width: 0; }
+.hosts legend { position: absolute; left: -999px; }
+.all-hosts { margin: 1.5rem 0 0; font-size: 1.25rem; max-width: 70ch; }
+.sand .limits { margin: 2rem 0 0; max-width: 66ch; font-size: 1.3rem; }

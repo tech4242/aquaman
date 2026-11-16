@@ -245,7 +245,7 @@ function brokerResolve(
     );
     req.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT' || err.code === 'ECONNREFUSED') {
-        resolve({ error: `Cannot reach the aquaman proxy at ${socketPath}`, fix: 'Start it with: aquaman init --agent <agent>  (or, in a terminal of your own: aquaman daemon)', code: 'proxy_unreachable' });
+        resolve({ error: `Cannot reach the aquaman proxy at ${socketPath}`, fix: 'Start it with: aquaman init --agent <agent> --no-hooks  (or, in a terminal of your own: aquaman daemon)', code: 'proxy_unreachable' });
       } else if (err.code === 'EPERM' || err.code === 'EACCES') {
         resolve({ error: `Connecting to ${socketPath} was denied (${err.code})`, fix: 'If this runs inside a sandbox, allowlist the socket; otherwise check its owner and 0600 mode', code: 'socket_blocked' });
       } else {
@@ -3764,7 +3764,7 @@ Example:
           status: 'error',
           ref,
           error: detail.error ?? 'No project covers the current directory',
-          fix: detail.fix ?? 'Run from the project directory, after: aquaman init --agent <agent>',
+          fix: detail.fix ?? 'Run from the project directory, after: aquaman init --agent <agent> --no-hooks',
         }, 1);
       }
     }
@@ -3776,7 +3776,7 @@ Example:
       (timeoutSeconds + 30) * 1000,
     );
     if ('error' in response) {
-      out({ status: 'error', ref, error: response.error, code: response.code, fix: 'Start the daemon in the background: aquaman init --agent <agent>   (in a terminal of your own: aquaman daemon)' }, 4);
+      out({ status: 'error', ref, error: response.error, code: response.code, fix: 'Start the daemon in the background: aquaman init --agent <agent> --no-hooks   (in a terminal of your own: aquaman daemon)' }, 4);
     }
     const { status, json } = response as { status: number; json: any };
     if (status !== 200) {

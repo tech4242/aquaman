@@ -9,6 +9,8 @@ interface Props {
   description: string;
   /** Path of this page's Markdown twin, e.g. `/claude-code.md`. */
   markdown: string;
+  /** What that link is, when it is not this page as Markdown. */
+  markdownTitle?: string;
   jsonLd?: Record<string, unknown>;
   /** Set when another page is the one to index, as for docs of an earlier release. */
   canonicalPath?: string;
@@ -17,7 +19,7 @@ interface Props {
   /** A page-wide look, as a class on <body>. */
   look?: string;
 }
-const { title, description, markdown, jsonLd, canonicalPath, wide, look } = Astro.props;
+const { title, description, markdown, jsonLd, canonicalPath, wide, look, markdownTitle = 'This page as Markdown' } = Astro.props;
 const stars = await githubStars();
 const fullTitle = title ? `${title} | ${SITE_NAME}` : HOME_TITLE;
 const canonical = new URL(canonicalPath ?? Astro.url.pathname, Astro.site).href;
@@ -32,7 +34,7 @@ const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/',
     <title>{fullTitle}</title>
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
-    <link rel="alternate" type="text/markdown" href={new URL(markdown, Astro.site).href} title="This page as Markdown" />
+    <link rel="alternate" type="text/markdown" href={new URL(markdown, Astro.site).href} title={markdownTitle} />
     <link rel="alternate" type="text/plain" href={new URL('/llms.txt', Astro.site).href} title="llms.txt" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="sitemap" href="/sitemap-index.xml" />
@@ -68,7 +70,7 @@ const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/',
     <footer class="site-footer">
       <div class="wrap">
         <ul>
-          <li><a href={markdown}>This page as Markdown</a></li>
+          <li><a href={markdown}>{markdownTitle}</a></li>
           <li><a href="/llms.txt">llms.txt</a></li>
           <li><a href="/llms-full.txt">llms-full.txt</a></li>
           <li><a href="/sitemap-index.xml">Sitemap</a></li>

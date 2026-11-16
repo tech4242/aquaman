@@ -449,7 +449,7 @@ program
       if (mode === 'exec') result.run = 'aquaman-coder exec -- <command>';
       if (agent === 'codex') {
         const sandbox = codexSandboxStatus(defaultSocketPath());
-        if (!sandbox.ok) result.human_steps.push(`let Codex's sandbox reach the proxy socket: ${sandbox.detail}. Run \`aquaman coder setup codex\` for the config.toml snippet`);
+        if (!sandbox.ok) result.human_steps.push(`let Codex's sandbox reach the proxy socket: ${sandbox.detail}. The config.toml profile is in docs/codex.md (https://github.com/tech4242/aquaman/blob/main/docs/codex.md)`);
       }
       if (opts.skill) result.skill = installSkill(agent);
       if (opts.instructions) result.agents_file = writeAgentsBlock(agent, cwd, mode);
@@ -500,7 +500,7 @@ program
     if (!match) {
       fail(
         `No aquaman project covers ${cwd}`,
-        'Run from the project directory, after `aquaman init --agent <agent>` there (or: aquaman coder project add <name> --path <dir>)',
+        'Run from the project directory, after `aquaman init --agent <agent> --no-hooks` there (or: aquaman coder project add <name> --path <dir>)',
       );
     }
     const project = { name: match!.name };
@@ -586,7 +586,7 @@ program
         name: 'proxy running',
         ok: false,
         detail: (err as Error).message,
-        fix: 'aquaman init --agent <agent>   (or, in a terminal of your own: aquaman daemon)',
+        fix: 'aquaman init --agent <agent> --no-hooks   (or, in a terminal of your own: aquaman daemon)',
       });
     }
 
