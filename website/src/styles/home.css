@@ -25,7 +25,9 @@
 .gb .site-header .stars b { border-left: var(--px) solid var(--ink); padding-left: 0.55rem; font-weight: 400; }
 .gb .site-header .wrap { align-items: center; }
 
-.home { font-family: var(--soft); font-size: 1.5rem; line-height: 1.2; position: relative; --line-x: 86%; }
+/* Fish swim in from beyond the edges; that must not make the page scroll sideways. */
+.home { overflow-x: clip;
+  font-family: var(--soft); font-size: 1.5rem; line-height: 1.2; position: relative; --line-x: 86%; }
 .home .sprite { image-rendering: pixelated; display: block; }
 .home a { color: inherit; text-decoration-thickness: 2px; }
 .home :focus-visible { outline: var(--px) solid var(--c); outline-offset: 2px; border-radius: 0; }

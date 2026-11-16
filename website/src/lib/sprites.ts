@@ -575,3 +575,19 @@ export const STAR = [
   '..#yy#.#yy#..',
   '...##...##...',
 ];
+
+export const ICON = [
+  '...cpcccc...',
+  '..cpcccccc..',
+  '.cccccccccc.',
+  '.ccwwccwwcc.',
+  'cccw#ccw#ccc',
+  '.ccw#ccw#cc.',
+  '.cccccccccc.',
+  '..cccccccc..',
+  '.cccccccc.cc',
+  '.cc.cc.cc.cc',
+  '.cc.cc.cc.cc',
+  'ccs.cs.cs.cs',
+  '...........c',
+];

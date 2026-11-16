@@ -3,7 +3,7 @@ import '../styles/global.css';
 import { SITE_NAME, HOME_TITLE } from '../lib/site';
 import { githubStars, formatStars } from '../lib/stars';
 import Sprite from '../components/Sprite.astro';
-import { STAR } from '../lib/sprites';
+import { STAR, ICON } from '../lib/sprites';
 
 interface Props {
   title?: string;
@@ -47,7 +47,7 @@ const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/',
     <a class="skip" href="#main">Skip to content</a>
     <header class="site-header">
       <div class="wrap">
-        <a class="wordmark" href="/">aquaman</a>
+        <a class="wordmark" href="/"><Sprite rows={ICON} px={2} /><span>aquaman</span></a>
         <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Show the menu" />
         <label for="nav-toggle" class="nav-button" aria-hidden="true">Menu</label>
         <nav aria-label="Site">

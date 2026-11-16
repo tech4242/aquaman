@@ -321,7 +321,7 @@ SPRITES = {
     'OCTOPUS': octopus(), 'OCTOPUS_BLINK': octopus(blink=True), 'CHEST': chest(), 'CHEST_OPEN': chest(open_lid=True),
     'KEY': key(), 'ROBOT': robot(), 'FISH': fish(), 'BUBBLE': bubble(), 'TAG': tag(),
     'WEED': weed(), 'WEED_TALL': weed(34, 1.3), 'INK': ink(), 'ANCHOR': anchor(), 'STARFISH': starfish(),
-    'SHELL': shell(), 'CRAB': crab(), 'CORAL': coral(), 'ROCK': rock(), 'SUN': sun(), 'CLOUD': cloud(), 'STAR': star(),
+    'SHELL': shell(), 'CRAB': crab(), 'CORAL': coral(), 'ROCK': rock(), 'SUN': sun(), 'CLOUD': cloud(), 'STAR': star(), 'ICON': icon(),
 }
 
 HEADER = '''/**
