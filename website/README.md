@@ -1,6 +1,6 @@
 # aquaman website
 
-The site renders the repository's own Markdown (`../docs`, `../SECURITY.md`); nothing is copied. The home page text is `src/home.md`.
+The site renders the repository's own Markdown (`../docs`, `../SECURITY.md`); nothing is copied. The home page is `src/pages/index.astro`: short and visual, for a person. Its Markdown version, `/index.md`, is the long form for agents and is built from `src/home.md`, the host list in `src/lib/hosts.ts`, and `src/home-more.md`; keep the facts in the two in step.
 
 ```bash
 cd website

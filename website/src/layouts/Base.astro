@@ -10,8 +10,10 @@ interface Props {
   jsonLd?: Record<string, unknown>;
   /** Set when another page is the one to index, as for docs of an earlier release. */
   canonicalPath?: string;
+  /** The page lays out its own full-width sections. */
+  wide?: boolean;
 }
-const { title, description, markdown, jsonLd, canonicalPath } = Astro.props;
+const { title, description, markdown, jsonLd, canonicalPath, wide } = Astro.props;
 const fullTitle = title ? `${title} | ${SITE_NAME}` : HOME_TITLE;
 const canonical = new URL(canonicalPath ?? Astro.url.pathname, Astro.site).href;
 const at = (p: string) => (Astro.url.pathname.replace(/\/?$/, '/') === p ? 'page' : undefined);
@@ -49,7 +51,7 @@ const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/',
         </nav>
       </div>
     </header>
-    <main id="main" class="wrap">
+    <main id="main" class={wide ? undefined : 'wrap'}>
       <slot />
     </main>
     <footer class="site-footer">

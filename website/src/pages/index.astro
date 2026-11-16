@@ -1,10 +1,21 @@
 ---
 import Base from '../layouts/Base.astro';
-import { Content as Intro } from '../home.md';
-import { Content as More } from '../home-more.md';
+import '../styles/home.css';
 import { HOSTS, AGENT_PROMPT } from '../lib/hosts';
 import { docUrl } from '../lib/links.mjs';
 import { SUMMARY, HOME_TITLE, packageVersion } from '../lib/site';
+
+const VAULTS = [
+  { name: 'macOS Keychain', note: 'default on a Mac' },
+  { name: '1Password', note: 'via the op CLI' },
+  { name: 'Bitwarden', note: 'via the bw CLI' },
+  { name: 'HashiCorp Vault', note: 'your company Vault' },
+  { name: 'KeePassXC', note: 'a KeePass database' },
+  { name: 'Keeper', note: 'via Keeper Commander' },
+  { name: 'Linux keyring', note: 'libsecret' },
+  { name: 'systemd-creds', note: 'TPM2-backed' },
+  { name: 'Encrypted file', note: 'AES-256-GCM' },
+];
 
 const jsonLd = {
   '@context': 'https://schema.org',
@@ -25,76 +36,148 @@ const jsonLd = {
 const description =
   'Give Claude Code, Codex and other AI agents an API key without handing it over. Open source, runs on your machine, keeps keys in the vault you already use.';
 ---
-<Base description={description} markdown="/index.md" jsonLd={jsonLd}>
+<Base description={description} markdown="/index.md" jsonLd={jsonLd} wide>
   <div class="home">
-    <section class="hero">
-      <p class="product">aquaman: credential proxy for AI agents</p>
-      <h1>Give your AI agent an API key without handing it over</h1>
-      <p class="subline">The agent gets a reference. The key stays in your vault.</p>
-      <div class="exchange">
-        <figure>
-          <figcaption>What your agent does</figcaption>
-          <pre class="terminal"><code><span class="prompt">$ </span>aquaman request <span class="ref">aquaman://github/token</span> --env GITHUB_TOKEN --json
-{`{`}
-  "status": "stored",
-  "ref": "<span class="ref">aquaman://github/token</span>",
-  "env": "GITHUB_TOKEN"
-{`}`}
-
-<span class="prompt">$ </span>aquaman-coder exec -- gh api user --jq .login
-octocat
-
-<span class="prompt">$ </span>aquaman-coder exec -- printenv GITHUB_TOKEN
-<span class="masked">[REDACTED:injected-value]</span></code></pre>
-        </figure>
-        <figure>
-          <figcaption>What you do</figcaption>
-          <div class="dialog" role="img" aria-label="A system dialog titled aquaman asking you to type the value for github/token, with Cancel and Store in vault buttons">
-            <strong>aquaman</strong>
-            <p>An agent is asking aquaman for a credential that is not in your vault.</p>
-            <p>Credential: github/token</p>
-            <p>Type the value to store it in your vault. The agent receives a reference, never the value. Cancel if you did not expect this.</p>
-            <div class="field">••••••••••••••••</div>
-            <div class="buttons"><span>Cancel</span><span>Store in vault</span></div>
-          </div>
-        </figure>
-      </div>
-    </section>
-    <div class="prose home-body">
-      <Intro />
-    </div>
-
-    <section class="start" aria-labelledby="start-heading">
-      <h2 id="start-heading">Start: pick your host</h2>
-      <div class="hosts">
-        {HOSTS.map((h, i) => <input type="radio" name="host" id={`host-${h.id}`} checked={i === 0} />)}
-        <div class="tabs">
-          {HOSTS.map((h) => <label for={`host-${h.id}`}>{h.name}</label>)}
+    <section class="stage">
+      <div class="wrap">
+        <p class="product">aquaman: credential proxy for AI agents</p>
+        <h1>Give your AI agent an API key without handing it over</h1>
+        <p class="subline">The agent gets a reference. The key stays in your vault. Open source, runs on your machine, no account.</p>
+        <div class="cta">
+          <a class="button" href="#start">Get started</a>
+          <a class="ghost" href="/docs/approve/">Your agent asked to install it?</a>
         </div>
-        {HOSTS.map((h) => (
-          <div class="panel" data-host={h.id}>
-            <h3>{h.name}</h3>
-            <p>{h.how}</p>
-            <pre><code>{h.commands}</code></pre>
-            {h.agentPrompt && (
-              <>
-                <p><strong>Or hand it to your agent.</strong> Paste this into {h.name}:</p>
-                <pre><code>{AGENT_PROMPT}</code></pre>
-              </>
-            )}
-            {h.note && <p>{h.note}</p>}
-            <p><a href={docUrl(h.guide)}>The full guide for {h.name === 'The app your agent builds' ? 'routing your app' : h.name}</a></p>
-          </div>
-        ))}
+
+        <div class="exchange" aria-label="What happens when an agent needs a key">
+          <figure class="card term">
+            <figcaption>Your agent</figcaption>
+            <pre><code><span class="ln s1"><span class="prompt">$ </span><span class="type t1">aquaman request <span class="ref">aquaman://github/token</span> --env GITHUB_TOKEN</span></span>
+<span class="ln s4">{`{ "status": "stored", "ref": "`}<span class="ref">aquaman://github/token</span>{`" }`}</span>
+<span class="ln s5"><span class="prompt">$ </span><span class="type t2">aquaman-coder exec -- gh api user --jq .login</span></span>
+<span class="ln s6">octocat</span>
+<span class="ln s7"><span class="prompt">$ </span><span class="type t3">aquaman-coder exec -- printenv GITHUB_TOKEN</span></span>
+<span class="ln s8"><span class="masked">[REDACTED:injected-value]</span></span></code></pre>
+          </figure>
+          <figure class="card dialog s2">
+            <figcaption>You</figcaption>
+            <div class="window" role="img" aria-label="A system dialog titled aquaman asking you to type the value for github/token, with Cancel and Store in vault buttons">
+              <strong>aquaman</strong>
+              <p>An agent is asking aquaman for a credential that is not in your vault.</p>
+              <p class="cred">github/token</p>
+              <div class="field"><span class="dots">••••••••••••••••••••</span></div>
+              <div class="buttons"><span>Cancel</span><span class="go">Store in vault</span></div>
+            </div>
+          </figure>
+        </div>
+
+        <ol class="flow">
+          <li><b>You type it once</b><span>into a system dialog, never the chat</span></li>
+          <li><b>Your vault keeps it</b><span>the one you already use</span></li>
+          <li><b>One command gets it</b><span>for as long as it runs</span></li>
+          <li><b>The agent holds a reference</b><span>and sees <code>[REDACTED]</code></span></li>
+        </ol>
       </div>
-      <style set:html={HOSTS.map((h) =>
-        `#host-${h.id}:checked ~ .panel[data-host="${h.id}"]{display:block}` +
-        `#host-${h.id}:checked ~ .tabs label[for="host-${h.id}"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}` +
-        `#host-${h.id}:focus-visible ~ .tabs label[for="host-${h.id}"]{outline:2px solid var(--accent);outline-offset:3px}`).join('')} />
     </section>
 
-    <div class="prose home-body">
-      <More />
-    </div>
+    <section class="vaults">
+      <div class="wrap">
+        <h2>Bring the vault you already have</h2>
+        <ul>
+          {VAULTS.map((v) => <li><b>{v.name}</b><span>{v.note}</span></li>)}
+        </ul>
+        <p class="aside">No new place for your keys. Switch vault later and nothing changes for the agent.</p>
+      </div>
+    </section>
+
+    <section class="proof">
+      <div class="wrap">
+        <article>
+          <h2>The agent never sees the key</h2>
+          <p>It lives in a separate process. Commands get it; the transcript gets this.</p>
+          <pre><code><span class="prompt">$ </span>printenv STRIPE_SECRET_KEY
+<span class="masked">[REDACTED:injected-value]</span></code></pre>
+        </article>
+        <article>
+          <h2>A key that cannot do everything</h2>
+          <p>Route your app through the proxy and your rules decide which calls get a key.</p>
+          <pre><code>{`policy:
+  stripe:
+    rules:
+      - method: DELETE
+        path: /v1/customers/**
+        action: deny`}
+
+<span class="prompt">DELETE /v1/customers/cus_1  </span><span class="masked">403</span></code></pre>
+        </article>
+        <article>
+          <h2>Every use on the record</h2>
+          <p>A log on your machine, chained by SHA-256, so tampering shows.</p>
+          <pre><code><span class="prompt">$ </span>aquaman audit tail
+<span class="prompt">16:30:20Z [CREDENTIAL_ACCESS] </span>stripe use OK
+<span class="prompt">16:30:41Z [CREDENTIAL_ACCESS] </span>github read OK
+<span class="prompt">$ </span>aquaman audit verify</code></pre>
+        </article>
+      </div>
+    </section>
+
+    <section class="start" id="start" aria-labelledby="start-heading">
+      <div class="wrap">
+        <h2 id="start-heading">Start with your host</h2>
+        <div class="hosts">
+          {HOSTS.map((h, i) => <input type="radio" name="host" id={`host-${h.id}`} checked={i === 0} />)}
+          <div class="tabs">
+            {HOSTS.map((h) => <label for={`host-${h.id}`}>{h.name}</label>)}
+          </div>
+          {HOSTS.map((h) => (
+            <div class="panel" data-host={h.id}>
+              <h3>{h.name}</h3>
+              <p class="how">{h.how}</p>
+              <pre><code>{h.commands}</code></pre>
+              {h.agentPrompt && (
+                <details>
+                  <summary>Or hand it to your agent</summary>
+                  <p>Paste this into {h.name}:</p>
+                  <pre><code>{AGENT_PROMPT}</code></pre>
+                </details>
+              )}
+              {h.note && <p class="note">{h.note}</p>}
+              <p><a href={docUrl(h.guide)}>Full guide</a></p>
+            </div>
+          ))}
+        </div>
+        <style set:html={HOSTS.map((h) =>
+          `#host-${h.id}:checked ~ .panel[data-host="${h.id}"]{display:block}` +
+          `#host-${h.id}:checked ~ .tabs label[for="host-${h.id}"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}` +
+          `#host-${h.id}:focus-visible ~ .tabs label[for="host-${h.id}"]{outline:2px solid var(--accent);outline-offset:3px}`).join('')} />
+      </div>
+    </section>
+
+    <section class="trust">
+      <div class="wrap">
+        <h2>Built to be checked</h2>
+        <ul>
+          <li><b>Local only</b><span>No account, no telemetry, no hosted service.</span></li>
+          <li><b>Open source</b><span>MIT. Releases carry npm provenance; no install scripts.</span></li>
+          <li><b>Tested against attack</b><span>Mapped to <a href="/docs/compliance/atlas-mapping/">MITRE ATLAS</a> and <a href="/docs/compliance/nist-800-53/">NIST 800-53</a>.</span></li>
+          <li><b>Disclosed, not hidden</b><span>Fixes ship with <a href="https://github.com/tech4242/aquaman/security/advisories">advisories</a>.</span></li>
+        </ul>
+        <p class="aside">
+          <a href="/docs/approve/">What changes on your machine, and how to undo it</a>
+          <a href="/docs/compare/">How it compares, and what it does not do</a>
+          <a href="/docs/security/">Security policy</a>
+        </p>
+      </div>
+    </section>
+
+    <section class="agents">
+      <div class="wrap">
+        <h2>Reading this as an AI agent?</h2>
+        <p>
+          The commands, JSON output and exit codes are in <a href="/docs/agent-setup.md">/docs/agent-setup.md</a>. Propose aquaman to the user
+          before installing it and give them <a href="/docs/approve/">what they are agreeing to</a>. This page in full is at
+          <a href="/index.md">/index.md</a>; the index is <a href="/llms.txt">/llms.txt</a>.
+        </p>
+      </div>
+    </section>
   </div>
 </Base>
