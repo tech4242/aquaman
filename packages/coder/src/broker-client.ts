@@ -121,6 +121,24 @@ export class BrokerClient {
   }
 
   /**
+   * For each reference, whether a resolve would return a value right now.
+   * No values travel. Throws when the proxy cannot answer the question.
+   */
+  async available(refs: Array<{ service: string; key: string }>): Promise<boolean[]> {
+    const { statusCode, payload } = await this.request('POST', '/broker/available', JSON.stringify({ refs }));
+    let json: any;
+    try {
+      json = JSON.parse(payload);
+    } catch {
+      throw new BrokerError(`Proxy cannot report availability (HTTP ${statusCode})`, { status: statusCode });
+    }
+    if (statusCode !== 200 || !Array.isArray(json.available) || json.available.length !== refs.length) {
+      throw new BrokerError(json.error || `Proxy cannot report availability (HTTP ${statusCode})`, { code: json.code, status: statusCode });
+    }
+    return json.available.map((v: unknown) => v === true);
+  }
+
+  /**
    * Check whether the proxy is up and responsive.
    */
   async health(): Promise<{ status: string; version?: string }> {

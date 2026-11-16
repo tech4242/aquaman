@@ -30,7 +30,7 @@
 // merged core/). There is no separate `aquaman-core` npm package since
 // v0.7.0; the vitest alias resolves the same path for tests.
 import { redact, redactDeep } from 'aquaman-proxy';
-import { findProjectForCwd, loadProjects } from '../../projects.js';
+import { findProjectForCwd, loadProjects, parseRef } from '../../projects.js';
 import { BrokerClient } from '../../broker-client.js';
 import { handleCodexPreToolUse, handleCodexPostToolUse } from '../codex/hook.js';
 
@@ -102,6 +102,16 @@ export function withPermissionTail(wrapped: string, original: string): string {
 }
 
 /**
+ * Whether the command line starts with the `aquaman` or `aquaman-coder`
+ * binary. Only the first word is looked at: a command that is not wrapped
+ * runs without credentials and under the host's own permission rules, so
+ * anything chained after it gains nothing by being here.
+ */
+export function isAquamanCommand(command: string): boolean {
+  return /^\s*(?:aquaman|aquaman-coder)(?:\s|$)/.test(command);
+}
+
+/**
  * If the project map has env bindings AND this is a Bash tool call AND
  * the command isn't already wrapped, rewrite it to run under the
  * `aquaman-coder exec` wrapper. The wrapper resolves env via the broker
@@ -133,13 +143,48 @@ export async function handlePreToolUse(
   try {
     await broker.health();
   } catch (err) {
+    // aquaman's own commands are how the proxy gets started, so a stopped
+    // proxy never blocks them: they go to the host's normal permission
+    // handling. While the proxy is up they are wrapped like any other
+    // command, which keeps `aquaman get` output under value redaction.
+    if (isAquamanCommand(command)) return null;
+    const agent = ctx.host === 'codex' ? 'codex' : 'claude-code';
+    // The client's own hint names the foreground command; the one below is the one an agent can use.
+    const reason = (err as Error).message.replace(/\.?\s*Start it with: aquaman daemon\.?/, '');
     return {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
         permissionDecisionReason:
-          `aquaman: proxy not reachable (${(err as Error).message}). ` +
-          `Start it with: aquaman daemon`,
+          `aquaman: proxy not reachable (${reason}), so this project's credentials ` +
+          `cannot be injected. Start it with: aquaman init --agent ${agent}  ` +
+          `(aquaman commands are not blocked; \`aquaman daemon\` runs in the foreground, use it in a terminal of your own)`,
+      },
+    };
+  }
+
+  // Wrapping comes with an `allow`, so it is only done when the project has a
+  // credential to inject. A project whose bindings all point at nothing gets
+  // no decision: the command runs as the host would have run it, prompts
+  // included. Otherwise registering a project and binding a made-up reference
+  // would be a way to switch permission prompts off.
+  const refs = Object.values(match.config.env).map(parseRef).filter((r): r is NonNullable<typeof r> => r !== null);
+  let anyAvailable = true;
+  try {
+    anyAvailable = (await broker.available(refs)).some(Boolean);
+  } catch {
+    // A proxy that cannot answer still gets the wrapper, which stops the
+    // command itself when it has nothing to inject.
+    anyAvailable = true;
+  }
+  if (!anyAvailable) {
+    return ctx.host === 'codex' ? null : {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        additionalContext:
+          `aquaman: none of this project's credentials (${Object.keys(match.config.env).join(', ')}) ` +
+          `are in the vault yet, so this command runs without them. ` +
+          `Ask for one with: aquaman request aquaman://<service>/<key> --env <NAME>`,
       },
     };
   }

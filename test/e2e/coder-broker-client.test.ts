@@ -182,4 +182,86 @@ projects:
     // Brackets prove the value was non-empty when the child printed it.
     expect(result.stdout).toBe('[[REDACTED:injected-value]]');
   }, 30_000);
+
+  it('a reference with no stored credential leaves that one variable unset and the command still runs', async () => {
+    const { spawn } = await import('node:child_process');
+    const coderCli = path.resolve('packages/coder/src/cli/index.ts');
+    fs.writeFileSync(
+      path.join(tmpHome, '.aquaman', 'projects.yaml'),
+      `version: 1
+projects:
+  testproj:
+    paths: ["${projectDir}"]
+    env:
+      TESTKEY: aquaman://dummysvc/token
+      NOT_YET: aquaman://dummysvc/not_added_yet
+`
+    );
+    // Asynchronous on purpose: the proxy lives in this process and has to answer.
+    const run = () => new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
+      const proc = spawn(
+        'npx',
+        ['tsx', coderCli, 'exec', '--', 'sh', '-c', 'printf "[%s][%s]" "$TESTKEY" "${NOT_YET-unset}"; exit 7'],
+        { cwd: projectDir, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: tmpHome } },
+      );
+      let stdout = '';
+      let stderr = '';
+      proc.stdout!.on('data', (d) => { stdout += d.toString(); });
+      proc.stderr!.on('data', (d) => { stderr += d.toString(); });
+      proc.on('close', (status) => resolve({ status, stdout, stderr }));
+    });
+
+    const missing = await run();
+    expect(missing.status).toBe(7);
+    expect(missing.stdout).toBe('[[REDACTED:injected-value]][unset]');
+    expect(missing.stderr).toContain('NOT_YET is not set for this command');
+    expect(missing.stderr).toContain('aquaman credentials add dummysvc not_added_yet');
+
+    // Once it is in the vault the same command gets it, with no restart.
+    await store.set('dummysvc', 'not_added_yet', 'second-shapeless-value-67890');
+    const present = await run();
+    expect(present.status).toBe(7);
+    expect(present.stdout).toBe('[[REDACTED:injected-value]][[REDACTED:injected-value]]');
+    expect(present.stderr).not.toContain('is not set');
+  }, 60_000);
+
+  it('with nothing at all to inject, the command is not run under the wrapper', async () => {
+    const { spawn } = await import('node:child_process');
+    const coderCli = path.resolve('packages/coder/src/cli/index.ts');
+    fs.writeFileSync(
+      path.join(tmpHome, '.aquaman', 'projects.yaml'),
+      `version: 1
+projects:
+  testproj:
+    paths: ["${projectDir}"]
+    env:
+      NOPE: aquaman://dummysvc/never_added
+`
+    );
+    const r = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
+      const proc = spawn('npx', ['tsx', coderCli, 'exec', '--', 'sh', '-c', 'echo ran'], {
+        cwd: projectDir, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: tmpHome },
+      });
+      let stdout = '';
+      let stderr = '';
+      proc.stdout!.on('data', (d) => { stdout += d.toString(); });
+      proc.stderr!.on('data', (d) => { stderr += d.toString(); });
+      proc.on('close', (status) => resolve({ status, stdout, stderr }));
+    });
+    expect(r.status).toBe(1);
+    expect(r.stdout).not.toContain('ran');
+    expect(r.stderr).toContain('was not run');
+  }, 30_000);
+
+  it('with no proxy to ask, the command does not run at all', async () => {
+    const { spawnSync } = await import('node:child_process');
+    const coderCli = path.resolve('packages/coder/src/cli/index.ts');
+    await proxy.stop();
+    const r = spawnSync('npx', ['tsx', coderCli, 'exec', '--', 'sh', '-c', 'echo ran'], {
+      cwd: projectDir, encoding: 'utf-8', env: { ...process.env, HOME: tmpHome },
+    });
+    expect(r.status).toBe(1);
+    expect(r.stdout).not.toContain('ran');
+    expect(r.stderr).toContain('failed to resolve TESTKEY');
+  }, 30_000);
 });

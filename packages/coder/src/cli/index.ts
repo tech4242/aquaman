@@ -15,6 +15,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import { spawn, execFileSync } from 'node:child_process';
 import { Command } from 'commander';
 import { VERSION } from '../index.js';
@@ -45,6 +46,7 @@ import {
   defaultCodexHooksPath,
   codexHome,
 } from '../adapters/codex/setup.js';
+import { writeAgentsBlock, installSkill, type CodingAgent } from '../agent-setup.js';
 
 /** Claude Code's managed (enterprise) settings file for this platform. */
 function managedSettingsPath(): string {
@@ -208,9 +210,9 @@ project
       }
       env[key] = ref;
     }
-    // Through v0.15.x this replaced an existing project, silently dropping its
-    // bindings (issue #67). It now merges: new paths are appended, and an env
-    // name that already exists takes the new ref. --replace keeps the old behavior.
+    // An existing project is merged into, never replaced, so its other
+    // bindings survive (issue #67): new paths are appended, and an env name
+    // that already exists takes the new ref. --replace opts out.
     const existing = opts.replace ? undefined : file.projects[name];
     if (existing) {
       const paths = [...existing.paths];
@@ -284,9 +286,25 @@ program
         env[envName] = result.value;
         injectedValues.push(result.value);
       } catch (err) {
+        // One reference the daemon will not serve (not stored yet, not
+        // declared) leaves that one variable unset. The command still runs:
+        // most commands in a project need none of its credentials, and the
+        // ones that do fail on their own with the variable named here.
+        if (err instanceof BrokerError && err.status === 404 && err.code !== 'broker_disabled') {
+          console.error(`aquaman: ${envName} is not set for this command: ${err.message}`);
+          continue;
+        }
         console.error(`aquaman: failed to resolve ${envName}: ${(err as Error).message}`);
         process.exit(1);
       }
+    }
+
+    // Reached with nothing to inject only when the hook could not ask the
+    // proxy first. The hook's `allow` was for a command run with credentials,
+    // so this one is not run under it.
+    if (injectedValues.length === 0 && Object.keys(match.config.env).length > 0) {
+      console.error('aquaman: none of this project\'s credentials are available, so the command was not run. Add one (aquaman request <ref> --env <NAME>) or run the command without aquaman-coder exec.');
+      process.exit(1);
     }
 
     const stdio = opts.raw ? 'inherit' : ['inherit', 'pipe', 'pipe'] as const;
@@ -328,6 +346,128 @@ program
     });
   });
 
+
+// ---------------- init / bind (agent-run, no prompts) ----------------
+
+/**
+ * The project covering `cwd`, creating one named after the directory if none
+ * does. Returns its name and whether it was created.
+ */
+function ensureProjectForCwd(cwd: string): { name: string; created: boolean; file: ReturnType<typeof loadProjects> } {
+  const file = fs.existsSync(defaultProjectsPath()) ? loadProjects() : { version: 1, projects: {} };
+  const match = findProjectForCwd(cwd, file);
+  if (match) return { name: match.name, created: false, file };
+  // A project's bindings reach every command under its paths. The home
+  // directory, or anything above it, is never what someone meant by "this project".
+  const home = fs.realpathSync(os.homedir());
+  if (cwd === home || home.startsWith(cwd.endsWith(path.sep) ? cwd : cwd + path.sep)) {
+    throw new Error(`${cwd} is your home directory or contains it. Run this from the project's own directory`);
+  }
+  const base = path.basename(cwd).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'project';
+  let name = base;
+  for (let n = 2; file.projects[name]; n++) name = `${base}-${n}`;
+  file.projects[name] = { paths: [cwd], env: {} };
+  saveProjects(file);
+  return { name, created: true, file };
+}
+
+program
+  .command('init')
+  .description('Set up a coding agent for the current directory: project, hooks, skill, instructions block. Never prompts')
+  .requiredOption('--agent <agent>', 'claude-code or codex')
+  .option('--json', 'Print one JSON object and nothing else')
+  .option('--no-instructions', 'Do not write the aquaman block into CLAUDE.md / AGENTS.md')
+  .option('--no-skill', 'Do not install the aquaman-credentials skill')
+  .action((opts: { agent: string; json?: boolean; instructions: boolean; skill: boolean }) => {
+    const result: Record<string, any> = { ok: false, agent: opts.agent, human_steps: [] as string[] };
+    const finish = (code: number): never => {
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else if (result.error) {
+        console.error(result.error);
+      } else {
+        console.log(`Project "${result.project.name}" covers ${result.project.path}`);
+        console.log(`Hooks: ${result.hooks.path}`);
+        if (result.skill) console.log(`Skill: ${result.skill.path}`);
+        if (result.agents_file) console.log(`Instructions: ${result.agents_file.path}`);
+        for (const step of result.human_steps) console.log(`A person needs to: ${step}`);
+      }
+      process.exit(code);
+    };
+    if (opts.agent !== 'claude-code' && opts.agent !== 'codex') {
+      result.error = `Unsupported agent "${opts.agent}". Supported: claude-code, codex`;
+      result.fix = 'aquaman-coder init --agent claude-code   (or: --agent codex)';
+      finish(1);
+    }
+    const agent = opts.agent as CodingAgent;
+    const cwd = fs.realpathSync(process.cwd());
+    try {
+      const project = ensureProjectForCwd(cwd);
+      result.project = { name: project.name, path: cwd, created: project.created };
+
+      if (agent === 'claude-code') {
+        const hooks = installClaudeCodeHooks();
+        result.hooks = { path: hooks.path, changed: hooks.changed };
+        if (hooks.changed) result.human_steps.push('restart Claude Code (or start a new session) so it loads the hooks');
+      } else {
+        const hooks = installCodexHooks();
+        result.hooks = { path: hooks.path, changed: hooks.changed };
+        if (!codexHookStatus(hooks.path).trusted) {
+          result.human_steps.push('start `codex` and trust the aquaman hooks in the startup hook review');
+        }
+        const sandbox = codexSandboxStatus(defaultSocketPath());
+        if (!sandbox.ok) result.human_steps.push(`let Codex's sandbox reach the proxy socket: ${sandbox.detail}. Run \`aquaman coder setup codex\` for the config.toml snippet`);
+      }
+      if (opts.skill) result.skill = installSkill(agent);
+      if (opts.instructions) result.agents_file = writeAgentsBlock(agent, cwd);
+      result.ok = true;
+    } catch (err) {
+      result.error = (err as Error).message;
+      finish(1);
+    }
+    finish(0);
+  });
+
+program
+  .command('bind <binding>')
+  .description('Bind NAME=aquaman://service/key for the project covering the current directory')
+  .option('--check', 'Only check that the binding could be made; change nothing')
+  .option('--json', 'Print one JSON object and nothing else')
+  .action((binding: string, opts: { json?: boolean; check?: boolean }) => {
+    const fail = (error: string, fix?: string): never => {
+      if (opts.json) console.log(JSON.stringify({ ok: false, error, fix }, null, 2));
+      else { console.error(error); if (fix) console.error(`Fix: ${fix}`); }
+      process.exit(1);
+    };
+    const idx = binding.indexOf('=');
+    const name = idx < 0 ? '' : binding.slice(0, idx);
+    const ref = idx < 0 ? '' : binding.slice(idx + 1);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) fail(`Bad binding "${binding}". Expected NAME=aquaman://service/key`);
+    if (!parseRef(ref)) fail(`Bad reference "${ref}". Expected aquaman://service/key`);
+    // A binding gives every command under the project's paths the value, so
+    // the project is one somebody registered on purpose, never one made up
+    // from wherever this happened to be run.
+    const cwd = fs.realpathSync(process.cwd());
+    const file = fs.existsSync(defaultProjectsPath()) ? loadProjects() : { version: 1, projects: {} };
+    const match = findProjectForCwd(cwd, file);
+    if (!match) {
+      fail(
+        `No aquaman project covers ${cwd}`,
+        'Run from the project directory, after `aquaman init --agent <agent>` there (or: aquaman coder project add <name> --path <dir>)',
+      );
+    }
+    const project = { name: match!.name };
+    if (opts.check) {
+      if (opts.json) console.log(JSON.stringify({ ok: true, project: project.name, env: name, ref, checked: true }, null, 2));
+      else console.log(`${name} -> ${ref} can be bound in project "${project.name}"`);
+      return;
+    }
+    file.projects[project.name] = { ...file.projects[project.name], env: { ...file.projects[project.name].env, [name]: ref } };
+    saveProjects(file);
+    if (opts.json) console.log(JSON.stringify({ ok: true, project: project.name, env: name, ref }, null, 2));
+    else console.log(`${name} -> ${ref} in project "${project.name}"`);
+  });
+
 // ---------------- hook ----------------
 
 program
@@ -348,7 +488,8 @@ program
 program
   .command('doctor')
   .description('Deep diagnostic for the coder integration (projects, broker, hooks, per-project vault checks)')
-  .action(async () => {
+  .option('--json', 'Print one JSON object and nothing else')
+  .action(async (doctorOpts: { json?: boolean }) => {
     const checks: Array<{ name: string; ok: boolean; detail?: string; fix?: string }> = [];
 
     // 1. projects.yaml exists
@@ -491,6 +632,12 @@ program
       });
     }
 
+    if (doctorOpts.json) {
+      const failed = checks.filter((c) => !c.ok).length;
+      console.log(JSON.stringify({ ok: failed === 0, version: VERSION, issues: failed, checks }, null, 2));
+      process.exit(failed > 0 ? 1 : 0);
+    }
+
     // Render — matches `aquaman openclaw doctor` formatting.
     console.log('');
     console.log(`  \u{1F531} Aquaman ${VERSION} — Welcome to the doctor’s office.`);
@@ -515,55 +662,75 @@ program
 
 program
   .command('status')
-  .description('Show coder configuration and recent broker activity')
-  .action(async () => {
-    console.log('\n  aquaman-coder status\n');
-
-    // Projects
+  .description('Show coder configuration and broker connectivity')
+  .option('--json', 'Print one JSON object and nothing else')
+  .action(async (statusOpts: { json?: boolean }) => {
+    // Gather first, then print in one of two forms.
     const projectsPath = defaultProjectsPath();
-    if (!fs.existsSync(projectsPath)) {
-      console.log('  Projects: none configured');
-      console.log(`  Add one: aquaman coder project add <name>\n`);
-    } else {
+    let projects: Array<{ name: string; paths: string[]; env: Record<string, string> }> = [];
+    let projectsError: string | undefined;
+    if (fs.existsSync(projectsPath)) {
       try {
-        const projects = loadProjects();
-        const names = Object.keys(projects.projects);
-        console.log(`  Projects: ${names.length} configured (${projectsPath})`);
-        for (const name of names) {
-          const cfg = projects.projects[name];
-          const envCount = Object.keys(cfg.env).length;
-          console.log(`    - ${name}: ${cfg.paths.length} path(s), ${envCount} env binding(s)`);
-        }
+        const file = loadProjects();
+        projects = Object.entries(file.projects).map(([name, cfg]) => ({ name, paths: cfg.paths, env: cfg.env }));
       } catch (err) {
-        console.log(`  Projects: invalid (${(err as Error).message})`);
+        projectsError = (err as Error).message;
       }
     }
+    let current: string | null = null;
+    try {
+      current = findProjectForCwd(process.cwd(), loadProjects())?.name ?? null;
+    } catch { /* no projects file, or invalid */ }
 
-    // Claude Code hooks
     const settingsPath = defaultSettingsPath();
-    console.log('');
-    if (fs.existsSync(settingsPath)) {
-      const raw = fs.readFileSync(settingsPath, 'utf-8');
-      const installed = raw.includes('aquaman-coder hook') || raw.includes('aquaman coder hook');
-      console.log(`  Claude Code hooks: ${installed ? 'installed' : 'not configured'}`);
-      console.log(`    ${settingsPath}`);
-    } else {
-      console.log('  Claude Code hooks: not configured (settings.json missing)');
-    }
+    const claudeInstalled = fs.existsSync(settingsPath) &&
+      /aquaman(-| )coder hook/.test(fs.readFileSync(settingsPath, 'utf-8'));
     const codexStatus = codexHookStatus();
+
+    const socketPath = defaultSocketPath();
+    let broker: { reachable: boolean; version?: string; error?: string };
+    try {
+      const health = await new BrokerClient({ socketPath, timeoutMs: 2000 }).health();
+      broker = { reachable: true, version: health.version };
+    } catch (err) {
+      broker = { reachable: false, error: (err as Error).message };
+    }
+
+    if (statusOpts.json) {
+      console.log(JSON.stringify({
+        version: VERSION,
+        // Env maps hold references (aquaman://service/key), never values.
+        current_project: current,
+        projects,
+        projects_error: projectsError,
+        hooks: {
+          claude_code: { installed: claudeInstalled, path: settingsPath },
+          codex: { installed: codexStatus.installed, trusted: codexStatus.trusted, path: defaultCodexHooksPath() },
+        },
+        broker: { ...broker, socket: socketPath },
+      }, null, 2));
+      return;
+    }
+
+    console.log('\n  aquaman-coder status\n');
+    if (projectsError) {
+      console.log(`  Projects: invalid (${projectsError})`);
+    } else if (projects.length === 0) {
+      console.log('  Projects: none configured');
+      console.log('  Add one: aquaman coder project add <name>\n');
+    } else {
+      console.log(`  Projects: ${projects.length} configured (${projectsPath})`);
+      for (const p of projects) {
+        console.log(`    - ${p.name}: ${p.paths.length} path(s), ${Object.keys(p.env).length} env binding(s)`);
+      }
+    }
+    console.log('');
+    console.log(`  Claude Code hooks: ${claudeInstalled ? 'installed' : 'not configured'}`);
+    console.log(`    ${settingsPath}`);
     console.log(`  Codex hooks: ${codexStatus.installed ? (codexStatus.trusted ? 'installed, trusted' : 'installed, not yet trusted') : 'not configured'}`);
     if (codexStatus.installed) console.log(`    ${defaultCodexHooksPath()}`);
-
-    // Broker connectivity
     console.log('');
-    const socketPath = defaultSocketPath();
-    const broker = new BrokerClient({ socketPath, timeoutMs: 2000 });
-    try {
-      const health = await broker.health();
-      console.log(`  Broker: reachable (proxy v${health.version ?? '?'})`);
-    } catch (err) {
-      console.log(`  Broker: unreachable (${(err as Error).message})`);
-    }
+    console.log(broker.reachable ? `  Broker: reachable (proxy v${broker.version ?? '?'})` : `  Broker: unreachable (${broker.error})`);
     console.log('');
   });
 
