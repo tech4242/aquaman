@@ -305,6 +305,18 @@ def star():
     c.outline()
     return c.rows()
 
+def icon():
+    """The octopus, small enough to read in a browser tab."""
+    c = Canvas(16, 16)
+    c.ellipse(7.5, 6, 5.6, 5, 'c')
+    for x in (3, 6, 9, 12):
+        c.rect(x, 10, 2, 4, 'c'); c.set(x + 1, 13, 's')
+    c.set(2, 13, 'c'); c.set(13, 14, 'c')
+    for ex in (5, 9):
+        c.rect(ex, 5, 2, 3, 'w'); c.set(ex + 1, 6, '#'); c.set(ex + 1, 7, '#')
+    c.set(5, 3, 'p'); c.set(6, 2, 'p')
+    return c.rows()
+
 SPRITES = {
     'OCTOPUS': octopus(), 'OCTOPUS_BLINK': octopus(blink=True), 'CHEST': chest(), 'CHEST_OPEN': chest(open_lid=True),
     'KEY': key(), 'ROBOT': robot(), 'FISH': fish(), 'BUBBLE': bubble(), 'TAG': tag(),
@@ -338,4 +350,11 @@ for name, rows in SPRITES.items():
     out.append(f'\nexport const {name} = [\n' + ''.join(f"  '{r.ljust(width, '.')}',\n" for r in rows) + '];\n')
 path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src', 'lib', 'sprites.ts')
 open(path, 'w').write(''.join(out))
-print('wrote', len(SPRITES), 'sprites')
+# The favicon is the same art, written out as a standalone SVG on deep water.
+COLOURS = {'#': '#0b2a3a', 'c': '#ff6b4a', 's': '#c9412a', 'p': '#ffa38a', 'w': '#ffffff'}
+rects = ''.join(f'<rect x="{x}" y="{y}" width="1" height="1" fill="{COLOURS[ch]}"/>'
+                for y, row in enumerate(icon()) for x, ch in enumerate(row) if ch in COLOURS)
+favicon = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 18 18" shape-rendering="crispEdges">'
+           '<rect x="-1" y="-1" width="18" height="18" fill="#3fc1c0"/>' + rects + '</svg>\n')
+open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'public', 'favicon.svg'), 'w').write(favicon)
+print('wrote', len(SPRITES), 'sprites and the favicon')
