@@ -57,7 +57,7 @@ describe('agent-run setup commands', () => {
     });
     expect(out.human_steps.join(' ')).toMatch(/restart Claude Code/);
     expect(projects()['my-app']).toEqual({ paths: [project], env: {} });
-    expect(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf-8')).toContain('aquaman coder hook');
+    expect(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf-8')).toContain('aquaman-coder hook');
     expect(fs.existsSync(out.skill.path)).toBe(true);
   }, 60_000);
 

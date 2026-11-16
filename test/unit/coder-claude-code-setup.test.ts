@@ -30,8 +30,8 @@ describe('aquaman-coder / claude-code setup', () => {
     expect(fs.existsSync(settingsPath)).toBe(true);
 
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-    expect(settings.hooks.PreToolUse[0].hooks[0].command).toBe('aquaman coder hook');
-    expect(settings.hooks.PostToolUse[0].hooks[0].command).toBe('aquaman coder hook');
+    expect(settings.hooks.PreToolUse[0].hooks[0].command).toBe('aquaman-coder hook');
+    expect(settings.hooks.PostToolUse[0].hooks[0].command).toBe('aquaman-coder hook');
   });
 
   // `onFailure: "block"` (Claude Code >= 2.1.295) is opt-in: verified live on
@@ -49,8 +49,8 @@ describe('aquaman-coder / claude-code setup', () => {
     expect(installClaudeCodeHooks({ settingsPath, failClosed: true }).changed).toBe(true);
     const on = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
     expect(on.hooks.PreToolUse[0].hooks[0]).toEqual({ type: 'command', command: 'other-tool check' });
-    expect(on.hooks.PreToolUse[1].hooks[0]).toEqual({ type: 'command', command: 'aquaman coder hook', onFailure: 'block' });
-    expect(on.hooks.PostToolUse[0].hooks[0]).toEqual({ type: 'command', command: 'aquaman coder hook' });
+    expect(on.hooks.PreToolUse[1].hooks[0]).toEqual({ type: 'command', command: 'aquaman-coder hook', onFailure: 'block' });
+    expect(on.hooks.PostToolUse[0].hooks[0]).toEqual({ type: 'command', command: 'aquaman-coder hook' });
     expect(claudeHookFailsClosed(settingsPath)).toBe(true);
 
     // A plain re-run keeps the choice; --no-fail-closed removes it.

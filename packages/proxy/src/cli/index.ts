@@ -236,7 +236,7 @@ function brokerResolve(
     );
     req.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT' || err.code === 'ECONNREFUSED') {
-        resolve({ error: `Cannot reach the aquaman proxy at ${socketPath}`, fix: 'Start it with: aquaman daemon', code: 'proxy_unreachable' });
+        resolve({ error: `Cannot reach the aquaman proxy at ${socketPath}`, fix: 'Start it with: aquaman init --agent <agent>  (or, in a terminal of your own: aquaman daemon)', code: 'proxy_unreachable' });
       } else if (err.code === 'EPERM' || err.code === 'EACCES') {
         resolve({ error: `Connecting to ${socketPath} was denied (${err.code})`, fix: 'If this runs inside a sandbox, allowlist the socket; otherwise check its owner and 0600 mode', code: 'socket_blocked' });
       } else {

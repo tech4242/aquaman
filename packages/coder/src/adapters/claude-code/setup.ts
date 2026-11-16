@@ -176,12 +176,15 @@ export function sandboxSocketStatus(
 
 /**
  * Ensure ~/.claude/settings.json has PreToolUse + PostToolUse hooks
- * pointing at `aquaman coder hook` (the canonical unified-CLI form;
- * the `aquaman` binary's `coder` shim execs `aquaman-coder` under the hood).
+ * pointing at `aquaman-coder hook`. The hook runs on every tool call, so it
+ * names the binary itself; `aquaman coder hook` reaches the same code through
+ * a second process and is still recognised as installed.
  */
+const HOOK_COMMAND = 'aquaman-coder hook';
+
 export function installClaudeCodeHooks(opts: SetupOptions = {}): SetupResult {
   const settingsPath = opts.settingsPath ?? defaultSettingsPath();
-  const hookCommand = opts.hookCommand ?? 'aquaman coder hook';
+  const hookCommand = opts.hookCommand ?? HOOK_COMMAND;
 
   const dir = path.dirname(settingsPath);
   if (!fs.existsSync(dir)) {
@@ -272,7 +275,7 @@ export function installClaudeCodeHooks(opts: SetupOptions = {}): SetupResult {
  */
 export function uninstallClaudeCodeHooks(opts: SetupOptions = {}): SetupResult {
   const settingsPath = opts.settingsPath ?? defaultSettingsPath();
-  const hookCommand = opts.hookCommand ?? 'aquaman coder hook';
+  const hookCommand = opts.hookCommand ?? HOOK_COMMAND;
 
   if (!fs.existsSync(settingsPath)) {
     return { path: settingsPath, changed: false, before: null, after: {}, sandboxSocket: 'absent' };

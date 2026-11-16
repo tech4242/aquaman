@@ -527,7 +527,7 @@ program
         name: 'proxy running',
         ok: false,
         detail: (err as Error).message,
-        fix: 'aquaman daemon &',
+        fix: 'aquaman init --agent <agent>   (or, in a terminal of your own: aquaman daemon)',
       });
     }
 

@@ -17,16 +17,7 @@ This package is the adapter for the [OpenClaw Gateway](https://openclaw.ai). It 
 
 **Requires:** Node.js 18 or later on macOS, Linux or WSL2.
 
-## If you are an AI agent
-
-When a task needs an API key or token, do not ask the user to paste it. Set the project up once, then ask for the credential by reference. A person supplies the value in a dialog; you get a status and the reference, never the value.
-
-```bash
-aquaman init --agent claude-code --json                              # or: --agent codex
-aquaman request aquaman://github/token --env GITHUB_TOKEN --json
-```
-
-Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md). These two commands are for coding agents; inside OpenClaw the gateway is wired by `aquaman openclaw setup` below.
+Inside OpenClaw the gateway is wired by `aquaman openclaw setup`, below. The agent-run setup and credential-request commands in the other packages are for coding agents (Claude Code, Codex) and are not part of this plugin: the proxy it starts never shows a dialog, never accepts a credential request and never hands out a credential value.
 
 ```
 Agent / OpenClaw Gateway              Aquaman Proxy
