@@ -7,7 +7,7 @@ cd ~/code/my-app && aquaman init --agent claude-code      # or: --agent codex
 
 Your app does not change: it reads its keys from the environment as it would anyway. aquaman is how those variables get set on your machine while the agent works, without the value passing through the agent, the transcript or a `.env` file.
 
-Guides: [Claude Code](/claude-code/), [Codex](/codex/), [OpenClaw](/openclaw/), [Hermes](/hermes/), [Docker Sandboxes](/docker-sandboxes/), [NVIDIA OpenShell](/openshell/). Or [compare it with the alternatives](/compare/).
+Guides: [Claude Code](/docs/claude-code/), [Codex](/docs/codex/), [OpenClaw](/docs/openclaw/), [Hermes](/docs/hermes/), [Docker Sandboxes](/docs/docker-sandboxes/), [NVIDIA OpenShell](/docs/openshell/). Or [compare it with the alternatives](/docs/compare/).
 
 ## If you are an AI agent
 
@@ -25,7 +25,7 @@ What `request` prints when the person has typed the value:
 { "status": "stored", "ref": "aquaman://github/token", "env": "GITHUB_TOKEN" }
 ```
 
-Write the app to read `process.env.GITHUB_TOKEN` as usual. Statuses, exit codes, JSON fields, what `init` changes and how to undo it: [Using aquaman from an AI agent](/agent-setup/).
+Write the app to read `process.env.GITHUB_TOKEN` as usual. Statuses, exit codes, JSON fields, what `init` changes and how to undo it: [Using aquaman from an AI agent](/docs/agent-setup/).
 
 Every page on this site is also served as Markdown at the same path with `.md`. The index is [/llms.txt](/llms.txt) and the whole site in one file is [/llms-full.txt](/llms-full.txt).
 
@@ -41,12 +41,12 @@ One vault and one daemon serve all of them. How the credential arrives differs b
 
 | Host | How the credential is injected | Install | Guide |
 |---|---|---|---|
-| Claude Code | Into each command, output redacted | `aquaman-proxy`, `aquaman-coder` | [Keep API keys out of Claude Code](/claude-code/) |
-| Codex | Into each command, output redacted | `aquaman-proxy`, `aquaman-coder` | [Give Codex a token without a .env file](/codex/) |
-| OpenClaw | At egress, by the proxy | `aquaman-plugin` | [Keep API keys out of the OpenClaw gateway process](/openclaw/) |
-| Hermes | At egress, by the proxy | `aquaman-proxy`, `aquaman-hermes` | [Keep provider keys out of the Hermes agent process](/hermes/) |
-| Docker Sandboxes | At egress, by Docker; aquaman supplies the value | `aquaman-proxy` | [Docker Sandboxes secrets from your own vault](/docker-sandboxes/) |
-| NVIDIA OpenShell | At egress, by OpenShell; aquaman supplies the value | `aquaman-proxy` | [Use your own vault as the OpenShell credential driver](/openshell/) |
+| Claude Code | Into each command, output redacted | `aquaman-proxy`, `aquaman-coder` | [Keep API keys out of Claude Code](/docs/claude-code/) |
+| Codex | Into each command, output redacted | `aquaman-proxy`, `aquaman-coder` | [Give Codex a token without a .env file](/docs/codex/) |
+| OpenClaw | At egress, by the proxy | `aquaman-plugin` | [Keep API keys out of the OpenClaw gateway process](/docs/openclaw/) |
+| Hermes | At egress, by the proxy | `aquaman-proxy`, `aquaman-hermes` | [Keep provider keys out of the Hermes agent process](/docs/hermes/) |
+| Docker Sandboxes | At egress, by Docker; aquaman supplies the value | `aquaman-proxy` | [Docker Sandboxes secrets from your own vault](/docs/docker-sandboxes/) |
+| NVIDIA OpenShell | At egress, by OpenShell; aquaman supplies the value | `aquaman-proxy` | [Use your own vault as the OpenShell credential driver](/docs/openshell/) |
 
 ## CI and production
 
@@ -59,15 +59,15 @@ aquaman runs on one person's machine and is not used in CI or production. The ap
 - You only use Claude Code with its sandbox on: its credential masking is built in.
 - Your team already runs Doppler or Infisical: secrets shared across a team, CI and production belong there.
 
-[The full comparison](/compare/), including what aquaman does not do.
+[The full comparison](/docs/compare/), including what aquaman does not do.
 
 ## Security
 
 - **Runs entirely on your machine.** No account, no telemetry, no hosted service. Config and logs are plain files under `~/.aquaman`.
 - **Open source, verifiable releases.** MIT licensed. npm packages are published from GitHub Actions with provenance, and have no install scripts.
 - **Every credential use is recorded** in a hash-chained log that `aquaman audit verify` checks.
-- **Tested against attack, not just for function.** The request path has a conformance suite that sends raw bytes at a real proxy, and the controls are mapped to [MITRE ATLAS](/compliance/atlas-mapping/) and [NIST SP 800-53](/compliance/nist-800-53/).
+- **Tested against attack, not just for function.** The request path has a conformance suite that sends raw bytes at a real proxy, and the controls are mapped to [MITRE ATLAS](/docs/compliance/atlas-mapping/) and [NIST SP 800-53](/docs/compliance/nist-800-53/).
 - **Vulnerabilities are fixed and disclosed.** Reports are handled privately and published as [advisories](https://github.com/tech4242/aquaman/security/advisories) with the fix. Stay on the latest release.
-- **Clear about its scope.** aquaman keeps credentials out of the agent. It is not a sandbox and does not separate programs running as you: [what it does not do](/compare/#what-aquaman-does-not-do).
+- **Clear about its scope.** aquaman keeps credentials out of the agent. It is not a sandbox and does not separate programs running as you: [what it does not do](/docs/compare/#what-aquaman-does-not-do).
 
-[Security policy and how to report](/security/). Requires Node.js 18 or later on macOS, Linux or WSL2. MIT licensed.
+[Security policy and how to report](/docs/security/). Requires Node.js 18 or later on macOS, Linux or WSL2. MIT licensed.

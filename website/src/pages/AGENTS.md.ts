@@ -11,7 +11,7 @@ export const GET: APIRoute = ({ site }) =>
       '',
       'Needs aquaman 0.18.0 or later. Write the app to read its keys from the environment as usual.',
       '',
-      `- Contract (fields, statuses, exit codes, what init changes): ${new URL('/agent-setup.md', site!).href}`,
+      `- Contract (fields, statuses, exit codes, what init changes): ${new URL('/docs/agent-setup.md', site!).href}`,
       `- Index of this site in Markdown: ${new URL('/llms.txt', site!).href}`,
       '',
     ].join('\n'),

@@ -8,11 +8,14 @@ interface Props {
   /** Path of this page's Markdown twin, e.g. `/claude-code.md`. */
   markdown: string;
   jsonLd?: Record<string, unknown>;
+  /** Set when another page is the one to index, as for docs of an earlier release. */
+  canonicalPath?: string;
 }
-const { title, description, markdown, jsonLd } = Astro.props;
+const { title, description, markdown, jsonLd, canonicalPath } = Astro.props;
 const fullTitle = title ? `${title} | ${SITE_NAME}` : HOME_TITLE;
-const canonical = new URL(Astro.url.pathname, Astro.site).href;
-const at = (p: string) => (Astro.url.pathname === p ? 'page' : undefined);
+const canonical = new URL(canonicalPath ?? Astro.url.pathname, Astro.site).href;
+const at = (p: string) => (Astro.url.pathname.replace(/\/?$/, '/') === p ? 'page' : undefined);
+const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/', '/docs/compare/', '/docs/security/'].includes(Astro.url.pathname.replace(/\/?$/, '/'));
 ---
 <!doctype html>
 <html lang="en">
@@ -38,10 +41,10 @@ const at = (p: string) => (Astro.url.pathname === p ? 'page' : undefined);
       <div class="wrap">
         <a class="wordmark" href="/">aquaman</a>
         <nav aria-label="Site">
-          <a href="/agent-setup/" aria-current={at('/agent-setup/')}>For agents</a>
-          <a href="/claude-code/" aria-current={at('/claude-code/')}>Guides</a>
-          <a href="/compare/" aria-current={at('/compare/')}>Compare</a>
-          <a href="/security/" aria-current={at('/security/')}>Security</a>
+          <a href="/docs/" aria-current={inDocs ? 'page' : undefined}>Docs</a>
+          <a href="/docs/agent-setup/" aria-current={at('/docs/agent-setup/')}>For agents</a>
+          <a href="/docs/compare/" aria-current={at('/docs/compare/')}>Compare</a>
+          <a href="/docs/security/" aria-current={at('/docs/security/')}>Security</a>
           <a href="https://github.com/tech4242/aquaman">GitHub</a>
         </nav>
       </div>

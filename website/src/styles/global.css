@@ -151,3 +151,12 @@ h1, h2, h3 { line-height: 1.15; letter-spacing: -0.015em; text-wrap: balance; }
 .home-body > pre, .home-body > table { max-width: 60rem; }
 .home-body > p:first-child { font-size: 1.2rem; line-height: 1.5; }
 .home .home-body h2 { margin-top: 3rem; }
+
+.versions { margin-bottom: 1.25rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.versions summary { cursor: pointer; padding: 0.4rem 0.75rem; font-weight: 600; }
+.versions ul { border-top: 1px solid var(--line); padding: 0.35rem 0; }
+.versions li a { border-left: 0; padding: 0.25rem 0.75rem; }
+.versions .none { padding: 0.25rem 0.75rem; color: var(--muted); }
+.sidebar .group a { border-left: 0; padding-left: 0; display: inline; color: inherit; }
+.sidebar .group a[aria-current='page'] { color: var(--accent); }
+.old-version { border: 1px solid var(--secret); border-radius: 6px; padding: 0.6rem 0.9rem; font-size: 0.95rem; }

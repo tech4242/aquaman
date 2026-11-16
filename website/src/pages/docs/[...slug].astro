@@ -1,0 +1,112 @@
+---
+import { render } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import { getPages, getVersions, navGroups, navLabel, versionLabel, type Page, type Versions } from '../../lib/site';
+import { GITHUB, docUrl } from '../../lib/links.mjs';
+
+// One route serves the docs index, each page, and the same two for every earlier release.
+export async function getStaticPaths() {
+  const versions = getVersions();
+  const latest = await getPages(null);
+  const paths = [];
+  // Which pages each version has, so the version menu never links to one that is missing.
+  const slugs: Record<string, string[]> = { '': latest.map((p) => p.slug) };
+  for (const v of versions.archived) slugs[v] = (await getPages(v)).map((p) => p.slug);
+  for (const version of [null, ...versions.archived]) {
+    const pages = await getPages(version);
+    paths.push({ params: { slug: version ?? undefined }, props: { pages, version, versions, latest, slugs } });
+    for (const page of pages) {
+      paths.push({ params: { slug: version ? `${version}/${page.slug}` : page.slug }, props: { page, pages, version, versions, latest, slugs } });
+    }
+  }
+  return paths;
+}
+interface Props { page?: Page; pages: Page[]; version: string | null; versions: Versions; latest: Page[]; slugs: Record<string, string[]> }
+const { page, pages, version, versions, latest, slugs } = Astro.props as Props;
+const groups = navGroups(pages);
+const label = versionLabel(versions, version);
+const Content = page ? (await render(page.entry)).Content : null;
+
+// The same page in the current docs, which is what search engines should index.
+const inLatest = page ? latest.find((p) => p.slug === page.slug) : undefined;
+const canonicalPath = version === null ? undefined : page ? inLatest?.url : '/docs/';
+const here = page?.url ?? `/docs/${version ? `${version}/` : ''}`;
+const title = page ? page.title : `Documentation${version ? ` for ${version}` : ''}`;
+const description = page
+  ? page.description
+  : 'Guides for each agent host, the contract for agents, and reference pages for aquaman, a credential proxy for AI agents.';
+const other = [null, ...versions.archived].filter((v) => v !== version);
+const jsonLd = page && {
+  '@context': 'https://schema.org',
+  '@type': 'TechArticle',
+  headline: page.title,
+  description: page.description,
+  url: new URL(page.url, Astro.site).href,
+  version: version ?? versions.current,
+  encoding: { '@type': 'MediaObject', encodingFormat: 'text/markdown', contentUrl: new URL(page.twin, Astro.site).href },
+  dateModified: page.modified,
+  author: { '@type': 'Person', name: 'tech4242', url: 'https://github.com/tech4242' },
+  isPartOf: { '@type': 'WebSite', name: 'aquaman', url: Astro.site!.href },
+};
+---
+<Base title={title} description={description} markdown={page ? page.twin : '/llms.txt'} canonicalPath={canonicalPath} jsonLd={jsonLd || undefined}>
+  <div class="docs">
+    <article class="prose">
+      {version && (
+        <p class="old-version">
+          These are the docs for aquaman {version}.{' '}
+          {page && !inLatest
+            ? <>This page is not in the <a href="/docs/">current docs</a>.</>
+            : <a href={inLatest?.url ?? '/docs/'}>Read the current version.</a>}
+        </p>
+      )}
+      {page ? (
+        <>
+          <div class="page-tools">
+            <a href={page.twin}>View as Markdown</a>
+            <a href={`${GITHUB}/blob/${version ? `v${version}` : 'main'}/${page.repoPath}`}>Source on GitHub</a>
+            {page.modified && <span>Last changed <time datetime={page.modified}>{page.modified}</time></span>}
+          </div>
+          {Content && <Content />}
+        </>
+      ) : (
+        <>
+          <h1>{title}</h1>
+          <p>
+            Every page is also served as Markdown at the same address with <code>.md</code>.{' '}
+            {version === null && <>The index for language models is <a href="/llms.txt">/llms.txt</a>.</>}
+          </p>
+          {groups.map((g) => g.pages.length > 0 && (
+            <>
+              <h2>{g.heading}</h2>
+              <ul>{g.pages.map((p) => <li><a href={p.url}>{p.title}</a>{p.description && <>: {p.description}</>}</li>)}</ul>
+            </>
+          ))}
+        </>
+      )}
+    </article>
+    <nav class="sidebar" aria-label="Documentation">
+      <details class="versions">
+        <summary>Version {label}</summary>
+        <ul>
+          {other.length === 0 && <li class="none">No earlier versions yet</li>}
+          {other.map((v) => {
+            const href = page && slugs[v ?? ''].includes(page.slug) ? docUrl(page.slug, v) : `/docs/${v ? `${v}/` : ''}`;
+            return <li><a href={href}>{versionLabel(versions, v)}</a></li>;
+          })}
+        </ul>
+      </details>
+      <p class="group"><a href={`/docs/${version ? `${version}/` : ''}`} aria-current={page ? undefined : 'page'}>Overview</a></p>
+      {groups.map((g) => g.pages.length > 0 && (
+        <>
+          <p class="group">{g.heading}</p>
+          <ul>
+            {g.pages.map((p) => (
+              <li><a href={p.url} aria-current={p.url === here ? 'page' : undefined}>{navLabel(p)}</a></li>
+            ))}
+          </ul>
+        </>
+      ))}
+    </nav>
+  </div>
+</Base>

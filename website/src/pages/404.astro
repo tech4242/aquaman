@@ -10,7 +10,7 @@ const groups = navGroups(await getPages());
     {groups.map((g) => (
       <>
         <h2>{g.heading}</h2>
-        <ul>{g.pages.map((p) => <li><a href={`/${p.slug}/`}>{navLabel(p)}</a>: {p.title}</li>)}</ul>
+        <ul>{g.pages.map((p) => <li><a href={p.url}>{navLabel(p)}</a>: {p.title}</li>)}</ul>
       </>
     ))}
   </article>

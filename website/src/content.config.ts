@@ -6,4 +6,9 @@ const pages = defineCollection({
   loader: glob({ base: '..', pattern: ['docs/**/*.md', 'SECURITY.md', '!docs/PACKAGES.md'] }),
 });
 
-export const collections = { pages };
+// Docs of earlier releases, copied out of their git tags at build time (src/lib/versions.mjs).
+const archived = defineCollection({
+  loader: glob({ base: './versioned', pattern: ['*/docs/**/*.md', '*/SECURITY.md', '!*/docs/PACKAGES.md'] }),
+});
+
+export const collections = { pages, archived };

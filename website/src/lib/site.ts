@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import homeSource from '../home.md?raw';
-import { slugForRepoPath, rewriteMarkdownLinks } from './links.mjs';
+import { slugForRepoPath, rewriteMarkdownLinks, docUrl, docTwin, locate } from './links.mjs';
 
 export const SITE_NAME = 'aquaman';
 export const TAGLINE = 'Credential proxy for AI agents';
@@ -22,21 +22,46 @@ export const AGENT_NOTE =
 
 export const HOME_TITLE = 'aquaman: credential proxy for AI agents';
 
+export interface Versions {
+  /** The version the working tree is at; its docs are served at /docs/. */
+  current: string;
+  /** Whether a release tag for `current` exists yet. */
+  released: boolean;
+  /** Earlier releases with docs, newest first; served at /docs/<version>/. */
+  archived: string[];
+}
+
+export function getVersions(): Versions {
+  try {
+    return JSON.parse(readFileSync(path.resolve(process.cwd(), 'versioned/versions.json'), 'utf-8'));
+  } catch {
+    return { current: packageVersion() ?? '0.0.0', released: false, archived: [] };
+  }
+}
+
+export const versionLabel = (v: Versions, version: string | null) =>
+  version ?? `${v.current}${v.released ? '' : ' (unreleased)'}`;
+
 export interface Page {
   slug: string;
+  /** null for the current docs, otherwise the earlier release this page belongs to. */
+  version: string | null;
+  /** Site route and its Markdown twin. */
+  url: string;
+  twin: string;
   repoPath: string;
   title: string;
   description: string;
   /** ISO date of the last commit that touched the source file, when git history is available. */
   modified?: string;
-  entry: CollectionEntry<'pages'>;
+  entry: CollectionEntry<'pages'> | CollectionEntry<'archived'>;
 }
 
 /** Navigation order. A page not listed here is still built and appears under Reference. */
 export const NAV: { heading: string; slugs: string[]; labels?: Record<string, string> }[] = [
   { heading: 'For agents', slugs: ['agent-setup'], labels: { 'agent-setup': 'The agent contract' } },
   {
-    heading: 'Guides',
+    heading: 'Hosts',
     slugs: ['claude-code', 'codex', 'openclaw', 'hermes', 'docker-sandboxes', 'openshell'],
     labels: {
       'claude-code': 'Claude Code',
@@ -108,8 +133,8 @@ export function homeMarkdown(): string {
 
 /** Site routes in Markdown (`/claude-code/`) pointed at their Markdown twins (`/claude-code.md`). */
 function routesToTwins(markdown: string, slugs: string[]): string {
-  return markdown.replace(/\]\(\/([a-z0-9/-]+)\/(#[^)]*)?\)/g, (whole, slug: string, hash = '') =>
-    slugs.includes(slug) ? `](/${slug}.md${hash})` : whole,
+  return markdown.replace(/\]\(\/docs\/([a-z0-9/-]+)\/(#[^)]*)?\)/g, (whole, slug: string, hash = '') =>
+    slugs.includes(slug) ? `](${docTwin(slug)}${hash})` : whole,
   );
 }
 
@@ -117,12 +142,15 @@ export function homeMarkdownTwin(pages: Page[]): string {
   return routesToTwins(homeMarkdown(), pages.map((p) => p.slug));
 }
 
-export async function getPages(): Promise<Page[]> {
-  const entries = await getCollection('pages');
+/** Pages of the current docs, or of one earlier release. */
+export async function getPages(version: string | null = null): Promise<Page[]> {
+  const entries = version === null ? await getCollection('pages') : await getCollection('archived');
   const pages: Page[] = [];
   for (const entry of entries) {
     // filePath is relative to the site folder, which sits one level below the repository root.
-    const repoPath = path.posix.normalize(path.posix.join('website', entry.filePath!.split(path.sep).join('/')));
+    const located = locate(path.posix.normalize(path.posix.join('website', entry.filePath!.split(path.sep).join('/'))));
+    if (located.version !== version) continue;
+    const repoPath = located.repoPath;
     const slug = slugForRepoPath(repoPath);
     if (!slug) continue;
     const body = entry.body ?? '';
@@ -132,7 +160,17 @@ export async function getPages(): Promise<Page[]> {
       .map((b) => b.trim())
       .find((b) => b && !/^(#|```|\||[-*] |\d+\. |>|<|\[!\[)/.test(b));
     const description = leadSentences(plain(firstParagraph ?? ''));
-    pages.push({ slug, repoPath, title, description, modified: lastModified(repoPath), entry });
+    pages.push({
+      slug,
+      version,
+      url: docUrl(slug, version),
+      twin: docTwin(slug, version),
+      repoPath,
+      title,
+      description,
+      modified: version === null ? lastModified(repoPath) : undefined,
+      entry,
+    });
   }
   const order = NAV.flatMap((g) => g.slugs);
   const rank = (s: string) => (order.indexOf(s) === -1 ? order.length : order.indexOf(s));
@@ -157,8 +195,8 @@ export function navGroups(pages: Page[]) {
 
 /** A page's Markdown with links to other pages pointing at their .md twins, root-relative so they hold on any host. */
 export function markdownFor(page: Page): string {
-  const twin = (slug: string) => `/${slug}.md`;
-  return rewriteMarkdownLinks(page.entry.body ?? '', page.repoPath, twin).trim() + '\n';
+  const twin = (slug: string) => docTwin(slug, page.version);
+  return rewriteMarkdownLinks(page.entry.body ?? '', page.repoPath, twin, page.version ? `v${page.version}` : 'main').trim() + '\n';
 }
 
 export function llmsIndex(pages: Page[], site: URL): string {
@@ -166,13 +204,14 @@ export function llmsIndex(pages: Page[], site: URL): string {
   for (const group of navGroups(pages)) {
     lines.push(`## ${group.heading}`, '');
     for (const p of group.pages) {
-      lines.push(`- [${p.title}](${new URL(`/${p.slug}.md`, site).href})${p.description ? `: ${p.description}` : ''}`);
+      lines.push(`- [${p.title}](${new URL(p.twin, site).href})${p.description ? `: ${p.description}` : ''}`);
     }
     lines.push('');
   }
   lines.push(
     '## Optional',
     '',
+    ...getVersions().archived.map((v) => `- [Docs for ${v}](${new URL(`/docs/${v}/`, site).href})`),
     `- [Everything on this site as one file](${new URL('/llms-full.txt', site).href})`,
     '- [Source repository](https://github.com/tech4242/aquaman)',
     '- [Published security advisories](https://github.com/tech4242/aquaman/security/advisories)',
