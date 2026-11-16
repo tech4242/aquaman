@@ -36,7 +36,9 @@ Two things only you can do, and `init` lists them:
 aquaman request aquaman://github/token --env GITHUB_TOKEN
 ```
 
-A dialog opens and waits 90 seconds for you; you type the token there. Codex gets the reference, not the value. The commands Codex runs, and the app they start, hold the token while they run; Codex, the transcript and your repository never do. Or add it yourself: `aquaman credentials add github token`, then `aquaman coder bind GITHUB_TOKEN=aquaman://github/token`.
+A dialog opens and waits 90 seconds for you; you type the token there. Codex gets the reference, not the value. The commands Codex runs, and the app they start, hold the token while they run; Codex, the transcript and your repository never do. Or add it yourself: `aquaman credentials add github token` (run it in your own terminal; it asks for the value, hidden), then `aquaman coder bind GITHUB_TOKEN=aquaman://github/token`.
+
+Your app does not change: it reads `GITHUB_TOKEN` from its environment as before. aquaman is how the variable gets set on your machine while Codex works. In CI and production the same name is filled from that platform's own secrets.
 
 ## Good to know
 

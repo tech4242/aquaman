@@ -95,7 +95,7 @@ aquaman request aquaman://github/token --env GITHUB_TOKEN
 
 `init` creates the config, starts the daemon, installs the agent's hooks and a skill, registers the directory as a project and adds a short block to `CLAUDE.md` (or `AGENTS.md`). It never prompts, so the agent can run it for you. `request` opens a dialog where you type the value; it goes straight into your vault and the agent only ever sees the reference. Both print JSON with `--json`. Restart the agent session afterwards, and run `aquaman coder doctor` if anything looks off. What `init` changes on your machine, and how to undo it, is listed in [Using aquaman from an AI agent](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md#what-init-changes).
 
-The app you are building holds the key while one of its commands runs, the same as with `op run` or a `.env` file; what changes is that the agent, the transcript and your repository never do. To keep the key out of the app as well, point its HTTP client at the proxy ([Quick Start 1](#1-use-the-proxy-on-its-own)).
+Your app does not change: it reads its keys from the environment as it would anyway, and aquaman is how those variables get set on your machine while the agent works. The app holds the key while one of its commands runs, the same as with `op run` or a `.env` file; what changes is that the agent, the transcript and your repository never do. In CI and production the same variable names are filled from that platform's own secrets. To keep the key out of the app as well, point its HTTP client at the proxy ([Quick Start 1](#1-use-the-proxy-on-its-own)).
 
 Prefer to pick the vault backend and wire things by hand?
 

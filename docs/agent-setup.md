@@ -2,7 +2,9 @@
 
 aquaman is a credential proxy for AI agents: secrets stay in the user's own vault and are injected when a command or request needs them. This page is the contract for an agent (Claude Code, Codex or similar) that wants to use it. Every command here runs without prompting and can print JSON.
 
-Requires Node.js 18 or later on macOS, Linux or WSL2.
+Requires Node.js 18 or later on macOS, Linux or WSL2, and aquaman 0.18.0 or later: `aquaman init --agent` and `aquaman request` do not exist before that. Check with `aquaman --version`.
+
+**Where this fits.** Write the app to read its keys from the environment (`process.env.GITHUB_TOKEN`, `os.environ["GITHUB_TOKEN"]`) as you would anyway. aquaman is how those variables get set on the user's machine while you work, without the value passing through you or a `.env` file. It is not a replacement for the environment, and in CI and production the same variable names are filled by that platform's own secrets: see [CI and production](#ci-and-production).
 
 ## 1. Set up the project
 
@@ -51,17 +53,63 @@ The daemon shows a dialog on the user's machine. They type the value, or approve
 
 With `--env NAME` the reference is bound to that variable for the project covering the current directory, so every shell command run there has the variable set. Run it from the project directory. Where no project covers the directory the command stops with exit 1 before any dialog is shown; it never creates a project.
 
+Output fields:
+
+| Field | Present | Meaning |
+|---|---|---|
+| `status` | Always | One of the values above |
+| `ref` | Always | The reference you asked for |
+| `env` | With `--env`, on `ready`, `stored` or `approved` | The variable now bound to the reference in this project |
+| `reason` | On `declined` and `pending` | Why, in words |
+| `fix` | On `pending`, and on `error` | A command that gets past the problem. For `pending` it is one for the user to run in their own terminal. Never present on `declined` |
+| `error`, `code` | On `error` | What went wrong, and the daemon's machine-readable code when it has one |
+| `env_error` | When the credential is usable but the binding failed | Why; `fix` then holds the `aquaman coder bind` command |
+
+```json
+{ "status": "stored", "ref": "aquaman://github/token", "env": "GITHUB_TOKEN" }
+```
+
+```json
+{ "status": "pending", "ref": "aquaman://github/token", "reason": "nobody answered the dialog", "fix": "aquaman credentials add github token && aquaman broker allow aquaman://github/token && aquaman coder bind GITHUB_TOKEN=aquaman://github/token" }
+```
+
+```json
+{ "status": "error", "ref": "aquaman://github/token", "error": "Cannot reach the aquaman proxy at /Users/you/.aquaman/proxy.sock", "code": "proxy_unreachable", "fix": "Start the daemon in the background: aquaman init --agent <agent>   (in a terminal of your own: aquaman daemon)" }
+```
+
+The wording of `reason`, `error` and `fix` can change between versions; branch on `status` and the exit code.
+
+One reference per call. For several keys, run the command once for each; the dialogs appear one after another.
+
 The daemon shows one dialog at a time and at most six in ten minutes, and does not ask again about a declined reference for ten minutes.
 
 ## 3. Use it
 
-Run commands as usual. The hook wraps each shell command so the project's variables are present for that command only. In output a value appears as `[REDACTED:injected-value]`: that means it is set. Do not try to print or decode it.
+**In the session that ran `init`, the hooks are not loaded yet.** `init` says so in `human_steps` (Claude Code: restart or start a new session; Codex: trust the hooks at startup). Until the user has done that, run a command that needs a credential as `aquaman-coder exec -- <command>`, which does the same injection and redaction without the hook.
 
-Outside an agent session, or in a script: `aquaman-coder exec -- <command>`.
+Once the hooks are loaded, run commands as usual. The hook wraps each shell command so the project's variables are present for that command only. In output a value appears as `[REDACTED:injected-value]`: that means it is set. Do not try to print or decode it.
+
+Outside an agent session, or in a script: `aquaman-coder exec -- <command>`. That is also how the user starts the app themselves, for example `aquaman-coder exec -- npm start`.
 
 A variable whose credential is not in the vault yet is left unset as long as another one in the project is available, with a line on stderr such as `aquaman: STRIPE_SECRET_KEY is not set for this command: ...`. The command still runs, and other variables are unaffected. Once the credential is added, by `aquaman request` or by the user with `aquaman credentials add`, the next command has it; nothing needs restarting.
 
 **What this protects.** The command you run, and the app it starts, receive the real value in their environment. You, the transcript and the repository do not. This is the same kind of protection as `op run` or `doppler run`, with the value coming from the user's own vault and each read logged. aquaman's request policies apply to traffic sent through its proxy, not to these commands. If the app must not hold the key either, its HTTP client has to be pointed at the proxy; see the [README](../README.md#1-use-the-proxy-on-its-own).
+
+## Example: a service that needs three keys
+
+```bash
+aquaman init --agent claude-code --json
+aquaman request aquaman://github/token --env GITHUB_TOKEN --json
+aquaman request aquaman://openai/api_key --env OPENAI_API_KEY --json
+aquaman request aquaman://stripe/secret_key --env STRIPE_SECRET_KEY --json
+aquaman-coder exec -- npm test          # until the session is restarted; afterwards plain `npm test`
+```
+
+The code reads `process.env.GITHUB_TOKEN`, `process.env.OPENAI_API_KEY` and `process.env.STRIPE_SECRET_KEY` and knows nothing about aquaman. Commit a `.env.example` that lists the three names with empty values, so the next person and the deployment know what to supply.
+
+## CI and production
+
+aquaman runs on one person's machine. It is not used in CI or production, and the app does not need it there: because the code only reads environment variables, the same names are set from the platform's own secret store (GitHub Actions secrets, the host's environment settings, the team's secrets manager). Tell the user which variable names to add there; `aquaman coder status --json` lists them for the project under `env`. Do not copy values out of aquaman to do it.
 
 ## 4. Check and diagnose
 
@@ -99,7 +147,7 @@ Two things the user should know before agreeing:
 - **Permission prompts change in the project (Claude Code).** Once the project has a binding with a credential behind it, the hook answers `allow` for each shell command it wraps. A project whose bindings all point at nothing is left alone: commands run unwrapped, with the usual prompts. The user's `deny` and `ask` rules still apply to the original command, but a command that no rule matches runs without a prompt. A user who relies on being asked should add `ask` rules.
 - **Codex needs its sandbox opened to reach the daemon.** `init` does not do this; it returns it in `human_steps`. On Codex 0.169 the setting that allows it also gives sandboxed commands outbound network access.
 
-**Vault backend.** A new config gets the macOS Keychain on macOS; on Linux the keyring if libsecret is present, otherwise systemd-creds, otherwise an encrypted file. The encrypted file needs a password from a person: `AQUAMAN_ENCRYPTION_PASSWORD`, 12 characters or more, set where the daemon starts. `init` stops with that instruction in `fix` and `human_steps`. Do not make up a password: the user needs it to open the vault later. To use 1Password, Bitwarden, HashiCorp Vault, KeePassXC or Keeper, the user runs `aquaman setup` first.
+**Vault backend.** A new config gets the macOS Keychain on macOS; on Linux the keyring if libsecret is present, otherwise systemd-creds, otherwise an encrypted file. The encrypted file needs a password from a person: `AQUAMAN_ENCRYPTION_PASSWORD`, 12 characters or more, set where the daemon starts. `init` stops with that instruction in `fix` and `human_steps`. Do not make up a password: the user needs it to open the vault later. To use 1Password, Bitwarden, HashiCorp Vault, KeePassXC or Keeper, the user runs `aquaman setup` first, in their own terminal: it asks questions.
 
 **Undo.**
 
@@ -122,5 +170,5 @@ Then delete the skill directory and the marked block. Stored credentials stay in
 - The wrapped command receives the real value, so a command can misuse it. Redaction catches accidental exposure, not a command that deliberately transforms the value.
 - `aquaman request` is a convenience and a consent step, not a boundary against other software running as the same user.
 - Commands started with Claude Code's Monitor tool are not wrapped.
-- This is a tool for one person's machine. It has no team sharing and is not meant for CI or production; use the team's secrets manager there.
+- This is a tool for one person's machine. It has no team sharing and does not run in CI or production: see [CI and production](#ci-and-production).
 - The project is young and has one maintainer: [what to know before trusting it](compare.md#what-to-know-before-trusting-it).

@@ -94,7 +94,7 @@ cd ~/code/my-app
 aquaman-coder exec -- python app/scripts/import.py
 ```
 
-Same env injection, same redaction on stdout/stderr. Drop it into Makefile targets and shell aliases on your own machine, anywhere you'd otherwise reach for a `.env` file. For CI and production, use your team's secrets manager.
+Same env injection, same redaction on stdout/stderr. Drop it into Makefile targets and shell aliases on your own machine, anywhere you'd otherwise reach for a `.env` file. Your app does not change: it reads its keys from the environment, and this is how they get set on your machine. For CI and production, use your team's secrets manager.
 
 When Claude Code or Codex runs a shell command in `~/code/my-app`, aquaman's hook rewrites the command via `updatedInput.command` to wrap it under `aquaman-coder exec`. That wrapper:
 

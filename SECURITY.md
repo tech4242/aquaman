@@ -1,6 +1,6 @@
 # Security Policy
 
-Aquaman is a credential-isolation proxy — security reports get priority over everything else.
+This is the security policy for aquaman, a credential proxy for AI agents: how to report a vulnerability, what is in scope, and which versions get fixes. Security reports get priority over everything else.
 
 ## Reporting a vulnerability
 
@@ -30,7 +30,7 @@ The four packages (`aquaman-proxy`, `aquaman-plugin`, `aquaman-coder` on npm; `a
 
 **Out of scope:**
 
-- Vulnerabilities in the vault backends themselves (1Password, Bitwarden, HashiCorp Vault, KeePassXC, OS keychains, systemd) — report those upstream
+- Vulnerabilities in the vault backends themselves (1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, OS keychains, systemd) — report those upstream
 - Vulnerabilities in the agent hosts (OpenClaw, Claude Code, Hermes) — report those upstream
 - Prompt-injection *content* attacks against the agent. Note the design boundary: **aquaman prevents credential exfiltration, not credential use.** A prompt-injected agent running as the same OS user can call the same proxy the legitimate code calls; the request-policy engine is the control that limits what a used credential can do. Reports that reduce to "the agent can use the proxy" are the documented threat model, not a vulnerability — but bypasses *of the policy engine itself* are very much in scope.
 - Redaction misses for secrets aquaman did not inject (the redactor is documented as defense-in-depth, not a guarantee)

@@ -14,6 +14,8 @@ sbx secret set github \
   --refresh on-demand                                # 5. sbx reads it from aquaman
 ```
 
+These commands are for a person in their own terminal: `aquaman setup` asks questions, `aquaman credentials add` asks for the value (hidden), and `aquaman daemon` stays running. An agent setting up a coding project uses [`aquaman init --agent`](agent-setup.md) instead.
+
 `sbx` runs that command from a background service without your shell's `PATH`, which is why step 5 stores absolute paths. Repeat steps 4 and 5 per service.
 
 ## Good to know

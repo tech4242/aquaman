@@ -17,7 +17,7 @@ aquaman does both, depending on the path:
 | NVIDIA OpenShell driver, Docker Sandboxes credential helper | aquaman supplies the value to the host; the host injects at egress |
 | Claude Code and Codex (`aquaman-coder`) | Into the environment of each command, with output redaction. Request policies do not apply |
 
-So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from its environment, aquaman is in the same class as `op run` and `doppler run`: the app holds the key while it runs. If you need the app itself never to hold it, use a tool that injects at egress for arbitrary commands (fnox, Claude Code's sandbox masking), or point the app's HTTP client at the aquaman proxy for the services it knows.
+So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from its environment, aquaman is in the same class as `op run` and `doppler run`: the app holds the key while it runs. The app itself is written the same way with any of them, or with none; the choice is only about how the variable gets set on the developer's machine. What differs is that aquaman needs no account, takes the value from whichever vault you already use, lets the agent ask for a key it does not have, and keeps a local record of each use. If you need the app itself never to hold it, use a tool that injects at egress for arbitrary commands (fnox, Claude Code's sandbox masking), or point the app's HTTP client at the aquaman proxy for the services it knows.
 
 ## At a glance
 
@@ -69,6 +69,6 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 - Any process running as your user can send requests through the proxy, within your policy, and can fetch references you declared. The audit log records it.
 - On the coding-agent path the wrapped command receives the real value for its lifetime. Output redaction catches accidental exposure, not a command that deliberately transforms the value.
 - The proxy only sees traffic from clients that can be pointed at it, for services it has a definition for (25 are built in; others are added in `services.yaml`).
-- No Windows support outside WSL2. No team sharing, CI or production story: use your existing secrets manager there.
+- No Windows support outside WSL2. No team sharing, and it does not run in CI or production. An app that reads its keys from the environment needs nothing from aquaman there: the same variable names are filled from that platform's secrets.
 
 Security policy and past advisories: [SECURITY.md](../SECURITY.md), [advisories](https://github.com/tech4242/aquaman/security/advisories).
