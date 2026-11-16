@@ -261,3 +261,9 @@
 .route pre { font-size: 0.74rem; overflow-x: auto; }
 .route .apis { margin: 1rem 0 0; font-size: 1.2rem; }
 @media (max-width: 62rem) { .route { grid-template-columns: minmax(0, 1fr); max-width: none; gap: 2rem; } }
+
+.floor .step { font-family: var(--pixel); font-size: 0.72rem; font-weight: 400; margin: 0 0 1rem; }
+.floor .next { margin-top: 2.5rem; max-width: 56rem; scroll-margin-top: 2rem; }
+.floor .next .how { margin: 0 0 1rem; max-width: 60ch; }
+.floor .next pre { margin: 0 0 1rem; overflow-x: auto; }
+.floor .next a { color: var(--ink); }

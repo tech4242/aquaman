@@ -162,7 +162,7 @@ const description =
               <li><b>aquaman holds</b> <span>the key, in your vault</span></li>
               <li><b>The API sees</b> <span>a normal request with the real key</span></li>
             </ul>
-            <p><a class="btn b" href="/docs/app-through-proxy/">Route your app through aquaman</a></p>
+            <p><a class="btn b" href="#start-app">How to set it up</a></p>
           </div>
           <figure class="box">
             <figcaption>What your app is started with</figcaption>
@@ -207,6 +207,7 @@ OPENAI_API_KEY=<span class="masked">aqm_rt_…</span>   <span class="prompt"># a
           <h2 id="start-heading">Start here</h2>
           <p class="depth" aria-hidden="true">Sea floor: press start</p>
         </header>
+        <h3 class="step">Step 1: pick your host</h3>
         <fieldset class="hosts">
           <legend>Pick your host</legend>
           {HOSTS.map((h, i) => <input type="radio" name="host" id={`host-${h.id}`} checked={i === 0} />)}
@@ -231,6 +232,14 @@ OPENAI_API_KEY=<span class="masked">aqm_rt_…</span>   <span class="prompt"># a
           ))}
         </fieldset>
         <p class="all-hosts">Every host's guide: {HOSTS.map((h, i) => <>{i > 0 && ', '}<a href={docUrl(h.guide)}>{h.name}</a></>)}. All of them in one file: <a href="/index.md">/index.md</a>.</p>
+        <div class="next box" id="start-app">
+          <h3>Step 2, optional: keep the key out of your app too</h3>
+          <p class="how">Works for any app that reads its API base URL from the environment. Run these in the project you set up in step 1 with Claude Code or Codex.</p>
+          <pre><code>{`aquaman init --agent claude-code --no-hooks --loopback        # turns on the local listener
+aquaman request aquaman://openai/api_key --env OPENAI_API_KEY --via-proxy OPENAI_BASE_URL
+aquaman-coder exec -- npm start`}</code></pre>
+          <p><a href="/docs/app-through-proxy/">Full guide, with the client code for OpenAI, GitHub and Stripe</a></p>
+        </div>
         <style set:html={HOSTS.map((h) =>
           `#host-${h.id}:checked ~ .panel[data-host="${h.id}"]{display:block}` +
           `#host-${h.id}:checked ~ .tabs label[for="host-${h.id}"]{background:var(--y);color:var(--ink)}` +
