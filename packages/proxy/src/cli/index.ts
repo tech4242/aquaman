@@ -24,6 +24,7 @@ import {
   expandPath,
   createAuditLogger,
   createCredentialStore,
+  validatePasswordStrength,
   saveConfig,
   generateLoopbackToken,
   DEFAULT_LOOPBACK_PORT,
@@ -47,7 +48,8 @@ import {
 } from '../openclaw/channel-routing.js';
 import { createHermesIntegration, detectHermes } from '../hermes/integration.js';
 import { managedScopeShadowedKeys, hermesManagedEnvPath, HERMES_SUPPORTED_SERVICES, hermesSecretSourceRefs } from '../hermes/config-writer.js';
-import { createBrokerScope, parseAquamanRef, defaultProjectsPath, type BrokerScope } from '../broker-scope.js';
+import { createBrokerScope, parseAquamanRef, formatAquamanRef, defaultProjectsPath, type BrokerScope } from '../broker-scope.js';
+import { createNativePrompter, clampPromptTimeout, PROMPT_TIMEOUT_SECONDS, PROMPT_TIMEOUT_MIN_SECONDS, PROMPT_TIMEOUT_MAX_SECONDS } from '../credential-prompt.js';
 import { loadPolicyFromConfig, validatePolicyConfig, lintPolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 
@@ -149,14 +151,12 @@ function daemonBrokerScope(config: WrapperConfig): BrokerScope | undefined {
  * (not loadConfig + saveConfig) so env overrides such as the loopback token
  * are never persisted as a side effect. The daemon re-reads the list on change.
  */
-function updateBrokerAllowedRefs(refs: string[], mode: 'allow' | 'revoke'): void {
-  const invalid = refs.filter(r => !parseAquamanRef(r));
-  if (invalid.length > 0) {
-    console.error(`Invalid ref${invalid.length > 1 ? 's' : ''}: ${invalid.join(', ')}`);
-    console.error('Refs look like aquaman://<service>/<key>, e.g. aquaman://github/token');
-    process.exit(1);
-  }
-
+/**
+ * Add or remove refs in `broker.allowedRefs`, editing the raw config file so
+ * values that only exist as environment overrides are never written back.
+ * Returns the raw config as written.
+ */
+function writeBrokerAllowedRefs(refs: string[], mode: 'allow' | 'revoke'): Record<string, any> {
   ensureConfigDir();
   const configPath = getConfigPath();
   let raw: Record<string, any> = {};
@@ -171,6 +171,18 @@ function updateBrokerAllowedRefs(refs: string[], mode: 'allow' | 'revoke'): void
   }
   raw.broker = { ...(raw.broker && typeof raw.broker === 'object' ? raw.broker : {}), allowedRefs: [...current].sort() };
   fs.writeFileSync(configPath, yamlStringify(raw), { encoding: 'utf-8', mode: 0o600 });
+  return raw;
+}
+
+function updateBrokerAllowedRefs(refs: string[], mode: 'allow' | 'revoke'): void {
+  const invalid = refs.filter(r => !parseAquamanRef(r));
+  if (invalid.length > 0) {
+    console.error(`Invalid ref${invalid.length > 1 ? 's' : ''}: ${invalid.join(', ')}`);
+    console.error('Refs look like aquaman://<service>/<key>, e.g. aquaman://github/token');
+    process.exit(1);
+  }
+
+  const raw = writeBrokerAllowedRefs(refs, mode);
 
   const verb = mode === 'allow' ? 'Allowed' : 'Revoked';
   for (const ref of refs) console.log(`${verb}: ${ref}`);
@@ -401,7 +413,7 @@ program
 
       // --- Vault & core (agent-agnostic) ---
       lines.push(aqua('Vault & core (agent-agnostic)'));
-      const vaultCore = ['setup', 'doctor', 'status', 'daemon', 'stop', 'init'];
+      const vaultCore = ['setup', 'doctor', 'status', 'daemon', 'stop', 'init', 'request'];
       for (const name of vaultCore) {
         const c = byName.get(name);
         if (c) lines.push(renderCmd(c));
@@ -435,7 +447,9 @@ program
       if (byName.has('coder')) {
         lines.push(aqua('AI coding-agent integration (Claude Code, Codex)'));
         const coderSubs: Array<[string, string]> = [
+          ['coder init --agent <agent>', 'Project + hooks + skill for the current directory, no prompts'],
           ['coder setup <agent>', 'Install hooks for an agent (claude-code, codex)'],
+          ['coder bind NAME=<ref>', 'Bind an env var to a reference for the current project'],
           ['coder doctor', 'Deep diagnostic \u2014 projects, broker, per-project vault'],
           ['coder status', 'Configured projects + hook wiring + broker activity'],
           ['coder project list/add/remove', 'Manage ~/.aquaman/projects.yaml'],
@@ -1047,11 +1061,20 @@ program
       policyConfig: policyConfig2,
       loopback: loadLoopbackOptions(config),
       broker: brokerScope,
+      // `aquaman request`: the human supplies or approves a credential in a
+      // dialog this daemon shows. Off when the broker is off.
+      credentialRequests: brokerScope
+        ? {
+            prompter: createNativePrompter(),
+            declare: (service, key) => { writeBrokerAllowedRefs([formatAquamanRef(service, key)], 'allow'); },
+          }
+        : undefined,
       onRequest: (info) => {
         auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
-          // A broker resolve hands the value out; everything else injects it.
-          operation: info.method === 'BROKER' ? 'read' : 'use',
+          // A broker resolve hands the value out, a broker request stores or
+          // declares one, everything else injects it.
+          operation: info.method === 'BROKER' ? 'read' : info.method === 'BROKER_REQUEST' ? 'rotate' : 'use',
           success: !info.error,
           error: info.error
         });
@@ -1492,12 +1515,205 @@ hermes
     }
   });
 
+
+/** One JSON POST to the proxy over its Unix socket. */
+function proxyPost(
+  socketPath: string,
+  urlPath: string,
+  body: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<{ status: number; json: any } | { error: string; code: string }> {
+  const payload = JSON.stringify(body);
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        socketPath,
+        path: urlPath,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        let text = '';
+        res.on('data', (chunk) => { text += chunk; });
+        res.on('end', () => {
+          try {
+            resolve({ status: res.statusCode ?? 0, json: JSON.parse(text) });
+          } catch {
+            resolve({ error: `Proxy returned a non-JSON response (HTTP ${res.statusCode})`, code: 'bad_response' });
+          }
+        });
+      },
+    );
+    req.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'ENOENT' || err.code === 'ECONNREFUSED') {
+        resolve({ error: `Cannot reach the aquaman proxy at ${socketPath}`, code: 'proxy_unreachable' });
+      } else if (err.code === 'EPERM' || err.code === 'EACCES') {
+        resolve({ error: `Connecting to ${socketPath} was denied (${err.code})`, code: 'socket_blocked' });
+      } else {
+        resolve({ error: err.message, code: 'proxy_error' });
+      }
+    });
+    req.on('timeout', () => req.destroy(new Error('timed out waiting for the proxy')));
+    req.end(payload);
+  });
+}
+
+function proxyHealthy(socketPath: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = http.get({ socketPath, path: '/_health', timeout: 1500 }, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
+}
+
+/** The backend `aquaman setup` would pick on this machine without asking. */
+async function detectDefaultBackend(): Promise<string> {
+  if (process.platform === 'darwin') return 'keychain';
+  try {
+    const { execSync } = await import('node:child_process');
+    execSync('pkg-config --exists libsecret-1', { stdio: 'pipe' });
+    return 'keychain';
+  } catch {
+    const { isSystemdCredsAvailable } = await import('../core/credentials/backends/systemd-creds.js');
+    return isSystemdCredsAvailable() ? 'systemd-creds' : 'encrypted-file';
+  }
+}
+
+/**
+ * `aquaman init --agent <agent>`: everything an agent can do on its own to get
+ * a project using aquaman. No prompts, no secrets, safe to run twice.
+ */
+async function initForAgent(agent: string, json: boolean): Promise<void> {
+  const say = (line: string) => { if (!json) console.log(line); };
+  const result: Record<string, any> = { ok: false, agent, version: VERSION, human_steps: [] as string[] };
+  const finish = (code: number): never => {
+    if (json) console.log(JSON.stringify(result, null, 2));
+    process.exit(code);
+  };
+  if (agent !== 'claude-code' && agent !== 'codex') {
+    result.error = `Unsupported agent "${agent}". Supported: claude-code, codex`;
+    result.fix = 'aquaman init --agent claude-code   (or: --agent codex)';
+    if (!json) { console.error(result.error); console.error(`  → ${result.fix}`); }
+    finish(1);
+  }
+
+  // 1. Config
+  ensureConfigDir();
+  const configPath = getConfigPath();
+  if (fs.existsSync(configPath)) {
+    result.config = { path: configPath, created: false };
+  } else {
+    const config = getDefaultConfig();
+    config.credentials.backend = (await detectDefaultBackend()) as typeof config.credentials.backend;
+    fs.writeFileSync(configPath, yamlStringify(config), { encoding: 'utf-8', mode: 0o600 });
+    fs.mkdirSync(path.join(getConfigDir(), 'audit'), { recursive: true, mode: 0o700 });
+    result.config = { path: configPath, created: true };
+  }
+  result.config.backend = loadConfig().credentials.backend;
+  say(`  ✓ Config ${result.config.created ? 'created' : 'found'} (${configPath}, backend: ${result.config.backend})`);
+
+  // 2. Daemon
+  const socketPath = path.join(getConfigDir(), 'proxy.sock');
+  let running = await proxyHealthy(socketPath);
+  let started = false;
+  if (!running && result.config.backend === 'encrypted-file') {
+    // This backend has no OS keystore behind it, so the daemon cannot open
+    // the vault without a password from a person. Say so before starting it.
+    const strength = validatePasswordStrength(loadConfig().credentials.encryptionPassword ?? '');
+    if (!strength.valid) {
+      result.daemon = { running: false, started: false, socket: socketPath };
+      result.error = `The encrypted-file vault needs a password before the daemon can start: ${strength.errors.join('; ')}`;
+      result.fix = 'A person sets AQUAMAN_ENCRYPTION_PASSWORD (12 characters or more) in the environment the daemon starts from, then this command is run again. Do not invent one: the person needs it to open the vault later';
+      result.human_steps.push('choose a vault password of at least 12 characters and export it as AQUAMAN_ENCRYPTION_PASSWORD');
+      if (!json) { console.error(`  ✗ ${result.error}`); console.error(`    → ${result.fix}`); }
+      finish(1);
+    }
+  }
+  if (!running) {
+    const logPath = path.join(getConfigDir(), 'daemon.log');
+    const { spawn } = await import('node:child_process');
+    const log = fs.openSync(logPath, 'a', 0o600);
+    spawn(process.execPath, [fileURLToPath(import.meta.url), 'daemon'], { detached: true, stdio: ['ignore', log, log] }).unref();
+    fs.closeSync(log);
+    for (let i = 0; i < 40 && !running; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      running = await proxyHealthy(socketPath);
+    }
+    started = running;
+    result.daemon = { running, started, socket: socketPath, log: logPath };
+    if (!running) {
+      result.error = `The daemon did not start. See ${logPath}`;
+      let lastLine = '';
+      try { lastLine = fs.readFileSync(logPath, 'utf-8').trim().split('\n').pop() ?? ''; } catch { /* no log */ }
+      if (lastLine) result.error += `: ${lastLine.slice(0, 300)}`;
+      result.fix = 'Run `aquaman daemon` in a terminal to see the error, then `aquaman doctor`';
+      if (!json) { console.error(`  ✗ ${result.error}`); console.error(`    → ${result.fix}`); }
+      finish(1);
+    }
+  } else {
+    result.daemon = { running, started, socket: socketPath };
+  }
+  say(`  ✓ Daemon ${started ? 'started' : 'already running'}`);
+
+  // 3. The agent side lives in aquaman-coder.
+  const { spawnSync } = await import('node:child_process');
+  const coder = spawnSync('aquaman-coder', ['init', '--agent', agent, '--json'], { encoding: 'utf-8' });
+  if (coder.error && (coder.error as NodeJS.ErrnoException).code === 'ENOENT') {
+    result.error = 'aquaman-coder is not installed';
+    result.fix = 'npm install -g aquaman-coder';
+    if (!json) { console.error(`  ✗ ${result.error}`); console.error(`    → ${result.fix}`); }
+    finish(1);
+  }
+  let coderResult: any;
+  try {
+    coderResult = JSON.parse(coder.stdout);
+  } catch {
+    result.error = `aquaman-coder init failed: ${(coder.stderr || coder.stdout || '').trim().split('\n').pop() ?? 'no output'}`;
+    if (!json) console.error(`  ✗ ${result.error}`);
+    finish(1);
+  }
+  Object.assign(result, {
+    project: coderResult.project,
+    hooks: coderResult.hooks,
+    skill: coderResult.skill,
+    agents_file: coderResult.agents_file,
+  });
+  result.human_steps.push(...(coderResult.human_steps ?? []));
+  result.ok = coderResult.ok === true;
+  if (!result.ok) result.error = coderResult.error;
+  result.next = 'When a task needs a credential: aquaman request aquaman://<service>/<key> --env <ENV_NAME>';
+
+  say(`  ✓ Project "${coderResult.project?.name}" covers ${coderResult.project?.path}`);
+  say(`  ✓ Hooks: ${coderResult.hooks?.path}`);
+  if (coderResult.skill?.path) say(`  ✓ Skill: ${coderResult.skill.path}`);
+  if (coderResult.agents_file?.path) say(`  ✓ Instructions: ${coderResult.agents_file.path}`);
+  for (const step of result.human_steps) say(`  → A person needs to: ${step}`);
+  say(`\n  ${result.next}`);
+  finish(result.ok ? 0 : 1);
+}
+
 // Init command
 program
   .command('init')
-  .description('Initialize aquaman configuration')
+  .description('Initialize aquaman configuration; with --agent, set up a coding agent in one step')
   .option('--force', 'Overwrite existing configuration')
+  .option('--agent <agent>', 'Also wire a coding agent for the current directory: claude-code or codex')
+  .option('--json', 'With --agent: print one JSON object and nothing else')
+  .addHelpText('after', `
+With --agent the command never prompts and can be re-run safely. It creates the
+config if missing, starts the daemon, installs the agent's hooks and skill,
+registers the current directory as a project and writes a short block into
+CLAUDE.md or AGENTS.md. Credentials are added later, by a person:
+  aquaman request aquaman://github/token --env GITHUB_TOKEN`)
   .action(async (options) => {
+    if (options.agent) {
+      await initForAgent(String(options.agent), Boolean(options.json));
+      return;
+    }
     ensureConfigDir();
     const configPath = path.join(getConfigDir(), 'config.yaml');
     const configExists = fs.existsSync(configPath);
@@ -3360,6 +3576,115 @@ against the broker scope and written to the audit log.`)
       console.error(`Fix: ${result.fix}`);
     }
     process.exit(1);
+  });
+
+
+// `aquaman request`: the way an agent asks for a credential it must not see.
+// The daemon shows the human a dialog; the value goes from the dialog into the
+// vault. This command only ever prints a status and the reference.
+program
+  .command('request')
+  .description('Ask for a credential by reference; a person supplies or approves it in a dialog. Never prints the value')
+  .argument('<ref>', 'aquaman://service/key')
+  .option('--env <NAME>', 'Also bind the ref to this env var for the project covering the current directory')
+  .option('--timeout <seconds>', `How long the dialog waits for an answer (${PROMPT_TIMEOUT_MIN_SECONDS}-${PROMPT_TIMEOUT_MAX_SECONDS})`, String(PROMPT_TIMEOUT_SECONDS))
+  .option('--json', 'Print one JSON object and nothing else')
+  .addHelpText('after', `
+The command waits while the dialog is open: up to --timeout seconds, ${PROMPT_TIMEOUT_SECONDS} by
+default. Give it a longer --timeout only if whatever runs it allows a command
+that long. An unanswered dialog is "pending"; asking again is fine.
+
+Statuses and exit codes:
+  ready     0   stored and usable already; nobody was asked
+  stored    0   a person typed the value; it is in the vault now
+  approved  0   it was already in the vault; a person allowed its use
+  declined  2   a person said no
+  pending   3   nobody could be asked (no desktop session, no answer); the output says what to run by hand
+  error     4   the daemon is not running or does not take requests
+  error     1   the command was wrong: bad reference, bad --env, --env outside a project
+
+Example:
+  aquaman request aquaman://github/token --env GITHUB_TOKEN --json`)
+  .action(async (ref: string, opts: { env?: string; json?: boolean; timeout: string }) => {
+    const out = (result: Record<string, unknown>, code: number): never => {
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        const stream = code === 0 ? console.log : console.error;
+        stream(`${result.status}: ${ref}${result.reason ? ` (${result.reason})` : ''}`);
+        if (result.error) stream(String(result.error));
+        if (result.env) stream(`Bound to ${result.env} for this project`);
+        if (result.fix) stream(`Fix: ${result.fix}`);
+      }
+      process.exit(code);
+    };
+
+    const parsed = parseAquamanRef(ref);
+    if (!parsed) {
+      out({ status: 'error', ref, error: `Invalid ref: ${ref}`, fix: 'Refs look like aquaman://<service>/<key>, e.g. aquaman://github/token' }, 1);
+    }
+    if (opts.env !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(opts.env)) {
+      out({ status: 'error', ref, error: `Invalid --env name: ${opts.env}`, fix: 'Use an environment variable name such as GITHUB_TOKEN' }, 1);
+    }
+
+    if (!/^\d+$/.test(opts.timeout)) {
+      out({ status: 'error', ref, error: `Invalid --timeout: ${opts.timeout}`, fix: `Give a whole number of seconds between ${PROMPT_TIMEOUT_MIN_SECONDS} and ${PROMPT_TIMEOUT_MAX_SECONDS}` }, 1);
+    }
+    const timeoutSeconds = clampPromptTimeout(Number(opts.timeout));
+
+    // A binding needs a project to live in. Checked before anyone is asked
+    // for a value, so a dialog is never shown for a request that cannot finish.
+    const { spawnSync } = await import('node:child_process');
+    const bindSpec = opts.env ? `${opts.env}=${ref}` : '';
+    if (opts.env) {
+      const check = spawnSync('aquaman-coder', ['bind', bindSpec, '--check', '--json'], { encoding: 'utf-8' });
+      if (check.error) {
+        out({ status: 'error', ref, error: 'aquaman-coder is not installed, so --env cannot bind anything', fix: 'npm install -g aquaman-coder' }, 1);
+      }
+      if (check.status !== 0) {
+        let detail: { error?: string; fix?: string } = {};
+        try { detail = JSON.parse(check.stdout); } catch { /* keep the generic message */ }
+        out({
+          status: 'error',
+          ref,
+          error: detail.error ?? 'No project covers the current directory',
+          fix: detail.fix ?? 'Run from the project directory, after: aquaman init --agent <agent>',
+        }, 1);
+      }
+    }
+
+    const response = await proxyPost(
+      path.join(getConfigDir(), 'proxy.sock'),
+      '/broker/request',
+      { service: parsed!.service, key: parsed!.key, project: process.cwd(), timeout_seconds: timeoutSeconds },
+      (timeoutSeconds + 30) * 1000,
+    );
+    if ('error' in response) {
+      out({ status: 'error', ref, error: response.error, code: response.code, fix: 'Start the daemon in the background: aquaman init --agent <agent>   (in a terminal of your own: aquaman daemon)' }, 4);
+    }
+    const { status, json } = response as { status: number; json: any };
+    if (status !== 200) {
+      out({ status: 'error', ref, error: json.error, code: json.code, fix: json.fix }, 4);
+    }
+
+    const result: Record<string, unknown> = { status: json.status, ref, reason: json.reason, fix: json.fix };
+    const usable = json.status === 'ready' || json.status === 'stored' || json.status === 'approved';
+    if (!usable && opts.env && typeof result.fix === 'string') {
+      // The by-hand route has to end in the same place this command would have.
+      result.fix = `${result.fix} && aquaman coder bind ${bindSpec}`;
+    }
+    if (usable && opts.env) {
+      const bind = spawnSync('aquaman-coder', ['bind', bindSpec, '--json'], { encoding: 'utf-8' });
+      if (bind.status === 0) {
+        result.env = opts.env;
+      } else {
+        result.env_error = bind.error
+          ? 'aquaman-coder is not installed (npm install -g aquaman-coder)'
+          : (bind.stderr || bind.stdout || '').trim().split('\n').pop();
+        result.fix = `aquaman coder bind ${opts.env}=${ref}`;
+      }
+    }
+    out(result, usable ? 0 : json.status === 'declined' ? 2 : 3);
   });
 
 // Migration commands

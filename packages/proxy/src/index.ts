@@ -143,3 +143,15 @@ export {
 
 // Core (merged from aquaman-core)
 export * from './core/index.js';
+
+export {
+  type CredentialPrompter,
+  type PromptRequest,
+  type PromptResult,
+  PROMPT_TIMEOUT_SECONDS,
+  PROMPT_TIMEOUT_MIN_SECONDS,
+  PROMPT_TIMEOUT_MAX_SECONDS,
+  clampPromptTimeout,
+  promptMessage,
+  createNativePrompter,
+} from './credential-prompt.js';

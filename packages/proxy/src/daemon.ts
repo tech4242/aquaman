@@ -15,6 +15,7 @@ import { ServiceRegistry, createServiceRegistry, type ServiceDefinition, type Au
 import { OAuthTokenCache, createOAuthTokenCache } from './oauth-token-cache.js';
 import { matchPolicy, type PolicyConfig } from './request-policy.js';
 import { parseRequestTarget, policyPathInterpretations, policyMethods } from './request-target.js';
+import { clampPromptTimeout, type CredentialPrompter, type PromptResult } from './credential-prompt.js';
 import type { BrokerScope } from './broker-scope.js';
 
 // Service name validation: lowercase alphanum, dots, hyphens, underscores
@@ -114,7 +115,24 @@ export interface CredentialProxyOptions {
    * See broker-scope.ts for the rules.
    */
   broker?: BrokerScope;
+  /**
+   * `POST /broker/request`: an agent asks for a credential by reference and
+   * the human supplies or approves it in a dialog the daemon shows. Needs
+   * `broker` as well; without both the endpoint is off. Unix socket only.
+   */
+  credentialRequests?: {
+    prompter: CredentialPrompter;
+    /** Persist the ref as declared, so the broker scope serves it from now on. */
+    declare(service: string, key: string): void | Promise<void>;
+  };
 }
+
+/** A ref the human declined is not asked about again for this long. */
+const REQUEST_DECLINE_COOLDOWN_MS = 10 * 60 * 1000;
+const REQUEST_NAME_MAX = 64;
+/** At most this many dialogs per window, so a looping caller cannot bury the human in prompts. */
+const REQUEST_WINDOW_MS = 10 * 60 * 1000;
+const REQUEST_MAX_PROMPTS_PER_WINDOW = 6;
 
 export interface RequestInfo {
   id: string;
@@ -319,6 +337,16 @@ export class CredentialProxy {
     // BrokerScope, and limited to declared refs when on (broker-scope.ts).
     if ((url === '/broker/resolve' || url === '/broker/resolve/') && req.method === 'POST') {
       await this.handleBrokerResolve(req, res, requestId, fromLoopback);
+      return;
+    }
+
+    if ((url === '/broker/available' || url === '/broker/available/') && req.method === 'POST') {
+      await this.handleBrokerAvailable(req, res, fromLoopback);
+      return;
+    }
+
+    if ((url === '/broker/request' || url === '/broker/request/') && req.method === 'POST') {
+      await this.handleBrokerRequest(req, res, requestId, fromLoopback);
       return;
     }
 
@@ -660,6 +688,247 @@ export class CredentialProxy {
    * v0.12.0+ — used by the aquaman-coder hook adapters to materialize
    * credentials per tool call without writing .env files to disk.
    */
+  private requestPromptOpen = false;
+  private requestPromptTimes: number[] = [];
+  private requestDeclinedAt = new Map<string, number>();
+
+  /**
+   * POST /broker/request  { service, key, project? }
+   *
+   * Makes a credential available by reference without the caller ever
+   * holding it. Never returns a value and never replaces a stored one.
+   *
+   *   200 { status: "ready" }     already stored and declared; nothing asked
+   *   200 { status: "stored" }    the human typed it; now stored and declared
+   *   200 { status: "approved" }  already stored; the human allowed its use
+   *   200 { status: "declined" }  the human said no (or did so recently)
+   *   200 { status: "pending" }   nobody could be asked; `fix` says what to run
+   *   404 { code }                broker off here, or not the Unix socket
+   */
+  /**
+   * `POST /broker/available`: for each reference, whether `/broker/resolve`
+   * would return a value right now. Never returns one. The scope is checked
+   * before the vault, as in resolve, so an undeclared reference answers
+   * `false` whatever the vault holds.
+   */
+  private async handleBrokerAvailable(req: IncomingMessage, res: ServerResponse, fromLoopback: boolean): Promise<void> {
+    res.setHeader('Content-Type', 'application/json');
+    const reply = (statusCode: number, body: Record<string, unknown>) => {
+      res.statusCode = statusCode;
+      res.end(JSON.stringify(body));
+    };
+    let bodyBuf = '';
+    for await (const chunk of req) {
+      bodyBuf += (chunk as Buffer).toString('utf-8');
+      if (bodyBuf.length > 16384) {
+        reply(400, { error: 'Request body too large', fix: 'Ask about at most 64 references' });
+        return;
+      }
+    }
+    let refs: unknown;
+    try {
+      refs = (JSON.parse(bodyBuf) as { refs?: unknown } | null)?.refs;
+    } catch {
+      refs = undefined;
+    }
+    if (!Array.isArray(refs) || refs.length > 64) {
+      reply(400, { error: 'Expected { refs: [{ service, key }] } with at most 64 entries', fix: 'POST a JSON body with a refs array' });
+      return;
+    }
+    const scope = this.options.broker;
+    if (!scope) {
+      reply(404, {
+        error: 'The credential broker is disabled on this proxy',
+        fix: 'OpenClaw-hosted proxies never hand out credential values. Run: aquaman daemon',
+        code: 'broker_disabled',
+      });
+      return;
+    }
+    const available: boolean[] = [];
+    for (const ref of refs as Array<{ service?: unknown; key?: unknown } | null>) {
+      const service = ref?.service;
+      const key = ref?.key;
+      let ok = false;
+      if (
+        typeof service === 'string' && SAFE_SERVICE_NAME.test(service) &&
+        typeof key === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(key) &&
+        scope.check(service, key, fromLoopback ? 'loopback' : 'uds').allowed
+      ) {
+        try {
+          ok = (await this.options.store.get(service, key)) !== null;
+        } catch {
+          ok = false;
+        }
+      }
+      available.push(ok);
+    }
+    reply(200, { available });
+  }
+
+  private async handleBrokerRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    requestId: string,
+    fromLoopback: boolean
+  ): Promise<void> {
+    res.setHeader('Content-Type', 'application/json');
+    const reply = (statusCode: number, body: Record<string, unknown>) => {
+      res.statusCode = statusCode;
+      res.end(JSON.stringify(body));
+    };
+
+    let bodyBuf = '';
+    for await (const chunk of req) {
+      bodyBuf += (chunk as Buffer).toString('utf-8');
+      if (bodyBuf.length > 4096) {
+        reply(400, { error: 'Request body too large', fix: 'Keep broker requests under 4 KB' });
+        return;
+      }
+    }
+    let body: { service?: unknown; key?: unknown; project?: unknown; timeout_seconds?: unknown };
+    try {
+      body = JSON.parse(bodyBuf);
+    } catch {
+      reply(400, { error: 'Request body is not valid JSON', fix: 'POST a JSON body with { service, key }' });
+      return;
+    }
+    if (body === null || typeof body !== 'object') {
+      reply(400, { error: 'Request body is not a JSON object', fix: 'POST a JSON body with { service, key }' });
+      return;
+    }
+    const { service, key } = body;
+    // Both names are shown to a person in the dialog, so they stay short
+    // enough to read in full.
+    if ((typeof service === 'string' && service.length > REQUEST_NAME_MAX) || (typeof key === 'string' && key.length > REQUEST_NAME_MAX)) {
+      reply(400, { error: `Service and key names are limited to ${REQUEST_NAME_MAX} characters here`, fix: 'Use a shorter reference' });
+      return;
+    }
+    if (typeof service !== 'string' || !SAFE_SERVICE_NAME.test(service)) {
+      reply(400, { error: `Invalid service name: ${JSON.stringify(service)}`, fix: 'Service names must match /^[a-z0-9][a-z0-9._-]*$/' });
+      return;
+    }
+    if (typeof key !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(key)) {
+      reply(400, { error: `Invalid key name: ${JSON.stringify(key)}`, fix: 'Key names must match /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/' });
+      return;
+    }
+    const project = typeof body.project === 'string' ? body.project : undefined;
+    const timeoutSeconds = clampPromptTimeout(body.timeout_seconds);
+    const ref = `aquaman://${service}/${key}`;
+    const manual = `aquaman credentials add ${service} ${key} && aquaman broker allow ${ref}`;
+
+    const audit = (error?: string) => this.emitRequest({
+      id: requestId,
+      service,
+      method: 'BROKER_REQUEST',
+      path: '/broker/request',
+      timestamp: new Date(),
+      authenticated: false,
+      statusCode: 200,
+      error,
+    });
+
+    const scope = this.options.broker;
+    const requests = this.options.credentialRequests;
+    if (!scope || !requests) {
+      reply(404, {
+        error: 'Credential requests are disabled on this proxy',
+        fix: 'OpenClaw-hosted proxies never take credential requests. Run: aquaman daemon',
+        code: 'broker_disabled',
+      });
+      return;
+    }
+    if (fromLoopback) {
+      reply(404, {
+        error: 'Credential requests are only accepted on the Unix socket',
+        fix: `Run on the machine itself: aquaman request ${ref}`,
+        code: 'broker_request_local_only',
+      });
+      return;
+    }
+
+    let exists: boolean;
+    try {
+      exists = await this.options.store.exists(service, key);
+    } catch (err) {
+      reply(500, {
+        error: `Vault backend error checking ${service}/${key}: ${err instanceof Error ? err.message : String(err)}`,
+        fix: 'Check that the configured backend is accessible. Run: aquaman doctor',
+      });
+      return;
+    }
+    const declared = scope.check(service, key, 'uds').allowed;
+    if (exists && declared) {
+      reply(200, { status: 'ready', ref });
+      return;
+    }
+
+    const now = Date.now();
+    const declinedAt = this.requestDeclinedAt.get(ref);
+    if (declinedAt !== undefined && now - declinedAt < REQUEST_DECLINE_COOLDOWN_MS) {
+      audit(`declined: ${service}/${key}`);
+      reply(200, { status: 'declined', ref, reason: 'declined a few minutes ago; not asking again yet' });
+      return;
+    }
+    this.requestPromptTimes = this.requestPromptTimes.filter((t) => now - t < REQUEST_WINDOW_MS);
+    if (this.requestPromptOpen || this.requestPromptTimes.length >= REQUEST_MAX_PROMPTS_PER_WINDOW) {
+      audit(`pending: ${service}/${key}`);
+      reply(200, {
+        status: 'pending',
+        ref,
+        reason: this.requestPromptOpen ? 'another credential request is waiting for an answer' : 'too many credential requests in a short time',
+        fix: manual,
+      });
+      return;
+    }
+
+    this.requestPromptOpen = true;
+    this.requestPromptTimes.push(now);
+    let result: PromptResult;
+    try {
+      result = exists
+        ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds })
+        : await requests.prompter.askValue({ service, key, project, timeoutSeconds });
+    } catch (err) {
+      result = { outcome: 'unavailable', reason: err instanceof Error ? err.message : String(err) };
+    } finally {
+      this.requestPromptOpen = false;
+    }
+
+    if (result.outcome === 'declined') {
+      this.requestDeclinedAt.set(ref, Date.now());
+      // No `fix` here: a command that completes what the person just refused
+      // is not something to hand back to the caller.
+      audit(`declined: ${service}/${key}`);
+      reply(200, { status: 'declined', ref, reason: 'the person at the dialog said no' });
+      return;
+    }
+    if (result.outcome === 'timeout' || result.outcome === 'unavailable') {
+      audit(`pending: ${service}/${key}`);
+      reply(200, {
+        status: 'pending',
+        ref,
+        reason: result.outcome === 'timeout' ? 'nobody answered the dialog' : result.reason,
+        fix: manual,
+      });
+      return;
+    }
+
+    try {
+      // Checked again: the dialog was open for a while, and a stored value is never replaced.
+      if (result.outcome === 'entered' && !(await this.options.store.exists(service, key))) {
+        await this.options.store.set(service, key, result.value);
+      }
+      if (!declared) await requests.declare(service, key);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      audit(message);
+      reply(500, { error: `Could not store ${service}/${key}: ${message}`, fix: 'Run: aquaman doctor' });
+      return;
+    }
+    audit();
+    reply(200, { status: result.outcome === 'entered' ? 'stored' : 'approved', ref });
+  }
+
   private async handleBrokerResolve(
     req: IncomingMessage,
     res: ServerResponse,
@@ -783,7 +1052,8 @@ export class CredentialProxy {
       res.statusCode = 404;
       res.end(JSON.stringify({
         error: `No credential found for ${service}/${key}`,
-        fix: `Run: aquaman credentials add ${service} ${key}`
+        fix: `Run: aquaman credentials add ${service} ${key}`,
+        code: 'credential_not_found'
       }));
       this.emitRequest({
         id: requestId,
