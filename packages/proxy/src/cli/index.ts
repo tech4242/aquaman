@@ -14,6 +14,7 @@ import { Command, Help } from 'commander';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
+import { randomBytes } from 'node:crypto';
 
 import {
   loadConfig,
@@ -126,6 +127,8 @@ function storeOptionsFromConfig(config: WrapperConfig): CredentialStoreOptions {
  * loopback proxy would be an open credential gateway for any local process) and
  * print how to fix it — the UDS proxy still starts normally.
  */
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
+
 function loadLoopbackOptions(config: WrapperConfig): { port: number; token: string; host?: string } | undefined {
   const lb = config.loopback;
   if (!lb?.enabled) return undefined;
@@ -134,7 +137,13 @@ function loadLoopbackOptions(config: WrapperConfig): { port: number; token: stri
     console.error('Fix: run `aquaman hermes setup` to generate one, or set AQUAMAN_LOOPBACK_TOKEN.');
     return undefined;
   }
-  return { port: lb.port || DEFAULT_LOOPBACK_PORT, token: lb.token, host: lb.host || '127.0.0.1' };
+  const host = lb.host || '127.0.0.1';
+  if (!LOOPBACK_HOSTS.has(host)) {
+    console.error(`Loopback listener host "${host}" is not a loopback address — refusing to start it (it would be reachable from other machines).`);
+    console.error('Fix: set loopback.host to 127.0.0.1 in config.yaml.');
+    return undefined;
+  }
+  return { port: lb.port || DEFAULT_LOOPBACK_PORT, token: lb.token, host };
 }
 
 /** Broker scope for `aquaman daemon`, or undefined when `broker.enabled: false`. */
@@ -1583,6 +1592,27 @@ async function detectDefaultBackend(): Promise<string> {
   }
 }
 
+/** The pid a proxy reports over its socket, or null (no proxy, or one that does not say). */
+function proxyPid(socketPath: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    const req = http.request({ socketPath, path: '/_health', method: 'GET', timeout: 1500 }, (res) => {
+      let text = '';
+      res.on('data', (c) => { text += c; });
+      res.on('end', () => {
+        try {
+          const pid = JSON.parse(text).pid;
+          resolve(typeof pid === 'number' ? pid : null);
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+
 /**
  * `aquaman init --agent <agent>`: everything an agent can do on its own to get
  * a project using aquaman. No prompts, no secrets, safe to run twice.
@@ -1619,31 +1649,35 @@ async function initForAgent(agent: string, json: boolean, hooks: boolean, loopba
   // 2. Daemon
   const socketPath = path.join(getConfigDir(), 'proxy.sock');
   let running = await proxyHealthy(socketPath);
+  let started = false;
+  let restartFor: number | null = null;
   if (loopback) {
     // The listener is a TCP port any local process can reach, so it is only
     // turned on when asked for. The raw file is edited so that values which
     // exist only as environment overrides are never written back.
-    const rawText = fs.readFileSync(configPath, 'utf-8');
-    const parsedRaw = yamlParse(rawText);
+    const parsedRaw = yamlParse(fs.readFileSync(configPath, 'utf-8'));
     const raw: Record<string, any> = parsedRaw && typeof parsedRaw === 'object' ? parsedRaw : {};
     const lb = raw.loopback && typeof raw.loopback === 'object' ? raw.loopback : {};
-    const next = { ...lb, enabled: true, port: lb.port || DEFAULT_LOOPBACK_PORT, host: lb.host || '127.0.0.1', token: lb.token || generateLoopbackToken() };
-    const changed = lb.enabled !== true || !lb.token;
+    const host = LOOPBACK_HOSTS.has(lb.host) ? lb.host : '127.0.0.1';
+    const next = { ...lb, enabled: true, port: lb.port || DEFAULT_LOOPBACK_PORT, host, token: lb.token || generateLoopbackToken() };
+    const changed = lb.enabled !== true || !lb.token || lb.host !== host;
     if (changed) {
       raw.loopback = next;
-      fs.writeFileSync(configPath, yamlStringify(raw), { encoding: 'utf-8', mode: 0o600 });
+      // The file now holds a token: written whole, readable by this user only.
+      const tmp = `${configPath}.${randomBytes(8).toString('hex')}.tmp`;
+      fs.writeFileSync(tmp, yamlStringify(raw), { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
+      fs.renameSync(tmp, configPath);
+      fs.chmodSync(configPath, 0o600);
     }
     result.loopback = { enabled: true, url: `http://${next.host}:${next.port}`, changed };
     if (running && !(await probeLoopbackHealth(next.host, next.port))) {
       // A daemon started before the listener was enabled does not have it.
+      // Only a process that says, over the socket, that it is the one in the
+      // pid file gets signalled; an OpenClaw-hosted proxy or a recycled pid does not.
       const pid = readPidFile();
-      if (pid && isProcessRunning(pid)) {
-        process.kill(pid, 'SIGTERM');
-        for (let i = 0; i < 50 && isProcessRunning(pid); i++) await new Promise((r) => setTimeout(r, 100));
-        removePidFile();
-        try { fs.unlinkSync(socketPath); } catch { /* already gone */ }
-        running = false;
-        result.loopback.daemon_restarted = true;
+      const served = await proxyPid(socketPath);
+      if (pid && served === pid && isProcessRunning(pid)) {
+        restartFor = pid;
       } else {
         result.error = 'A proxy is running without the loopback listener and this command cannot restart it';
         result.fix = 'Stop it (aquaman stop, or stop the OpenClaw gateway that started it), then run this command again';
@@ -1653,8 +1687,7 @@ async function initForAgent(agent: string, json: boolean, hooks: boolean, loopba
     }
     say(`  ✓ Loopback listener enabled (${result.loopback.url})`);
   }
-  let started = false;
-  if (!running && result.config.backend === 'encrypted-file') {
+  if ((!running || restartFor !== null) && result.config.backend === 'encrypted-file') {
     // This backend has no OS keystore behind it, so the daemon cannot open
     // the vault without a password from a person. Say so before starting it.
     // Only the yes/no leaves this check. Nothing derived from the password
@@ -1668,6 +1701,21 @@ async function initForAgent(agent: string, json: boolean, hooks: boolean, loopba
       if (!json) { console.error(`  ✗ ${result.error}`); console.error(`    → ${result.fix}`); }
       finish(1);
     }
+  }
+  if (restartFor !== null) {
+    // Stopped only now, after everything that could keep it from coming back was checked.
+    process.kill(restartFor, 'SIGTERM');
+    for (let i = 0; i < 50 && isProcessRunning(restartFor); i++) await new Promise((r) => setTimeout(r, 100));
+    if (isProcessRunning(restartFor)) {
+      result.error = 'The running daemon did not stop, so the loopback listener is not on yet';
+      result.fix = 'Run: aquaman stop, then this command again';
+      if (!json) { console.error(`  ✗ ${result.error}`); console.error(`    → ${result.fix}`); }
+      finish(1);
+    }
+    removePidFile();
+    try { fs.unlinkSync(socketPath); } catch { /* already gone */ }
+    running = false;
+    result.loopback.daemon_restarted = true;
   }
   if (!running) {
     const logPath = path.join(getConfigDir(), 'daemon.log');
@@ -3724,7 +3772,7 @@ Example:
     const response = await proxyPost(
       path.join(getConfigDir(), 'proxy.sock'),
       '/broker/request',
-      { service: parsed!.service, key: parsed!.key, project: process.cwd(), timeout_seconds: timeoutSeconds },
+      { service: parsed!.service, key: parsed!.key, project: process.cwd(), timeout_seconds: timeoutSeconds, ...(routeArgs.length ? { routed: true } : {}) },
       (timeoutSeconds + 30) * 1000,
     );
     if ('error' in response) {

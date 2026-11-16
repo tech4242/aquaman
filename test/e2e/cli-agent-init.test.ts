@@ -235,6 +235,35 @@ describe('agent-run setup commands', () => {
     expect(off.fix).toContain('--loopback');
   }, 180_000);
 
+  it('a binding cannot name a variable that controls how programs are loaded', () => {
+    run(CODER_CLI, ['init', '--agent', 'claude-code', '--json', '--no-hooks']);
+    for (const args of [
+      ['PATH=aquaman://github/token'],
+      ['LD_PRELOAD=aquaman://github/token'],
+      ['NODE_OPTIONS=aquaman://github/token'],
+      ['OPENAI_API_KEY=aquaman://openai/api_key', '--via-proxy', 'NODE_OPTIONS'],
+      ['OPENAI_API_KEY=aquaman://openai/api_key', '--via-proxy', 'DYLD_INSERT_LIBRARIES'],
+      ['OPENAI_API_KEY=aquaman://openai/api_key', '--via-proxy', 'https_proxy'],
+    ]) {
+      expect(run(CODER_CLI, ['bind', ...args, '--json']).code, args.join(' ')).toBe(1);
+    }
+    expect(projects()['my-app'].env).toEqual({});
+    // A hand-edited file is refused as a whole rather than used.
+    const file = path.join(config, 'projects.yaml');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf-8').replace('env: {}', 'env:\n      K: aquaman://openai/api_key\n    routes:\n      K:\n        url_env: LD_PRELOAD'));
+    const r = run(CODER_CLI, ['exec', '--', 'true']);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toMatch(/url_env/);
+  }, 180_000);
+
+  it('exec --raw refuses when its output is being captured', () => {
+    run(CODER_CLI, ['init', '--agent', 'claude-code', '--json', '--no-hooks']);
+    const r = run(CODER_CLI, ['exec', '--raw', '--', 'printenv', 'HOME']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('--raw only works with a terminal');
+    expect(r.stdout).toBe('');
+  }, 60_000);
+
   it('bind refuses a value that is not a reference', () => {
     for (const bad of ['GITHUB_TOKEN=ghp_actual_secret', 'GITHUB_TOKEN', '1BAD=aquaman://github/token']) {
       const r = run(CODER_CLI, ['bind', bad, '--json']);

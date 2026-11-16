@@ -12,11 +12,11 @@ aquaman request aquaman://stripe/secret_key --env STRIPE_SECRET_KEY --via-proxy 
 aquaman-coder exec -- npm start
 ```
 
-- `--loopback` turns on a listener on `127.0.0.1` (port 8585 unless configured) that only answers requests carrying a token generated for your machine. It is off until you ask for it, and `init` restarts the daemon if it was running without it.
-- `--via-proxy STRIPE_API_BASE` records a route. In commands run for the project, `STRIPE_API_BASE` is the proxy's URL for the service (`http://127.0.0.1:8585/stripe`) and `STRIPE_SECRET_KEY` is the local token, not the key.
+- `--loopback` turns on a listener on `127.0.0.1` (port 8585 unless configured). It only answers requests that carry one of the proxy's own tokens. It is off until you ask for it, and `init` restarts the daemon if it was running without it.
+- `--via-proxy STRIPE_API_BASE` records a route. In commands run for the project, `STRIPE_API_BASE` is the proxy's URL for the service (`http://127.0.0.1:8585/stripe`) and `STRIPE_SECRET_KEY` is a route token, not the key. The route token is made fresh each time the daemon starts, is accepted only for forwarding to services a project has routed, and is refused by every endpoint that hands out a credential.
 - The app sends its requests to that URL with that token as its key, exactly as it would send the real one. The proxy checks the token, checks your policy, removes the token, adds the key from your vault and forwards the request.
 
-Binding the same variable again without `--via-proxy` goes back to setting the value.
+Binding the same variable again without `--via-proxy` goes back to setting the value. While a reference is bound only through the proxy, aquaman does not hand its value to anything: `aquaman get` and `aquaman-coder exec` in another mode are refused for it.
 
 ## What the app has to do
 
@@ -54,14 +54,14 @@ A service the proxy has a definition for and injects a request header for. Built
 | Service | Reference | Service | Reference |
 |---|---|---|---|
 | anthropic | `aquaman://anthropic/api_key` | stripe | `aquaman://stripe/secret_key` |
-| openai | `aquaman://openai/api_key` | elevenlabs | `aquaman://elevenlabs/api_key` |
+| openai | `aquaman://openai/api_key` | elevenlabs | `aquaman://elevenlabs/api_key` (token in `xi-api-key`) |
 | github | `aquaman://github/token` | slack | `aquaman://slack/bot_token` |
 | xai | `aquaman://xai/api_key` | discord | `aquaman://discord/bot_token` |
 | mistral | `aquaman://mistral/api_key` | matrix | `aquaman://matrix/access_token` |
 | huggingface | `aquaman://huggingface/api_key` | mattermost | `aquaman://mattermost/bot_token` |
-| cloudflare-ai | `aquaman://cloudflare-ai/api_token` | line, twitch, telnyx, zalo | see `aquaman services list` |
+| cloudflare-ai | `aquaman://cloudflare-ai/api_token` | line, telnyx, zalo | see `aquaman services list` |
 
-The reference has to name the key the proxy injects for the service, which is the one shown. `aquaman request` checks this before anyone is asked.
+The client sends the route token wherever it would send the key: `Authorization`, `x-api-key`, or the service's own header. The reference has to name the key the proxy injects for the service, which is the one shown. Twitch is left out because its API needs a second credential the proxy does not add. `aquaman request` checks this before anyone is asked.
 
 For any other API, add a definition to `~/.aquaman/services.yaml`:
 
@@ -94,9 +94,9 @@ A denied request gets a 403 from the proxy and no key. `aquaman policy test stri
 ## What this does and does not give you
 
 - The app, its dependencies and anything it logs hold a token that is useless off your machine and that the API rejects. The key is never in the app's memory or environment.
-- The token is not a secret from other software on your machine. Any local process that reads it, or that can connect to the Unix socket, can send requests through the proxy within your policy. This keeps the key from leaking; it is not a boundary between programs running as you.
-- The listener is plain HTTP on `127.0.0.1`. It never accepts connections from other machines.
-- One token covers every service the proxy forwards for. Policy rules are what narrow it.
+- The route token is not a secret from other software on your machine. A local process that reads it can send requests to the routed services, within your policy; it cannot use it to obtain a key. A process running as you can also change the binding itself, so this keeps the key from leaking through the app. It is not a boundary between programs running as you.
+- The listener is plain HTTP on a loopback address. aquaman refuses to start it on any other address, and refuses requests addressed to it by any name other than `127.0.0.1` or `localhost`.
+- One route token covers every service your projects have routed, and nothing else. Policy rules narrow what it can do on each. A long-running app has to be started again after the daemon restarts, because the token changes.
 - Only HTTP APIs with header authentication. For everything else the variable is set to the value, as before.
 - It is for your machine. In CI and production leave the URL variable unset and supply the key from that platform's secrets.
 

@@ -18,7 +18,7 @@ That starts the aquaman daemon, installs a `PreToolUse`/`PostToolUse` hook in `~
 aquaman init --agent claude-code --no-hooks
 ```
 
-This writes nothing to `~/.claude/settings.json` and changes no permission prompt. Claude then runs the commands that need a key as `aquaman-coder exec -- <command>`; the skill and the block in `CLAUDE.md` tell it so. You give up automatic wrapping and the redaction of other tools' output. It is the form an agent can run without asking you first.
+This writes nothing to `~/.claude/settings.json` and changes no permission prompt. Claude then runs the commands that need a key as `aquaman-coder exec -- <command>`; the skill and the block in `CLAUDE.md` tell it so. You give up automatic wrapping and the redaction of other tools' output. Your `deny` and `ask` rules match the text of a command, so write the ones you care about for the prefixed form as well (`Bash(aquaman-coder exec -- git push:*)`): in hook mode aquaman keeps the original command visible to your rules, and here there is no hook to do that. It is the form an agent can run without asking you first.
 
 ## Add a credential
 

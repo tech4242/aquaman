@@ -78,7 +78,7 @@ aquaman keeps secrets in the user's vault (Keychain, 1Password, Bitwarden, Hashi
 
 How a command gets the project's variables depends on how the project was set up. \`aquaman init\` reports it as \`mode\`, and the project's instructions file says the same.
 
-- \`exec\`: nothing is installed in the agent host. Run a command that needs a credential as \`aquaman-coder exec -- <command>\`, for example \`aquaman-coder exec -- npm test\`. Commands you run without it do not have the variables.
+- \`exec\`: nothing is installed in the agent host. Run a command that needs a credential as \`aquaman-coder exec -- <command>\`, for example \`aquaman-coder exec -- npm test\`. Commands you run without it do not have the variables. The prefix is not a way around the user's permission rules: if a command would be refused or need approval without it, ask instead of adding it.
 - \`hook\`: a hook wraps every shell command in the project, so you run commands as usual. The hook only loads when a session starts: in the session that installed it, use \`aquaman-coder exec -- <command>\` until the user has restarted.
 
 If you do not know which applies, \`aquaman-coder exec -- <command>\` works in both.
@@ -103,7 +103,7 @@ By default the command you run holds the real value while it runs. If the app's 
 aquaman request aquaman://stripe/secret_key --env STRIPE_SECRET_KEY --via-proxy STRIPE_API_BASE --json
 \`\`\`
 
-The app then gets a local token in \`STRIPE_SECRET_KEY\` and aquaman's proxy URL in \`STRIPE_API_BASE\`; write it to use that variable as its API base URL when set. The proxy adds the real key and applies the user's request policies. It needs \`aquaman init --agent <agent> --loopback\` once, which opens a token-gated listener on 127.0.0.1: tell the user. If the command answers with an error and a \`fix\`, follow the fix or drop \`--via-proxy\`.
+The app then gets a local token in \`STRIPE_SECRET_KEY\` and aquaman's proxy URL in \`STRIPE_API_BASE\`; write it to use that variable as its API base URL when set. The proxy adds the real key and applies the user's request policies; the token only forwards requests and cannot be used to read a value. It needs \`aquaman init --agent <agent> --loopback\` once, which opens a token-gated listener on 127.0.0.1: tell the user. If the command answers with an error and a \`fix\`, follow the fix or drop \`--via-proxy\`.
 
 ## Rules
 

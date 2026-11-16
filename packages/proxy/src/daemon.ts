@@ -76,6 +76,13 @@ export function findUrlPathCredentialSlot(
  * return. timingSafeEqual requires equal-length buffers, so unequal lengths
  * are compared against self (to burn comparable time) and then rejected.
  */
+/** The Host header names this machine's loopback interface (any port). */
+function isLoopbackHostHeader(host: string | undefined): boolean {
+  if (!host) return true; // HTTP/1.0 clients; a browser always sends one
+  const name = host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.split(':')[0];
+  return name === '127.0.0.1' || name === 'localhost' || name === '[::1]';
+}
+
 function timingSafeStrEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a, 'utf-8');
   const bb = Buffer.from(b, 'utf-8');
@@ -155,6 +162,13 @@ interface ServiceConfig {
 export class CredentialProxy {
   private server: http.Server | null = null;
   private loopbackServer: http.Server | null = null;
+  /**
+   * What a program routed through the proxy presents in place of its key.
+   * Separate from the loopback token that agent hosts hold: this one is
+   * accepted only for forwarding to a service a project has routed, never by
+   * a broker endpoint. Made per daemon start and kept in memory only.
+   */
+  private readonly routeToken = `aqm_rt_${crypto.randomBytes(24).toString('hex')}`;
   private options: CredentialProxyOptions;
   private running = false;
   private serviceRegistry: ServiceRegistry;
@@ -246,7 +260,31 @@ export class CredentialProxy {
   private isLoopbackTokenValid(req: IncomingMessage): boolean {
     const expected = this.options.loopback?.token;
     if (!expected) return false;
+    return this.presentedTokens(req).some(c => timingSafeStrEqual(c, expected));
+  }
 
+  /**
+   * Whether the request presents the route token, for a service a project has
+   * routed. A client sends its "key" in whatever header the vendor uses, so
+   * the service's own auth header is read as well.
+   */
+  private isRouteTokenValid(req: IncomingMessage): boolean {
+    if (!this.options.loopback) return false;
+    const target = parseRequestTarget(req.url || '/');
+    const service = target.ok ? target.segments[0] : undefined;
+    if (!service || !SAFE_SERVICE_NAME.test(service) || !this.isServiceRouted(service)) return false;
+    const def = this.serviceRegistry.get(service)!;
+    const candidates = this.presentedTokens(req);
+    const own = req.headers[def.authHeader.toLowerCase()];
+    const ownValue = Array.isArray(own) ? own[0] : own;
+    if (ownValue) {
+      candidates.push(def.authPrefix && ownValue.startsWith(def.authPrefix) ? ownValue.slice(def.authPrefix.length) : ownValue);
+    }
+    return candidates.some(c => timingSafeStrEqual(c, this.routeToken));
+  }
+
+  /** Every place a client may have put a local token. */
+  private presentedTokens(req: IncomingMessage): string[] {
     const candidates: string[] = [];
     const header = (name: string): string | undefined => {
       const v = req.headers[name];
@@ -268,7 +306,13 @@ export class CredentialProxy {
     const pathBorne = this.urlPathTokenCandidate(req.url || '/');
     if (pathBorne) candidates.push(pathBorne);
 
-    return candidates.some(c => timingSafeStrEqual(c, expected));
+    return candidates;
+  }
+
+  /** True for a header value that is, or wraps, one of this proxy's own tokens. Those never go upstream. */
+  private carriesLocalToken(value: string): boolean {
+    const lb = this.options.loopback?.token;
+    return value.includes(this.routeToken) || (!!lb && value.includes(lb));
   }
 
   /**
@@ -299,7 +343,22 @@ export class CredentialProxy {
     // Loopback listener is network-reachable (unlike the 0o600 UDS), so every
     // request on it must present the loopback token. Health check is exempt so
     // local tooling can probe liveness without the token.
+    // A browser page can be made to send requests here under a name it
+    // controls (DNS rebinding). Nothing legitimate addresses this listener by
+    // any name other than the loopback ones.
+    if (fromLoopback && !isLoopbackHostHeader(req.headers.host)) {
+      res.setHeader('Content-Type', 'application/json');
+      res.statusCode = 403;
+      res.end(JSON.stringify({ error: 'Loopback request rejected: unexpected Host header', fix: 'Address the proxy as 127.0.0.1 or localhost' }));
+      return;
+    }
+    // A routed program's token is good for forwarding to routed services and
+    // for nothing else; `viaRouteToken` narrows everything below.
+    let viaRouteToken = false;
     if (fromLoopback && url !== '/_health' && url !== '/_health/' && !this.isLoopbackTokenValid(req)) {
+      viaRouteToken = this.isRouteTokenValid(req);
+    }
+    if (fromLoopback && url !== '/_health' && url !== '/_health/' && !viaRouteToken && !this.isLoopbackTokenValid(req)) {
       res.setHeader('Content-Type', 'application/json');
       res.statusCode = 401;
       res.end(JSON.stringify({
@@ -313,7 +372,14 @@ export class CredentialProxy {
     if (url === '/_health' || url === '/_health/') {
       res.setHeader('Content-Type', 'application/json');
       res.statusCode = 200;
-      res.end(JSON.stringify({ status: 'ok', version: DAEMON_VERSION, uptime: process.uptime(), services: this.options.allowedServices }));
+      res.end(JSON.stringify({
+        status: 'ok',
+        version: DAEMON_VERSION,
+        uptime: process.uptime(),
+        services: this.options.allowedServices,
+        // Only over the socket: lets `aquaman init` confirm the pid file names this process before signalling it.
+        ...(fromLoopback ? {} : { pid: process.pid }),
+      }));
       return;
     }
 
@@ -336,6 +402,13 @@ export class CredentialProxy {
     // The expires_at field is a hint for the consumer, not a server-side
     // expiration. Scoped since v0.15.0: off unless the proxy was built with a
     // BrokerScope, and limited to declared refs when on (broker-scope.ts).
+    if (viaRouteToken && (url.startsWith('/broker/') || url.startsWith('/_'))) {
+      res.setHeader('Content-Type', 'application/json');
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'This token only forwards requests to routed services', code: 'route_token_forward_only' }));
+      return;
+    }
+
     if ((url === '/broker/resolve' || url === '/broker/resolve/') && req.method === 'POST') {
       await this.handleBrokerResolve(req, res, requestId, fromLoopback);
       return;
@@ -382,7 +455,7 @@ export class CredentialProxy {
       return;
     }
 
-    if (!service || !this.isServiceProxied(service)) {
+    if (!service || !(viaRouteToken ? this.isServiceRouted(service) : this.isServiceProxied(service))) {
       res.statusCode = 404;
       res.end('Not found');
       return;
@@ -559,6 +632,8 @@ export class CredentialProxy {
         if (key.toLowerCase() === 'authorization') continue;
         // Never forward the loopback access token to the upstream provider
         if (key.toLowerCase() === 'x-aquaman-token') continue;
+        // Nor in any other header a client may have put it in.
+        if ((Array.isArray(value) ? value : [value ?? '']).some((v) => this.carriesLocalToken(v))) continue;
         if (value) {
           headers[key] = Array.isArray(value) ? value[0] : value;
         }
@@ -717,13 +792,20 @@ export class CredentialProxy {
    * before the vault, as in resolve, so an undeclared reference answers
    * `false` whatever the vault holds.
    */
-  /**
-   * Whether requests for this service are forwarded: it is in the configured
-   * list, or a project has recorded a route to it.
-   */
+  /** Whether requests for this service are forwarded for agent hosts and socket clients: the configured list. */
   private isServiceProxied(service: string): boolean {
-    if (this.options.allowedServices.includes(service)) return true;
-    return this.options.broker?.routedServices?.().has(service) === true;
+    return this.options.allowedServices.includes(service);
+  }
+
+  /**
+   * Whether a project has routed a program to this service in a way the
+   * proxy can serve: the service takes its credential in a header, and the
+   * routed reference is the key the proxy injects for it.
+   */
+  private isServiceRouted(service: string): boolean {
+    const def = this.serviceRegistry.get(service);
+    if (!def || (def.authMode ?? 'header') !== 'header') return false;
+    return this.options.broker?.routedRefs?.().has(`aquaman://${service}/${def.credentialKey}`) === true;
   }
 
   /**
@@ -734,8 +816,9 @@ export class CredentialProxy {
    * The token is the capability to reach the local proxy, not a credential:
    * it works only on this machine, the proxy strips it, and request policy
    * applies to everything sent with it. So this endpoint never touches a
-   * credential value. It answers only over the Unix socket, only for a
-   * declared reference, only for a service the proxy injects a header for,
+   * credential value, and the token it returns is refused by every broker
+   * endpoint. It answers only over the Unix socket, only for a reference a
+   * project has routed, only for a service the proxy injects a header for,
    * and only when the reference names the key the proxy would inject.
    */
   private async handleBrokerRoute(req: IncomingMessage, res: ServerResponse, fromLoopback: boolean): Promise<void> {
@@ -789,24 +872,20 @@ export class CredentialProxy {
       refuse('broker_disabled', 'The credential broker is disabled on this proxy', 'OpenClaw-hosted proxies do not hand out routes. Run: aquaman daemon');
       return;
     }
-    const decision = scope.check(service, key, 'uds');
-    if (!decision.allowed) {
-      refuse(decision.code, decision.reason, decision.fix);
+    // Scope before anything else, as in resolve: an answer about a reference
+    // nobody routed must not depend on what the vault or the registry holds.
+    if (!scope.routedRefs?.().has(`aquaman://${service}/${key}`)) {
+      refuse('route_not_recorded', `No project routes a program to aquaman://${service}/${key}`, `Bind it with: aquaman coder bind <NAME>=aquaman://${service}/${key} --via-proxy <URL_ENV>`);
       return;
     }
     const address = this.getLoopbackAddress();
-    const token = this.options.loopback?.token;
-    if (!address || !token) {
+    if (!address) {
       refuse('route_listener_off', 'The loopback listener is not running, so there is nowhere to send requests', 'Run: aquaman init --agent <agent> --loopback');
       return;
     }
     const serviceDef = this.serviceRegistry.get(service);
     if (!serviceDef) {
       refuse('route_service_unknown', `The proxy has no definition for "${service}", so it cannot forward requests for it`, `Add "${service}" to services.yaml (see docs/app-through-proxy.md), or bind the reference without --via-proxy`);
-      return;
-    }
-    if (!this.isServiceProxied(service)) {
-      refuse('route_not_recorded', `No project routes a program to "${service}", so the proxy does not forward for it`, `Bind it with: aquaman coder bind <NAME>=aquaman://${service}/${key} --via-proxy <URL_ENV>`);
       return;
     }
     if ((serviceDef.authMode ?? 'header') !== 'header') {
@@ -827,7 +906,16 @@ export class CredentialProxy {
       refuse('credential_not_found', `Credential not found: ${service}/${key}`, `Run: aquaman credentials add ${service} ${key}`);
       return;
     }
-    reply(200, { url: `http://${address}/${service}`, token });
+    reply(200, { url: `http://${address}/${service}`, token: this.routeToken });
+    this.emitRequest({
+      id: crypto.randomUUID(),
+      service,
+      method: 'BROKER_ROUTE',
+      path: '/broker/route',
+      timestamp: new Date(),
+      authenticated: true,
+      statusCode: 200,
+    });
   }
 
   private async handleBrokerAvailable(req: IncomingMessage, res: ServerResponse, fromLoopback: boolean): Promise<void> {
@@ -871,7 +959,9 @@ export class CredentialProxy {
       if (
         typeof service === 'string' && SAFE_SERVICE_NAME.test(service) &&
         typeof key === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(key) &&
-        scope.check(service, key, fromLoopback ? 'loopback' : 'uds').allowed
+        (scope.check(service, key, fromLoopback ? 'loopback' : 'uds').allowed ||
+          // A routed reference is usable by its project without being resolvable.
+          (!fromLoopback && scope.routedRefs?.().has(`aquaman://${service}/${key}`) === true))
       ) {
         try {
           ok = (await this.options.store.get(service, key)) !== null;
@@ -904,7 +994,7 @@ export class CredentialProxy {
         return;
       }
     }
-    let body: { service?: unknown; key?: unknown; project?: unknown; timeout_seconds?: unknown };
+    let body: { service?: unknown; key?: unknown; project?: unknown; timeout_seconds?: unknown; routed?: unknown };
     try {
       body = JSON.parse(bodyBuf);
     } catch {
@@ -933,7 +1023,12 @@ export class CredentialProxy {
     const project = typeof body.project === 'string' ? body.project : undefined;
     const timeoutSeconds = clampPromptTimeout(body.timeout_seconds);
     const ref = `aquaman://${service}/${key}`;
-    const manual = `aquaman credentials add ${service} ${key} && aquaman broker allow ${ref}`;
+    // Asked for on behalf of a binding made through the proxy: the value is
+    // stored, and the reference is not declared for handing out.
+    const routed = body.routed === true;
+    const manual = routed
+      ? `aquaman credentials add ${service} ${key}`
+      : `aquaman credentials add ${service} ${key} && aquaman broker allow ${ref}`;
 
     const audit = (error?: string) => this.emitRequest({
       id: requestId,
@@ -975,7 +1070,9 @@ export class CredentialProxy {
       });
       return;
     }
-    const declared = scope.check(service, key, 'uds').allowed;
+    const declared = routed
+      ? scope.routedRefs?.().has(ref) === true
+      : scope.check(service, key, 'uds').allowed;
     if (exists && declared) {
       reply(200, { status: 'ready', ref });
       return;
@@ -1037,7 +1134,7 @@ export class CredentialProxy {
       if (result.outcome === 'entered' && !(await this.options.store.exists(service, key))) {
         await this.options.store.set(service, key, result.value);
       }
-      if (!declared) await requests.declare(service, key);
+      if (!declared && !routed) await requests.declare(service, key);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       audit(message);

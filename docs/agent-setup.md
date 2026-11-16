@@ -18,7 +18,7 @@ There are two forms, and which one you run decides how commands get their creden
 
 | Form | What it installs in the agent host | How a command gets the variables | `mode` in the output |
 |---|---|---|---|
-| `--no-hooks` | Nothing. No setting of Claude Code or Codex is changed and no permission prompt changes | You run it as `aquaman-coder exec -- <command>` | `exec` |
+| `--no-hooks` | Nothing. No setting of Claude Code or Codex is changed, and aquaman answers no permission prompt | You run it as `aquaman-coder exec -- <command>` | `exec` |
 | without it | A user-level hook that wraps every shell command in registered projects, and answers the permission prompt for the commands it wraps | Automatically, after the session is restarted | `hook` |
 
 Use `--no-hooks` unless the user has asked for the hook: it is the form that changes nothing outside aquaman's own files, the skill and the project. Propose the hook when they want commands to work without a prefix. If hooks are already installed from an earlier run, `--no-hooks` leaves them in place and reports `mode: hook`.
@@ -99,7 +99,9 @@ The daemon shows one dialog at a time and at most six in ten minutes, and does n
 
 ## 3. Use it
 
-**With `mode: exec`**, run a command that needs a credential as `aquaman-coder exec -- <command>`, for example `aquaman-coder exec -- npm test`. It sets the project's variables for that command only and redacts them in its output. A command you run without the prefix does not have them. If the user wants to stop being asked about each such command, a permission rule for `aquaman-coder exec` is theirs to add; it would cover every command run that way.
+**With `mode: exec`**, run a command that needs a credential as `aquaman-coder exec -- <command>`, for example `aquaman-coder exec -- npm test`. It sets the project's variables for that command only and redacts them in its output. A command you run without the prefix does not have them. 
+
+The prefix is for giving a command its credentials, not a way around the user's permission rules. Those rules are matched against the text of the command, so one written for `git push` does not match `aquaman-coder exec -- git push`. If a command would be refused or need approval without the prefix, do not run it with the prefix: ask. A user who adds an allow rule for `aquaman-coder exec` allows every command run that way, and should keep their `deny` rules in the prefixed form too. `--raw`, which turns redaction off, only works with a terminal on stdout, so it does nothing for a command whose output you capture.
 
 **With `mode: hook`**, the hooks are not loaded in the session that installed them. `init` says so in `human_steps` (Claude Code: restart or start a new session; Codex: trust the hooks at startup). Until the user has done that, use `aquaman-coder exec -- <command>` as above. Once the hooks are loaded, run commands as usual: the hook wraps each shell command so the project's variables are present for that command only. In output a value appears as `[REDACTED:injected-value]`: that means it is set. Do not try to print or decode it.
 
@@ -116,7 +118,7 @@ aquaman init --agent claude-code --no-hooks --loopback --json
 aquaman request aquaman://stripe/secret_key --env STRIPE_SECRET_KEY --via-proxy STRIPE_API_BASE --json
 ```
 
-With `--via-proxy <URL_ENV>` the command gets a local token in the `--env` variable and the proxy's URL for the service in `URL_ENV`, instead of the key. Write the app to read its base URL from that variable, falling back to the vendor's address, and to send the "key" it was given as usual. The proxy swaps the token for the real key and applies the user's request policies. The reply carries `"via_proxy": { "url_env": ..., "base_path": ... }`.
+With `--via-proxy <URL_ENV>` the command gets a local token in the `--env` variable and the proxy's URL for the service in `URL_ENV`, instead of the key. Write the app to read its base URL from that variable, falling back to the vendor's address, and to send the "key" it was given as usual. The proxy swaps the token for the real key and applies the user's request policies. That token only forwards requests to routed services; it cannot be used to fetch a value, and while a reference is bound this way aquaman hands its value to nothing. The reply carries `"via_proxy": { "url_env": ..., "base_path": ... }`.
 
 It stops with exit 1 before any dialog when the route cannot work: `--loopback` was not given to `init`, the proxy has no definition for the service, or the reference is not the key the proxy injects for it. `error` and `fix` say which. Services, `services.yaml` and limits: [Keep an API key out of the app a coding agent builds](app-through-proxy.md).
 

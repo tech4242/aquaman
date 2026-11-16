@@ -162,7 +162,7 @@ projects:
     proxy = createCredentialProxy({
       socketPath: socketPathLocal,
       store,
-      allowedServices: ['dummysvc', 'stripe'],
+      allowedServices: ['dummysvc'],
       broker: createBrokerScope({ projectsPath: path.join(tmpHome, '.aquaman', 'projects.yaml') }),
       loopback: { port: 0, token: routedToken, host: '127.0.0.1' },
     });
@@ -197,8 +197,9 @@ projects:
     });
     expect(result.code, result.stderr).toBe(0);
     expect(result.stdout).toContain(`url=http://${proxy.getLoopbackAddress()}/stripe/v1`);
-    expect(result.stdout).toContain(`keylen=${routedToken.length}`);
-    expect(result.stdout).toContain('prefix=aqm_lb_');
+    // The command holds the forwarding-only token, not the agent hosts' loopback token and not the key.
+    expect(result.stdout).toContain(`keylen=${'aqm_rt_'.length + 48}`);
+    expect(result.stdout).toContain('prefix=aqm_rt_');
     expect(result.stdout + result.stderr).not.toContain('sk_live_never_in_the_command');
   }, 60_000);
 

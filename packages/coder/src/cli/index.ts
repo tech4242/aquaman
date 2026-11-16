@@ -24,6 +24,7 @@ import {
   loadProjects,
   saveProjects,
   ROUTE_BASE_PATH,
+  isLoaderEnvName,
   type ProjectRoute,
   findProjectForCwd,
   parseRef,
@@ -269,6 +270,12 @@ program
   .allowUnknownOption()
   .option('--raw', 'Disable stdout/stderr redaction', false)
   .action(async (cmd: string, args: string[], opts: { raw?: boolean }) => {
+    // Unredacted output is for a person at a terminal. Anything that captures
+    // the output instead (an agent's shell tool, a pipe) would be handed the values.
+    if (opts.raw && !process.stdout.isTTY) {
+      console.error('aquaman: --raw only works with a terminal on stdout; without it, output is redacted for whoever is capturing it. Drop --raw.');
+      process.exit(1);
+    }
     const cwd = process.cwd();
     const projects = loadProjects();
     const match = findProjectForCwd(cwd, projects);
@@ -471,10 +478,11 @@ program
     const name = idx < 0 ? '' : binding.slice(0, idx);
     const ref = idx < 0 ? '' : binding.slice(idx + 1);
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) fail(`Bad binding "${binding}". Expected NAME=aquaman://service/key`);
+    if (isLoaderEnvName(name)) fail(`${name} controls how programs are loaded or run and cannot be bound to a credential`);
     if (!parseRef(ref)) fail(`Bad reference "${ref}". Expected aquaman://service/key`);
     let route: ProjectRoute | undefined;
     if (opts.viaProxy !== undefined) {
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(opts.viaProxy) || opts.viaProxy === name) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(opts.viaProxy) || opts.viaProxy === name || isLoaderEnvName(opts.viaProxy)) {
         fail(`Bad --via-proxy "${opts.viaProxy}". Expected the name of the variable the program reads its base URL from, e.g. OPENAI_BASE_URL`);
       }
       const basePath = opts.basePath ?? (parseRef(ref)!.service === 'openai' ? '/v1' : '');
@@ -502,7 +510,7 @@ program
       return;
     }
     const current = file.projects[project.name];
-    if (route && route.url_env in current.env) {
+    if (route && Object.hasOwn(current.env, route.url_env)) {
       fail(`${route.url_env} is already bound to a credential in project "${project.name}"; pick another variable for the URL`);
     }
     // Binding a name again replaces how it is delivered: with a route, or without one.
