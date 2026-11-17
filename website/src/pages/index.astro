@@ -21,7 +21,7 @@ const VAULTS = [
 // Seventh by downloads in ClawHub's Security category when checked on 2026-11-17. Recheck now and then; remove if it stops being true.
 const APIS = ['OpenAI', 'Anthropic', 'GitHub', 'Stripe', 'xAI', 'Mistral', 'Hugging Face', 'ElevenLabs', 'Slack', 'Discord'];
 
-const jsonLd = {
+const software = {
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
   name: 'aquaman',
@@ -32,11 +32,12 @@ const jsonLd = {
   url: Astro.site!.href,
   softwareVersion: packageVersion(),
   license: 'https://www.apache.org/licenses/LICENSE-2.0',
-  codeRepository: 'https://github.com/tech4242/aquaman',
+  author: { '@type': 'Person', name: 'tech4242', url: 'https://github.com/tech4242' },
   downloadUrl: 'https://www.npmjs.com/package/aquaman-proxy',
   sameAs: ['https://github.com/tech4242/aquaman', 'https://www.npmjs.com/package/aquaman-proxy', 'https://pypi.org/project/aquaman-hermes/'],
   offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
 };
+const jsonLd = [software, { '@context': 'https://schema.org', '@type': 'WebSite', name: 'aquaman', url: Astro.site!.href }];
 const description =
   'Give Claude Code, Codex and other AI agents an API key without handing it over. Open source, runs on your machine, keeps keys in the vault you already use.';
 ---

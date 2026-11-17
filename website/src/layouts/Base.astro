@@ -11,17 +11,19 @@ interface Props {
   markdown: string;
   /** What that link is, when it is not this page as Markdown. */
   markdownTitle?: string;
-  jsonLd?: Record<string, unknown>;
+  jsonLd?: Record<string, unknown> | Record<string, unknown>[];
   /** Set when another page is the one to index, as for docs of an earlier release. */
   canonicalPath?: string;
   /** The page lays out its own full-width sections. */
   wide?: boolean;
   /** A page-wide look, as a class on <body>. */
   look?: string;
+  ogType?: 'website' | 'article';
 }
-const { title, description, markdown, jsonLd, canonicalPath, wide, look, markdownTitle = 'This page as Markdown' } = Astro.props;
+const { title, description, markdown, jsonLd, canonicalPath, wide, look, markdownTitle = 'This page as Markdown', ogType = 'website' } = Astro.props;
 const stars = await githubStars();
-const fullTitle = title ? `${title} | ${SITE_NAME}` : HOME_TITLE;
+// The name is added once: a title that already says it does not get it again.
+const fullTitle = title ? (title.includes(SITE_NAME) ? title : `${title} | ${SITE_NAME}`) : HOME_TITLE;
 const canonical = new URL(canonicalPath ?? Astro.url.pathname, Astro.site).href;
 const at = (p: string) => (Astro.url.pathname.replace(/\/?$/, '/') === p ? 'page' : undefined);
 const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/', '/docs/compare/', '/docs/security/'].includes(Astro.url.pathname.replace(/\/?$/, '/'));
@@ -37,10 +39,13 @@ const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/',
     <link rel="alternate" type="text/markdown" href={new URL(markdown, Astro.site).href} title={markdownTitle} />
     <link rel="alternate" type="text/plain" href={new URL('/llms.txt', Astro.site).href} title="llms.txt" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="sitemap" href="/sitemap-index.xml" />
     <meta property="og:title" content={fullTitle} />
     <meta property="og:description" content={description} />
-    <meta property="og:type" content="website" />
+    <meta property="og:type" content={ogType} />
+    <meta property="og:site_name" content={SITE_NAME} />
     <meta property="og:url" content={canonical} />
     <meta property="og:image" content={new URL('/og.png', Astro.site).href} />
     <meta property="og:image:width" content="1200" />

@@ -1,6 +1,6 @@
 # Agentic AI Security Guidance
 
-Aquaman aligns with multiple 2026 industry guidances on agentic AI security. These are documentary frameworks (no conformance programs), so claim **alignment** with specific recommendations, not certification.
+aquaman aligns with multiple 2026 industry guidances on agentic AI security. These are documentary frameworks (no conformance programs), so claim **alignment** with specific recommendations, not certification.
 
 ## CISA / NSA / Five-Eyes — "Careful Adoption of Agentic AI Services" (April 2026)
 
@@ -8,12 +8,12 @@ Aquaman aligns with multiple 2026 industry guidances on agentic AI security. The
 >
 > Source: https://media.defense.gov/2026/Apr/30/2003922823/-1/-1/0/CAREFUL%20ADOPTION%20OF%20AGENTIC%20AI%20SERVICES_FINAL.PDF
 
-| Recommendation theme | Aquaman alignment |
+| Recommendation theme | aquaman alignment |
 |---|---|
-| **Incremental deployment** | Aquaman ships as a plugin / adapter that can be added to existing agent setups without re-architecting. `aquaman doctor` validates the integration before any credential flows. |
+| **Incremental deployment** | aquaman ships as a plugin / adapter that can be added to existing agent setups without re-architecting. `aquaman doctor` validates the integration before any credential flows. |
 | **Strong governance** | Hash-chained audit log records every credential access, every policy decision, every broker resolve. Tamper-evident chain provides governance-grade evidence trail. |
 | **Continuous monitoring** | Per-credential-access audit events with timestamp, service, method, path, outcome. `aquaman audit tail` for live monitoring. |
-| **Supply-chain controls** | Aquaman pins its own dependencies exactly (no semver ranges on `aquaman-proxy` from `aquaman-plugin` or `aquaman-coder`). Versions cross-pin between packages. ClawScan + VirusTotal third-party audit posture: Passed. |
+| **Supply-chain controls** | aquaman pins its own dependencies exactly (no semver ranges on `aquaman-proxy` from `aquaman-plugin` or `aquaman-coder`). Versions cross-pin between packages. ClawScan + VirusTotal third-party audit posture: Passed. |
 | **Expanded attack surface mitigation** | Process isolation: credentials live in a separate proxy process, not in the agent's address space. UDS-only socket (chmod 0o600), no network exposure. |
 | **Privilege creep prevention** | Broker endpoint materializes credentials per tool call (default 60s TTL, max 3600s). Agent's shell holds the credential only for the duration of one command. Project-scoped credential maps (v0.12.0+) limit which services each project sees. |
 | **Obscure event records (anti-tampering)** | Hash-chained audit log makes mutation, insertion, or deletion of entries detectable via `AuditLogger.verifyIntegrity()`. |
@@ -26,7 +26,7 @@ Aquaman aligns with multiple 2026 industry guidances on agentic AI security. The
 
 CSA's own MAESTRO commentary explicitly endorses the **ephemeral credential broker model** — credentials issued at execution time, scoped per task. That is a near-literal description of aquaman's broker endpoint.
 
-| MAESTRO Layer | Aquaman feature |
+| MAESTRO Layer | aquaman feature |
 |---|---|
 | **L2 Data Operations** | Vault backends + secret-pattern redactor (incoming + outgoing data sanitization). |
 | **L3 Agent Framework** | HTTP interceptor strips `Authorization` and `X-API-Key` headers before routing — credentials don't leak from agent SDKs that preset them. |
@@ -39,13 +39,13 @@ CSA's own MAESTRO commentary explicitly endorses the **ephemeral credential brok
 
 > Source: https://genai.owasp.org/2025/12/09/owasp-top-10-for-agentic-applications-the-benchmark-for-agentic-security-in-the-age-of-autonomous-ai/
 
-Aquaman aligns with several ASI categories. The canonical "OWASP Top 10 for Agentic Applications for 2026" (published 2025-12-09) is the stable reference; in it **ASI04 = Agentic Supply Chain Vulnerabilities**. We map to ASI02, ASI03, and ASI04 where the alignment is concrete.
+aquaman aligns with several ASI categories. The canonical "OWASP Top 10 for Agentic Applications for 2026" (published 2025-12-09) is the stable reference; in it **ASI04 = Agentic Supply Chain Vulnerabilities**. We map to ASI02, ASI03, and ASI04 where the alignment is concrete.
 
-| ASI Category | Aquaman alignment |
+| ASI Category | aquaman alignment |
 |---|---|
 | **ASI02** Tool Misuse | HTTP interceptor scope is operator-controlled via `services` config (v0.11.4+). Channels not in `services` keep their direct-to-upstream behavior — no over-broad redirect. |
 | **ASI03** Agent Identity & Privilege Abuse | `autoGenerateAuthProfiles: false` opt-out (v0.11.4+) for operators managing their own auth. Spawn env narrowed to an explicit allowlist (v0.11.5+) so the proxy process doesn't inherit arbitrary parent secrets. Broker endpoint (v0.12.0+) for per-call materialization. |
-| **ASI04** Agentic Supply Chain Vulnerabilities | Aquaman cross-pins its own packages exactly (no semver ranges between `aquaman-proxy` / `aquaman-plugin` / `aquaman-coder`); ClawHub's automated ClawScan and VirusTotal checks of the published plugin: passed (a registry scan, not a third-party audit; there has been none). Relevant to the 2026 npm-worm wave (Shai-Hulud / Miasma) that harvests AI-agent configs: credentials are never written into `~/.claude/settings.json` or agent config (only the hook command is), so a config-stealing worm finds no secrets there. **Gap:** aquaman does not detect tampering of its own hook entries yet — `aquaman doctor` hook-drift detection is tracked for a future release (see ROADMAP.md). |
+| **ASI04** Agentic Supply Chain Vulnerabilities | aquaman cross-pins its own packages exactly (no semver ranges between `aquaman-proxy` / `aquaman-plugin` / `aquaman-coder`); ClawHub's automated ClawScan and VirusTotal checks of the published plugin: passed (a registry scan, not a third-party audit; there has been none). Relevant to the 2026 npm-worm wave (Shai-Hulud / Miasma) that harvests AI-agent configs: credentials are never written into `~/.claude/settings.json` or agent config (only the hook command is), so a config-stealing worm finds no secrets there. **Gap:** aquaman does not detect tampering of its own hook entries yet — `aquaman doctor` hook-drift detection is tracked for a future release (see ROADMAP.md). |
 
 ## NIST CAISI — AI Agent Standards Initiative
 

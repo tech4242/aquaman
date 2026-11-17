@@ -31,12 +31,12 @@ const Content = page ? (await render(page.entry)).Content : null;
 const inLatest = page ? latest.find((p) => p.slug === page.slug) : undefined;
 const canonicalPath = version === null ? undefined : page ? inLatest?.url : '/docs/';
 const here = page?.url ?? `/docs/${version ? `${version}/` : ''}`;
-const title = page ? page.title : `Documentation${version ? ` for ${version}` : ''}`;
+const title = page ? page.metaTitle : `Documentation${version ? ` for ${version}` : ''}`;
 const description = page
   ? page.description
   : 'Guides for each agent host, the contract for agents, and reference pages for aquaman, a credential proxy for AI agents.';
 const other = [null, ...versions.archived].filter((v) => v !== version);
-const jsonLd = page && {
+const article = page && {
   '@context': 'https://schema.org',
   '@type': 'TechArticle',
   headline: page.title,
@@ -48,8 +48,19 @@ const jsonLd = page && {
   author: { '@type': 'Person', name: 'tech4242', url: 'https://github.com/tech4242' },
   isPartOf: { '@type': 'WebSite', name: 'aquaman', url: Astro.site!.href },
 };
+const jsonLd = article && [
+  article,
+  {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Docs', item: new URL('/docs/', Astro.site).href },
+      { '@type': 'ListItem', position: 2, name: page.title, item: new URL(page.url, Astro.site).href },
+    ],
+  },
+];
 ---
-<Base title={title} description={description} markdown={page ? page.twin : '/llms.txt'} markdownTitle={page ? undefined : 'Index of this site in Markdown'} canonicalPath={canonicalPath} jsonLd={jsonLd || undefined}>
+<Base title={title} description={description} markdown={page ? page.twin : '/llms.txt'} markdownTitle={page ? undefined : 'Index of this site in Markdown'} canonicalPath={canonicalPath} jsonLd={jsonLd || undefined} ogType={page ? 'article' : 'website'}>
   <div class="docs">
     <article class="prose">
       {version && (
