@@ -121,6 +121,43 @@ export class BrokerClient {
   }
 
   /**
+   * For each reference, whether a resolve would return a value right now.
+   * No values travel. Throws when the proxy cannot answer the question.
+   */
+  async available(refs: Array<{ service: string; key: string }>): Promise<boolean[]> {
+    const { statusCode, payload } = await this.request('POST', '/broker/available', JSON.stringify({ refs }));
+    let json: any;
+    try {
+      json = JSON.parse(payload);
+    } catch {
+      throw new BrokerError(`Proxy cannot report availability (HTTP ${statusCode})`, { status: statusCode });
+    }
+    if (statusCode !== 200 || !Array.isArray(json.available) || json.available.length !== refs.length) {
+      throw new BrokerError(json.error || `Proxy cannot report availability (HTTP ${statusCode})`, { code: json.code, status: statusCode });
+    }
+    return json.available.map((v: unknown) => v === true);
+  }
+
+  /**
+   * Where a program should send requests for this reference's service so the
+   * proxy injects the credential: the proxy's URL for the service and the
+   * token it accepts in place of the key. Never a credential value.
+   */
+  async route(ref: { service: string; key: string }): Promise<{ url: string; token: string }> {
+    const { statusCode, payload } = await this.request('POST', '/broker/route', JSON.stringify(ref));
+    let json: any;
+    try {
+      json = JSON.parse(payload);
+    } catch {
+      throw new BrokerError(`Proxy returned no route (HTTP ${statusCode})`, { status: statusCode });
+    }
+    if (statusCode !== 200 || typeof json.url !== 'string' || typeof json.token !== 'string') {
+      throw new BrokerError(json.error || `Proxy returned no route (HTTP ${statusCode})`, { code: json.code, fix: json.fix, status: statusCode });
+    }
+    return { url: json.url, token: json.token };
+  }
+
+  /**
    * Check whether the proxy is up and responsive.
    */
   async health(): Promise<{ status: string; version?: string }> {
@@ -160,7 +197,7 @@ export class BrokerClient {
         if (err.code === 'ENOENT' || err.code === 'ECONNREFUSED') {
           reject(new BrokerError(
             `Cannot reach aquaman proxy at ${this.socketPath}. ` +
-            `Start it with: aquaman daemon`,
+            `Start it with: aquaman init --agent <agent> --no-hooks  (or, in a terminal of your own: aquaman daemon)`,
             { code: 'proxy_unreachable' }
           ));
         } else if (err.code === 'EPERM' || err.code === 'EACCES') {

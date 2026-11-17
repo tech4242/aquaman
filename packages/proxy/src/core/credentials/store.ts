@@ -3,6 +3,7 @@
  * Supports: macOS Keychain, 1Password, HashiCorp Vault, encrypted file
  */
 
+import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -152,6 +153,8 @@ export class EncryptedFileStore implements CredentialStore {
   private filePath: string;
   private password: string;
   private cache: Map<string, Credential> | null = null;
+  /** Identity of the file the cache was read from, so a write by another process is noticed. */
+  private cacheStamp = '';
 
   constructor(password: string, filePath?: string) {
     this.password = password;
@@ -162,13 +165,30 @@ export class EncryptedFileStore implements CredentialStore {
     return `${service}:${key}`;
   }
 
+  /** Size, modification time and inode of the file, or `''` when it does not exist. */
+  private fileStamp(): string {
+    try {
+      const st = fs.statSync(this.filePath);
+      return `${st.size}:${st.mtimeMs}:${st.ino}`;
+    } catch {
+      return '';
+    }
+  }
+
+  // A long-running daemon and the CLI are separate processes sharing this
+  // file. The decrypted copy is kept only while the file is the one it was
+  // read from, so `aquaman credentials add` takes effect in a running daemon
+  // and a write here starts from what another process last saved. There is
+  // no lock: two writes in the same instant can still lose one of them.
   private async load(): Promise<Map<string, Credential>> {
-    if (this.cache) {
+    const stamp = this.fileStamp();
+    if (this.cache && stamp === this.cacheStamp) {
       return this.cache;
     }
 
-    if (!fs.existsSync(this.filePath)) {
+    if (stamp === '') {
       this.cache = new Map();
+      this.cacheStamp = '';
       return this.cache;
     }
 
@@ -178,6 +198,7 @@ export class EncryptedFileStore implements CredentialStore {
       const data = JSON.parse(decrypted) as Record<string, Credential>;
 
       this.cache = new Map(Object.entries(data));
+      this.cacheStamp = stamp;
       return this.cache;
     } catch {
       throw new Error('Failed to decrypt credentials file - wrong password?');
@@ -200,7 +221,19 @@ export class EncryptedFileStore implements CredentialStore {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    fs.writeFileSync(this.filePath, encrypted, { mode: 0o600 });
+    // Written beside the file and renamed over it, so a reader in another
+    // process sees the old contents or the new, never part of each.
+    // The name is unguessable and the open fails if anything is already
+    // there, so the write cannot be steered through a planted link.
+    const tmp = `${this.filePath}.${randomBytes(8).toString('hex')}.tmp`;
+    try {
+      fs.writeFileSync(tmp, encrypted, { mode: 0o600, flag: 'wx' });
+      fs.renameSync(tmp, this.filePath);
+    } catch (err) {
+      fs.rmSync(tmp, { force: true });
+      throw err;
+    }
+    this.cacheStamp = this.fileStamp();
   }
 
   async get(service: string, key: string): Promise<string | null> {

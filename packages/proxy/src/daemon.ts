@@ -15,6 +15,7 @@ import { ServiceRegistry, createServiceRegistry, type ServiceDefinition, type Au
 import { OAuthTokenCache, createOAuthTokenCache } from './oauth-token-cache.js';
 import { matchPolicy, type PolicyConfig } from './request-policy.js';
 import { parseRequestTarget, policyPathInterpretations, policyMethods } from './request-target.js';
+import { clampPromptTimeout, type CredentialPrompter, type PromptResult } from './credential-prompt.js';
 import type { BrokerScope } from './broker-scope.js';
 
 // Service name validation: lowercase alphanum, dots, hyphens, underscores
@@ -75,6 +76,13 @@ export function findUrlPathCredentialSlot(
  * return. timingSafeEqual requires equal-length buffers, so unequal lengths
  * are compared against self (to burn comparable time) and then rejected.
  */
+/** The Host header names this machine's loopback interface (any port). */
+function isLoopbackHostHeader(host: string | undefined): boolean {
+  if (!host) return true; // HTTP/1.0 clients; a browser always sends one
+  const name = host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.split(':')[0];
+  return name === '127.0.0.1' || name === 'localhost' || name === '[::1]';
+}
+
 function timingSafeStrEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a, 'utf-8');
   const bb = Buffer.from(b, 'utf-8');
@@ -114,7 +122,24 @@ export interface CredentialProxyOptions {
    * See broker-scope.ts for the rules.
    */
   broker?: BrokerScope;
+  /**
+   * `POST /broker/request`: an agent asks for a credential by reference and
+   * the human supplies or approves it in a dialog the daemon shows. Needs
+   * `broker` as well; without both the endpoint is off. Unix socket only.
+   */
+  credentialRequests?: {
+    prompter: CredentialPrompter;
+    /** Persist the ref as declared, so the broker scope serves it from now on. */
+    declare(service: string, key: string): void | Promise<void>;
+  };
 }
+
+/** A ref the human declined is not asked about again for this long. */
+const REQUEST_DECLINE_COOLDOWN_MS = 10 * 60 * 1000;
+const REQUEST_NAME_MAX = 64;
+/** At most this many dialogs per window, so a looping caller cannot bury the human in prompts. */
+const REQUEST_WINDOW_MS = 10 * 60 * 1000;
+const REQUEST_MAX_PROMPTS_PER_WINDOW = 6;
 
 export interface RequestInfo {
   id: string;
@@ -137,6 +162,13 @@ interface ServiceConfig {
 export class CredentialProxy {
   private server: http.Server | null = null;
   private loopbackServer: http.Server | null = null;
+  /**
+   * What a program routed through the proxy presents in place of its key.
+   * Separate from the loopback token that agent hosts hold: this one is
+   * accepted only for forwarding to a service a project has routed, never by
+   * a broker endpoint. Made per daemon start and kept in memory only.
+   */
+  private readonly routeToken = `aqm_rt_${crypto.randomBytes(24).toString('hex')}`;
   private options: CredentialProxyOptions;
   private running = false;
   private serviceRegistry: ServiceRegistry;
@@ -228,7 +260,31 @@ export class CredentialProxy {
   private isLoopbackTokenValid(req: IncomingMessage): boolean {
     const expected = this.options.loopback?.token;
     if (!expected) return false;
+    return this.presentedTokens(req).some(c => timingSafeStrEqual(c, expected));
+  }
 
+  /**
+   * Whether the request presents the route token, for a service a project has
+   * routed. A client sends its "key" in whatever header the vendor uses, so
+   * the service's own auth header is read as well.
+   */
+  private isRouteTokenValid(req: IncomingMessage): boolean {
+    if (!this.options.loopback) return false;
+    const target = parseRequestTarget(req.url || '/');
+    const service = target.ok ? target.segments[0] : undefined;
+    if (!service || !SAFE_SERVICE_NAME.test(service) || !this.isServiceRouted(service)) return false;
+    const def = this.serviceRegistry.get(service)!;
+    const candidates = this.presentedTokens(req);
+    const own = req.headers[def.authHeader.toLowerCase()];
+    const ownValue = Array.isArray(own) ? own[0] : own;
+    if (ownValue) {
+      candidates.push(def.authPrefix && ownValue.startsWith(def.authPrefix) ? ownValue.slice(def.authPrefix.length) : ownValue);
+    }
+    return candidates.some(c => timingSafeStrEqual(c, this.routeToken));
+  }
+
+  /** Every place a client may have put a local token. */
+  private presentedTokens(req: IncomingMessage): string[] {
     const candidates: string[] = [];
     const header = (name: string): string | undefined => {
       const v = req.headers[name];
@@ -243,13 +299,20 @@ export class CredentialProxy {
 
     const authz = header('authorization');
     if (authz) {
-      candidates.push(authz.replace(/^Bearer\s+/i, ''));
+      // GitHub clients send `token <value>` as well as `Bearer <value>`.
+      candidates.push(authz.replace(/^(?:Bearer|token)\s+/i, ''));
     }
 
     const pathBorne = this.urlPathTokenCandidate(req.url || '/');
     if (pathBorne) candidates.push(pathBorne);
 
-    return candidates.some(c => timingSafeStrEqual(c, expected));
+    return candidates;
+  }
+
+  /** True for a header value that is, or wraps, one of this proxy's own tokens. Those never go upstream. */
+  private carriesLocalToken(value: string): boolean {
+    const lb = this.options.loopback?.token;
+    return value.includes(this.routeToken) || (!!lb && value.includes(lb));
   }
 
   /**
@@ -264,7 +327,7 @@ export class CredentialProxy {
     const segments = target.segments;
     const service = segments[0];
     if (!service || !SAFE_SERVICE_NAME.test(service)) return undefined;
-    if (!this.options.allowedServices.includes(service)) return undefined;
+    if (!this.isServiceProxied(service)) return undefined;
 
     const serviceDef = this.serviceRegistry.get(service);
     if (!serviceDef || serviceDef.authMode !== 'url-path' || !serviceDef.authPathTemplate) {
@@ -280,7 +343,22 @@ export class CredentialProxy {
     // Loopback listener is network-reachable (unlike the 0o600 UDS), so every
     // request on it must present the loopback token. Health check is exempt so
     // local tooling can probe liveness without the token.
+    // A browser page can be made to send requests here under a name it
+    // controls (DNS rebinding). Nothing legitimate addresses this listener by
+    // any name other than the loopback ones.
+    if (fromLoopback && !isLoopbackHostHeader(req.headers.host)) {
+      res.setHeader('Content-Type', 'application/json');
+      res.statusCode = 403;
+      res.end(JSON.stringify({ error: 'Loopback request rejected: unexpected Host header', fix: 'Address the proxy as 127.0.0.1 or localhost' }));
+      return;
+    }
+    // A routed program's token is good for forwarding to routed services and
+    // for nothing else; `viaRouteToken` narrows everything below.
+    let viaRouteToken = false;
     if (fromLoopback && url !== '/_health' && url !== '/_health/' && !this.isLoopbackTokenValid(req)) {
+      viaRouteToken = this.isRouteTokenValid(req);
+    }
+    if (fromLoopback && url !== '/_health' && url !== '/_health/' && !viaRouteToken && !this.isLoopbackTokenValid(req)) {
       res.setHeader('Content-Type', 'application/json');
       res.statusCode = 401;
       res.end(JSON.stringify({
@@ -294,7 +372,14 @@ export class CredentialProxy {
     if (url === '/_health' || url === '/_health/') {
       res.setHeader('Content-Type', 'application/json');
       res.statusCode = 200;
-      res.end(JSON.stringify({ status: 'ok', version: DAEMON_VERSION, uptime: process.uptime(), services: this.options.allowedServices }));
+      res.end(JSON.stringify({
+        status: 'ok',
+        version: DAEMON_VERSION,
+        uptime: process.uptime(),
+        services: this.options.allowedServices,
+        // Only over the socket: lets `aquaman init` confirm the pid file names this process before signalling it.
+        ...(fromLoopback ? {} : { pid: process.pid }),
+      }));
       return;
     }
 
@@ -317,8 +402,30 @@ export class CredentialProxy {
     // The expires_at field is a hint for the consumer, not a server-side
     // expiration. Scoped since v0.15.0: off unless the proxy was built with a
     // BrokerScope, and limited to declared refs when on (broker-scope.ts).
+    if (viaRouteToken && (url.startsWith('/broker/') || url.startsWith('/_'))) {
+      res.setHeader('Content-Type', 'application/json');
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'This token only forwards requests to routed services', code: 'route_token_forward_only' }));
+      return;
+    }
+
     if ((url === '/broker/resolve' || url === '/broker/resolve/') && req.method === 'POST') {
       await this.handleBrokerResolve(req, res, requestId, fromLoopback);
+      return;
+    }
+
+    if ((url === '/broker/route' || url === '/broker/route/') && req.method === 'POST') {
+      await this.handleBrokerRoute(req, res, fromLoopback);
+      return;
+    }
+
+    if ((url === '/broker/available' || url === '/broker/available/') && req.method === 'POST') {
+      await this.handleBrokerAvailable(req, res, fromLoopback);
+      return;
+    }
+
+    if ((url === '/broker/request' || url === '/broker/request/') && req.method === 'POST') {
+      await this.handleBrokerRequest(req, res, requestId, fromLoopback);
       return;
     }
 
@@ -348,7 +455,7 @@ export class CredentialProxy {
       return;
     }
 
-    if (!service || !this.options.allowedServices.includes(service)) {
+    if (!service || !(viaRouteToken ? this.isServiceRouted(service) : this.isServiceProxied(service))) {
       res.statusCode = 404;
       res.end('Not found');
       return;
@@ -525,6 +632,8 @@ export class CredentialProxy {
         if (key.toLowerCase() === 'authorization') continue;
         // Never forward the loopback access token to the upstream provider
         if (key.toLowerCase() === 'x-aquaman-token') continue;
+        // Nor in any other header a client may have put it in.
+        if ((Array.isArray(value) ? value : [value ?? '']).some((v) => this.carriesLocalToken(v))) continue;
         if (value) {
           headers[key] = Array.isArray(value) ? value[0] : value;
         }
@@ -660,6 +769,382 @@ export class CredentialProxy {
    * v0.12.0+ — used by the aquaman-coder hook adapters to materialize
    * credentials per tool call without writing .env files to disk.
    */
+  private requestPromptOpen = false;
+  private requestPromptTimes: number[] = [];
+  private requestDeclinedAt = new Map<string, number>();
+
+  /**
+   * POST /broker/request  { service, key, project? }
+   *
+   * Makes a credential available by reference without the caller ever
+   * holding it. Never returns a value and never replaces a stored one.
+   *
+   *   200 { status: "ready" }     already stored and declared; nothing asked
+   *   200 { status: "stored" }    the human typed it; now stored and declared
+   *   200 { status: "approved" }  already stored; the human allowed its use
+   *   200 { status: "declined" }  the human said no (or did so recently)
+   *   200 { status: "pending" }   nobody could be asked; `fix` says what to run
+   *   404 { code }                broker off here, or not the Unix socket
+   */
+  /**
+   * `POST /broker/available`: for each reference, whether `/broker/resolve`
+   * would return a value right now. Never returns one. The scope is checked
+   * before the vault, as in resolve, so an undeclared reference answers
+   * `false` whatever the vault holds.
+   */
+  /** Whether requests for this service are forwarded for agent hosts and socket clients: the configured list. */
+  private isServiceProxied(service: string): boolean {
+    return this.options.allowedServices.includes(service);
+  }
+
+  /**
+   * Whether a project has routed a program to this service in a way the
+   * proxy can serve: the service takes its credential in a header, and the
+   * routed reference is the key the proxy injects for it.
+   */
+  private isServiceRouted(service: string): boolean {
+    const def = this.serviceRegistry.get(service);
+    if (!def || (def.authMode ?? 'header') !== 'header') return false;
+    return this.options.broker?.routedRefs?.().has(`aquaman://${service}/${def.credentialKey}`) === true;
+  }
+
+  /**
+   * `POST /broker/route`: where a program should send its requests for one
+   * service so that the proxy, not the program, holds the credential. Returns
+   * the loopback listener's URL for the service and the listener's token.
+   *
+   * The token is the capability to reach the local proxy, not a credential:
+   * it works only on this machine, the proxy strips it, and request policy
+   * applies to everything sent with it. So this endpoint never touches a
+   * credential value, and the token it returns is refused by every broker
+   * endpoint. It answers only over the Unix socket, only for a reference a
+   * project has routed, only for a service the proxy injects a header for,
+   * and only when the reference names the key the proxy would inject.
+   */
+  private async handleBrokerRoute(req: IncomingMessage, res: ServerResponse, fromLoopback: boolean): Promise<void> {
+    res.setHeader('Content-Type', 'application/json');
+    const reply = (statusCode: number, body: Record<string, unknown>) => {
+      res.statusCode = statusCode;
+      res.end(JSON.stringify(body));
+    };
+    let bodyBuf = '';
+    for await (const chunk of req) {
+      bodyBuf += (chunk as Buffer).toString('utf-8');
+      if (bodyBuf.length > 4096) {
+        reply(400, { error: 'Request body too large', fix: 'POST { service, key }' });
+        return;
+      }
+    }
+    let body: { service?: unknown; key?: unknown } | null;
+    try {
+      body = JSON.parse(bodyBuf);
+    } catch {
+      body = null;
+    }
+    const service = body && typeof body === 'object' ? body.service : undefined;
+    const key = body && typeof body === 'object' ? body.key : undefined;
+    if (
+      typeof service !== 'string' || !SAFE_SERVICE_NAME.test(service) ||
+      typeof key !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(key)
+    ) {
+      reply(400, { error: 'Expected { service, key }', fix: 'POST a JSON body naming one reference' });
+      return;
+    }
+    const refuse = (code: string, error: string, fix: string) => {
+      reply(404, { error, fix, code });
+      this.emitRequest({
+        id: crypto.randomUUID(),
+        service,
+        method: 'BROKER',
+        path: '/broker/route',
+        timestamp: new Date(),
+        authenticated: false,
+        statusCode: 404,
+        error: `${code}: ${service}/${key}`,
+      });
+    };
+    if (fromLoopback) {
+      refuse('route_socket_only', 'Routes are handed out over the Unix socket only', 'Ask over the proxy socket');
+      return;
+    }
+    const scope = this.options.broker;
+    if (!scope) {
+      refuse('broker_disabled', 'The credential broker is disabled on this proxy', 'OpenClaw-hosted proxies do not hand out routes. Run: aquaman daemon');
+      return;
+    }
+    // Scope before anything else, as in resolve: an answer about a reference
+    // nobody routed must not depend on what the vault or the registry holds.
+    if (!scope.routedRefs?.().has(`aquaman://${service}/${key}`)) {
+      refuse('route_not_recorded', `No project routes a program to aquaman://${service}/${key}`, `Bind it with: aquaman coder bind <NAME>=aquaman://${service}/${key} --via-proxy <URL_ENV>`);
+      return;
+    }
+    const address = this.getLoopbackAddress();
+    if (!address) {
+      refuse('route_listener_off', 'The loopback listener is not running, so there is nowhere to send requests', 'Run: aquaman init --agent <agent> --loopback');
+      return;
+    }
+    const serviceDef = this.serviceRegistry.get(service);
+    if (!serviceDef) {
+      refuse('route_service_unknown', `The proxy has no definition for "${service}", so it cannot forward requests for it`, `Add "${service}" to services.yaml (see docs/app-through-proxy.md), or bind the reference without --via-proxy`);
+      return;
+    }
+    if ((serviceDef.authMode ?? 'header') !== 'header') {
+      refuse('route_unsupported', `"${service}" does not take its credential in a request header, so a program cannot be routed to it this way`, 'Bind the reference without --via-proxy');
+      return;
+    }
+    if (key !== serviceDef.credentialKey) {
+      refuse('route_key_mismatch', `The proxy injects ${service}/${serviceDef.credentialKey} for this service, not ${service}/${key}`, `Use aquaman://${service}/${serviceDef.credentialKey}`);
+      return;
+    }
+    let stored = false;
+    try {
+      stored = (await this.options.store.get(service, key)) !== null;
+    } catch {
+      stored = false;
+    }
+    if (!stored) {
+      refuse('credential_not_found', `Credential not found: ${service}/${key}`, `Run: aquaman credentials add ${service} ${key}`);
+      return;
+    }
+    reply(200, { url: `http://${address}/${service}`, token: this.routeToken });
+    this.emitRequest({
+      id: crypto.randomUUID(),
+      service,
+      method: 'BROKER_ROUTE',
+      path: '/broker/route',
+      timestamp: new Date(),
+      authenticated: true,
+      statusCode: 200,
+    });
+  }
+
+  private async handleBrokerAvailable(req: IncomingMessage, res: ServerResponse, fromLoopback: boolean): Promise<void> {
+    res.setHeader('Content-Type', 'application/json');
+    const reply = (statusCode: number, body: Record<string, unknown>) => {
+      res.statusCode = statusCode;
+      res.end(JSON.stringify(body));
+    };
+    let bodyBuf = '';
+    for await (const chunk of req) {
+      bodyBuf += (chunk as Buffer).toString('utf-8');
+      if (bodyBuf.length > 16384) {
+        reply(400, { error: 'Request body too large', fix: 'Ask about at most 64 references' });
+        return;
+      }
+    }
+    let refs: unknown;
+    try {
+      refs = (JSON.parse(bodyBuf) as { refs?: unknown } | null)?.refs;
+    } catch {
+      refs = undefined;
+    }
+    if (!Array.isArray(refs) || refs.length > 64) {
+      reply(400, { error: 'Expected { refs: [{ service, key }] } with at most 64 entries', fix: 'POST a JSON body with a refs array' });
+      return;
+    }
+    const scope = this.options.broker;
+    if (!scope) {
+      reply(404, {
+        error: 'The credential broker is disabled on this proxy',
+        fix: 'OpenClaw-hosted proxies never hand out credential values. Run: aquaman daemon',
+        code: 'broker_disabled',
+      });
+      return;
+    }
+    const available: boolean[] = [];
+    for (const ref of refs as Array<{ service?: unknown; key?: unknown } | null>) {
+      const service = ref?.service;
+      const key = ref?.key;
+      let ok = false;
+      if (
+        typeof service === 'string' && SAFE_SERVICE_NAME.test(service) &&
+        typeof key === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(key) &&
+        (scope.check(service, key, fromLoopback ? 'loopback' : 'uds').allowed ||
+          // A routed reference is usable by its project without being resolvable.
+          (!fromLoopback && scope.routedRefs?.().has(`aquaman://${service}/${key}`) === true))
+      ) {
+        try {
+          ok = (await this.options.store.get(service, key)) !== null;
+        } catch {
+          ok = false;
+        }
+      }
+      available.push(ok);
+    }
+    reply(200, { available });
+  }
+
+  private async handleBrokerRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    requestId: string,
+    fromLoopback: boolean
+  ): Promise<void> {
+    res.setHeader('Content-Type', 'application/json');
+    const reply = (statusCode: number, body: Record<string, unknown>) => {
+      res.statusCode = statusCode;
+      res.end(JSON.stringify(body));
+    };
+
+    let bodyBuf = '';
+    for await (const chunk of req) {
+      bodyBuf += (chunk as Buffer).toString('utf-8');
+      if (bodyBuf.length > 4096) {
+        reply(400, { error: 'Request body too large', fix: 'Keep broker requests under 4 KB' });
+        return;
+      }
+    }
+    let body: { service?: unknown; key?: unknown; project?: unknown; timeout_seconds?: unknown; routed?: unknown };
+    try {
+      body = JSON.parse(bodyBuf);
+    } catch {
+      reply(400, { error: 'Request body is not valid JSON', fix: 'POST a JSON body with { service, key }' });
+      return;
+    }
+    if (body === null || typeof body !== 'object') {
+      reply(400, { error: 'Request body is not a JSON object', fix: 'POST a JSON body with { service, key }' });
+      return;
+    }
+    const { service, key } = body;
+    // Both names are shown to a person in the dialog, so they stay short
+    // enough to read in full.
+    if ((typeof service === 'string' && service.length > REQUEST_NAME_MAX) || (typeof key === 'string' && key.length > REQUEST_NAME_MAX)) {
+      reply(400, { error: `Service and key names are limited to ${REQUEST_NAME_MAX} characters here`, fix: 'Use a shorter reference' });
+      return;
+    }
+    if (typeof service !== 'string' || !SAFE_SERVICE_NAME.test(service)) {
+      reply(400, { error: `Invalid service name: ${JSON.stringify(service)}`, fix: 'Service names must match /^[a-z0-9][a-z0-9._-]*$/' });
+      return;
+    }
+    if (typeof key !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(key)) {
+      reply(400, { error: `Invalid key name: ${JSON.stringify(key)}`, fix: 'Key names must match /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/' });
+      return;
+    }
+    const project = typeof body.project === 'string' ? body.project : undefined;
+    const timeoutSeconds = clampPromptTimeout(body.timeout_seconds);
+    const ref = `aquaman://${service}/${key}`;
+    // Asked for on behalf of a binding made through the proxy: the value is
+    // stored, and the reference is not declared for handing out.
+    const routed = body.routed === true;
+    const manual = routed
+      ? `aquaman credentials add ${service} ${key}`
+      : `aquaman credentials add ${service} ${key} && aquaman broker allow ${ref}`;
+
+    const audit = (error?: string) => this.emitRequest({
+      id: requestId,
+      service,
+      method: 'BROKER_REQUEST',
+      path: '/broker/request',
+      timestamp: new Date(),
+      authenticated: false,
+      statusCode: 200,
+      error,
+    });
+
+    const scope = this.options.broker;
+    const requests = this.options.credentialRequests;
+    if (!scope || !requests) {
+      reply(404, {
+        error: 'Credential requests are disabled on this proxy',
+        fix: 'OpenClaw-hosted proxies never take credential requests. Run: aquaman daemon',
+        code: 'broker_disabled',
+      });
+      return;
+    }
+    if (fromLoopback) {
+      reply(404, {
+        error: 'Credential requests are only accepted on the Unix socket',
+        fix: `Run on the machine itself: aquaman request ${ref}`,
+        code: 'broker_request_local_only',
+      });
+      return;
+    }
+
+    let exists: boolean;
+    try {
+      exists = await this.options.store.exists(service, key);
+    } catch (err) {
+      reply(500, {
+        error: `Vault backend error checking ${service}/${key}: ${err instanceof Error ? err.message : String(err)}`,
+        fix: 'Check that the configured backend is accessible. Run: aquaman doctor',
+      });
+      return;
+    }
+    const declared = routed
+      ? scope.routedRefs?.().has(ref) === true
+      : scope.check(service, key, 'uds').allowed;
+    if (exists && declared) {
+      reply(200, { status: 'ready', ref });
+      return;
+    }
+
+    const now = Date.now();
+    const declinedAt = this.requestDeclinedAt.get(ref);
+    if (declinedAt !== undefined && now - declinedAt < REQUEST_DECLINE_COOLDOWN_MS) {
+      audit(`declined: ${service}/${key}`);
+      reply(200, { status: 'declined', ref, reason: 'declined a few minutes ago; not asking again yet' });
+      return;
+    }
+    this.requestPromptTimes = this.requestPromptTimes.filter((t) => now - t < REQUEST_WINDOW_MS);
+    if (this.requestPromptOpen || this.requestPromptTimes.length >= REQUEST_MAX_PROMPTS_PER_WINDOW) {
+      audit(`pending: ${service}/${key}`);
+      reply(200, {
+        status: 'pending',
+        ref,
+        reason: this.requestPromptOpen ? 'another credential request is waiting for an answer' : 'too many credential requests in a short time',
+        fix: manual,
+      });
+      return;
+    }
+
+    this.requestPromptOpen = true;
+    this.requestPromptTimes.push(now);
+    let result: PromptResult;
+    try {
+      result = exists
+        ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds })
+        : await requests.prompter.askValue({ service, key, project, timeoutSeconds });
+    } catch (err) {
+      result = { outcome: 'unavailable', reason: err instanceof Error ? err.message : String(err) };
+    } finally {
+      this.requestPromptOpen = false;
+    }
+
+    if (result.outcome === 'declined') {
+      this.requestDeclinedAt.set(ref, Date.now());
+      // No `fix` here: a command that completes what the person just refused
+      // is not something to hand back to the caller.
+      audit(`declined: ${service}/${key}`);
+      reply(200, { status: 'declined', ref, reason: 'the person at the dialog said no' });
+      return;
+    }
+    if (result.outcome === 'timeout' || result.outcome === 'unavailable') {
+      audit(`pending: ${service}/${key}`);
+      reply(200, {
+        status: 'pending',
+        ref,
+        reason: result.outcome === 'timeout' ? 'nobody answered the dialog' : result.reason,
+        fix: manual,
+      });
+      return;
+    }
+
+    try {
+      // Checked again: the dialog was open for a while, and a stored value is never replaced.
+      if (result.outcome === 'entered' && !(await this.options.store.exists(service, key))) {
+        await this.options.store.set(service, key, result.value);
+      }
+      if (!declared && !routed) await requests.declare(service, key);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      audit(message);
+      reply(500, { error: `Could not store ${service}/${key}: ${message}`, fix: 'Run: aquaman doctor' });
+      return;
+    }
+    audit();
+    reply(200, { status: result.outcome === 'entered' ? 'stored' : 'approved', ref });
+  }
+
   private async handleBrokerResolve(
     req: IncomingMessage,
     res: ServerResponse,
@@ -783,7 +1268,8 @@ export class CredentialProxy {
       res.statusCode = 404;
       res.end(JSON.stringify({
         error: `No credential found for ${service}/${key}`,
-        fix: `Run: aquaman credentials add ${service} ${key}`
+        fix: `Run: aquaman credentials add ${service} ${key}`,
+        code: 'credential_not_found'
       }));
       this.emitRequest({
         id: requestId,

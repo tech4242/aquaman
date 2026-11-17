@@ -1,0 +1,105 @@
+---
+import '../styles/global.css';
+import { SITE_NAME, HOME_TITLE } from '../lib/site';
+import { githubStars, formatStars } from '../lib/stars';
+import Sprite from '../components/Sprite.astro';
+
+interface Props {
+  title?: string;
+  description: string;
+  /** Path of this page's Markdown twin, e.g. `/claude-code.md`. */
+  markdown: string;
+  /** What that link is, when it is not this page as Markdown. */
+  markdownTitle?: string;
+  jsonLd?: Record<string, unknown>;
+  /** Set when another page is the one to index, as for docs of an earlier release. */
+  canonicalPath?: string;
+  /** The page lays out its own full-width sections. */
+  wide?: boolean;
+  /** A page-wide look, as a class on <body>. */
+  look?: string;
+}
+const { title, description, markdown, jsonLd, canonicalPath, wide, look, markdownTitle = 'This page as Markdown' } = Astro.props;
+const stars = await githubStars();
+const fullTitle = title ? `${title} | ${SITE_NAME}` : HOME_TITLE;
+const canonical = new URL(canonicalPath ?? Astro.url.pathname, Astro.site).href;
+const at = (p: string) => (Astro.url.pathname.replace(/\/?$/, '/') === p ? 'page' : undefined);
+const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/', '/docs/compare/', '/docs/security/'].includes(Astro.url.pathname.replace(/\/?$/, '/'));
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="alternate" type="text/markdown" href={new URL(markdown, Astro.site).href} title={markdownTitle} />
+    <link rel="alternate" type="text/plain" href={new URL('/llms.txt', Astro.site).href} title="llms.txt" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={new URL('/og.png', Astro.site).href} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="aquaman: an agent asks for a credential by reference and sees it redacted, while a dialog asks you to store the value in your vault" />
+    <meta name="twitter:card" content="summary_large_image" />
+    {jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />}
+  </head>
+  <body class={look}>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="wordmark" href="/"><Sprite name="ICON" px={2} /><span>aquaman</span></a>
+        <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Show the menu" />
+        <label for="nav-toggle" class="nav-button" aria-hidden="true">Menu</label>
+        <nav aria-label="Site">
+          <a href="/docs/" aria-current={inDocs ? 'page' : undefined}>Docs</a>
+          <a href="/docs/agent-setup/" aria-current={at('/docs/agent-setup/')}>For agents</a>
+          <a href="/docs/compare/" aria-current={at('/docs/compare/')}>Compare</a>
+          <a href="/docs/security/" aria-current={at('/docs/security/')}>Security</a>
+          <a class="stars" href="https://github.com/tech4242/aquaman" aria-label={stars === null ? 'Star aquaman on GitHub' : `Star aquaman on GitHub: ${stars} stars`}>
+            <Sprite name="STAR" px={2} />
+            <span>GitHub</span>
+            <b data-stars hidden={stars === null}>{stars === null ? '' : formatStars(stars)}</b>
+          </a>
+        </nav>
+      </div>
+    </header>
+    <main id="main" class={wide ? undefined : 'wrap'}>
+      <slot />
+    </main>
+    <footer class="site-footer">
+      <div class="wrap">
+        <ul>
+          <li><a href={markdown}>{markdownTitle}</a></li>
+          <li><a href="/llms.txt">llms.txt</a></li>
+          <li><a href="/llms-full.txt">llms-full.txt</a></li>
+          <li><a href="/sitemap-index.xml">Sitemap</a></li>
+        </ul>
+        <ul>
+          <li><a href="https://github.com/tech4242/aquaman/security/advisories">Advisories</a></li>
+          <li>Apache-2.0 licensed</li>
+          <li><a href="https://www.npmjs.com/package/aquaman-proxy">npm</a></li>
+          <li><a href="https://pypi.org/project/aquaman-hermes/">PyPI</a></li>
+          <li><a href="https://clawhub.ai/plugins/aquaman-plugin">ClawHub</a></li>
+        </ul>
+      </div>
+    </footer>
+    <script is:inline>
+      // The count in the page is from the last build; this replaces it with the live one when GitHub answers.
+      fetch('https://api.github.com/repos/tech4242/aquaman', { headers: { Accept: 'application/vnd.github+json' } })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          var n = d && d.stargazers_count, el = document.querySelector('[data-stars]');
+          if (typeof n !== 'number' || !el) return;
+          el.textContent = n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n);
+          el.hidden = false;
+        })
+        .catch(function () {});
+    </script>
+  </body>
+</html>

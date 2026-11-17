@@ -135,6 +135,47 @@ describe('EncryptedFileStore', () => {
     }
   });
 
+  describe('two processes sharing the file', () => {
+    // A daemon holds one store open for hours while the CLI writes through another.
+    it('sees a credential another store added after this one first read the file', async () => {
+      await store.set('github', 'token', 'first');
+      expect(await store.get('stripe', 'secret_key')).toBeNull();
+
+      const cli = new EncryptedFileStore(password, testFile);
+      await cli.set('stripe', 'secret_key', 'added-later');
+
+      expect(await store.get('stripe', 'secret_key')).toBe('added-later');
+      expect(await store.exists('stripe', 'secret_key')).toBe(true);
+      expect(await store.get('github', 'token')).toBe('first');
+    });
+
+    it('sees a rotation and a delete made by another store', async () => {
+      await store.set('github', 'token', 'old');
+      expect(await store.get('github', 'token')).toBe('old');
+      const cli = new EncryptedFileStore(password, testFile);
+      await cli.set('github', 'token', 'new-and-longer');
+      expect(await store.get('github', 'token')).toBe('new-and-longer');
+      await cli.delete('github', 'token');
+      expect(await store.get('github', 'token')).toBeNull();
+    });
+
+    it('a write never discards what another store wrote in between', async () => {
+      await store.set('a', 'k', '1');
+      const cli = new EncryptedFileStore(password, testFile);
+      await cli.set('b', 'k', '2');
+      await store.set('c', 'k', '3');
+
+      const fresh = new EncryptedFileStore(password, testFile);
+      expect((await fresh.list()).map((c) => c.service).sort()).toEqual(['a', 'b', 'c']);
+    });
+
+    it('leaves no temporary file behind and keeps the file private', async () => {
+      await store.set('a', 'k', '1');
+      expect(fs.readdirSync(testDir)).toEqual(['credentials.enc']);
+      expect(fs.statSync(testFile).mode & 0o777).toBe(0o600);
+    });
+  });
+
   describe('set and get', () => {
     it('should store and retrieve credentials', async () => {
       await store.set('anthropic', 'api_key', 'sk-ant-test123');

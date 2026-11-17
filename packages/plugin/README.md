@@ -1,8 +1,23 @@
-# aquaman-plugin: API Key Protection for OpenClaw
+# aquaman-plugin: credential proxy for AI agents (OpenClaw)
 
-The [aquaman](https://github.com/tech4242/aquaman) adapter for the [OpenClaw Gateway](https://openclaw.ai). Your API keys and tokens stay in your vault. The agent never sees them: they live in a separate process that injects them on the way out, and that process has no endpoint that hands a key back. A compromised agent can't read them. What it *can* do while it runs is send requests through the proxy, which request policy bounds and the audit log records (see [Security model](#security-model)).
+**No account. Bring your own vault. Runs locally.** aquaman keeps API keys and tokens in the vault you already use (Keychain, 1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, systemd-creds or an encrypted file) and injects them when a request or command needs them. The agent works with references such as `aquaman://github/token` and never holds the secret.
 
-This plugin **spawns** [`aquaman-proxy`](https://www.npmjs.com/package/aquaman-proxy) (exact-pinned, same author) on Gateway startup, routes model traffic to that proxy over a token-gated loopback listener, and lets you reach the same vault and policy engine from inside OpenClaw.
+This package is the adapter for the [OpenClaw Gateway](https://openclaw.ai). It starts [`aquaman-proxy`](https://www.npmjs.com/package/aquaman-proxy) (exact-pinned, same author) with the gateway and routes model traffic and Telegram through it, so provider keys are not in the gateway process. Anything running as your user can still send requests through the proxy while it runs; that is within your request policies and recorded in the audit log.
+
+| Package | For | Install |
+|---|---|---|
+| [`aquaman-proxy`](https://github.com/tech4242/aquaman/tree/main/packages/proxy) | Everyone: the daemon, vault access, audit log, request policy and the `aquaman` CLI | `npm install -g aquaman-proxy` |
+| [`aquaman-coder`](https://github.com/tech4242/aquaman/tree/main/packages/coder) | Claude Code and Codex | `npm install -g aquaman-coder` |
+| **`aquaman-plugin`** (this package) | OpenClaw | `openclaw plugins install aquaman-plugin` |
+| [`aquaman-hermes`](https://github.com/tech4242/aquaman/tree/main/packages/hermes) | Hermes | `pip install aquaman-hermes` |
+
+**Guides:** [Claude Code](https://github.com/tech4242/aquaman/blob/main/docs/claude-code.md) · [Codex](https://github.com/tech4242/aquaman/blob/main/docs/codex.md) · [OpenClaw](https://github.com/tech4242/aquaman/blob/main/docs/openclaw.md) · [Hermes](https://github.com/tech4242/aquaman/blob/main/docs/hermes.md) · [Docker Sandboxes](https://github.com/tech4242/aquaman/blob/main/docs/docker-sandboxes.md) · [NVIDIA OpenShell](https://github.com/tech4242/aquaman/blob/main/docs/openshell.md) · [for agents](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md) · [compared with alternatives](https://github.com/tech4242/aquaman/blob/main/docs/compare.md)
+
+**Security:** [policy and how to report](https://github.com/tech4242/aquaman/blob/main/SECURITY.md) · [published advisories](https://github.com/tech4242/aquaman/security/advisories) (latest: [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v), fixed in 0.17.2) · [what to know before trusting it](https://github.com/tech4242/aquaman/blob/main/docs/compare.md#what-to-know-before-trusting-it) · [adversarial tests of the request path](https://github.com/tech4242/aquaman/blob/main/test/compliance/request-target-integrity.test.ts) · [what aquaman does not protect against](https://github.com/tech4242/aquaman/blob/main/docs/compare.md#what-aquaman-does-not-do)
+
+**Requires:** Node.js 18 or later on macOS, Linux or WSL2.
+
+Inside OpenClaw the gateway is wired by `aquaman openclaw setup`, below. The agent-run setup and credential-request commands in the other packages are for coding agents (Claude Code, Codex) and are not part of this plugin: the proxy it starts never shows a dialog, never accepts a credential request and never hands out a credential value.
 
 ```
 Agent / OpenClaw Gateway              Aquaman Proxy
@@ -167,10 +182,10 @@ Advanced settings (audit, vault, request policies) go in `~/.aquaman/config.yaml
 
 ## Documentation
 
-- **[Root README](https://github.com/tech4242/aquaman#readme)**: value prop, three-path Quick Start, security model
+- **[Root README](https://github.com/tech4242/aquaman#readme)**: value prop, Quick Start for each host, security model
 - **[`aquaman-proxy`](../proxy)**: core CLI and daemon
 - **[`aquaman-coder`](../coder)**: coding-agent adapter (Claude Code, Codex)
 
 ## License
 
-MIT
+Apache-2.0. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).

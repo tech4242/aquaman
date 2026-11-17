@@ -1,0 +1,23 @@
+{
+  "name": "aquaman-website",
+  "type": "module",
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=22.23.4"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/markdown-remark": "^7.3.9",
+    "@astrojs/sitemap": "^3.7.5",
+    "@fontsource-variable/instrument-sans": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource/press-start-2p": "^5.3.0",
+    "astro": "^7.4.12"
+  },
+  "private": true
+}

@@ -31,7 +31,7 @@ export interface CodexHooksFile {
   [key: string]: unknown;
 }
 
-export const CODEX_HOOK_COMMAND = 'aquaman coder hook --host codex';
+export const CODEX_HOOK_COMMAND = 'aquaman-coder hook --host codex';
 const HOOK_MARKS = ['aquaman coder hook', 'aquaman-coder hook'];
 const EVENTS = ['PreToolUse', 'PostToolUse'] as const;
 

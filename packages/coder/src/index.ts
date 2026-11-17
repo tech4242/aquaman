@@ -84,3 +84,17 @@ export {
 } from './adapters/codex/setup.js';
 
 export { handleCodexPreToolUse, handleCodexPostToolUse } from './adapters/codex/hook.js';
+
+export {
+  type CodingAgent,
+  type AgentsFileResult,
+  SKILL_NAME,
+  SKILL_MD,
+  AGENTS_BLOCK,
+  agentsBlock,
+  type RunMode,
+  agentsFileName,
+  writeAgentsBlock,
+  skillPath,
+  installSkill,
+} from './agent-setup.js';

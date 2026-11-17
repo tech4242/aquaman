@@ -1,0 +1,17 @@
+---
+import Base from '../layouts/Base.astro';
+import { getPages, navGroups, navLabel } from '../lib/site';
+const groups = navGroups(await getPages());
+---
+<Base title="Page not found" description="This page does not exist. The pages that do are listed here." markdown="/llms.txt" markdownTitle="Index of this site in Markdown">
+  <article class="prose" style="padding-top: 2.5rem">
+    <h1>There is no page at this address</h1>
+    <p>These are the pages that exist. The same list in Markdown is at <a href="/llms.txt">/llms.txt</a>.</p>
+    {groups.map((g) => (
+      <>
+        <h2>{g.heading}</h2>
+        <ul>{g.pages.map((p) => <li><a href={p.url}>{navLabel(p)}</a>: {p.title}</li>)}</ul>
+      </>
+    ))}
+  </article>
+</Base>
