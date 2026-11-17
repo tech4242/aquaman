@@ -11,6 +11,8 @@ aquaman daemon &                           # 4. start the proxy
 aquaman hermes doctor                      # 5. verify
 ```
 
+These commands are for a person in their own terminal: `aquaman setup` asks questions, `aquaman credentials add` asks for the value (hidden), and `aquaman daemon` stays running. An agent setting up a coding project uses [`aquaman init --agent`](agent-setup.md) instead.
+
 Optional, inside Hermes: a `/aquaman-status` command, an `aquaman_status` tool and a secret source for project secrets.
 
 ```bash

@@ -182,6 +182,15 @@ export function sandboxSocketStatus(
  */
 const HOOK_COMMAND = 'aquaman-coder hook';
 
+/** Whether the settings file already runs the aquaman hook, in either spelling. */
+export function claudeCodeHooksInstalled(settingsPath: string = defaultSettingsPath()): boolean {
+  try {
+    return /aquaman(-| )coder hook/.test(fs.readFileSync(settingsPath, 'utf-8'));
+  } catch {
+    return false;
+  }
+}
+
 export function installClaudeCodeHooks(opts: SetupOptions = {}): SetupResult {
   const settingsPath = opts.settingsPath ?? defaultSettingsPath();
   const hookCommand = opts.hookCommand ?? HOOK_COMMAND;

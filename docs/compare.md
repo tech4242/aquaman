@@ -15,15 +15,16 @@ aquaman does both, depending on the path:
 |---|---|
 | OpenClaw, Hermes model calls, any client you point at the proxy (`/<service>/...`) | At egress. Request policies apply here |
 | NVIDIA OpenShell driver, Docker Sandboxes credential helper | aquaman supplies the value to the host; the host injects at egress |
-| Claude Code and Codex (`aquaman-coder`) | Into the environment of each command, with output redaction. Request policies do not apply |
+| Claude Code and Codex (`aquaman-coder`), default | Into the environment of each command, with output redaction. Request policies do not apply |
+| Claude Code and Codex, a binding made with `--via-proxy` | At egress: the app holds a local token and the proxy's URL. Request policies apply. Needs an app that takes a base URL ([guide](app-through-proxy.md)) |
 
-So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from its environment, aquaman is in the same class as `op run` and `doppler run`: the app holds the key while it runs. If you need the app itself never to hold it, use a tool that injects at egress for arbitrary commands (fnox, Claude Code's sandbox masking), or point the app's HTTP client at the aquaman proxy for the services it knows.
+So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from its environment, aquaman is in the same class as `op run` and `doppler run`: the app holds the key while it runs. The app itself is written the same way with any of them, or with none; the choice is only about how the variable gets set on the developer's machine. What differs is that aquaman needs no account, takes the value from whichever vault you already use, lets the agent ask for a key it does not have, and keeps a local record of each use. If you need the app itself never to hold it, [route it through the aquaman proxy](app-through-proxy.md), which works for any HTTP API whose client accepts a base URL, or use a tool that intercepts HTTPS for arbitrary commands (fnox, Claude Code's sandbox masking), which needs no cooperation from the app but puts a local certificate authority in the path.
 
 ## At a glance
 
 | | Mechanism for a coding agent's commands | Where the secret is kept | Account needed | Record of each use |
 |---|---|---|---|---|
-| **aquaman** | Environment, per command, output redacted. At egress for clients pointed at the proxy | The vault you already use: Keychain, 1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, systemd-creds, or an encrypted file | No | Hash-chained log on your machine |
+| **aquaman** | Environment, per command, output redacted. At egress, with request policies, for an app given the proxy's URL (`--via-proxy`) | The vault you already use: Keychain, 1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, systemd-creds, or an encrypted file | No | Hash-chained log on your machine |
 | 1Password `op run` and Environments | Environment, output masked | 1Password | 1Password | On the 1Password account side (usage reports, Events API); not examined in detail |
 | fnox `proxy run` | At egress, for hosts you write a rule for, through a local HTTPS proxy with its own certificate authority | Providers you configure, such as 1Password, the system keychain or age | No | Optional log of method, host, path and secret name |
 | dotenvx | Environment; the agent process itself is started with the real values, output redacted | Encrypted `.env` files in the repository, key kept separately | No | None in the open-source CLI; audit logs are listed for its paid hosted plans |
@@ -48,7 +49,7 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 ## Choose something else when
 
 - **You already pay for 1Password and only need environment variables for local commands.** `op run` does that with a mature product behind it. aquaman can use 1Password as its vault if you later want the log or the agent-run setup.
-- **The program must never hold the key, for any API.** fnox `proxy run` injects at egress for any HTTPS host you write a rule for, by terminating TLS locally. It also needs no account and reads from vaults you already have. aquaman's proxy does this only for services it has a definition for and clients you can point at it.
+- **The program must never hold the key, for any API.** fnox `proxy run` injects at egress for any HTTPS host you write a rule for, by terminating TLS locally. It also needs no account and reads from vaults you already have. aquaman does it without a certificate authority, for services it has a definition for (26 built in, others in `services.yaml`) and apps that accept a base URL.
 - **You only use Claude Code, with its sandbox on.** Its credential masking is built in and needs no separate tool.
 - **You only use Docker Sandboxes and the OS keychain is enough.** It does the injection itself; aquaman only adds other vaults and a log entry per read.
 - **Your team already runs Doppler or Infisical.** Secrets shared across a team, CI and production belong there. aquaman is a local tool for one person's machine and has no team sync.
@@ -68,7 +69,7 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 - It is not a sandbox. It keeps credentials away from the agent; it does not confine what the agent runs.
 - Any process running as your user can send requests through the proxy, within your policy, and can fetch references you declared. The audit log records it.
 - On the coding-agent path the wrapped command receives the real value for its lifetime. Output redaction catches accidental exposure, not a command that deliberately transforms the value.
-- The proxy only sees traffic from clients that can be pointed at it, for services it has a definition for (25 are built in; others are added in `services.yaml`).
-- No Windows support outside WSL2. No team sharing, CI or production story: use your existing secrets manager there.
+- The proxy only sees traffic from clients that can be pointed at it, for services it has a definition for (26 are built in; others are added in `services.yaml`).
+- No Windows support outside WSL2. No team sharing, and it does not run in CI or production. An app that reads its keys from the environment needs nothing from aquaman there: the same variable names are filled from that platform's secrets.
 
 Security policy and past advisories: [SECURITY.md](../SECURITY.md), [advisories](https://github.com/tech4242/aquaman/security/advisories).

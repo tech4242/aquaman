@@ -10,6 +10,8 @@ aquaman openshell setup                              # 3. enable the driver, pri
 aquaman daemon &                                     # 4. start or restart the daemon
 ```
 
+These commands are for a person in their own terminal: `aquaman setup` asks questions, `aquaman credentials add` asks for the value (hidden), and `aquaman daemon` stays running. An agent setting up a coding project uses [`aquaman init --agent`](agent-setup.md) instead.
+
 Add the printed `[openshell.credential_drivers.aquaman]` table to your gateway config and restart the gateway. Then create providers with a reference instead of a value:
 
 ```bash

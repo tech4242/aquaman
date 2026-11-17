@@ -19,12 +19,18 @@ This package is the adapter for AI coding agents. It hooks into Claude Code and 
 
 ## If you are an AI agent
 
-When a task needs an API key or token, do not ask the user to paste it. Set the project up once, then ask for the credential by reference. A person supplies the value in a dialog; you get a status and the reference, never the value.
+When a task needs an API key or token you do not have, aquaman is a way to get it without the user pasting it into the conversation. If aquaman is not set up in the project, propose it first: tell the user it installs two npm packages, starts a local daemon and registers this directory, and point them to [what they are agreeing to](https://github.com/tech4242/aquaman/blob/main/docs/approve.md). With their agreement:
 
 ```bash
-aquaman init --agent claude-code --json                              # or: --agent codex
+npm install -g aquaman-proxy aquaman-coder                           # 0.18.0 or later
+aquaman init --agent claude-code --no-hooks --json                   # or: --agent codex
 aquaman request aquaman://github/token --env GITHUB_TOKEN --json
+aquaman-coder exec -- npm test                                       # any command that needs the key
 ```
+
+Tell the user to look for the dialog before you run `request`; it waits up to 90 seconds. You receive a status and the reference, never the value. If the status is `declined`, stop and ask how to proceed. Write the app to read its keys from the environment as usual. This is a tool for a developer's own machine, not for CI.
+
+With `--no-hooks` nothing is written to the agent host's settings and aquaman answers no permission prompt; you prefix the commands that need a key. Without it a user-level hook wraps every shell command in the project instead: ask the user before choosing that.
 
 Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md).
 
@@ -42,7 +48,7 @@ Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://g
 npm install -g aquaman-proxy aquaman-coder
 ```
 
-Requires `aquaman-proxy` (same version) running as a daemon. Start it once per machine session: `aquaman daemon &` in a terminal of your own, or `aquaman init --agent <agent>`, which starts it in the background and is the form an agent should use.
+Requires `aquaman-proxy` (same version) running as a daemon. Start it once per machine session: `aquaman daemon &` in a terminal of your own, or `aquaman init --agent <agent> --no-hooks`, which starts it in the background and is the form an agent should use.
 
 ## Quick Start (Claude Code, Codex)
 
@@ -51,6 +57,8 @@ cd ~/code/my-app
 aquaman init --agent claude-code             # or: --agent codex
 aquaman request aquaman://github/token --env GITHUB_TOKEN
 ```
+
+To leave Claude Code's or Codex's own settings untouched, add `--no-hooks`: no hook is installed and no permission prompt changes, and commands that need a key are run as `aquaman-coder exec -- <command>`.
 
 `aquaman init --agent` does everything that needs no secret: creates the config, starts the daemon, installs the hooks and the `aquaman-credentials` skill, registers the directory as a project and adds a short block to `CLAUDE.md` or `AGENTS.md`. It never prompts and can be re-run, so the agent can run it itself. `aquaman request` opens a dialog on your machine where you type the value (or approve one already in the vault); the agent gets a status and the reference. Add `--json` to either for machine-readable output.
 
@@ -94,7 +102,7 @@ cd ~/code/my-app
 aquaman-coder exec -- python app/scripts/import.py
 ```
 
-Same env injection, same redaction on stdout/stderr. Drop it into Makefile targets and shell aliases on your own machine, anywhere you'd otherwise reach for a `.env` file. For CI and production, use your team's secrets manager.
+Same env injection, same redaction on stdout/stderr. Drop it into Makefile targets and shell aliases on your own machine, anywhere you'd otherwise reach for a `.env` file. Your app does not change: it reads its keys from the environment, and this is how they get set on your machine. For CI and production, use your team's secrets manager.
 
 When Claude Code or Codex runs a shell command in `~/code/my-app`, aquaman's hook rewrites the command via `updatedInput.command` to wrap it under `aquaman-coder exec`. That wrapper:
 
@@ -212,4 +220,4 @@ The file is `chmod 0o600`. Both the service and key components are validated aga
 
 ## License
 
-MIT - see [LICENSE](./LICENSE).
+Apache-2.0. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
