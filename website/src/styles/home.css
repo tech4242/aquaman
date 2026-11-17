@@ -286,8 +286,5 @@
 .d1 .hosts, .d1 .all-hosts { max-width: 78%; }
 @media (max-width: 62rem) { .d1 .hosts, .d1 .all-hosts { max-width: none; } }
 
-/* A ranking someone else publishes, stated plainly. */
-.surface .rank { display: inline-flex; align-items: stretch; margin: 1.75rem 0 0; border: var(--px) solid var(--ink); background: #fff; text-decoration: none; color: var(--ink); max-width: 100%; }
-.surface .rank .mark { background: var(--y); padding: 0.3rem 0.55rem; border-right: var(--px) solid var(--ink); display: flex; align-items: center; }
-.surface .rank .text { padding: 0.45rem 0.9rem; font-size: 0.95rem; align-self: center; }
-.surface .rank .text b { font-family: var(--pixel); font-weight: 400; font-size: 0.72rem; margin-right: 0.5rem; }
+/* A ranking someone else publishes, stated plainly: a footnote to the buttons, not a third one. */
+.surface .rank { display: inline-flex; align-items: center; gap: 0.5rem; margin: 1.75rem 0 0; padding-top: 0.6rem; border-top: var(--px) solid var(--ink); font-size: 0.9rem; opacity: 0.85; }
