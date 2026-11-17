@@ -33,3 +33,16 @@ The GitHub star count in the header is read from the GitHub API once per build (
   --window-size=1200,630 --allow-file-access-from-files \
   --screenshot=$PWD/public/og.png file://$PWD/scripts/og-image.html
 ```
+
+## Deploying
+
+The site is hosted on Vercel and deployed by `.github/workflows/website.yml`, not by Vercel's Git integration (`vercel.json` turns that off). The workflow deploys when a GitHub release is published, or when it is run by hand, so the public site describes a version that can be installed.
+
+One-time setup:
+
+1. In Vercel, import this repository as a project with Root Directory `website` and the Astro preset.
+2. Create a Vercel token. Run `vercel link` once locally in `website/` and read the org and project ids from `.vercel/project.json`.
+3. In the GitHub repository, add the secrets `VERCEL_TOKEN`, `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`, and the variables `SITE_URL` (for example `https://example.org`) and `VERCEL_DEPLOY` = `true`.
+4. Add the domain to the Vercel project.
+
+`vercel.json` also sets the character set on the Markdown and text files and a `Link` header on the home page pointing at its Markdown version.
