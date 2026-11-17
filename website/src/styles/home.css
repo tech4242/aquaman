@@ -241,7 +241,6 @@
 /* The depth label reads above its heading but comes after it in the markup, so the heading is what a text reader meets first. */
 .zh { display: flex; flex-direction: column; }
 .zh .depth { order: -1; }
-.agent-link { font-size: 0.99rem; align-self: center; }
 .hosts { border: 0; padding: 0; margin: 0; min-width: 0; }
 .hosts legend { position: absolute; left: -999px; }
 .all-hosts { margin: 1.5rem 0 0; font-size: 0.95rem; max-width: 70ch; }
