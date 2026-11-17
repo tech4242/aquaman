@@ -213,6 +213,8 @@
 @media (max-width: 62rem) {
   .home { font-size: 1.03rem; --line-x: 88%; }
   .zone { padding-block: 3.25rem; }
+  /* Room for the things standing on the sea floor, which rise into this zone. */
+  .zone.floor { padding-bottom: 12rem; }
   .surface { padding-bottom: 13rem; }
   .exchange, .flow, .proof { max-width: none; }
   .exchange { grid-template-columns: minmax(0, 1fr); }
@@ -224,8 +226,9 @@
   .trust { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .line, .swim, .gauge, .sky { display: none !important; }
   .octo { transform: scale(0.75); transform-origin: left top; height: 190px; }
-  .seabed .sprite:nth-child(n + 4), .beach .s3, .beach .s4 { display: none; }
-  .beach .crab { right: 8%; top: 1rem; }
+  .seabed .sprite:nth-child(n + 4) { display: none; }
+  /* No room on the sand for the small things at this width: they would sit on the text. */
+  .beach { display: none; }
   .surface .raft { left: 78%; }
 }
 
