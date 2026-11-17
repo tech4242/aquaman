@@ -897,6 +897,20 @@ describe('VaultStore against a local server', () => {
     await expect(vault().list()).rejects.toThrow('Vault API error (500): internal error');
   });
 
+  it('an error whose body mentions 404 is an error, not "not stored"', async () => {
+    stubFetch();
+    respond = () => ({ status: 500, body: 'upstream answered 404 for the storage backend' });
+    await expect(vault().get('github', 'token')).rejects.toThrow('Vault API error (500): upstream answered 404');
+    await expect(vault().exists('github', 'token')).rejects.toThrow('Vault API error (500)');
+    await expect(vault().delete('github', 'token')).rejects.toThrow('Vault API error (500)');
+    await expect(vault().list('github')).rejects.toThrow('Vault API error (500)');
+    await expect(vault().list()).rejects.toThrow('Vault API error (500)');
+    respond = () => ({ status: 403, body: '{"errors":["permission denied on path 404-team/"]}' });
+    await expect(vault().get('github', 'token')).rejects.toThrow('Vault API error (403)');
+    await expect(vault().delete('github', 'token')).rejects.toThrow('Vault API error (403)');
+    await expect(vault().list('github')).rejects.toThrow('Vault API error (403)');
+  });
+
   it('list tolerates a reply with no keys, and drops the trailing slash Vault puts on folders', async () => {
     stubFetch();
     respond = () => ({ status: 200, body: JSON.stringify({ data: {} }) });
