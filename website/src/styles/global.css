@@ -135,3 +135,41 @@ h1, h2, h3 { line-height: 1.15; letter-spacing: -0.015em; text-wrap: balance; }
 
 .wordmark { display: inline-flex; align-items: center; gap: 0.5rem; }
 .wordmark .sprite { display: block; image-rendering: pixelated; }
+
+/* The reference diagram (src/lib/diagram.mjs). It carries its own colours, so it reads the same on the home page's water and on a guide in either theme. */
+.dia { --d-ink: #0b2a3a; --d-foam: #d9f5ec; --d-aqua: #3fc1c0; --d-y: #ffd23f; --d-px: 4px;
+  display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 0.8fr) minmax(0, 1.1fr) minmax(0, 0.8fr) minmax(0, 1fr); align-items: center; margin: 2rem 0 0; font-family: var(--sans); }
+.dia-box { position: relative; background: var(--d-foam); color: var(--d-ink); border: var(--d-px) solid var(--d-ink); padding: 1.35rem 1.2rem 1.1rem;
+  box-shadow: inset 0 0 0 var(--d-px) var(--d-foam), inset 0 0 0 calc(var(--d-px) * 2) var(--d-ink), 8px 8px 0 var(--d-ink); }
+.dia-box.dia-me { background: var(--d-y); box-shadow: inset 0 0 0 var(--d-px) var(--d-y), inset 0 0 0 calc(var(--d-px) * 2) var(--d-ink), 8px 8px 0 var(--d-ink); }
+.dia .dia-box h3 { font-family: var(--sans); font-size: 1rem; line-height: 1.3; font-weight: 700; margin: 0 0 0.5rem; color: var(--d-ink); }
+/* The home page has the pixel face loaded; guides do not. */
+.gb .dia .dia-box h3 { font-family: 'Press Start 2P', var(--mono); font-size: 0.72rem; line-height: 1.5; font-weight: 400; margin-bottom: 0.6rem; }
+.dia .dia-box p { margin: 0; font-size: 0.94rem; line-height: 1.4; max-width: none; color: var(--d-ink); }
+.dia .dia-box code { display: block; margin-top: 0.6rem; padding: 0.5rem 0.6rem; background: var(--d-ink); color: var(--d-foam); font: 500 0.72rem/1.6 var(--mono); overflow-wrap: anywhere; border-radius: 0; }
+.dia .dia-box code b { color: var(--d-y); font-weight: 500; }
+.dia .dia-box code i { color: var(--d-aqua); font-style: normal; }
+.dia-art { position: absolute; right: 0.9rem; image-rendering: pixelated; }
+.dia-octopus { top: -2.1rem; height: 3.5rem; }
+.dia-chest { top: -1.6rem; height: 2.75rem; }
+.dia-arrow { position: relative; height: var(--d-px); margin: 0 6px 0 14px; background: currentColor; }
+.dia-arrow::after { content: ''; position: absolute; right: -2px; top: -8px; border: 10px solid transparent; border-right: 0; border-left-color: currentColor; }
+.dia-arrow span, .dia-arrow small { position: absolute; left: 0; right: 10px; text-align: center; line-height: 1.3; }
+.dia-arrow span { bottom: 14px; font-size: 0.84rem; font-weight: 600; }
+.dia-arrow small { top: 16px; font-size: 0.75rem; opacity: 0.85; }
+.dia-up { grid-column: 3; justify-self: center; position: relative; width: var(--d-px); height: 54px; margin-top: 8px; background: currentColor; }
+.dia-up::before { content: ''; position: absolute; left: -8px; top: -2px; border: 10px solid transparent; border-top: 0; border-bottom-color: currentColor; }
+.dia-up span { position: absolute; right: 18px; top: 12px; width: 11.5rem; text-align: right; font-size: 0.84rem; font-weight: 600; line-height: 1.3; }
+.dia-vault { grid-column: 3; }
+.dia-note { margin: 1.6rem 0 0; }
+@media (max-width: 62rem) {
+  .dia { grid-template-columns: minmax(0, 1fr); }
+  .dia-arrow { width: var(--d-px); height: 3.2rem; margin: 0.9rem 0 1.1rem 2rem; }
+  .dia-arrow::after { right: -8px; top: auto; bottom: -2px; border: 10px solid transparent; border-bottom: 0; border-top-color: currentColor; }
+  .dia-arrow span, .dia-arrow small { left: 1.2rem; right: auto; width: 14rem; text-align: left; }
+  .dia-arrow span { bottom: auto; top: 0.3rem; }
+  .dia-arrow small { top: 1.6rem; }
+  .dia-up, .dia-vault { grid-column: 1; }
+  .dia-up { justify-self: start; margin: 1.4rem 0 0.6rem 2rem; }
+  .dia-up span { right: auto; left: 1.2rem; text-align: left; width: 14rem; }
+}

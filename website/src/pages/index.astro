@@ -40,6 +40,7 @@ const software = {
 const jsonLd = [software, { '@context': 'https://schema.org', '@type': 'WebSite', name: 'aquaman', url: Astro.site!.href }];
 const description =
   'Give Claude Code, Codex and other AI agents an API key without handing it over. Open source, runs on your machine, keeps keys in the vault you already use.';
+import { routeDiagramHtml } from '../lib/diagram.mjs';
 ---
 <Base description={description} markdown="/index.md" jsonLd={jsonLd} wide look="gb">
   <div class="home">
@@ -181,14 +182,10 @@ const description =
           <h2>Any app, any SDK: point it at aquaman and it never holds the key.</h2>
           <p class="depth" aria-hidden="true">Depth 200 m: not only agents</p>
         </header>
+        <div class="where" set:html={routeDiagramHtml({ art: true })} />
         <div class="route">
           <div>
             <p class="big">Your code changes in one place: the API base URL comes from the environment. aquaman hands the app a local token and its own address, adds the real key on the way out, and applies your request policies.</p>
-            <ul class="steps">
-              <li><b>The app holds</b> <span>a token that only works on your machine</span></li>
-              <li><b>aquaman holds</b> <span>the key, in your vault</span></li>
-              <li><b>The API sees</b> <span>a normal request with the real key</span></li>
-            </ul>
             <p><a class="btn b" href="#start" data-check="host-your-app">How to set it up</a></p>
           </div>
           <figure class="box">
