@@ -289,8 +289,8 @@ program
     const env: Record<string, string> = { ...process.env as Record<string, string> };
     const injectedValues: string[] = [];
     for (const [envName, ref] of Object.entries(match.config.env)) {
-      const parsed = parseRef(ref);
-      if (!parsed) continue;
+      // loadProjects() refuses a file with a reference that does not parse.
+      const parsed = parseRef(ref)!;
       const route = match.config.routes?.[envName];
       try {
         if (route) {
@@ -594,11 +594,8 @@ program
     if (brokerOk && projects) {
       for (const [name, cfg] of Object.entries(projects.projects)) {
         for (const [envName, ref] of Object.entries(cfg.env)) {
-          const parsed = parseRef(ref);
-          if (!parsed) {
-            checks.push({ name: `project ${name}: env ${envName}`, ok: false, detail: `bad ref "${ref}"` });
-            continue;
-          }
+          // loadProjects() refuses a file with a reference that does not parse.
+          const parsed = parseRef(ref)!;
           try {
             await broker.resolve({ service: parsed.service, key: parsed.key, ttlSeconds: 1 });
             checks.push({ name: `project ${name}: ${envName}`, ok: true, detail: ref });
