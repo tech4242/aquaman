@@ -1,6 +1,6 @@
 {
   "name": "aquaman-coder",
-  "version": "0.18.1",
+  "version": "0.18.2",
   "description": "aquaman: credential proxy for AI agents (Claude Code, Codex). Keeps API keys, tokens and .env secrets out of your coding agent's context and transcripts; injects them per command from your own vault.",
   "type": "module",
   "bin": {
@@ -47,7 +47,7 @@
   "author": "tech4242",
   "license": "Apache-2.0",
   "dependencies": {
-    "aquaman-proxy": "0.18.1",
+    "aquaman-proxy": "0.18.2",
     "commander": "^11.0.0",
     "smol-toml": "1.9.1",
     "yaml": "^2.9.1"

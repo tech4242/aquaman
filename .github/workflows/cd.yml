@@ -47,6 +47,7 @@ jobs:
           assert "coder->aquaman-proxy dep"   "$(jq -r '.dependencies["aquaman-proxy"]' packages/coder/package.json)"
           assert "pyproject.toml"             "$(python3 -c "import tomllib;print(tomllib.load(open('packages/hermes/pyproject.toml','rb'))['project']['version'])")"
           assert "hermes plugin.yaml"         "$(grep -E '^version:' packages/hermes/aquaman_hermes/plugin.yaml | sed -E 's/^version:[[:space:]]*"?([^"]*)"?/\1/')"
+          assert "hermes __init__.py"         "$(sed -nE 's/^__version__[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' packages/hermes/aquaman_hermes/__init__.py)"
           if [ "$fail" = 1 ]; then echo "::error::version mismatch — aborting release"; exit 1; fi
           echo "version=$TAG" >> "$GITHUB_OUTPUT"
 
