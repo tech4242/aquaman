@@ -36,13 +36,14 @@ The GitHub star count in the header is read from the GitHub API once per build (
 
 ## Deploying
 
-The site is hosted on Vercel and deployed by `.github/workflows/website.yml`, not by Vercel's Git integration (`vercel.json` turns that off). The workflow deploys when a GitHub release is published, or when it is run by hand, so the public site describes a version that can be installed.
+The site is hosted on Vercel, which builds and deploys it from this repository: `main` goes to production and every pull request gets a preview. `.github/workflows/website.yml` only checks that the site builds.
 
-One-time setup:
+Project settings in Vercel:
 
-1. In Vercel, import this repository as a project with Root Directory `website` and the Astro preset.
-2. Create a Vercel token. Run `vercel link` once locally in `website/` and read the org and project ids from `.vercel/project.json`.
-3. In the GitHub repository, add the secrets `VERCEL_TOKEN`, `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`, and the variables `SITE_URL` (for example `https://example.org`) and `VERCEL_DEPLOY` = `true`.
-4. Add the domain to the Vercel project.
+- Root Directory `website`, Astro preset, production branch `main`.
+- Environment variable `VERCEL_DEEP_CLONE` = `true`. Page dates and the version menu are read from git history, and Vercel fetches only the latest commits without it.
+- `SITE_URL` is optional: without it the build uses the project's production domain.
+
+Docs on `main` can be ahead of the last release; the version menu marks them as unreleased until the tag exists.
 
 `vercel.json` also sets the character set on the Markdown and text files and a `Link` header on the home page pointing at its Markdown version.

@@ -1,8 +1,7 @@
 name: Website
 
+# Checks that the site builds. Vercel deploys it from main.
 on:
-  release:
-    types: [published]
   workflow_dispatch:
   pull_request:
     paths: ['website/**', 'docs/**', 'SECURITY.md', '.github/workflows/website.yml']
@@ -42,34 +41,3 @@ jobs:
             case "$slug" in docs/[0-9]*.[0-9]*.[0-9]*/*) continue ;; esac
             grep -q "/$slug.md" dist/llms.txt || { echo "/$slug.md is not in llms.txt"; exit 1; }
           done
-
-  # The public site is deployed from a release, so it always describes a
-  # version people can install. Vercel's own Git deployments are off
-  # (website/vercel.json); this job builds here, with full history for the
-  # page dates and the version menu, and uploads the result.
-  #
-  # Needs repository secrets VERCEL_TOKEN, VERCEL_ORG_ID and VERCEL_PROJECT_ID,
-  # and repository variables SITE_URL (the public origin) and
-  # VERCEL_DEPLOY=true. Without the variable the job is skipped.
-  deploy:
-    name: Deploy to Vercel
-    if: (github.event_name == 'release' || github.event_name == 'workflow_dispatch') && vars.VERCEL_DEPLOY == 'true'
-    needs: build
-    runs-on: ubuntu-latest
-    env:
-      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-      SITE_URL: ${{ vars.SITE_URL }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-      - name: Refuse to deploy without a public origin
-        run: test -n "$SITE_URL" || { echo "Set the SITE_URL repository variable"; exit 1; }
-      - run: npm install --global vercel@latest
-      - run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
-      - run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
-      - run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
