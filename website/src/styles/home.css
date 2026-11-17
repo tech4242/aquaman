@@ -103,7 +103,7 @@
 .octo .shut { opacity: 0; }
 .octo .loot { position: absolute; left: 284px; top: 150px; }
 .octo .loot .key { position: absolute; left: 36px; top: -44px; }
-.vaults { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; }
+.vaults { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: 1rem; }
 .vaults li { border: var(--px) solid var(--aqua); padding: 0.9rem 1rem; }
 .vaults b { display: block; font-size: 1.22rem; line-height: 1.25; color: var(--y); font-weight: 650; }
 .vaults span { font-size: 0.95rem; opacity: 0.85; }

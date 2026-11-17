@@ -8,6 +8,7 @@ import { SUMMARY, HOME_TITLE, packageVersion } from '../lib/site';
 
 const VAULTS = [
   { name: 'macOS Keychain', note: 'default on a Mac' },
+  { name: 'Linux keyring', note: 'libsecret' },
   { name: '1Password', note: 'op CLI' },
   { name: 'Bitwarden', note: 'bw CLI' },
   { name: 'HashiCorp Vault', note: 'company Vault' },
@@ -197,7 +198,7 @@ const openai = new OpenAI();</code></pre>
             {VAULTS.map((v) => <li><b>{v.name}</b>{' '}<span>{v.note}</span></li>)}
           </ul>
         </div>
-        <p class="aside">No new place for your keys. On Linux desktops the keyring works too. Switch vault later and nothing changes for the agent.</p>
+        <p class="aside">No new place for your keys. Switch vault later and nothing changes for the agent.</p>
       </div>
     </section>
 
