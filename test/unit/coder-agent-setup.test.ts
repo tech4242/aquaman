@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { writeAgentsBlock, installSkill, skillPath, agentsFileName, AGENTS_BLOCK, SKILL_MD, SKILL_NAME } from 'aquaman-coder';
+import { writeAgentsBlock, installSkill, skillPath, agentsFileName, agentsBlock, AGENTS_BLOCK, SKILL_MD, SKILL_NAME } from 'aquaman-coder';
 
 describe('agent setup', () => {
   let dir: string;
@@ -59,6 +59,28 @@ describe('agent setup', () => {
     it('tells the agent how to ask and what not to do, without any secret-shaped text', () => {
       expect(AGENTS_BLOCK).toContain('aquaman request aquaman://<service>/<key> --env <ENV_NAME> --json');
       expect(AGENTS_BLOCK).toContain('.env');
+    });
+  });
+
+  describe('run mode', () => {
+    it('the exec block tells the agent to prefix commands and never claims they are injected already', () => {
+      const r = writeAgentsBlock('claude-code', dir, 'exec');
+      const text = fs.readFileSync(r.path, 'utf-8');
+      expect(text).toBe(agentsBlock('exec'));
+      expect(text).toContain('aquaman-coder exec -- <command>');
+      expect(text).not.toContain('already have its variables injected');
+    });
+
+    it('a later run in the other mode replaces the block', () => {
+      writeAgentsBlock('claude-code', dir, 'exec');
+      expect(writeAgentsBlock('claude-code', dir, 'hook').action).toBe('updated');
+      expect(fs.readFileSync(path.join(dir, 'CLAUDE.md'), 'utf-8')).toBe(AGENTS_BLOCK);
+    });
+
+    it('the skill explains both modes and names the form that changes no host setting', () => {
+      expect(SKILL_MD).toContain('aquaman-coder exec -- <command>');
+      expect(SKILL_MD).toContain('--no-hooks');
+      expect(SKILL_MD).toMatch(/Ask the user before choosing it/);
     });
   });
 

@@ -91,6 +91,8 @@ export {
   SKILL_NAME,
   SKILL_MD,
   AGENTS_BLOCK,
+  agentsBlock,
+  type RunMode,
   agentsFileName,
   writeAgentsBlock,
   skillPath,
