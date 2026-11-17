@@ -519,6 +519,25 @@ describe('aquaman-plugin register(api)', () => {
       expect(out).toContain('  SLACK_BASE_URL=http://aquaman.local/slack');
     }, T);
 
+    it('status reads back the variable names the plugin sets, for GitHub and for a hyphenated service', async () => {
+      const made = await register({ mode: 'full', version: '2026.9.37', config: { services: ['github', 'cloudflare-ai'] } });
+      expect(process.env.GITHUB_API_URL).toBe('http://aquaman.local/github');
+      expect(process.env.CLOUDFLARE_AI_BASE_URL).toBe('http://aquaman.local/cloudflare-ai');
+
+      const tool = await made.tools[0].factory().execute('call-1', {});
+      expect(tool.details.environmentVariables).toEqual({
+        GITHUB_API_URL: 'http://aquaman.local/github',
+        CLOUDFLARE_AI_BASE_URL: 'http://aquaman.local/cloudflare-ai',
+      });
+
+      const cli = await cliFor(made);
+      await startService(made);
+      await cli('status');
+      expect(out).toContain('  GITHUB_API_URL=http://aquaman.local/github');
+      expect(out).toContain('  CLOUDFLARE_AI_BASE_URL=http://aquaman.local/cloudflare-ai');
+      expect(out.join('\n')).not.toContain('(not set)');
+    }, T);
+
     it('status: says when the proxy binary is missing', async () => {
       process.env.PATH = fake.emptyDir;
       const made = await register({ mode: 'full' });

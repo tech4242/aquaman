@@ -163,13 +163,20 @@ describe('plugin proxy-manager with a fake aquaman binary', () => {
     it('rejects, and tells onError, when the binary cannot be started', async () => {
       process.env.PATH = fake.brokenDir;
       const onError = vi.fn();
-      // Not handed to afterEach: stop() after a failed spawn waits for an exit that never comes.
       const broken = createProxyManager({ config: {} as any, onError });
       const err = await broken.start().catch((e) => e);
       expect(err.code).toBe('EACCES');
       expect(onError).toHaveBeenCalledWith(err);
       expect(broken.isRunning()).toBe(false);
       expect(broken.getSocketPath()).toBeNull();
+
+      // There is no process to wait for, so stop() returns instead of waiting for an exit.
+      const stopped = await Promise.race([
+        broken.stop().then(() => 'stopped'),
+        new Promise((resolve) => setTimeout(() => resolve('still waiting'), 2000)),
+      ]);
+      expect(stopped).toBe('stopped');
+      expect(broken.isRunning()).toBe(false);
     }, T);
 
     it('rejects with the exit code and the proxy’s own stderr when it dies before it is ready', async () => {
