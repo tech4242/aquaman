@@ -160,13 +160,39 @@
 .b1 { left: 8%; bottom: 20%; }
 .b2 { left: 11%; bottom: 55%; }
 
-/* How deep you are, for browsers that can tie an animation to scrolling. */
-.gauge { display: none; }
-@supports (animation-timeline: scroll()) {
-  .gauge { display: block; position: fixed; right: 14px; top: 20vh; height: 60vh; width: var(--px); background: var(--ink); outline: 2px solid var(--foam); z-index: 5; }
-  .gauge i { position: absolute; left: -6px; top: 0; width: 16px; height: 16px; background: var(--c); border: var(--px) solid var(--ink); box-sizing: border-box; animation: descend linear both; animation-timeline: scroll(root); }
+/* How deep you are: a small instrument in the corner, filled in by /depth-panel.js. Wide screens only. */
+.hud { position: fixed; right: 18px; bottom: 18px; z-index: 6; min-width: 150px; padding: 16px 16px 14px; font-family: var(--pixel); font-size: 0.62rem; line-height: 1;
+  background: var(--foam); color: var(--ink); border: var(--px) solid var(--ink);
+  box-shadow: inset 0 0 0 var(--px) var(--foam), inset 0 0 0 calc(var(--px) * 2) var(--ink), 6px 6px 0 var(--ink); }
+.hud b { display: block; font-weight: 400; font-size: 0.95rem; margin: 8px 0 10px; }
+.hud .bar { height: 8px; background: var(--ink); position: relative; }
+.hud .bar i { position: absolute; inset: 2px auto 2px 2px; width: 0; background: var(--aqua); }
+.hud small { display: block; margin-top: 8px; font-size: 0.5rem; opacity: 0.8; }
+/* On a tablet the page uses the full width, so the panel shrinks to the reading alone. */
+@media (max-width: 62rem) {
+  .hud { min-width: 0; right: 10px; bottom: 10px; padding: 8px 10px; font-size: 0.5rem; box-shadow: 4px 4px 0 var(--ink); display: flex; align-items: center; gap: 8px; }
+  .hud b { margin: 0; font-size: 0.62rem; }
+  .hud .bar, .hud small { display: none; }
 }
-@keyframes descend { to { top: calc(100% - 16px); } }
+@media (max-width: 46rem) { .hud { display: none; } }
+
+/* The waterline stays on screen when the page opens: the hero follows the window's height and tightens on short ones. */
+@media (min-width: 62.01rem) {
+  .surface { padding-block: clamp(1.75rem, 5svh, 4.5rem) clamp(3.5rem, 8svh, 6.5rem); min-height: calc(90svh - 5rem); box-sizing: border-box; }
+}
+@media (min-width: 62.01rem) and (max-height: 780px) {
+  .zone h1 { font-size: clamp(1.25rem, 3vw, 2.25rem); }
+  .surface .subline { font-size: 1.28rem; margin-top: 1.2rem; }
+  .surface .cta { margin-top: 1.6rem; }
+  .surface .rank { margin-top: 1.2rem; }
+}
+@media (min-width: 62.01rem) and (max-height: 700px) {
+  .zone h1 { font-size: clamp(1.2rem, 2.6vw, 1.9rem); max-width: 28ch; }
+  .surface { padding-block: 1.25rem 2.75rem; }
+  .surface .subline { font-size: 1.18rem; margin-top: 0.9rem; }
+  .surface .cta { margin-top: 1.25rem; }
+  .surface .rank { margin-top: 0.9rem; }
+}
 
 @media (prefers-reduced-motion: no-preference) {
   .raft { animation: bob 1.6s steps(2, jump-none) infinite; }
@@ -224,7 +250,7 @@
   .guard { grid-template-columns: minmax(0, 1fr); gap: 2rem; }
   .vaults { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .trust { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .line, .swim, .gauge, .sky { display: none !important; }
+  .line, .swim, .sky { display: none !important; }
   .octo { transform: scale(0.75); transform-origin: left top; height: 190px; }
   .seabed .sprite:nth-child(n + 4) { display: none; }
   /* No room on the sand for the small things at this width: they would sit on the text. */
