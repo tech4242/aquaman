@@ -184,6 +184,86 @@ describe('agent-run setup commands', () => {
     expect(projects()['my-app'].env).toEqual({});
   }, 90_000);
 
+  it('bind --via-proxy records the route, with /v1 for openai, and binding again without it removes it', () => {
+    run(CODER_CLI, ['init', '--agent', 'claude-code', '--json', '--no-hooks']);
+    const r = run(CODER_CLI, ['bind', 'OPENAI_API_KEY=aquaman://openai/api_key', '--via-proxy', 'OPENAI_BASE_URL', '--json']);
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject({ ok: true, via_proxy: { url_env: 'OPENAI_BASE_URL', base_path: '/v1' } });
+    run(CODER_CLI, ['bind', 'STRIPE_SECRET_KEY=aquaman://stripe/secret_key', '--via-proxy', 'STRIPE_API_BASE', '--json']);
+    expect(projects()['my-app'].routes).toEqual({
+      OPENAI_API_KEY: { url_env: 'OPENAI_BASE_URL', base_path: '/v1' },
+      STRIPE_SECRET_KEY: { url_env: 'STRIPE_API_BASE' },
+    });
+    expect(JSON.parse(run(CODER_CLI, ['status', '--json']).stdout).projects[0].routes.STRIPE_SECRET_KEY).toEqual({ url_env: 'STRIPE_API_BASE' });
+
+    run(CODER_CLI, ['bind', 'OPENAI_API_KEY=aquaman://openai/api_key', '--json']);
+    run(CODER_CLI, ['bind', 'STRIPE_SECRET_KEY=aquaman://stripe/secret_key', '--json']);
+    expect(projects()['my-app'].routes).toBeUndefined();
+    expect(projects()['my-app'].env.OPENAI_API_KEY).toBe('aquaman://openai/api_key');
+  }, 120_000);
+
+  it('bind --via-proxy refuses a bad URL variable, a bad path, and a URL variable that holds a credential', () => {
+    run(CODER_CLI, ['init', '--agent', 'claude-code', '--json', '--no-hooks']);
+    run(CODER_CLI, ['bind', 'GITHUB_TOKEN=aquaman://github/token', '--json']);
+    for (const args of [
+      ['--via-proxy', '1BAD'],
+      ['--via-proxy', 'OPENAI_API_KEY'],
+      ['--via-proxy', 'GITHUB_TOKEN'],
+      ['--via-proxy', 'OPENAI_BASE_URL', '--base-path', '/v1/../x'],
+      ['--base-path', '/v1'],
+    ]) {
+      const r = run(CODER_CLI, ['bind', 'OPENAI_API_KEY=aquaman://openai/api_key', ...args, '--json']);
+      expect(r.code, args.join(' ')).toBe(1);
+    }
+    expect(projects()['my-app'].routes).toBeUndefined();
+  }, 120_000);
+
+  it('request --via-proxy stops before any dialog when the route could not work, and says why', () => {
+    const cases: Array<[string[], RegExp]> = [
+      [['aquaman://openai/api_key', '--via-proxy', 'OPENAI_BASE_URL'], /needs --env/],
+      [['aquaman://acme/api_key', '--env', 'ACME_KEY', '--via-proxy', 'ACME_URL'], /no definition for "acme"/],
+      [['aquaman://stripe/restricted_key', '--env', 'STRIPE_SECRET_KEY', '--via-proxy', 'STRIPE_API_BASE'], /injects stripe\/secret_key/],
+      [['aquaman://twilio/account_sid', '--env', 'TWILIO_SID', '--via-proxy', 'TWILIO_URL'], /request header/],
+      [['aquaman://stripe/secret_key', '--env', 'STRIPE_SECRET_KEY', '--via-proxy', 'STRIPE_API_BASE'], /loopback listener is off/],
+    ];
+    for (const [args, message] of cases) {
+      const r = run(PROXY_CLI, ['request', ...args, '--json']);
+      expect(r.code, args.join(' ')).toBe(1);
+      expect(JSON.parse(r.stdout).error, args.join(' ')).toMatch(message);
+    }
+    const off = JSON.parse(run(PROXY_CLI, ['request', 'aquaman://stripe/secret_key', '--env', 'STRIPE_SECRET_KEY', '--via-proxy', 'STRIPE_API_BASE', '--json']).stdout);
+    expect(off.fix).toContain('--loopback');
+  }, 180_000);
+
+  it('a binding cannot name a variable that controls how programs are loaded', () => {
+    run(CODER_CLI, ['init', '--agent', 'claude-code', '--json', '--no-hooks']);
+    for (const args of [
+      ['PATH=aquaman://github/token'],
+      ['LD_PRELOAD=aquaman://github/token'],
+      ['NODE_OPTIONS=aquaman://github/token'],
+      ['OPENAI_API_KEY=aquaman://openai/api_key', '--via-proxy', 'NODE_OPTIONS'],
+      ['OPENAI_API_KEY=aquaman://openai/api_key', '--via-proxy', 'DYLD_INSERT_LIBRARIES'],
+      ['OPENAI_API_KEY=aquaman://openai/api_key', '--via-proxy', 'https_proxy'],
+    ]) {
+      expect(run(CODER_CLI, ['bind', ...args, '--json']).code, args.join(' ')).toBe(1);
+    }
+    expect(projects()['my-app'].env).toEqual({});
+    // A hand-edited file is refused as a whole rather than used.
+    const file = path.join(config, 'projects.yaml');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf-8').replace('env: {}', 'env:\n      K: aquaman://openai/api_key\n    routes:\n      K:\n        url_env: LD_PRELOAD'));
+    const r = run(CODER_CLI, ['exec', '--', 'true']);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toMatch(/url_env/);
+  }, 180_000);
+
+  it('exec --raw refuses when its output is being captured', () => {
+    run(CODER_CLI, ['init', '--agent', 'claude-code', '--json', '--no-hooks']);
+    const r = run(CODER_CLI, ['exec', '--raw', '--', 'printenv', 'HOME']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('--raw only works with a terminal');
+    expect(r.stdout).toBe('');
+  }, 60_000);
+
   it('bind refuses a value that is not a reference', () => {
     for (const bad of ['GITHUB_TOKEN=ghp_actual_secret', 'GITHUB_TOKEN', '1BAD=aquaman://github/token']) {
       const r = run(CODER_CLI, ['bind', bad, '--json']);

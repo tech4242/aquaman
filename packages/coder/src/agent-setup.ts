@@ -78,7 +78,7 @@ aquaman keeps secrets in the user's vault (Keychain, 1Password, Bitwarden, Hashi
 
 How a command gets the project's variables depends on how the project was set up. \`aquaman init\` reports it as \`mode\`, and the project's instructions file says the same.
 
-- \`exec\`: nothing is installed in the agent host. Run a command that needs a credential as \`aquaman-coder exec -- <command>\`, for example \`aquaman-coder exec -- npm test\`. Commands you run without it do not have the variables.
+- \`exec\`: nothing is installed in the agent host. Run a command that needs a credential as \`aquaman-coder exec -- <command>\`, for example \`aquaman-coder exec -- npm test\`. Commands you run without it do not have the variables. The prefix is not a way around the user's permission rules: if a command would be refused or need approval without it, ask instead of adding it.
 - \`hook\`: a hook wraps every shell command in the project, so you run commands as usual. The hook only loads when a session starts: in the session that installed it, use \`aquaman-coder exec -- <command>\` until the user has restarted.
 
 If you do not know which applies, \`aquaman-coder exec -- <command>\` works in both.
@@ -89,11 +89,21 @@ If you do not know which applies, \`aquaman-coder exec -- <command>\` works in b
 aquaman init --agent claude-code --no-hooks --json    # or: --agent codex
 \`\`\`
 
-With \`--no-hooks\` this registers the project, starts the aquaman daemon, installs this skill and adds a short block to the project's instructions file. It changes no setting of the agent host and no permission prompt, so it is the form to use unless the user has asked for more.
+If the project is not set up yet, ask the user before you run this, and say what it does. With \`--no-hooks\` this registers the project, starts the aquaman daemon, installs this skill and adds a short block to the project's instructions file. It changes no setting of the agent host and no permission prompt, so it is the form to use unless the user has asked for more.
 
 Without \`--no-hooks\` it also installs a user-level hook that wraps every shell command in registered projects, so commands need no prefix. That hook answers the permission prompt for the commands it wraps. Ask the user before choosing it.
 
 Either form never prompts and can be run again safely. If \`aquaman\` is not installed: \`npm install -g aquaman-proxy aquaman-coder\`. The output lists \`human_steps\` when the user has to do something; pass those on.
+
+## Keeping the key out of the app as well
+
+By default the command you run holds the real value while it runs. If the app's client library accepts a base URL, ask for the credential this way instead:
+
+\`\`\`bash
+aquaman request aquaman://stripe/secret_key --env STRIPE_SECRET_KEY --via-proxy STRIPE_API_BASE --json
+\`\`\`
+
+The app then gets a local token in \`STRIPE_SECRET_KEY\` and aquaman's proxy URL in \`STRIPE_API_BASE\`; write it to use that variable as its API base URL when set. The proxy adds the real key and applies the user's request policies; the token only forwards requests and cannot be used to read a value. It needs \`aquaman init --agent <agent> --loopback\` once, which opens a token-gated listener on 127.0.0.1: tell the user. If the command answers with an error and a \`fix\`, follow the fix or drop \`--via-proxy\`.
 
 ## Rules
 

@@ -49,7 +49,7 @@ const jsonLd = page && {
   isPartOf: { '@type': 'WebSite', name: 'aquaman', url: Astro.site!.href },
 };
 ---
-<Base title={title} description={description} markdown={page ? page.twin : '/llms.txt'} canonicalPath={canonicalPath} jsonLd={jsonLd || undefined}>
+<Base title={title} description={description} markdown={page ? page.twin : '/llms.txt'} markdownTitle={page ? undefined : 'Index of this site in Markdown'} canonicalPath={canonicalPath} jsonLd={jsonLd || undefined}>
   <div class="docs">
     <article class="prose">
       {version && (

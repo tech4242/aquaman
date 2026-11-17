@@ -1,0 +1,28 @@
+---
+import * as sprites from '../lib/sprites';
+
+interface Props {
+  /** Which drawing, by its name in lib/sprites.ts. */
+  name: Exclude<keyof typeof sprites, 'PALETTE'>;
+  /** Size of one pixel, in CSS pixels. */
+  px?: number;
+  /** Outlines in foam instead of ink, for a sprite that sits on dark water. */
+  lit?: boolean;
+  class?: string;
+  label?: string;
+}
+const { name, px = 6, lit = false, class: className, label } = Astro.props;
+const rows = sprites[name] as string[];
+const width = Math.max(...rows.map((r) => r.length));
+// The art lives in its own file, so the page's HTML stays text and the browser caches the drawing.
+const src = `/sprites/${name.toLowerCase().replace(/_/g, '-')}${lit ? '-lit' : ''}.svg`;
+---
+<img
+  class:list={['sprite', className]}
+  src={src}
+  width={width * px}
+  height={rows.length * px}
+  alt={label ?? ''}
+  aria-hidden={label ? undefined : 'true'}
+  decoding="async"
+/>

@@ -47,7 +47,7 @@
     "agent"
   ],
   "author": "tech4242",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "@sinclair/typebox": "0.34.52",
     "aquaman-proxy": "0.18.0",
@@ -69,6 +69,7 @@
     "dist",
     "openclaw.plugin.json",
     "LICENSE",
+    "NOTICE",
     "README.md"
   ],
   "repository": {
