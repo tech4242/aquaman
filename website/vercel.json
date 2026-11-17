@@ -3,14 +3,14 @@
   "trailingSlash": true,
   "redirects": [
     {
-      "source": "/:path*",
+      "source": "/(.*)",
       "has": [
         {
           "type": "host",
           "value": "website-tan-iota-27.vercel.app"
         }
       ],
-      "destination": "https://aquaman.sh/:path*",
+      "destination": "https://aquaman.sh/$1",
       "permanent": true
     },
     {
