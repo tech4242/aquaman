@@ -23,3 +23,13 @@ The working tree is the current docs, at `/docs/`. For each release tag older th
 The home page's sprites are text grids in `src/lib/sprites.ts`. Each is built into its own file under `/sprites/` (`src/pages/sprites/[file].svg.ts`) and placed with `src/components/Sprite.astro` as an image, so the page's HTML stays small and readable as text. They are drawn from shapes by `scripts/draw-sprites.py`; change the drawing there and run `python3 scripts/draw-sprites.py` from `website/`.
 
 The GitHub star count in the header is read from the GitHub API once per build (`src/lib/stars.ts`) and left out if the API cannot be reached.
+
+## Share image
+
+`public/og.png` is the picture shown when the site's link is shared. Its source is `scripts/og-image.html`, which uses the built sprites and the installed fonts. After `npm run build`, render it at 1200 by 630 with headless Chrome:
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --hide-scrollbars \
+  --window-size=1200,630 --allow-file-access-from-files \
+  --screenshot=$PWD/public/og.png file://$PWD/scripts/og-image.html
+```
