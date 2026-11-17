@@ -1,5 +1,4 @@
 @import '@fontsource/press-start-2p';
-@import '@fontsource-variable/literata';
 
 /* A handheld's palette: four shades of water, plus coral and brass. */
 .gb {
@@ -11,7 +10,7 @@
   --y: #ffd23f;
   --px: 4px;
   --pixel: 'Press Start 2P', var(--mono);
-  --soft: 'Literata Variable', Georgia, 'Times New Roman', serif;
+  --soft: var(--sans);
   background: var(--foam);
 }
 .gb .site-header { background: var(--foam); border-bottom: var(--px) solid var(--ink); }
