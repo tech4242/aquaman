@@ -55,7 +55,7 @@
     "env"
   ],
   "author": "tech4242",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "commander": "^12.0.0",
     "yaml": "^2.9.1"
@@ -92,6 +92,7 @@
     "dist",
     "proto",
     "LICENSE",
+    "NOTICE",
     "README.md"
   ],
   "repository": {

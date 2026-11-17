@@ -57,6 +57,12 @@ export function defaultProjectsPath(): string {
 export interface DeclaredRefsResult {
   /** Set of `aquaman://service/key` strings. */
   refs: Set<string>;
+  /**
+   * Refs a project binds through the proxy (a `routes` entry in projects.yaml).
+   * A program bound this way is given the proxy's address, never the value, so
+   * these are not declared for materialization unless something else declares them.
+   */
+  routedRefs?: Set<string>;
   /** Parse problem, if the file exists but can't be read as a project map. Fails closed. */
   error?: string;
 }
@@ -83,17 +89,22 @@ export function loadProjectRefs(projectsPath: string = defaultProjectsPath()): D
   }
 
   const refs = new Set<string>();
+  const routedRefs = new Set<string>();
   const projects = parsed && typeof parsed === 'object' ? parsed.projects : undefined;
   if (!projects || typeof projects !== 'object') return { refs };
 
   for (const cfg of Object.values(projects) as any[]) {
     const env = cfg && typeof cfg === 'object' ? cfg.env : undefined;
     if (!env || typeof env !== 'object') continue;
-    for (const ref of Object.values(env)) {
-      if (typeof ref === 'string' && parseAquamanRef(ref)) refs.add(ref);
+    const routes = cfg.routes && typeof cfg.routes === 'object' && !Array.isArray(cfg.routes) ? cfg.routes : {};
+    for (const [envName, ref] of Object.entries(env)) {
+      if (typeof ref !== 'string' || !parseAquamanRef(ref)) continue;
+      const route = Object.hasOwn(routes, envName) ? routes[envName] : undefined;
+      if (route && typeof route === 'object' && typeof route.url_env === 'string') routedRefs.add(ref);
+      else refs.add(ref);
     }
   }
-  return { refs };
+  return { refs, routedRefs };
 }
 
 /**
@@ -165,6 +176,12 @@ export interface BrokerScope {
   declared(): { ref: string; source: 'projects.yaml' | 'config.yaml' }[];
   /** Parse problems with the declaring files, if any (the broker fails closed for their refs). */
   declarationError(): string | undefined;
+  /**
+   * Refs some project binds through the proxy. The daemon forwards for their
+   * services to a program holding the route token, and hands their values to
+   * nobody: `check()` answers for these only if they are declared some other way.
+   */
+  routedRefs?(): ReadonlySet<string>;
 }
 
 export function createBrokerScope(opts: BrokerScopeOptions = {}): BrokerScope {
@@ -197,6 +214,15 @@ export function createBrokerScope(opts: BrokerScopeOptions = {}): BrokerScope {
 
       if (projectRefs().refs.has(ref) || configRefs().refs.has(ref)) return { allowed: true };
 
+      if (projectRefs().routedRefs?.has(ref)) {
+        return {
+          allowed: false,
+          code: 'broker_ref_not_declared',
+          reason: `${ref} is bound through the proxy, so its value is not handed out`,
+          fix: `Send requests to the proxy URL the binding provides. To have the value itself set instead, bind it again without --via-proxy`,
+        };
+      }
+
       const err = errors();
       const parseNote = err ? ` (${err} — fix it to restore its refs)` : '';
       return {
@@ -216,6 +242,10 @@ export function createBrokerScope(opts: BrokerScopeOptions = {}): BrokerScope {
 
     declarationError() {
       return errors();
+    },
+
+    routedRefs() {
+      return projectRefs().routedRefs ?? new Set<string>();
     },
   };
 }
