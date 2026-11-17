@@ -93,12 +93,12 @@ function codexSandboxNote(): string {
     `Note: enabled = true also gives sandboxed commands outbound network access, and on Codex 0.169 every Unix socket, not only this one.`;
 }
 
-// ANSI color helpers — aquamarine theme. Mirrors packages/proxy/src/cli/index.ts
+// ANSI color helpers: the aqua of the website and the banner. Mirrors packages/proxy/src/cli/index.ts
 // so `aquaman coder doctor` matches `aquaman openclaw doctor`.
 // Respects NO_COLOR (https://no-color.org/) and disables in piped output.
 const noColor = process.env['NO_COLOR'] !== undefined ||
                 (!process.stdout.isTTY && process.env['FORCE_COLOR'] === undefined);
-const aqua = (s: string) => noColor ? s : `\x1b[38;2;127;255;212m${s}\x1b[0m`;
+const aqua = (s: string) => noColor ? s : `\x1b[38;2;63;193;192m${s}\x1b[0m`;
 
 const program = new Command();
 program
@@ -449,7 +449,7 @@ program
       if (mode === 'exec') result.run = 'aquaman-coder exec -- <command>';
       if (agent === 'codex') {
         const sandbox = codexSandboxStatus(defaultSocketPath());
-        if (!sandbox.ok) result.human_steps.push(`let Codex's sandbox reach the proxy socket: ${sandbox.detail}. Run \`aquaman coder setup codex\` for the config.toml snippet`);
+        if (!sandbox.ok) result.human_steps.push(`let Codex's sandbox reach the proxy socket: ${sandbox.detail}. The config.toml profile is in docs/codex.md (https://github.com/tech4242/aquaman/blob/main/docs/codex.md)`);
       }
       if (opts.skill) result.skill = installSkill(agent);
       if (opts.instructions) result.agents_file = writeAgentsBlock(agent, cwd, mode);
@@ -500,7 +500,7 @@ program
     if (!match) {
       fail(
         `No aquaman project covers ${cwd}`,
-        'Run from the project directory, after `aquaman init --agent <agent>` there (or: aquaman coder project add <name> --path <dir>)',
+        'Run from the project directory, after `aquaman init --agent <agent> --no-hooks` there (or: aquaman coder project add <name> --path <dir>)',
       );
     }
     const project = { name: match!.name };
@@ -586,7 +586,7 @@ program
         name: 'proxy running',
         ok: false,
         detail: (err as Error).message,
-        fix: 'aquaman init --agent <agent>   (or, in a terminal of your own: aquaman daemon)',
+        fix: 'aquaman init --agent <agent> --no-hooks   (or, in a terminal of your own: aquaman daemon)',
       });
     }
 
@@ -698,7 +698,7 @@ program
 
     // Render — matches `aquaman openclaw doctor` formatting.
     console.log('');
-    console.log(`  \u{1F531} Aquaman ${VERSION} — Welcome to the doctor’s office.`);
+    console.log(`  \u{1F419} aquaman ${VERSION} — Welcome to the doctor’s office.`);
     console.log('');
     for (const c of checks) {
       const mark = c.ok ? '✓' : '✗';

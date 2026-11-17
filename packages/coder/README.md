@@ -48,7 +48,7 @@ Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://g
 npm install -g aquaman-proxy aquaman-coder
 ```
 
-Requires `aquaman-proxy` (same version) running as a daemon. Start it once per machine session: `aquaman daemon &` in a terminal of your own, or `aquaman init --agent <agent>`, which starts it in the background and is the form an agent should use.
+Requires `aquaman-proxy` (same version) running as a daemon. Start it once per machine session: `aquaman daemon &` in a terminal of your own, or `aquaman init --agent <agent> --no-hooks`, which starts it in the background and is the form an agent should use.
 
 ## Quick Start (Claude Code, Codex)
 

@@ -3,13 +3,14 @@ import '../styles/global.css';
 import { SITE_NAME, HOME_TITLE } from '../lib/site';
 import { githubStars, formatStars } from '../lib/stars';
 import Sprite from '../components/Sprite.astro';
-import { STAR } from '../lib/sprites';
 
 interface Props {
   title?: string;
   description: string;
   /** Path of this page's Markdown twin, e.g. `/claude-code.md`. */
   markdown: string;
+  /** What that link is, when it is not this page as Markdown. */
+  markdownTitle?: string;
   jsonLd?: Record<string, unknown>;
   /** Set when another page is the one to index, as for docs of an earlier release. */
   canonicalPath?: string;
@@ -18,7 +19,7 @@ interface Props {
   /** A page-wide look, as a class on <body>. */
   look?: string;
 }
-const { title, description, markdown, jsonLd, canonicalPath, wide, look } = Astro.props;
+const { title, description, markdown, jsonLd, canonicalPath, wide, look, markdownTitle = 'This page as Markdown' } = Astro.props;
 const stars = await githubStars();
 const fullTitle = title ? `${title} | ${SITE_NAME}` : HOME_TITLE;
 const canonical = new URL(canonicalPath ?? Astro.url.pathname, Astro.site).href;
@@ -33,7 +34,7 @@ const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/',
     <title>{fullTitle}</title>
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
-    <link rel="alternate" type="text/markdown" href={new URL(markdown, Astro.site).href} title="This page as Markdown" />
+    <link rel="alternate" type="text/markdown" href={new URL(markdown, Astro.site).href} title={markdownTitle} />
     <link rel="alternate" type="text/plain" href={new URL('/llms.txt', Astro.site).href} title="llms.txt" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="sitemap" href="/sitemap-index.xml" />
@@ -47,7 +48,7 @@ const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/',
     <a class="skip" href="#main">Skip to content</a>
     <header class="site-header">
       <div class="wrap">
-        <a class="wordmark" href="/">aquaman</a>
+        <a class="wordmark" href="/"><Sprite name="ICON" px={2} /><span>aquaman</span></a>
         <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-label="Show the menu" />
         <label for="nav-toggle" class="nav-button" aria-hidden="true">Menu</label>
         <nav aria-label="Site">
@@ -56,7 +57,7 @@ const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/',
           <a href="/docs/compare/" aria-current={at('/docs/compare/')}>Compare</a>
           <a href="/docs/security/" aria-current={at('/docs/security/')}>Security</a>
           <a class="stars" href="https://github.com/tech4242/aquaman" aria-label={stars === null ? 'Star aquaman on GitHub' : `Star aquaman on GitHub: ${stars} stars`}>
-            <Sprite rows={STAR} px={2} />
+            <Sprite name="STAR" px={2} />
             <span>GitHub</span>
             <b data-stars hidden={stars === null}>{stars === null ? '' : formatStars(stars)}</b>
           </a>
@@ -69,16 +70,17 @@ const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/',
     <footer class="site-footer">
       <div class="wrap">
         <ul>
-          <li><a href={markdown}>This page as Markdown</a></li>
+          <li><a href={markdown}>{markdownTitle}</a></li>
           <li><a href="/llms.txt">llms.txt</a></li>
           <li><a href="/llms-full.txt">llms-full.txt</a></li>
           <li><a href="/sitemap-index.xml">Sitemap</a></li>
         </ul>
         <ul>
-          <li><a href="https://www.npmjs.com/package/aquaman-proxy">npm</a></li>
-          <li><a href="https://pypi.org/project/aquaman-hermes/">PyPI</a></li>
           <li><a href="https://github.com/tech4242/aquaman/security/advisories">Advisories</a></li>
           <li>Apache-2.0 licensed</li>
+          <li><a href="https://www.npmjs.com/package/aquaman-proxy">npm</a></li>
+          <li><a href="https://pypi.org/project/aquaman-hermes/">PyPI</a></li>
+          <li><a href="https://clawhub.ai/plugins/aquaman-plugin">ClawHub</a></li>
         </ul>
       </div>
     </footer>
