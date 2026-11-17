@@ -247,6 +247,34 @@ describe('VaultStore', () => {
   });
 
   describe('list', () => {
+    it('refuses a service name that is not a plain name, before any request', async () => {
+      const { VaultStore } = await import('aquaman-core');
+      const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
+
+      for (const name of ['../../sys/policy', 'a/b', '..', 'x?list=true', 'x#y', 'A', '']) {
+        if (name === '') continue; // no service means "list everything"
+        await expect(store.list(name)).rejects.toThrow('Invalid service name');
+      }
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('skips entries under the prefix that are not names aquaman could have written', async () => {
+      mockFetch.mockImplementation(async (url: string) => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: { keys: url.endsWith('/metadata/aquaman') ? ['github/', '../sys/', 'Not Ours/'] : ['token'] },
+        }),
+      }));
+
+      const { VaultStore } = await import('aquaman-core');
+      const store = new VaultStore({ address: VAULT_ADDR, token: VAULT_TOKEN });
+
+      expect(await store.list()).toEqual([{ service: 'github', key: 'token' }]);
+      const urls = mockFetch.mock.calls.map((c) => c[0] as string);
+      expect(urls).toEqual([`${VAULT_ADDR}/v1/secret/metadata/aquaman`, `${VAULT_ADDR}/v1/secret/metadata/aquaman/github`]);
+    });
+
     it('lists keys for a specific service', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
