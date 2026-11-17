@@ -2,7 +2,7 @@
 
 aquaman is a credential proxy for AI agents: secrets stay in the user's own vault and are injected when a command or request needs them. This page is the contract for an agent (Claude Code, Codex or similar) that wants to use it. Every command here runs without prompting and can print JSON.
 
-Requires Node.js 18 or later on macOS, Linux or WSL2, and aquaman 0.18.0 or later: `aquaman init --agent` and `aquaman request` do not exist before that. Check with `aquaman --version`.
+Requires Node.js 18 or later on macOS, Linux or WSL2, and aquaman 0.18.1 or later: `aquaman init --agent` and `aquaman request` do not exist before that. Check with `aquaman --version`.
 
 **Where this fits.** Write the app to read its keys from the environment (`process.env.GITHUB_TOKEN`, `os.environ["GITHUB_TOKEN"]`) as you would anyway. aquaman is how those variables get set on the user's machine while you work, without the value passing through you or a `.env` file. It is not a replacement for the environment, and in CI and production the same variable names are filled by that platform's own secrets: see [CI and production](#ci-and-production).
 

@@ -14,7 +14,7 @@ const REPO = path.resolve(SITE_DIR, '..');
 export const VERSIONED_DIR = path.join(SITE_DIR, 'versioned');
 
 /** The first release whose docs are published here. Earlier tags predate the guides. */
-const FIRST = process.env.DOCS_FIRST_VERSION ?? '0.18.0';
+const FIRST = process.env.DOCS_FIRST_VERSION ?? '0.18.1';
 
 const parse = (v) => v.split('.').map((n) => Number(n));
 const compare = (a, b) => {

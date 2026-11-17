@@ -16,7 +16,7 @@ Every page is also served as Markdown at the same path with `.md`, and `/llms.tx
 
 ## Versions
 
-The working tree is the current docs, at `/docs/`. For each release tag older than the version in `packages/proxy/package.json` (from 0.18.0 on), the build copies that tag's `docs/` and `SECURITY.md` out of git into `versioned/` (ignored) and serves them at `/docs/<version>/`, with a version menu in the sidebar. Those pages name the current page as canonical and stay out of the sitemap and `llms.txt`. The build needs the repository's tags, so CI checks out full history.
+The working tree is the current docs, at `/docs/`. For each release tag older than the version in `packages/proxy/package.json` (from 0.18.1 on), the build copies that tag's `docs/` and `SECURITY.md` out of git into `versioned/` (ignored) and serves them at `/docs/<version>/`, with a version menu in the sidebar. Those pages name the current page as canonical and stay out of the sitemap and `llms.txt`. The build needs the repository's tags, so CI checks out full history.
 
 ## Pixel art
 
