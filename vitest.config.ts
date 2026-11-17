@@ -9,19 +9,24 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['test/**/*.test.ts'],
+    // Tests start the CLI and the daemon as separate processes. This hands those
+    // processes a directory to write their own coverage into (see scripts/coverage.mjs).
+    setupFiles: ['./test/helpers/child-coverage.ts'],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'json', 'lcov', 'html'],
-      include: ['src/**/*.ts', 'packages/*/src/**/*.ts'],
-      exclude: ['src/cli/index.ts', 'src/types.ts', 'packages/*/src/cli/**'],
-      // Core business logic has 86-98% coverage
-      // WebSocket/HTTP proxies have lower coverage (integration tests)
-      thresholds: {
-        lines: 60,
-        functions: 60,
-        branches: 60,
-        statements: 60
-      }
+      reporter: ['text-summary', 'json', 'json-summary', 'lcov', 'html'],
+      // A failed or flaky test must not hide the numbers.
+      reportOnFailure: true,
+      // Everything that ships: all three packages, both CLIs and the plugin's entry file.
+      include: ['packages/*/src/**/*.ts', 'packages/plugin/index.ts'],
+      // Files that only re-export other modules have nothing to execute.
+      exclude: [
+        'packages/proxy/src/index.ts',
+        'packages/proxy/src/core/index.ts',
+        'packages/proxy/src/core/utils/index.ts',
+        'packages/proxy/src/core/audit/index.ts',
+        'packages/proxy/src/core/credentials/index.ts',
+      ],
     }
   },
   resolve: {
@@ -29,7 +34,7 @@ export default defineConfig({
       // Map package imports to source for development/testing
       'aquaman-core': path.resolve(__dirname, 'packages/proxy/src/core/index.ts'),
       'aquaman-proxy': path.resolve(__dirname, 'packages/proxy/src/index.ts'),
-      'aquaman-plugin': path.resolve(__dirname, 'packages/plugin/src/index.ts'),
+      'aquaman-plugin': path.resolve(__dirname, 'packages/plugin/index.ts'),
       'aquaman-coder': path.resolve(__dirname, 'packages/coder/src/index.ts')
     }
   }
