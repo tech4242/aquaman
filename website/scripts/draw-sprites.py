@@ -317,11 +317,36 @@ def icon():
     c.set(5, 3, 'p'); c.set(6, 2, 'p')
     return c.rows()
 
+def lobster():
+    """A lobster seen from above, claws up. Our own drawing, in the page's style."""
+    c = Canvas(26, 28)
+    cx = 13
+    for side in (-1, 1):
+        # Antennae, then the arm out to each claw.
+        for t in range(7):
+            c.set(cx + side * (1 + t * 0.55), 8 - t, 's')
+        for t in range(6):
+            c.set(cx + side * (3 + t * 0.9), 10 - t * 0.7, 'c'); c.set(cx + side * (3 + t * 0.9), 11 - t * 0.7, 'c')
+        c.ellipse(cx + side * 9, 5, 3, 3.6, 'c')
+        c.set(cx + side * 9, 2, '.'); c.set(cx + side * 9, 3, '.'); c.set(cx + side * 9, 4, '.')   # the gap between the pincers
+        c.set(cx + side * 10, 6, 'p')
+        for y in (13, 15, 17):
+            c.set(cx + side * 4, y, 's'); c.set(cx + side * 5, y + 1, 's')                          # legs
+    c.ellipse(cx, 12, 3.4, 5, 'c')
+    c.ellipse(cx - 1, 10, 1, 1.6, 'p', only='c')
+    for i, (w, y) in enumerate(((5, 17), (5, 19), (4, 21), (3, 23))):
+        c.rect(cx - w // 2, y, w, 2, 'c'); c.rect(cx - w // 2, y + 1, w, 1, 's')                   # tail segments
+    c.rect(cx - 4, 25, 9, 2, 'c'); c.set(cx - 4, 26, '.'); c.set(cx + 4, 26, '.'); c.rect(cx - 1, 26, 3, 1, 's')
+    for side in (-1, 1):
+        c.set(cx + side * 2, 8, 'w'); c.set(cx + side * 2, 7, '#')
+    c.outline()
+    return c.rows()
+
 SPRITES = {
     'OCTOPUS': octopus(), 'OCTOPUS_BLINK': octopus(blink=True), 'CHEST': chest(), 'CHEST_OPEN': chest(open_lid=True),
     'KEY': key(), 'ROBOT': robot(), 'FISH': fish(), 'BUBBLE': bubble(), 'TAG': tag(),
     'WEED': weed(), 'WEED_TALL': weed(34, 1.3), 'INK': ink(), 'ANCHOR': anchor(), 'STARFISH': starfish(),
-    'SHELL': shell(), 'CRAB': crab(), 'CORAL': coral(), 'ROCK': rock(), 'SUN': sun(), 'CLOUD': cloud(), 'STAR': star(), 'ICON': icon(),
+    'SHELL': shell(), 'CRAB': crab(), 'CORAL': coral(), 'ROCK': rock(), 'SUN': sun(), 'CLOUD': cloud(), 'STAR': star(), 'ICON': icon(), 'LOBSTER': lobster(),
 }
 
 HEADER = '''/**
