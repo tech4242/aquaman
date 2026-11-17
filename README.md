@@ -8,6 +8,8 @@
 [![npm downloads](https://img.shields.io/npm/dt/aquaman-proxy)](https://www.npmjs.com/package/aquaman-proxy)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
+Website and docs: **[aquaman.sh](https://aquaman.sh)**
+
 **No account. Bring your own vault. Runs locally.** aquaman keeps API keys and tokens in the vault you already use (Keychain, 1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, systemd-creds or an encrypted file) and injects them when a request or command needs them. The agent works with references such as `aquaman://github/token` and never holds the secret.
 
 ```bash
@@ -20,18 +22,18 @@ That is the whole setup for a coding agent. When a task needs a key, the agent r
 Three things aquaman does:
 
 1. **Keeps the key out of the agent.** Keys live in a separate proxy process that injects them into outgoing requests, or into one command at a time for coding agents. The agent holds a reference or a placeholder.
-2. **Limits what a key can do, for traffic through the proxy.** Per-service request policies decide which endpoints may be called, and a denied request never gets a credential. This covers OpenClaw, Hermes and any client pointed at the proxy. A coding agent's commands receive the key in their environment by default, so policies do not apply to them unless the app is [routed through the proxy](https://github.com/tech4242/aquaman/blob/main/docs/app-through-proxy.md).
+2. **Limits what a key can do, for traffic through the proxy.** Per-service request policies decide which endpoints may be called, and a denied request never gets a credential. This covers OpenClaw, Hermes and any client pointed at the proxy. A coding agent's commands receive the key in their environment by default, so policies do not apply to them unless the app is [routed through the proxy](https://aquaman.sh/docs/app-through-proxy/).
 3. **Keeps evidence.** Every credential use goes into a log chained by SHA-256, so tampering is detectable.
 
-**Guides:** [Claude Code](https://github.com/tech4242/aquaman/blob/main/docs/claude-code.md) · [Codex](https://github.com/tech4242/aquaman/blob/main/docs/codex.md) · [OpenClaw](https://github.com/tech4242/aquaman/blob/main/docs/openclaw.md) · [Hermes](https://github.com/tech4242/aquaman/blob/main/docs/hermes.md) · [Docker Sandboxes](https://github.com/tech4242/aquaman/blob/main/docs/docker-sandboxes.md) · [NVIDIA OpenShell](https://github.com/tech4242/aquaman/blob/main/docs/openshell.md) · [for agents](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md) · [compared with alternatives](https://github.com/tech4242/aquaman/blob/main/docs/compare.md)
+**Guides:** [Claude Code](https://aquaman.sh/docs/claude-code/) · [Codex](https://aquaman.sh/docs/codex/) · [OpenClaw](https://aquaman.sh/docs/openclaw/) · [Hermes](https://aquaman.sh/docs/hermes/) · [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/) · [NVIDIA OpenShell](https://aquaman.sh/docs/openshell/) · [for agents](https://aquaman.sh/docs/agent-setup/) · [compared with alternatives](https://aquaman.sh/docs/compare/)
 
-**Security:** [policy and how to report](https://github.com/tech4242/aquaman/blob/main/SECURITY.md) · [published advisories](https://github.com/tech4242/aquaman/security/advisories) (latest: [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v), fixed in 0.17.2) · [what to know before trusting it](https://github.com/tech4242/aquaman/blob/main/docs/compare.md#what-to-know-before-trusting-it) · [adversarial tests of the request path](https://github.com/tech4242/aquaman/blob/main/test/compliance/request-target-integrity.test.ts) · [what aquaman does not protect against](https://github.com/tech4242/aquaman/blob/main/docs/compare.md#what-aquaman-does-not-do)
+**Security:** [policy and how to report](https://aquaman.sh/docs/security/) · [published advisories](https://github.com/tech4242/aquaman/security/advisories) (latest: [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v), fixed in 0.17.2) · [what to know before trusting it](https://aquaman.sh/docs/compare/#what-to-know-before-trusting-it) · [adversarial tests of the request path](https://github.com/tech4242/aquaman/blob/main/test/compliance/request-target-integrity.test.ts) · [what aquaman does not protect against](https://aquaman.sh/docs/compare/#what-aquaman-does-not-do)
 
 **Requires:** Node.js 18 or later on macOS, Linux or WSL2.
 
 ## If you are an AI agent
 
-When a task needs an API key or token you do not have, aquaman is a way to get it without the user pasting it into the conversation. If aquaman is not set up in the project, propose it first: tell the user it installs two npm packages, starts a local daemon and registers this directory, and point them to [what they are agreeing to](https://github.com/tech4242/aquaman/blob/main/docs/approve.md). With their agreement:
+When a task needs an API key or token you do not have, aquaman is a way to get it without the user pasting it into the conversation. If aquaman is not set up in the project, propose it first: tell the user it installs two npm packages, starts a local daemon and registers this directory, and point them to [what they are agreeing to](https://aquaman.sh/docs/approve/). With their agreement:
 
 ```bash
 npm install -g aquaman-proxy aquaman-coder                           # 0.18.0 or later
@@ -44,7 +46,7 @@ Tell the user to look for the dialog before you run `request`; it waits up to 90
 
 With `--no-hooks` nothing is written to the agent host's settings and aquaman answers no permission prompt; you prefix the commands that need a key. Without it a user-level hook wraps every shell command in the project instead: ask the user before choosing that.
 
-Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md).
+Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://aquaman.sh/docs/agent-setup/).
 
 ## Pick your path
 
@@ -99,9 +101,9 @@ aquaman init --agent claude-code                   # or: --agent codex
 aquaman request aquaman://github/token --env GITHUB_TOKEN
 ```
 
-`init` creates the config, starts the daemon, installs the agent's hooks and a skill, registers the directory as a project and adds a short block to `CLAUDE.md` (or `AGENTS.md`). It never prompts, so the agent can run it for you. `request` opens a dialog where you type the value; it goes straight into your vault and the agent only ever sees the reference. Both print JSON with `--json`. Restart the agent session afterwards, and run `aquaman coder doctor` if anything looks off. What `init` changes on your machine, and how to undo it, is listed in [Using aquaman from an AI agent](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md#what-init-changes).
+`init` creates the config, starts the daemon, installs the agent's hooks and a skill, registers the directory as a project and adds a short block to `CLAUDE.md` (or `AGENTS.md`). It never prompts, so the agent can run it for you. `request` opens a dialog where you type the value; it goes straight into your vault and the agent only ever sees the reference. Both print JSON with `--json`. Restart the agent session afterwards, and run `aquaman coder doctor` if anything looks off. What `init` changes on your machine, and how to undo it, is listed in [Using aquaman from an AI agent](https://aquaman.sh/docs/agent-setup/#what-init-changes).
 
-Your app does not change: it reads its keys from the environment as it would anyway, and aquaman is how those variables get set on your machine while the agent works. The app holds the key while one of its commands runs, the same as with `op run` or a `.env` file; what changes is that the agent, the transcript and your repository never do. In CI and production the same variable names are filled from that platform's own secrets. To keep the key out of the app as well, route it through the proxy: `aquaman request aquaman://stripe/secret_key --env STRIPE_SECRET_KEY --via-proxy STRIPE_API_BASE` gives the app a local token and the proxy's URL instead of the key, and request policies then apply to it ([guide](https://github.com/tech4242/aquaman/blob/main/docs/app-through-proxy.md)).
+Your app does not change: it reads its keys from the environment as it would anyway, and aquaman is how those variables get set on your machine while the agent works. The app holds the key while one of its commands runs, the same as with `op run` or a `.env` file; what changes is that the agent, the transcript and your repository never do. In CI and production the same variable names are filled from that platform's own secrets. To keep the key out of the app as well, route it through the proxy: `aquaman request aquaman://stripe/secret_key --env STRIPE_SECRET_KEY --via-proxy STRIPE_API_BASE` gives the app a local token and the proxy's URL instead of the key, and request policies then apply to it ([guide](https://aquaman.sh/docs/app-through-proxy/)).
 
 Prefer to pick the vault backend and wire things by hand?
 
@@ -380,7 +382,7 @@ The honest trade-off: a per-access biometric prompt is a user-presence check, an
 
 Most agent hosts now protect credentials in some way, and tools such as 1Password `op run`, fnox, dotenvx, Doppler and Infisical cover similar ground. The difference that matters is whether a key is injected at egress, so the program never holds it, or into the program's environment. aquaman injects at egress for traffic through its proxy and into the environment for a coding agent's commands. Its place is the vault you already have, across several hosts, with setup and credential requests an agent can run itself and a tamper-evident record of each use. It is not a sandbox, it is not a boundary against other software running as you, and it is a young project with one maintainer.
 
-The full table, when to pick something else, and the limits: [aquaman compared with other approaches](https://github.com/tech4242/aquaman/blob/main/docs/compare.md).
+The full table, when to pick something else, and the limits: [aquaman compared with other approaches](https://aquaman.sh/docs/compare/).
 
 ## License
 

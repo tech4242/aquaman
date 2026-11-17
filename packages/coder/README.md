@@ -11,15 +11,15 @@ This package is the adapter for AI coding agents. It hooks into Claude Code and 
 | [`aquaman-plugin`](https://github.com/tech4242/aquaman/tree/main/packages/plugin) | OpenClaw | `openclaw plugins install aquaman-plugin` |
 | [`aquaman-hermes`](https://github.com/tech4242/aquaman/tree/main/packages/hermes) | Hermes | `pip install aquaman-hermes` |
 
-**Guides:** [Claude Code](https://github.com/tech4242/aquaman/blob/main/docs/claude-code.md) · [Codex](https://github.com/tech4242/aquaman/blob/main/docs/codex.md) · [OpenClaw](https://github.com/tech4242/aquaman/blob/main/docs/openclaw.md) · [Hermes](https://github.com/tech4242/aquaman/blob/main/docs/hermes.md) · [Docker Sandboxes](https://github.com/tech4242/aquaman/blob/main/docs/docker-sandboxes.md) · [NVIDIA OpenShell](https://github.com/tech4242/aquaman/blob/main/docs/openshell.md) · [for agents](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md) · [compared with alternatives](https://github.com/tech4242/aquaman/blob/main/docs/compare.md)
+**Guides:** [Claude Code](https://aquaman.sh/docs/claude-code/) · [Codex](https://aquaman.sh/docs/codex/) · [OpenClaw](https://aquaman.sh/docs/openclaw/) · [Hermes](https://aquaman.sh/docs/hermes/) · [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/) · [NVIDIA OpenShell](https://aquaman.sh/docs/openshell/) · [for agents](https://aquaman.sh/docs/agent-setup/) · [compared with alternatives](https://aquaman.sh/docs/compare/)
 
-**Security:** [policy and how to report](https://github.com/tech4242/aquaman/blob/main/SECURITY.md) · [published advisories](https://github.com/tech4242/aquaman/security/advisories) (latest: [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v), fixed in 0.17.2) · [what to know before trusting it](https://github.com/tech4242/aquaman/blob/main/docs/compare.md#what-to-know-before-trusting-it) · [adversarial tests of the request path](https://github.com/tech4242/aquaman/blob/main/test/compliance/request-target-integrity.test.ts) · [what aquaman does not protect against](https://github.com/tech4242/aquaman/blob/main/docs/compare.md#what-aquaman-does-not-do)
+**Security:** [policy and how to report](https://aquaman.sh/docs/security/) · [published advisories](https://github.com/tech4242/aquaman/security/advisories) (latest: [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v), fixed in 0.17.2) · [what to know before trusting it](https://aquaman.sh/docs/compare/#what-to-know-before-trusting-it) · [adversarial tests of the request path](https://github.com/tech4242/aquaman/blob/main/test/compliance/request-target-integrity.test.ts) · [what aquaman does not protect against](https://aquaman.sh/docs/compare/#what-aquaman-does-not-do)
 
 **Requires:** Node.js 18 or later on macOS, Linux or WSL2.
 
 ## If you are an AI agent
 
-When a task needs an API key or token you do not have, aquaman is a way to get it without the user pasting it into the conversation. If aquaman is not set up in the project, propose it first: tell the user it installs two npm packages, starts a local daemon and registers this directory, and point them to [what they are agreeing to](https://github.com/tech4242/aquaman/blob/main/docs/approve.md). With their agreement:
+When a task needs an API key or token you do not have, aquaman is a way to get it without the user pasting it into the conversation. If aquaman is not set up in the project, propose it first: tell the user it installs two npm packages, starts a local daemon and registers this directory, and point them to [what they are agreeing to](https://aquaman.sh/docs/approve/). With their agreement:
 
 ```bash
 npm install -g aquaman-proxy aquaman-coder                           # 0.18.0 or later
@@ -32,7 +32,7 @@ Tell the user to look for the dialog before you run `request`; it waits up to 90
 
 With `--no-hooks` nothing is written to the agent host's settings and aquaman answers no permission prompt; you prefix the commands that need a key. Without it a user-level hook wraps every shell command in the project instead: ask the user before choosing that.
 
-Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md).
+Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://aquaman.sh/docs/agent-setup/).
 
 ## What it does
 

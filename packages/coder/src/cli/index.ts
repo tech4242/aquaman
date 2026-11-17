@@ -449,7 +449,7 @@ program
       if (mode === 'exec') result.run = 'aquaman-coder exec -- <command>';
       if (agent === 'codex') {
         const sandbox = codexSandboxStatus(defaultSocketPath());
-        if (!sandbox.ok) result.human_steps.push(`let Codex's sandbox reach the proxy socket: ${sandbox.detail}. The config.toml profile is in docs/codex.md (https://github.com/tech4242/aquaman/blob/main/docs/codex.md)`);
+        if (!sandbox.ok) result.human_steps.push(`let Codex's sandbox reach the proxy socket: ${sandbox.detail}. The config.toml profile is in docs/codex.md (https://aquaman.sh/docs/codex/)`);
       }
       if (opts.skill) result.skill = installSkill(agent);
       if (opts.instructions) result.agents_file = writeAgentsBlock(agent, cwd, mode);
