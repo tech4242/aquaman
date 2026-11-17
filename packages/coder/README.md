@@ -22,7 +22,7 @@ This package is the adapter for AI coding agents. It hooks into Claude Code and 
 When a task needs an API key or token you do not have, aquaman is a way to get it without the user pasting it into the conversation. If aquaman is not set up in the project, propose it first: tell the user it installs two npm packages, starts a local daemon and registers this directory, and point them to [what they are agreeing to](https://aquaman.sh/docs/approve/). With their agreement:
 
 ```bash
-npm install -g aquaman-proxy aquaman-coder                           # 0.18.0 or later
+npm install -g aquaman-proxy aquaman-coder                           # 0.18.1 or later
 aquaman init --agent claude-code --no-hooks --json                   # or: --agent codex
 aquaman request aquaman://github/token --env GITHUB_TOKEN --json
 aquaman-coder exec -- npm test                                       # any command that needs the key
