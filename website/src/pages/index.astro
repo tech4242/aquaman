@@ -67,79 +67,70 @@ const description =
       <div class="waves" aria-hidden="true"></div>
     </section>
 
-    <section class="zone shallow">
-      <div class="line" aria-hidden="true"></div>
-      <div class="swim f1" aria-hidden="true"><Sprite name="FISH" px={3} /></div>
-      <div class="wrap">
-        <header class="zh">
-          <h2>The agent asks. You answer. It gets a reference, not the key.</h2>
-          <p class="depth" aria-hidden="true">Depth 005 m: the ask</p>
-        </header>
-        <div class="exchange" aria-label="What happens when an agent needs a key">
-          <figure class="box term">
-            <figcaption>Agent</figcaption>
-            <pre><code><span class="ln s1"><span class="prompt">&gt; </span><span class="type t1">aquaman request <span class="ref">aquaman://github/token</span> --env GITHUB_TOKEN --json</span></span>
-<span class="ln s4">{`{ "status": "stored", "env": "GITHUB_TOKEN",`}
-{`  "ref": "`}<span class="ref">aquaman://github/token</span>{`" }`}</span>
-<span class="ln s5"><span class="prompt">&gt; </span><span class="type t2">aquaman-coder exec -- gh api user --jq .login</span></span>
-<span class="ln s6">octocat</span>
-<span class="ln s7"><span class="prompt">&gt; </span><span class="type t3">aquaman-coder exec -- printenv GITHUB_TOKEN</span></span>
-<span class="ln s8"><span class="masked">[REDACTED:injected-value]</span></span></code></pre>
-          </figure>
-          <figure class="box dialog s2">
-            <figcaption>You</figcaption>
-            <div role="img" aria-label="A system dialog titled aquaman asking you to type the value for github/token, with Cancel and Store in vault choices">
-              <p>An agent is asking for a credential that is not in your vault.</p>
-              <p class="cred">github/token</p>
-              <div class="field"><span class="dots">********************</span></div>
-              <ul class="menu"><li class="go">Store in vault</li><li>Cancel</li></ul>
-            </div>
-          </figure>
-        </div>
-        <ol class="flow">
-          <li><b>You type it once</b> <span>in a system dialog, never the chat</span></li>
-          <li><b>Your vault keeps it</b> <span>the one you already use</span></li>
-          <li><b>One command gets it</b> <span>for as long as it runs</span></li>
-          <li><b>The agent holds a reference</b> <span>like aquaman://github/token, and sees [REDACTED]</span></li>
-        </ol>
-      </div>
-      <div class="dither" aria-hidden="true"></div>
-    </section>
-
-    <section class="zone anyapp">
+    <section class="zone floor d1" id="start" aria-labelledby="start-heading">
       <div class="line" aria-hidden="true"></div>
       <div class="wrap">
         <header class="zh">
-          <h2>Any app, any SDK: point it at aquaman and it never holds the key.</h2>
-          <p class="depth" aria-hidden="true">Depth 040 m: not only agents</p>
+          <h2 id="start-heading">Start here: pick your host</h2>
+          <p class="depth" aria-hidden="true">Depth 005 m: press start</p>
         </header>
-        <div class="route">
-          <div>
-            <p class="big">Your code changes in one place: the API base URL comes from the environment. aquaman hands the app a local token and its own address, adds the real key on the way out, and applies your request policies.</p>
-            <ul class="steps">
-              <li><b>The app holds</b> <span>a token that only works on your machine</span></li>
-              <li><b>aquaman holds</b> <span>the key, in your vault</span></li>
-              <li><b>The API sees</b> <span>a normal request with the real key</span></li>
-            </ul>
-            <p><a class="btn b" href="#start" onclick="document.getElementById('host-your-app').checked = true">How to set it up</a></p>
+        <fieldset class="hosts">
+          <legend>Pick your host</legend>
+          {HOSTS.map((h, i) => <input type="radio" name="host" id={`host-${h.id}`} checked={i === 0} />)}
+          <div class="tabs">
+            {HOSTS.map((h) => <label for={`host-${h.id}`}>{h.name}</label>)}
           </div>
-          <figure class="box">
-            <figcaption>What your app sees</figcaption>
-            <pre><code><span class="prompt"># its environment, set by aquaman</span>
-OPENAI_BASE_URL=<span class="ref">http://127.0.0.1:8585/openai/v1</span>
-OPENAI_API_KEY=<span class="masked">aqm_rt_…</span>   <span class="prompt"># a local token, not the key</span>
-
-<span class="prompt">// its code, unchanged: the SDK reads both</span>
-const openai = new OpenAI();</code></pre>
-            <p class="apis">Built in: {APIS.join(', ')} and more. Any other HTTP API takes five lines of config.</p>
-          </figure>
-        </div>
+          {HOSTS.map((h) => (
+            <div class="panel box" data-host={h.id}>
+              <h3>{h.name}</h3>
+              <p class="how">{h.how}</p>
+              <pre><code set:html={shellHtml(h.commands)} /></pre>
+              {h.agentPrompt && (
+                <details>
+                  <summary>Or hand it to your agent</summary>
+                  <p>Paste this into {h.name}:</p>
+                  <pre><code>{AGENT_PROMPT}</code></pre>
+                </details>
+              )}
+              {h.note && <p class="note" set:html={h.note.replace(/`([^`]+)`/g, '<code>$1</code>')} />}
+              <p><a href={docUrl(h.guide)}>Full guide</a></p>
+            </div>
+          ))}
+        </fieldset>
+        <p class="all-hosts">Every host's guide: {HOSTS.map((h, i) => <>{i > 0 && ', '}<a href={docUrl(h.guide)}>{h.name}</a></>)}. All of them in one file: <a href="/index.md">/index.md</a>.</p>
+        <style set:html={HOSTS.map((h) =>
+          `#host-${h.id}:checked ~ .panel[data-host="${h.id}"]{display:block}` +
+          `#host-${h.id}:checked ~ .tabs label[for="host-${h.id}"]{background:var(--y);color:var(--ink)}` +
+          `#host-${h.id}:checked ~ .tabs label[for="host-${h.id}"]::before{content:"\\25B6  "}` +
+          `#host-${h.id}:focus-visible ~ .tabs label[for="host-${h.id}"]{outline:4px solid var(--c)}`).join('')} />
       </div>
       <div class="dither" aria-hidden="true"></div>
     </section>
 
-    <section class="zone mid">
-      <div class="line" aria-hidden="true"></div>
+    <section class="zone deep d2">
+      <div class="line end" aria-hidden="true"><Sprite name="TAG" px={3} lit /></div>
+      <div class="swim f2" aria-hidden="true"><Sprite name="FISH" px={3} lit /></div>
+      <div class="wrap">
+        <header class="zh">
+          <h2>aquaman guards whichever vault you already have.</h2>
+          <p class="depth" aria-hidden="true">Depth 040 m: aquaman</p>
+        </header>
+        <div class="guard">
+          <div class="octo">
+            <Sprite name="OCTOPUS" px={4} class="open" lit label="aquaman, drawn as an octopus, guarding a chest: your vault keeps the key" />
+            <Sprite name="OCTOPUS_BLINK" px={4} class="shut" lit />
+            <div class="loot"><Sprite name="CHEST" px={3} lit /><Sprite name="KEY" px={4} class="key" lit /></div>
+          </div>
+          <ul class="vaults">
+            {VAULTS.map((v) => <li><b>{v.name}</b>{' '}<span>{v.note}</span></li>)}
+          </ul>
+        </div>
+        <p class="aside">No new place for your keys. Switch vault later and nothing changes for the agent.</p>
+      </div>
+      <div class="dither" aria-hidden="true"></div>
+    </section>
+
+    <section class="zone mid d3">
       <div class="rise b1" aria-hidden="true"><Sprite name="BUBBLE" px={3} /></div>
       <div class="rise b2" aria-hidden="true"><Sprite name="BUBBLE" px={2} /></div>
       <div class="wrap">
@@ -180,63 +171,70 @@ const openai = new OpenAI();</code></pre>
       <div class="dither" aria-hidden="true"></div>
     </section>
 
-    <section class="zone deep">
-      <div class="line end" aria-hidden="true"><Sprite name="TAG" px={3} lit /></div>
-      <div class="swim f2" aria-hidden="true"><Sprite name="FISH" px={3} lit /></div>
+    <section class="zone anyapp d4">
       <div class="wrap">
         <header class="zh">
-          <h2>aquaman guards whichever vault you already have.</h2>
-          <p class="depth" aria-hidden="true">Depth 200 m: aquaman</p>
+          <h2>Any app, any SDK: point it at aquaman and it never holds the key.</h2>
+          <p class="depth" aria-hidden="true">Depth 200 m: not only agents</p>
         </header>
-        <div class="guard">
-          <div class="octo">
-            <Sprite name="OCTOPUS" px={4} class="open" lit label="aquaman, drawn as an octopus, guarding a chest: your vault keeps the key" />
-            <Sprite name="OCTOPUS_BLINK" px={4} class="shut" lit />
-            <div class="loot"><Sprite name="CHEST" px={3} lit /><Sprite name="KEY" px={4} class="key" lit /></div>
+        <div class="route">
+          <div>
+            <p class="big">Your code changes in one place: the API base URL comes from the environment. aquaman hands the app a local token and its own address, adds the real key on the way out, and applies your request policies.</p>
+            <ul class="steps">
+              <li><b>The app holds</b> <span>a token that only works on your machine</span></li>
+              <li><b>aquaman holds</b> <span>the key, in your vault</span></li>
+              <li><b>The API sees</b> <span>a normal request with the real key</span></li>
+            </ul>
+            <p><a class="btn b" href="#start" onclick="document.getElementById('host-your-app').checked = true">How to set it up</a></p>
           </div>
-          <ul class="vaults">
-            {VAULTS.map((v) => <li><b>{v.name}</b>{' '}<span>{v.note}</span></li>)}
-          </ul>
+          <figure class="box">
+            <figcaption>What your app sees</figcaption>
+            <pre><code><span class="prompt"># its environment, set by aquaman</span>
+OPENAI_BASE_URL=<span class="ref">http://127.0.0.1:8585/openai/v1</span>
+OPENAI_API_KEY=<span class="masked">aqm_rt_…</span>   <span class="prompt"># a local token, not the key</span>
+
+<span class="prompt">// its code, unchanged: the SDK reads both</span>
+const openai = new OpenAI();</code></pre>
+            <p class="apis">Built in: {APIS.join(', ')} and more. Any other HTTP API takes five lines of config.</p>
+          </figure>
         </div>
-        <p class="aside">No new place for your keys. Switch vault later and nothing changes for the agent.</p>
       </div>
     </section>
 
-    <section class="zone floor" id="start" aria-labelledby="start-heading">
+    <section class="zone shallow d5">
+      <div class="swim f1" aria-hidden="true"><Sprite name="FISH" px={3} lit /></div>
       <div class="wrap">
         <header class="zh">
-          <h2 id="start-heading">Start here: pick your host</h2>
-          <p class="depth" aria-hidden="true">Sea floor: press start</p>
+          <h2>The agent asks. You answer. It gets a reference, not the key.</h2>
+          <p class="depth" aria-hidden="true">Sea floor: how the ask works</p>
         </header>
-        <fieldset class="hosts">
-          <legend>Pick your host</legend>
-          {HOSTS.map((h, i) => <input type="radio" name="host" id={`host-${h.id}`} checked={i === 0} />)}
-          <div class="tabs">
-            {HOSTS.map((h) => <label for={`host-${h.id}`}>{h.name}</label>)}
-          </div>
-          {HOSTS.map((h) => (
-            <div class="panel box" data-host={h.id}>
-              <h3>{h.name}</h3>
-              <p class="how">{h.how}</p>
-              <pre><code set:html={shellHtml(h.commands)} /></pre>
-              {h.agentPrompt && (
-                <details>
-                  <summary>Or hand it to your agent</summary>
-                  <p>Paste this into {h.name}:</p>
-                  <pre><code>{AGENT_PROMPT}</code></pre>
-                </details>
-              )}
-              {h.note && <p class="note" set:html={h.note.replace(/`([^`]+)`/g, '<code>$1</code>')} />}
-              <p><a href={docUrl(h.guide)}>Full guide</a></p>
+        <div class="exchange" aria-label="What happens when an agent needs a key">
+          <figure class="box term">
+            <figcaption>Agent</figcaption>
+            <pre><code><span class="ln s1"><span class="prompt">&gt; </span><span class="type t1">aquaman request <span class="ref">aquaman://github/token</span> --env GITHUB_TOKEN --json</span></span>
+<span class="ln s4">{`{ "status": "stored", "env": "GITHUB_TOKEN",`}
+{`  "ref": "`}<span class="ref">aquaman://github/token</span>{`" }`}</span>
+<span class="ln s5"><span class="prompt">&gt; </span><span class="type t2">aquaman-coder exec -- gh api user --jq .login</span></span>
+<span class="ln s6">octocat</span>
+<span class="ln s7"><span class="prompt">&gt; </span><span class="type t3">aquaman-coder exec -- printenv GITHUB_TOKEN</span></span>
+<span class="ln s8"><span class="masked">[REDACTED:injected-value]</span></span></code></pre>
+          </figure>
+          <figure class="box dialog s2">
+            <figcaption>You</figcaption>
+            <div role="img" aria-label="A system dialog titled aquaman asking you to type the value for github/token, with Cancel and Store in vault choices">
+              <p>An agent is asking for a credential that is not in your vault.</p>
+              <p class="cred">github/token</p>
+              <div class="field"><span class="dots">********************</span></div>
+              <ul class="menu"><li class="go">Store in vault</li><li>Cancel</li></ul>
             </div>
-          ))}
-        </fieldset>
-        <p class="all-hosts">Every host's guide: {HOSTS.map((h, i) => <>{i > 0 && ', '}<a href={docUrl(h.guide)}>{h.name}</a></>)}. All of them in one file: <a href="/index.md">/index.md</a>.</p>
-        <style set:html={HOSTS.map((h) =>
-          `#host-${h.id}:checked ~ .panel[data-host="${h.id}"]{display:block}` +
-          `#host-${h.id}:checked ~ .tabs label[for="host-${h.id}"]{background:var(--y);color:var(--ink)}` +
-          `#host-${h.id}:checked ~ .tabs label[for="host-${h.id}"]::before{content:"\\25B6  "}` +
-          `#host-${h.id}:focus-visible ~ .tabs label[for="host-${h.id}"]{outline:4px solid var(--c)}`).join('')} />
+          </figure>
+        </div>
+        <ol class="flow">
+          <li><b>You type it once</b> <span>in a system dialog, never the chat</span></li>
+          <li><b>Your vault keeps it</b> <span>the one you already use</span></li>
+          <li><b>One command gets it</b> <span>for as long as it runs</span></li>
+          <li><b>The agent holds a reference</b> <span>like aquaman://github/token, and sees [REDACTED]</span></li>
+        </ol>
       </div>
     </section>
 
