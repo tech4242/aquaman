@@ -21,7 +21,7 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/tech4242/aquaman"
+Homepage = "https://aquaman.sh"
 Repository = "https://github.com/tech4242/aquaman"
 
 [project.scripts]

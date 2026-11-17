@@ -16,7 +16,7 @@ export interface Host {
 }
 
 export const AGENT_PROMPT = `Set up aquaman in this project so you can request credentials instead of me pasting them.
-Read https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md first and tell me
+Read https://aquaman.sh/docs/agent-setup.md first and tell me
 what it will change before you run anything.`;
 
 export const HOSTS: Host[] = [
