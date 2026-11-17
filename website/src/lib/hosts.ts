@@ -109,3 +109,27 @@ export function hostsMarkdown(docLink: (slug: string) => string): string {
   }
   return parts.join('\n');
 }
+
+const escapeHtml = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/**
+ * Shell commands marked up the way the page's other code windows are: a
+ * prompt before each command, references in the reference colour, comments
+ * dimmed. A line that continues the one above (after a trailing backslash)
+ * gets no prompt.
+ */
+export function shellHtml(commands: string): string {
+  let continued = false;
+  return commands
+    .split('\n')
+    .map((line) => {
+      const hash = line.search(/(^|\s)#\s/);
+      const code = hash === -1 ? line : line.slice(0, hash === 0 ? 0 : hash + 1);
+      const comment = hash === -1 ? '' : line.slice(code.length);
+      const prompt = !continued && code.trim() ? '<span class="prompt">&gt; </span>' : '';
+      continued = /\\\s*$/.test(code);
+      const body = escapeHtml(code).replace(/aquaman:\/\/[A-Za-z0-9._/-]+/g, '<span class="ref">$&</span>');
+      return prompt + body + (comment ? `<span class="prompt">${escapeHtml(comment)}</span>` : '');
+    })
+    .join('\n');
+}

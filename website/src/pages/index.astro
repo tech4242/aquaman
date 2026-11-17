@@ -2,7 +2,7 @@
 import Base from '../layouts/Base.astro';
 import '../styles/home.css';
 import Sprite from '../components/Sprite.astro';
-import { HOSTS, AGENT_PROMPT } from '../lib/hosts';
+import { HOSTS, AGENT_PROMPT, shellHtml } from '../lib/hosts';
 import { docUrl } from '../lib/links.mjs';
 import { SUMMARY, HOME_TITLE, packageVersion } from '../lib/site';
 
@@ -218,7 +218,7 @@ const openai = new OpenAI();</code></pre>
             <div class="panel box" data-host={h.id}>
               <h3>{h.name}</h3>
               <p class="how">{h.how}</p>
-              <pre><code>{h.commands}</code></pre>
+              <pre><code set:html={shellHtml(h.commands)} /></pre>
               {h.agentPrompt && (
                 <details>
                   <summary>Or hand it to your agent</summary>
