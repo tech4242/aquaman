@@ -11,5 +11,5 @@ export const getStaticPaths: GetStaticPaths = async () => {
   return paths;
 };
 
-export const GET: APIRoute = ({ props }) =>
-  new Response(markdownFor(props.page as Page), { headers: { 'Content-Type': 'text/markdown; charset=utf-8' } });
+export const GET: APIRoute = ({ props, site }) =>
+  new Response(markdownFor(props.page as Page, site!), { headers: { 'Content-Type': 'text/markdown; charset=utf-8' } });

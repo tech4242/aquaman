@@ -1,4 +1,6 @@
 // @ts-check
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import { unified } from '@astrojs/markdown-remark';
@@ -18,13 +20,35 @@ if (process.env.VERCEL && site.includes('localhost')) {
   throw new Error('Set SITE_URL: a build on Vercel has no public address to print.');
 }
 
+// When the source of a docs page last changed, from git, for the sitemap. Other pages get no date.
+function lastChanged(pathname) {
+  const slug = /^\/docs\/(.+)\/$/.exec(pathname)?.[1];
+  if (!slug) return undefined;
+  try {
+    const file = slug === 'security' ? 'SECURITY.md' : `docs/${slug}.md`;
+    const out = execFileSync('git', ['log', '-1', '--format=%cI', '--', file], {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export default defineConfig({
   site,
   // Canonical URLs end in a slash; the dev server also answers without one.
   trailingSlash: 'ignore',
   server: { host: '127.0.0.1', port: 4399 },
   // Pages for earlier releases point at the current page as canonical, so they stay out of the sitemap.
-  integrations: [sitemap({ filter: (page) => !/\/docs\/\d+\.\d+\.\d+\//.test(page) })],
+  integrations: [
+    sitemap({
+      filter: (page) => !/\/docs\/\d+\.\d+\.\d+\//.test(page),
+      serialize: (item) => ({ ...item, lastmod: lastChanged(new URL(item.url).pathname) }),
+    }),
+  ],
   markdown: {
     processor: unified({ remarkPlugins: [remarkDocLinks] }),
     shikiConfig: { themes: { light: 'github-light', dark: 'github-dark-dimmed' } },

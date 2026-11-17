@@ -1,12 +1,12 @@
 # MITRE ATLAS Mapping
 
-Aquaman maps to **MITRE ATLAS v5.4.0 (Adversarial Threat Landscape for Artificial-Intelligence Systems)** — a stable, machine-readable catalog of adversary techniques widely cited in audit reports. The 2026 ATLAS updates added agent-focused techniques; the one most directly in aquaman's lane is **AML.T0098 (AI Agent Tool Credential Harvesting)**, mapped below.
+aquaman maps to **MITRE ATLAS v5.4.0 (Adversarial Threat Landscape for Artificial-Intelligence Systems)** — a stable, machine-readable catalog of adversary techniques widely cited in audit reports. The 2026 ATLAS updates added agent-focused techniques; the one most directly in aquaman's lane is **AML.T0098 (AI Agent Tool Credential Harvesting)**, mapped below.
 
 Below: each ATLAS technique aquaman addresses, the aquaman feature that mitigates it, and the runnable test that proves the mitigation holds.
 
 Run all ATLAS conformance tests with `vitest run test/compliance/atlas/` (or just `npm test`, which runs the whole suite). The opt-in loopback listener (Hermes path, v0.13.0+) is a network-reachable surface and is covered separately in [`test/compliance/loopback-listener.test.ts`](../../test/compliance/loopback-listener.test.ts). The Hermes Python plugin — a credential-free status layer that performs no isolation itself — is conformance-tested in [`packages/hermes/tests/test_compliance.py`](../../packages/hermes/tests/test_compliance.py) for the controls applicable to it (it is verified to never *undermine* the proxy's isolation, not to enforce it).
 
-| Technique | Title | Aquaman mitigation | Test |
+| Technique | Title | aquaman mitigation | Test |
 |---|---|---|---|
 | **AML.T0055** | Unsecured Credentials | Credentials live in a vault backend (Keychain, 1Password, HashiCorp Vault, KeePassXC, encrypted-file, systemd-creds, Bitwarden, Keeper). The agent process never sees them — only a sentinel base-URL and a placeholder `aquaman-proxy-managed` marker. The proxy strips placeholder + injects the real credential before forwarding upstream. Post-tool-output redactor catches secrets that might leak into transcripts. The same guarantees hold on the opt-in loopback listener (Hermes path) — token-gated instead of socket-file-gated, placeholder stripped, real key injected only on the upstream leg. | [`t0055-unsecured-credentials.test.ts`](../../test/compliance/atlas/t0055-unsecured-credentials.test.ts), [`loopback-listener.test.ts`](../../test/compliance/loopback-listener.test.ts) |
 | **AML.T0012** | Valid Accounts | Even with valid credentials injected, request-level policy enforcement (method + path deny rules per service) blocks privileged paths *before* credentials are injected. Hash-chained audit log records every denied request with tamper-evident chain. Denied requests never reach the upstream provider. | [`test/compliance/atlas/t0012-valid-accounts.test.ts`](../../test/compliance/atlas/t0012-valid-accounts.test.ts) |
@@ -21,7 +21,7 @@ Run all ATLAS conformance tests with `vitest run test/compliance/atlas/` (or jus
 
 ## Limits
 
-- **AML.T0055:** Vault backends themselves can be compromised. Aquaman shifts the trust boundary from agent process → vault; it doesn't eliminate it.
+- **AML.T0055:** Vault backends themselves can be compromised. aquaman shifts the trust boundary from agent process → vault; it doesn't eliminate it.
 - **AML.T0012:** Policy rules are operator-defined. A misconfigured allow-everything policy leaves the path open. `aquaman doctor` validates the policy config but cannot validate intent.
 - **AML.T0062:** Header-stripping covers `Authorization` and `X-API-Key`. Other auth schemes (cookies, custom headers, query-string-embedded tokens) flow through untouched and rely on the policy engine.
 - **AML.T0090:** The broker endpoint materializes credentials in the agent shell's env for the duration of the tool call. That's still a non-zero window where the credential exists outside the proxy. The consumer's responsibility is to scrub after.

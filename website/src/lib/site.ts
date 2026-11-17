@@ -51,6 +51,8 @@ export interface Page {
   twin: string;
   repoPath: string;
   title: string;
+  /** The title for search results and browser tabs, when the heading is too long for one. */
+  metaTitle: string;
   description: string;
   /** ISO date of the last commit that touched the source file, when git history is available. */
   modified?: string;
@@ -85,6 +87,28 @@ export const NAV: { heading: string; slugs: string[]; labels?: Record<string, st
     },
   },
 ];
+
+/**
+ * What a search result or a link list shows for a page: one sentence naming aquaman and what the page gets you,
+ * short enough not to be cut off, and a shorter title where the page's heading is too long for a result.
+ * A page not listed here falls back to its heading and its first sentences.
+ */
+const META: Record<string, { title?: string; description: string }> = {
+  'agent-setup': { description: 'The contract for AI agents using aquaman: the commands, JSON output, statuses and exit codes for setting it up and requesting a credential.' },
+  'approve': { description: 'What you agree to when your coding agent proposes aquaman: what it installs, what it changes on your machine, and how to undo it.' },
+  'claude-code': { description: 'Use aquaman so Claude Code runs commands with your API keys without reading them: keys stay in your vault and output is redacted.' },
+  'codex': { description: 'Use aquaman to give Codex a token without a .env file: the key stays in your vault, is set per command, and is redacted from output.' },
+  'app-through-proxy': { title: 'Keep an API key out of the app your agent builds', description: 'Route the app your coding agent builds through aquaman, so it holds a local token and never the API key, with request policies applied.' },
+  'openclaw': { description: 'Run OpenClaw with aquaman so model keys and the Telegram token stay in your vault and never enter the gateway process, where plugins run.' },
+  'hermes': { description: "Point Hermes at aquaman's local proxy so provider API keys stay in your vault and are never in the Hermes agent process." },
+  'docker-sandboxes': { title: 'Docker Sandboxes secrets from your own vault', description: 'Source Docker Sandboxes (sbx) secrets from 1Password, Bitwarden or any vault aquaman supports, with an allow-list and an audit entry per read.' },
+  'openshell': { title: 'NVIDIA OpenShell credential driver for your vault', description: 'Make aquaman the credential driver for NVIDIA OpenShell, so sandboxes take keys from your own vault by reference, with an audit trail.' },
+  'compare': { title: 'aquaman vs other agent credential tools', description: 'Where aquaman fits among agent credential tools such as op run, Infisical, Doppler and fnox, and when something else is the better choice.' },
+  'security': { description: "aquaman's security policy: how to report a vulnerability privately, what is in scope, and which versions receive fixes." },
+  'compliance/atlas-mapping': { description: "How aquaman's controls map to MITRE ATLAS v5.4.0 techniques for AI systems, with the test that exercises each one." },
+  'compliance/nist-800-53': { description: 'How aquaman maps to NIST SP 800-53 Rev 5 controls for authentication, access enforcement, key management and audit.' },
+  'compliance/agentic-ai-guidance': { description: 'How aquaman aligns with 2026 guidance on agentic AI security from CISA, CSA MAESTRO and OWASP. Alignment, not certification.' },
+};
 
 function plain(markdown: string): string {
   return markdown
@@ -134,15 +158,15 @@ export function homeMarkdown(): string {
 }
 
 /** Site routes in Markdown (`/claude-code/`) pointed at their Markdown twins (`/claude-code.md`). */
-function routesToTwins(markdown: string, slugs: string[]): string {
+function routesToTwins(markdown: string, slugs: string[], site: URL): string {
   return markdown.replace(/\]\(\/docs\/([a-z0-9/-]+)\/(#[^)]*)?\)/g, (whole, slug: string, hash = '') =>
-    slugs.includes(slug) ? `](${docTwin(slug)}${hash})` : whole,
+    slugs.includes(slug) ? `](${new URL(docTwin(slug), site).href}${hash})` : whole,
   );
 }
 
 export function homeMarkdownTwin(pages: Page[], site: URL): string {
   // A reader of the Markdown is most often an agent, so its instruction comes first.
-  const body = routesToTwins(homeMarkdown(), pages.map((p) => p.slug));
+  const body = routesToTwins(homeMarkdown(), pages.map((p) => p.slug), site);
   return body.replace(/^(# .+\n)/, `$1\n> ${agentNote(site)}\n`);
 }
 
@@ -163,7 +187,7 @@ export async function getPages(version: string | null = null): Promise<Page[]> {
       .split(/\n\s*\n/)
       .map((b) => b.trim())
       .find((b) => b && !/^(#|```|\||[-*] |\d+\. |>|<|\[!\[)/.test(b));
-    const description = leadSentences(plain(firstParagraph ?? ''));
+    const description = version === null && META[slug] ? META[slug].description : leadSentences(plain(firstParagraph ?? ''));
     pages.push({
       slug,
       version,
@@ -171,6 +195,7 @@ export async function getPages(version: string | null = null): Promise<Page[]> {
       twin: docTwin(slug, version),
       repoPath,
       title,
+      metaTitle: META[slug]?.title ?? title,
       description,
       modified: version === null ? lastModified(repoPath) : undefined,
       entry,
@@ -197,9 +222,9 @@ export function navGroups(pages: Page[]) {
   }));
 }
 
-/** A page's Markdown with links to other pages pointing at their .md twins, root-relative so they hold on any host. */
-export function markdownFor(page: Page): string {
-  const twin = (slug: string) => docTwin(slug, page.version);
+/** A page's Markdown with links to other pages pointing at their .md twins, as full URLs so they still resolve once the text is pasted somewhere else. */
+export function markdownFor(page: Page, site: URL): string {
+  const twin = (slug: string) => new URL(docTwin(slug, page.version), site).href;
   return rewriteMarkdownLinks(page.entry.body ?? '', page.repoPath, twin, page.version ? `v${page.version}` : 'main').trim() + '\n';
 }
 

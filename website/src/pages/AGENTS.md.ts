@@ -1,11 +1,13 @@
 import type { APIRoute } from 'astro';
-import { agentNote } from '../lib/site';
+import { agentNote, SUMMARY } from '../lib/site';
 
 // Agents probe this path. It answers with the short instruction and where the contract is.
 export const GET: APIRoute = ({ site }) =>
   new Response(
     [
       '# aquaman, for agents',
+      '',
+      SUMMARY,
       '',
       agentNote(site!),
       '',
