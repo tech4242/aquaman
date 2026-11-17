@@ -19,11 +19,7 @@ Switching vault later does not change anything for the agent: references such as
 
 By default a command gets the key in its environment. Any app that reads its API base URL from the environment can instead be routed through aquaman: it is started with a local token and aquaman's address, aquaman adds the real key on the way out, and your request policies apply.
 
-```bash
-aquaman init --agent claude-code --no-hooks --loopback        # or: --agent codex
-aquaman request aquaman://openai/api_key --env OPENAI_API_KEY --via-proxy OPENAI_BASE_URL
-aquaman-coder exec -- npm start
-```
+The commands are under "Your app/agent" in the Start section above.
 
 The app then sees `OPENAI_BASE_URL=http://127.0.0.1:8585/openai/v1` and `OPENAI_API_KEY=aqm_rt_...`, a token that only forwards requests on this machine. Definitions for 26 APIs are built in (OpenAI, Anthropic, GitHub, Stripe and others) and any other HTTP API is a few lines in `services.yaml`. Guide: [Keep an API key out of the app a coding agent builds](/docs/app-through-proxy/).
 

@@ -262,11 +262,7 @@
 .route .apis { margin: 1rem 0 0; font-size: 0.91rem; }
 @media (max-width: 62rem) { .route { grid-template-columns: minmax(0, 1fr); max-width: none; gap: 2rem; } }
 
-.floor .step { font-family: var(--pixel); font-size: 0.72rem; font-weight: 400; margin: 0 0 1rem; }
-.floor .next { margin-top: 2.5rem; max-width: 56rem; scroll-margin-top: 2rem; }
-.floor .next .how { margin: 0 0 1rem; max-width: 60ch; }
-.floor .next pre { margin: 0 0 1rem; overflow-x: auto; }
-.floor .next a { color: var(--ink); }
-
 .surface .what { font-size: 1.03rem; max-width: 46ch; margin: 0.9rem 0 0; opacity: 0.8; }
 .sand .more { list-style: none; margin: 1.75rem 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem 1.75rem; font-size: 0.99rem; }
+.home :not(pre) > code { background: rgb(11 42 58 / 0.1); color: inherit; padding: 0.05em 0.3em; border-radius: 0; }
+.zone.deep :not(pre) > code, .zone.floor > .wrap > p code { background: rgb(217 245 236 / 0.14); }

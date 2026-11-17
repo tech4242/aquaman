@@ -85,6 +85,17 @@ aquaman openshell setup                              # enable the driver, prints
 aquaman daemon &                                     # start or restart the daemon`,
     guide: 'openshell',
   },
+  {
+    id: 'your-app',
+    name: 'Your app/agent',
+    how: 'Any app or agent you run yourself, in any language, as long as it reads its API base URL from the environment. It is started with a local token and aquaman\'s address; aquaman adds the real key on the way out and applies your request policies.',
+    commands: `npm install -g aquaman-proxy aquaman-coder
+cd ~/code/my-app && aquaman init --agent claude-code --no-hooks --loopback
+aquaman request aquaman://openai/api_key --env OPENAI_API_KEY --via-proxy OPENAI_BASE_URL
+aquaman-coder exec -- npm start`,
+    guide: 'app-through-proxy',
+    note: 'No coding agent is needed for this. `--agent` only decides which instruction file gets a short note (CLAUDE.md or AGENTS.md); pick either.',
+  },
 ];
 
 /** The same picker as Markdown, for the page's `.md` version. */
