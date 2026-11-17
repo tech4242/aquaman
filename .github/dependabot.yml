@@ -8,6 +8,8 @@ updates:
     directories:
       - "/"
       - "/packages/*"
+      # The site has its own lockfile, outside the workspaces.
+      - "/website"
     schedule:
       interval: weekly
       day: monday

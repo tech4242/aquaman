@@ -47,7 +47,7 @@ const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/',
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="aquaman: an agent asks for a credential by reference and sees it redacted, while a dialog asks you to store the value in your vault" />
     <meta name="twitter:card" content="summary_large_image" />
-    {jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />}
+    {jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd).replace(/</g, '\\u003c')} />}
   </head>
   <body class={look}>
     <a class="skip" href="#main">Skip to content</a>
@@ -64,7 +64,7 @@ const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/',
           <a class="stars" href="https://github.com/tech4242/aquaman" aria-label={stars === null ? 'Star aquaman on GitHub' : `Star aquaman on GitHub: ${stars} stars`}>
             <Sprite name="STAR" px={2} />
             <span>GitHub</span>
-            <b data-stars hidden={stars === null}>{stars === null ? '' : formatStars(stars)}</b>
+            <b hidden={stars === null}>{stars === null ? '' : formatStars(stars)}</b>
           </a>
         </nav>
       </div>
@@ -89,17 +89,5 @@ const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/',
         </ul>
       </div>
     </footer>
-    <script is:inline>
-      // The count in the page is from the last build; this replaces it with the live one when GitHub answers.
-      fetch('https://api.github.com/repos/tech4242/aquaman', { headers: { Accept: 'application/vnd.github+json' } })
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (d) {
-          var n = d && d.stargazers_count, el = document.querySelector('[data-stars]');
-          if (typeof n !== 'number' || !el) return;
-          el.textContent = n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n);
-          el.hidden = false;
-        })
-        .catch(function () {});
-    </script>
   </body>
 </html>

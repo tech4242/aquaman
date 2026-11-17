@@ -1,7 +1,7 @@
 /**
- * The repository's star count, read once per build, so the page shows a
- * number without waiting. A small script in the layout then replaces it with
- * the live count. If GitHub cannot be reached the count is left out.
+ * The repository's star count, read once per build. Pages make no request
+ * to GitHub or any other third party; the number is as fresh as the last
+ * deploy. If GitHub cannot be reached during the build the count is left out.
  */
 let pending: Promise<number | null> | undefined;
 
