@@ -197,14 +197,18 @@ describe('cli-core: aquaman init --agent', () => {
     const onTerm = () => { signalled = true; };
     process.once('SIGTERM', onTerm);
     try {
+      const configBefore = fs.readFileSync(configFile(), 'utf-8');
       const r = await init(['claude-code', '--loopback', '--json']);
       expect(r.code).toBe(1);
       expect(JSON.parse(r.stdout)).toMatchObject({
         ok: false,
-        loopback: { enabled: true, changed: true },
+        loopback: { enabled: false, changed: false },
         error: 'A proxy is running without the loopback listener and this command cannot restart it',
         fix: expect.stringContaining('aquaman stop'),
       });
+      // A refused run enables nothing: no listener in the config, no token written.
+      expect(fs.readFileSync(configFile(), 'utf-8')).toBe(configBefore);
+      expect(rawConfig().loopback).toEqual({ port });
 
       // Nor one whose health reply cannot be read at all.
       speaksJson = false;
@@ -212,6 +216,8 @@ describe('cli-core: aquaman init --agent', () => {
       expect(text.code).toBe(1);
       expect(text.stderr).toContain('✗ A proxy is running without the loopback listener and this command cannot restart it');
       expect(text.stderr).toContain('→ Stop it (aquaman stop, or stop the OpenClaw gateway that started it)');
+      expect(text.stdout).not.toContain('Loopback listener enabled');
+      expect(fs.readFileSync(configFile(), 'utf-8')).toBe(configBefore);
       expect(signalled).toBe(false);
       expect(proxy.requests.every((q) => q.url === '/_health')).toBe(true);
     } finally {

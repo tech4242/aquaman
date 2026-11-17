@@ -129,25 +129,32 @@ export function getDefaultConfig(): WrapperConfig {
   };
 }
 
-export function loadConfig(): WrapperConfig {
+/**
+ * The configuration as config.yaml holds it, merged with the defaults and
+ * with no environment override applied. This is the form a command that
+ * writes the file back must start from: loadConfig() adds values that exist
+ * only in the environment (the encryption password, a Vault token, a
+ * loopback token), and saving its result would write them to disk.
+ */
+export function loadStoredConfig(): WrapperConfig {
   const configPath = getConfigPath();
   const defaultConfig = getDefaultConfig();
 
-  let config: WrapperConfig;
   if (!fs.existsSync(configPath)) {
-    config = defaultConfig;
-  } else {
-    try {
-      const content = fs.readFileSync(configPath, 'utf-8');
-      const userConfig = parseYaml(content) as Partial<WrapperConfig>;
-      config = mergeConfig(defaultConfig, userConfig);
-    } catch {
-      console.error(`Warning: Failed to load config from ${configPath}, using defaults`);
-      config = defaultConfig;
-    }
+    return defaultConfig;
   }
+  try {
+    const content = fs.readFileSync(configPath, 'utf-8');
+    const userConfig = parseYaml(content) as Partial<WrapperConfig>;
+    return mergeConfig(defaultConfig, userConfig);
+  } catch {
+    console.error(`Warning: Failed to load config from ${configPath}, using defaults`);
+    return defaultConfig;
+  }
+}
 
-  return applyEnvOverrides(config);
+export function loadConfig(): WrapperConfig {
+  return applyEnvOverrides(loadStoredConfig());
 }
 
 export function applyEnvOverrides(config: WrapperConfig): WrapperConfig {

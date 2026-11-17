@@ -1,7 +1,7 @@
 /**
  * The prompts of `aquaman openclaw setup`, `aquaman setup` and
  * `aquaman openclaw migrate --auto` when a person is at a terminal: secrets
- * are read in raw mode, key by key.
+ * are read in raw mode, key by key, and never shown.
  *
  * A pseudo-terminal stands in for the person's terminal
  * (test/helpers/cov-cli-hosts-pty.py, Python's standard `pty` module). The
@@ -90,14 +90,9 @@ describe.skipIf(!findPython3())('aquaman prompts on a terminal (cli-hosts covera
     expect(await vault().get('anthropic', 'api_key')).toBeNull();
   }, T);
 
-  // Known bug, reported and not fixed here: each of the three secret prompts
-  // (promptSecretInput, and the promptSecret copies in runVaultSetup and in
-  // `openclaw setup`) opens a readline interface on stdin/stdout before it
-  // switches to raw mode, and that interface echoes every key. The key or
-  // master password is therefore shown while it is typed. `it.fails` keeps
-  // the expectation written down: these start failing, as they should, the
-  // day the prompts stop echoing; turn them into plain `it` then.
-  it.fails('openclaw setup: a typed API key is not shown on the terminal', async () => {
+  // What the terminal showed is what a person at the screen (or over their
+  // shoulder) saw: the prompt, and nothing of what was typed after it.
+  it('openclaw setup: a typed API key is not shown on the terminal', async () => {
     const r = await runCliOnTty(sb, ['openclaw', 'setup', '--backend', 'encrypted-file'], [
       ['? Enter your Anthropic API key: ', `sk-ant-secret${CTRL_C}`],
     ]);
@@ -105,7 +100,7 @@ describe.skipIf(!findPython3())('aquaman prompts on a terminal (cli-hosts covera
     expect(r.output).not.toContain('sk-ant-secret');
   }, T);
 
-  it.fails('aquaman setup: a typed API key is not shown on the terminal', async () => {
+  it('aquaman setup: a typed API key is not shown on the terminal', async () => {
     const r = await runCliOnTty(sb, ['setup', '--backend', 'encrypted-file'], [
       ['? Anthropic API key (or Enter to skip): ', `sk-ant-secret${CTRL_C}`],
     ]);
@@ -113,7 +108,7 @@ describe.skipIf(!findPython3())('aquaman prompts on a terminal (cli-hosts covera
     expect(r.output).not.toContain('sk-ant-secret');
   }, T);
 
-  it.fails('openclaw setup --backend keepassxc: the master password is not shown on the terminal', async () => {
+  it('openclaw setup --backend keepassxc: the master password is not shown on the terminal', async () => {
     const r = await runCliOnTty(sb, ['openclaw', 'setup', '--backend', 'keepassxc'], [
       ['? KeePassXC master password: ', `hunter2-master${CTRL_C}`],
     ]);

@@ -125,6 +125,24 @@ describe('OpenClaw migrator: failure and edge paths', () => {
       expect(fs.readFileSync(configPath, 'utf-8')).toBe('{ "channels": ');
     });
 
+    it('claims no replacement when openclaw.json cannot be written', () => {
+      writeConfig({ channels: { slack: { botToken: 'xoxb-real' } } });
+      const before = fs.readFileSync(configPath, 'utf-8');
+      fs.chmodSync(configPath, 0o444);
+      try {
+        const result = cleanupSources(configPath, credentialsDir, [
+          { service: 'slack', key: 'bot_token', source: 'channels.slack.botToken' },
+        ]);
+        expect(result.deleted).toEqual([]);
+        expect(result.errors).toHaveLength(1);
+        expect(result.errors[0]!.source).toBe('openclaw.json');
+        expect(result.errors[0]!.error).toMatch(/^Failed to update config: /);
+        expect(fs.readFileSync(configPath, 'utf-8')).toBe(before);
+      } finally {
+        fs.chmodSync(configPath, 0o644);
+      }
+    });
+
     it('replaces only the paths that exist with the placeholder', () => {
       writeConfig({ channels: { slack: { botToken: 'xoxb-real' } }, plugins: 'not-an-object' });
       const result = cleanupSources(configPath, credentialsDir, [

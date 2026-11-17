@@ -170,6 +170,9 @@ export function writeHermesEnv(env: Record<string, string>, filePath: string): v
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
   fs.writeFileSync(filePath, merged, { mode: 0o600 });
+  // `mode` only applies when the file is created. An existing file keeps the
+  // mode it had, and it now holds the loopback token, so set it explicitly.
+  fs.chmodSync(filePath, 0o600);
 }
 
 /**

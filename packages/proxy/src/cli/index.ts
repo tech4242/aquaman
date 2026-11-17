@@ -18,6 +18,7 @@ import { randomBytes } from 'node:crypto';
 
 import {
   loadConfig,
+  loadStoredConfig,
   getConfigDir,
   getConfigPath,
   ensureConfigDir,
@@ -309,40 +310,56 @@ const isProcessRunning = (pid: number): boolean => {
   }
 };
 
-/** Prompt for secret input with echo suppression (TTY) or plain readline (pipe) */
-async function promptSecretInput(prompt: string): Promise<string> {
-  const readline = await import('node:readline');
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+/**
+ * Read one line typed at a terminal without showing it. The terminal is put
+ * in raw mode and stdin is read directly: a readline interface must not be
+ * attached while a secret is typed, because on a terminal it echoes each key.
+ * Enter submits, DEL/^H rubs out one character, Ctrl-C exits the process with
+ * `interruptExitCode`.
+ */
+function readHiddenTtyLine(interruptExitCode: number): Promise<string> {
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.setEncoding('utf-8');
 
-  if (process.stdin.isTTY) {
-    return new Promise((resolve) => {
-      process.stdout.write(prompt);
-      const stdin = process.stdin;
-      stdin.setRawMode(true);
-      stdin.resume();
-      let input = '';
-      const onData = (data: Buffer) => {
-        const char = data.toString();
+  return new Promise((resolve) => {
+    let value = '';
+    const onData = (chunk: string) => {
+      for (const char of chunk) {
         if (char === '\n' || char === '\r') {
-          stdin.setRawMode(false);
-          stdin.removeListener('data', onData);
-          stdin.pause();
-          rl.close();
-          process.stdout.write('\n');
-          resolve(input.trim());
-        } else if (char === '\x7f' || char === '\b') {
-          input = input.slice(0, -1);
-        } else if (char === '\x03') {
-          stdin.setRawMode(false);
-          process.exit(0);
-        } else {
-          input += char;
+          process.stdin.setRawMode(false);
+          process.stdin.pause();
+          process.stdin.off('data', onData);
+          console.log('');
+          resolve(value);
+          return;
         }
-      };
-      stdin.on('data', onData);
-    });
+        if (char === '\x7f' || char === '\b') {
+          value = value.slice(0, -1);
+        } else if (char === '\x03') {  // Ctrl-C
+          process.stdin.setRawMode(false);
+          process.exit(interruptExitCode);
+        } else {
+          value += char;
+        }
+      }
+    };
+    process.stdin.on('data', onData);
+  });
+}
+
+/**
+ * Ask for a secret during setup. On a terminal the answer is read hidden
+ * (readHiddenTtyLine); from a pipe it is read as a plain line.
+ */
+async function promptSecretInput(prompt: string): Promise<string> {
+  if (process.stdin.isTTY) {
+    process.stdout.write(prompt);
+    return (await readHiddenTtyLine(0)).trim();
   }
 
+  const readline = await import('node:readline');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
     rl.question(prompt, (answer) => {
       rl.close();
@@ -724,7 +741,6 @@ async function runVaultSetup(opts: { backend?: string; policy: boolean; nonInter
   Promise<{ store: import('../core/index.js').CredentialStore; storedServices: string[]; backend: string }> {
   const os = await import('node:os');
   const configDir = getConfigDir();
-  const configPath = path.join(configDir, 'config.yaml');
 
   if (!opts.quiet) console.log('\n  \u{1F419} Vault setup\n');
 
@@ -758,22 +774,26 @@ async function runVaultSetup(opts: { backend?: string; policy: boolean; nonInter
   }
 
   ensureConfigDir();
-  let config = getDefaultConfig();
-  if (fs.existsSync(configPath)) {
-    config = loadConfig();
-  }
+  // `config` is what gets written: the file as stored, plus what this wizard
+  // decides. Values that exist only as environment overrides (the encryption
+  // password, a Vault token, a loopback token, ...) must not reach the file,
+  // so it never starts from loadConfig().
+  const config = loadStoredConfig();
   config.credentials.backend = backend as any;
   if (backend === 'keeper' && process.env['AQUAMAN_KEEPER_FOLDER_UID']) {
     config.credentials.keeperFolderUid = process.env['AQUAMAN_KEEPER_FOLDER_UID'];
   }
-  fs.writeFileSync(configPath, yamlStringify(config), { encoding: 'utf-8', mode: 0o600 });
+  saveConfig(config);
+  // The store is opened with the environment applied, like every other command.
+  const runtimeConfig = loadConfig();
+  runtimeConfig.credentials.backend = backend as any;
 
   const auditDir = path.join(configDir, 'audit');
   fs.mkdirSync(auditDir, { recursive: true, mode: 0o700 });
 
   let store: import('../core/index.js').CredentialStore;
   try {
-    store = await createCredentialStore(storeOptionsFromConfig(config));
+    store = await createCredentialStore(storeOptionsFromConfig(runtimeConfig));
   } catch (err) {
     console.error(`  Failed to initialize ${backend}: ${err instanceof Error ? err.message : err}`);
     process.exit(1);
@@ -786,32 +806,9 @@ async function runVaultSetup(opts: { backend?: string; policy: boolean; nonInter
     const op = process.env['OPENAI_API_KEY'];
     if (op) { await store.set('openai', 'api_key', op); storedServices.push('openai'); console.log('  \u2713 Stored openai/api_key'); }
   } else {
-    const readline = await import('node:readline');
-    const promptSecret = (prompt: string): Promise<string> => new Promise((resolve) => {
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      if (process.stdin.isTTY) {
-        process.stdout.write(prompt);
-        const stdin = process.stdin;
-        stdin.setRawMode(true);
-        stdin.resume();
-        let input = '';
-        const onData = (data: Buffer) => {
-          const char = data.toString();
-          if (char === '\n' || char === '\r') {
-            stdin.setRawMode(false); stdin.removeListener('data', onData); stdin.pause(); rl.close();
-            process.stdout.write('\n'); resolve(input.trim());
-          } else if (char === '\x7f' || char === '\b') { input = input.slice(0, -1); }
-          else if (char === '\x03') { stdin.setRawMode(false); process.exit(0); }
-          else { input += char; }
-        };
-        stdin.on('data', onData);
-      } else {
-        rl.question(prompt, (a) => { rl.close(); resolve(a.trim()); });
-      }
-    });
-    const anth = await promptSecret('  ? Anthropic API key (or Enter to skip): ');
+    const anth = await promptSecretInput('  ? Anthropic API key (or Enter to skip): ');
     if (anth) { await store.set('anthropic', 'api_key', anth); storedServices.push('anthropic'); console.log('    \u2713 anthropic/api_key\n'); }
-    const op = await promptSecret('  ? OpenAI API key (or Enter to skip): ');
+    const op = await promptSecretInput('  ? OpenAI API key (or Enter to skip): ');
     if (op) { await store.set('openai', 'api_key', op); storedServices.push('openai'); console.log('    \u2713 openai/api_key\n'); }
   }
 
@@ -822,7 +819,9 @@ async function runVaultSetup(opts: { backend?: string; policy: boolean; nonInter
       if (presets[svc]) policyToApply[svc] = presets[svc];
     }
     if (Object.keys(policyToApply).length > 0) {
-      config.policy = policyToApply;
+      // A preset fills in a service that has no policy; a policy already in
+      // the file is the user's and is kept.
+      config.policy = { ...policyToApply, ...config.policy };
       saveConfig(config);
       if (!opts.quiet) console.log('  \u2713 Default policy presets applied.\n');
     }
@@ -1306,8 +1305,11 @@ hermes
     }
 
     // Persist loopback config (enabled + port + token + host).
-    config.loopback = { enabled: true, port, host, token };
-    saveConfig(config);
+    // Written onto the file as stored, so that nothing else that exists only
+    // as an environment override is saved along with the listener settings.
+    const stored = loadStoredConfig();
+    stored.loopback = { enabled: true, port, host, token };
+    saveConfig(stored);
     console.log(`✓ Loopback listener enabled on http://${host}:${port} (saved to ${path.join(getConfigDir(), 'config.yaml')})`);
 
     if (options.write !== false) {
@@ -1651,6 +1653,7 @@ async function initForAgent(agent: string, json: boolean, hooks: boolean, loopba
   let running = await proxyHealthy(socketPath);
   let started = false;
   let restartFor: number | null = null;
+  let enableLoopback: (() => void) | null = null;
   if (loopback) {
     // The listener is a TCP port any local process can reach, so it is only
     // turned on when asked for. The raw file is edited so that values which
@@ -1661,15 +1664,19 @@ async function initForAgent(agent: string, json: boolean, hooks: boolean, loopba
     const host = LOOPBACK_HOSTS.has(lb.host) ? lb.host : '127.0.0.1';
     const next = { ...lb, enabled: true, port: lb.port || DEFAULT_LOOPBACK_PORT, host, token: lb.token || generateLoopbackToken() };
     const changed = lb.enabled !== true || !lb.token || lb.host !== host;
+    // Nothing is written until every reason to refuse has been checked: a
+    // run that stops with an error leaves the listener as it found it.
     if (changed) {
-      raw.loopback = next;
-      // The file now holds a token: written whole, readable by this user only.
-      const tmp = `${configPath}.${randomBytes(8).toString('hex')}.tmp`;
-      fs.writeFileSync(tmp, yamlStringify(raw), { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
-      fs.renameSync(tmp, configPath);
-      fs.chmodSync(configPath, 0o600);
+      enableLoopback = () => {
+        raw.loopback = next;
+        // The file now holds a token: written whole, readable by this user only.
+        const tmp = `${configPath}.${randomBytes(8).toString('hex')}.tmp`;
+        fs.writeFileSync(tmp, yamlStringify(raw), { encoding: 'utf-8', mode: 0o600, flag: 'wx' });
+        fs.renameSync(tmp, configPath);
+        fs.chmodSync(configPath, 0o600);
+      };
     }
-    result.loopback = { enabled: true, url: `http://${next.host}:${next.port}`, changed };
+    result.loopback = { enabled: !changed, url: `http://${next.host}:${next.port}`, changed: false };
     if (running && !(await probeLoopbackHealth(next.host, next.port))) {
       // A daemon started before the listener was enabled does not have it.
       // Only a process that says, over the socket, that it is the one in the
@@ -1685,7 +1692,6 @@ async function initForAgent(agent: string, json: boolean, hooks: boolean, loopba
         finish(1);
       }
     }
-    say(`  ✓ Loopback listener enabled (${result.loopback.url})`);
   }
   if ((!running || restartFor !== null) && result.config.backend === 'encrypted-file') {
     // This backend has no OS keystore behind it, so the daemon cannot open
@@ -1701,6 +1707,14 @@ async function initForAgent(agent: string, json: boolean, hooks: boolean, loopba
       if (!json) { console.error(`  ✗ ${result.error}`); console.error(`    → ${result.fix}`); }
       finish(1);
     }
+  }
+  if (loopback) {
+    if (enableLoopback) {
+      enableLoopback();
+      result.loopback.changed = true;
+    }
+    result.loopback.enabled = true;
+    say(`  ✓ Loopback listener enabled (${result.loopback.url})`);
   }
   if (restartFor !== null) {
     // Stopped only now, after everything that could keep it from coming back was checked.
@@ -2019,13 +2033,19 @@ openclaw
 
     // 2. Run init internally (create dirs, config)
     ensureConfigDir();
-    const config = getDefaultConfig();
+    // Start from the file as stored (the defaults when there is none) and
+    // change only what setup decides: the backend, policy presets for newly
+    // stored services, the loopback listener and routed channels. Everything
+    // else in an existing config (the loopback token and port, declared broker
+    // refs, policies, proxied services) is the user's and stays. Environment
+    // overrides are not applied, so none of them is written to the file.
+    const config = loadStoredConfig();
     config.credentials.backend = backend;
     if (backend === 'keeper') {
       config.credentials.keeperFolderUid = process.env['AQUAMAN_KEEPER_FOLDER_UID'];
       if (process.env['AQUAMAN_KEEPER_CONFIG']) config.credentials.keeperConfigPath = process.env['AQUAMAN_KEEPER_CONFIG'];
     }
-    fs.writeFileSync(configPath, yamlStringify(config), { encoding: 'utf-8', mode: 0o600 });
+    saveConfig(config);
 
     // Create audit directory
     const auditDir = path.join(configDir, 'audit');
@@ -2059,59 +2079,14 @@ openclaw
       }
     } else {
       // Interactive: prompt with hidden input
-      const readline = await import('node:readline');
-
-      const promptSecret = (prompt: string): Promise<string> => {
-        return new Promise((resolve) => {
-          const rl = readline.createInterface({
-            input: process.stdin,
-            output: process.stdout
-          });
-
-          // Attempt to hide input on TTY
-          if (process.stdin.isTTY) {
-            process.stdout.write(prompt);
-            const stdin = process.stdin;
-            stdin.setRawMode(true);
-            stdin.resume();
-            let input = '';
-            const onData = (data: Buffer) => {
-              const char = data.toString();
-              if (char === '\n' || char === '\r') {
-                stdin.setRawMode(false);
-                stdin.removeListener('data', onData);
-                stdin.pause();
-                rl.close();
-                process.stdout.write('\n');
-                resolve(input.trim());
-              } else if (char === '\x7f' || char === '\b') {
-                input = input.slice(0, -1);
-              } else if (char === '\x03') {
-                // Ctrl+C
-                stdin.setRawMode(false);
-                process.exit(0);
-              } else {
-                input += char;
-              }
-            };
-            stdin.on('data', onData);
-          } else {
-            rl.question(prompt, (answer) => {
-              rl.close();
-              resolve(answer.trim());
-            });
-          }
-        });
-      };
-
-      const anthropicKey = await promptSecret('  ? Enter your Anthropic API key: ');
+      const anthropicKey = await promptSecretInput('  ? Enter your Anthropic API key: ');
       if (anthropicKey) {
         await store.set('anthropic', 'api_key', anthropicKey);
         storedServices.push('anthropic');
         console.log('    \u2713 Stored anthropic/api_key\n');
       }
 
-      const openaiKey = await promptSecret('  ? Enter your OpenAI API key (or press Enter to skip): ');
+      const openaiKey = await promptSecretInput('  ? Enter your OpenAI API key (or press Enter to skip): ');
       if (openaiKey) {
         await store.set('openai', 'api_key', openaiKey);
         storedServices.push('openai');
@@ -2144,13 +2119,14 @@ openclaw
         const presets = getDefaultPolicyPresets();
         const policyToApply: Record<string, any> = {};
         for (const svc of storedServices) {
-          if (presets[svc]) {
+          // A service that already has a policy keeps it.
+          if (presets[svc] && !config.policy?.[svc]) {
             policyToApply[svc] = presets[svc];
           }
         }
 
         if (Object.keys(policyToApply).length > 0) {
-          config.policy = policyToApply;
+          config.policy = { ...config.policy, ...policyToApply };
           saveConfig(config);
 
           console.log('  Applying default policy presets:\n');
@@ -2394,20 +2370,6 @@ openclaw
             fs.mkdirSync(profilesDir, { recursive: true, mode: 0o700 });
             fs.writeFileSync(profilesPath, JSON.stringify({ version: 1, profiles, order }, null, 2), { mode: 0o600 });
             console.log('  \u2713 Auth profiles generated at ' + profilesPath);
-
-            // OpenClaw >= 2026.6.5 reads provider auth profiles from each agent's
-            // openclaw-agent.sqlite, not auth-profiles.json (openclaw/openclaw#89102).
-            // On those versions the SecretRef branch above applies instead; this
-            // hint only fires when the version couldn't be detected (SecretRef
-            // gate returned false) but the runtime turns out to be >= 2026.6.5.
-            // We deliberately do NOT auto-run `openclaw doctor --fix` here:
-            // it is OpenClaw's broad config-healing command \u2014 verified to take
-            // ~19s (gateway probes) and to rewrite openclaw.json (it reset our
-            // plugin entry to bundled defaults in testing).
-            if (authProfilesAreSqliteOnly(ocVersion)) {
-              console.log('  \u2192 OpenClaw \u2265 2026.6.5 reads auth profiles from SQLite; import the placeholder once:');
-              console.log('      openclaw doctor --fix    (backs up openclaw.json first; see aquaman openclaw doctor)');
-            }
           }
         }
       } else {
@@ -3145,34 +3107,7 @@ async function readAllStdin(): Promise<string> {
 
 async function readTtyHiddenInput(prompt: string): Promise<string> {
   console.log(prompt);
-  process.stdin.setRawMode(true);
-  process.stdin.resume();
-  process.stdin.setEncoding('utf-8');
-
-  return new Promise((resolve) => {
-    let value = '';
-    const onData = (chunk: string) => {
-      for (const char of chunk) {
-        if (char === '\n' || char === '\r') {
-          process.stdin.setRawMode(false);
-          process.stdin.pause();
-          process.stdin.off('data', onData);
-          console.log('');
-          resolve(value);
-          return;
-        }
-        if (char === '\x7f' || char === '\b') {
-          value = value.slice(0, -1);
-        } else if (char === '\x03') {  // Ctrl-C
-          process.stdin.setRawMode(false);
-          process.exit(130);
-        } else {
-          value += char;
-        }
-      }
-    };
-    process.stdin.on('data', onData);
-  });
+  return readHiddenTtyLine(130);
 }
 
 credentials
@@ -4120,7 +4055,8 @@ openclaw
           fs.writeFileSync(servicesYamlPath, yamlStringify(servicesConfig), 'utf-8');
 
           // Add to proxiedServices in config.yaml
-          const updatedConfig = loadConfig();
+          // The stored form, so no environment override is written back.
+          const updatedConfig = loadStoredConfig();
           let addedToProxied = false;
           for (const serviceName of unknownServices.keys()) {
             if (!updatedConfig.credentials.proxiedServices.includes(serviceName)) {
@@ -4177,6 +4113,12 @@ openclaw
         }
         if (cleanupResult.deleted.length > 0) {
           console.log('');
+        }
+        if (cleanupResult.errors.length > 0) {
+          // The credentials are in the vault, but plaintext the user asked to
+          // have removed is still on disk.
+          console.log('  Plaintext originals remain where removal failed. Fix the cause and remove them by hand.');
+          process.exit(1);
         }
       } else if (opts.cleanup !== true) {
         // Show manual cleanup commands if not auto-cleaning

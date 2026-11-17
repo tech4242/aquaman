@@ -16,6 +16,7 @@ export {
   expandPath,
   getDefaultConfig,
   loadConfig,
+  loadStoredConfig,
   ensureConfigDir,
   saveConfig,
   applyEnvOverrides,

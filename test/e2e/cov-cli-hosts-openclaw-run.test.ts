@@ -359,9 +359,12 @@ describe('aquaman openclaw start / configure / status / migrate (cli-hosts cover
       const before = fs.readFileSync(cfg, 'utf-8');
       fs.chmodSync(cfg, 0o444);
       const r = await runCli(sb, ['openclaw', 'migrate', '--auto', '--cleanup']);
-      expect(r.code).toBe(0);
+      // The plaintext is still on disk, so the run does not claim otherwise and does not exit 0.
+      expect(r.code).toBe(1);
       expect(r.stdout).toContain('Migrated 1 credential');
       expect(r.stdout).toContain('✗ openclaw.json: Failed to update config:');
+      expect(r.stdout).not.toContain('Replaced');
+      expect(r.stdout).toContain('Plaintext originals remain where removal failed.');
       expect(fs.readFileSync(cfg, 'utf-8')).toBe(before);
       const status = await runCli(sb, ['openclaw', 'status']);
       expect(status.stdout).toContain('Stored credentials: 1');
