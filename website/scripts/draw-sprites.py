@@ -382,7 +382,45 @@ rects = ''.join(f'<rect x="{x}" y="{y}" width="1" height="1" fill="{COLOURS[ch]}
 favicon = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 18 18" shape-rendering="crispEdges">'
            '<rect x="-1" y="-1" width="18" height="18" fill="#3fc1c0"/>' + rects + '</svg>\n')
 open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'public', 'favicon.svg'), 'w').write(favicon)
-print('wrote', len(SPRITES), 'sprites and the favicon')
+# The same icon as bitmaps, for clients that do not take an SVG icon:
+# favicon.ico (16, 32 and 48 pixels) and the 180 pixel touch icon. Written
+# with the standard library only, so the art stays generated from one grid.
+import struct, zlib
+
+def _rgb(colour):
+    return bytes(int(colour[i:i + 2], 16) for i in (1, 3, 5))
+
+def icon_png(scale, pad, cells=16):
+    """The icon centred on a square of water as a PNG: `cells` cells of `scale` pixels, plus `pad` pixels around."""
+    drawn = [(x, y, ch) for y, row in enumerate(icon()) for x, ch in enumerate(row) if ch in COLOURS]
+    xs, ys = [x for x, _, _ in drawn], [y for _, y, _ in drawn]
+    dx = (cells - (max(xs) - min(xs) + 1)) // 2 - min(xs)
+    dy = (cells - (max(ys) - min(ys) + 1)) // 2 - min(ys)
+    water = _rgb('#3fc1c0')
+    grid = [[water] * cells for _ in range(cells)]
+    for x, y, ch in drawn:
+        grid[y + dy][x + dx] = _rgb(COLOURS[ch])
+    size = cells * scale + 2 * pad
+    blank = b'\x00' + water * size
+    lines = [blank] * pad
+    for row in grid:
+        lines += [b'\x00' + water * pad + b''.join(cell * scale for cell in row) + water * pad] * scale
+    lines += [blank] * pad
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+    head = struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0)
+    return size, b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', head) + chunk(b'IDAT', zlib.compress(b''.join(lines), 9)) + chunk(b'IEND', b'')
+
+public = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'public')
+images = [icon_png(scale, 0) for scale in (1, 2, 3)]
+offset = 6 + 16 * len(images)
+ico, body = struct.pack('<HHH', 0, 1, len(images)), b''
+for size, png in images:
+    ico += struct.pack('<BBBBHHII', size, size, 0, 0, 1, 24, len(png), offset + len(body))
+    body += png
+open(os.path.join(public, 'favicon.ico'), 'wb').write(ico + body)
+open(os.path.join(public, 'apple-touch-icon.png'), 'wb').write(icon_png(10, 10)[1])
+print('wrote', len(SPRITES), 'sprites, the favicon and the bitmap icons')
 
 
 # ---- The README banner: the home page's scene as one standalone SVG ----------------
