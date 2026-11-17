@@ -285,3 +285,9 @@
 .d2 .line { background: var(--foam); bottom: auto; height: 3.5rem; }
 .d1 .hosts, .d1 .all-hosts { max-width: 78%; }
 @media (max-width: 62rem) { .d1 .hosts, .d1 .all-hosts { max-width: none; } }
+
+/* A ranking someone else publishes, stated plainly and linked to where it can be checked. */
+.surface .rank { display: inline-flex; align-items: stretch; margin-top: 1.75rem; border: var(--px) solid var(--ink); background: #fff; text-decoration: none; color: var(--ink); max-width: 100%; }
+.surface .rank b { font-family: var(--pixel); font-weight: 400; font-size: 0.85rem; background: var(--y); padding: 0.6rem 0.75rem; border-right: var(--px) solid var(--ink); display: flex; align-items: center; }
+.surface .rank span { padding: 0.45rem 0.8rem; font-size: 0.95rem; align-self: center; }
+.surface .rank:hover { background: var(--foam); }

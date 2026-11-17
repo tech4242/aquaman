@@ -18,6 +18,9 @@ const VAULTS = [
   { name: 'Encrypted file', note: 'AES-256-GCM' },
 ];
 
+// ClawHub's Security category, ordered by downloads. Checked by hand; update or remove when it changes.
+const CLAWHUB_RANK = { rank: 7, checked: '2026-11-17', url: 'https://clawhub.ai/plugins?category=security' };
+
 const APIS = ['OpenAI', 'Anthropic', 'GitHub', 'Stripe', 'xAI', 'Mistral', 'Hugging Face', 'ElevenLabs', 'Slack', 'Discord'];
 
 const jsonLd = {
@@ -55,6 +58,10 @@ const description =
           <a class="btn a" href="#start">Start</a>
           <a class="btn b" href="/docs/approve/">My agent asked to install it</a>
         </div>
+        <a class="rank" href={CLAWHUB_RANK.url} title={`By downloads in ClawHub's Security category, checked ${CLAWHUB_RANK.checked}`}>
+          <b>#{CLAWHUB_RANK.rank}</b>
+          <span>Security plugin on ClawHub, by downloads</span>
+        </a>
         <div class="raft">
           <Sprite name="ROBOT" px={3} label="A small robot on a raft: your agent, on the surface" />
         </div>
