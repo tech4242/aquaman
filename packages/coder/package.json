@@ -70,7 +70,7 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "homepage": "https://github.com/tech4242/aquaman/tree/main/packages/coder#readme",
+  "homepage": "https://aquaman.sh",
   "bugs": {
     "url": "https://github.com/tech4242/aquaman/issues"
   }
