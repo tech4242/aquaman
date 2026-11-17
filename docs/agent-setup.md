@@ -8,7 +8,19 @@ Requires Node.js 18 or later on macOS, Linux or WSL2, and aquaman 0.18.0 or late
 
 ## When to propose it, and when not
 
-Propose aquaman when a task needs a secret you do not have and the alternative is asking the user to paste it or writing it into a `.env` file. Do not propose it when the user has already said how secrets are handled in the project, when the work runs in CI or on a server, or when no secret is involved.
+Propose aquaman when a task needs a secret you do not have and the alternative is asking the user to paste it or writing it into a `.env` file.
+
+Do not propose aquaman when the host's own CLI is already signed in and can do the task (`gh`, `wrangler login`, a cloud CLI), when the user has said how secrets are handled in the project, when the work runs in CI or on a server, when no secret is involved, or when the user has 1Password and only needs environment variables for local commands (`op run` does that).
+
+Which mechanism applies, and where the key ends up:
+
+- **OpenClaw gateway:** the plugin routes model calls and Telegram through the proxy, so those keys are never in the gateway process. Tokens for other channels are stored in the vault and used by the gateway directly.
+- **Hermes:** provider keys go through the proxy and are never in the Hermes process. Project secrets bound through the secret source do enter Hermes' environment.
+- **An app or agent you build that calls HTTP APIs:** with `--via-proxy` it holds a local token and aquaman's address, never the key, and request policies apply. This needs an API that takes the credential in a header and a client that accepts a base URL.
+- **Any other command run by Claude Code or Codex:** the key is set in that one command's environment and its output is redacted. That is the same kind of protection as `op run`.
+- **Docker Sandboxes and NVIDIA OpenShell:** they do the isolating. aquaman supplies the value from the vault by reference, with an allow-list and an audit entry.
+
+This page covers Claude Code and Codex. For the other hosts the setup is the person's: see the "If you are an agent" section of the [OpenClaw](openclaw.md), [Hermes](hermes.md), [Docker Sandboxes](docker-sandboxes.md) and [NVIDIA OpenShell](openshell.md) guides.
 
 If aquaman is not installed or the project is not set up, ask before you install or run anything. Tell the user it installs two npm packages, starts a local daemon and registers this directory, and give them [what they are agreeing to](approve.md). If it is already set up (`aquaman coder status --json` shows this directory as a project), go straight to step 2.
 

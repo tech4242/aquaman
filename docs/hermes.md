@@ -11,8 +11,6 @@ aquaman daemon &                           # 4. start the proxy
 aquaman hermes doctor                      # 5. verify
 ```
 
-These commands are for a person in their own terminal: `aquaman setup` asks questions, `aquaman credentials add` asks for the value (hidden), and `aquaman daemon` stays running. An agent setting up a coding project uses [`aquaman init --agent`](agent-setup.md) instead.
-
 Optional, inside Hermes: a `/aquaman-status` command, an `aquaman_status` tool and a secret source for project secrets.
 
 ```bash
@@ -24,6 +22,14 @@ hermes plugins enable aquaman
 ## Project secrets
 
 Bind them in Hermes' `config.yaml` under `secrets.aquaman.env`, for example `GITHUB_TOKEN: aquaman://github/token`, and declare each one with `aquaman broker allow aquaman://github/token`. These values do enter Hermes' environment; provider keys do not, and the secret source refuses to hand those out.
+
+## If you are an agent
+
+- **Hand the setup to the person.** `aquaman setup` asks questions, `aquaman credentials add` asks for the value (hidden) and `aquaman daemon` stays running. Give them the commands above; never ask for a key in the conversation.
+- **You may run `aquaman hermes doctor`** and report what it says. It checks and changes nothing.
+- **Where each credential ends up:** provider keys (Anthropic, OpenAI) are never in the Hermes process. A project secret bound through the secret source, such as a GitHub token, is in Hermes' environment: it is stored in the vault and each read is audited, but it is not isolated from Hermes or its tools.
+- **Keys that were already in `~/.hermes/.env` are not removed by setup.** The person deletes those lines, and rotates the keys if anything they do not trust could have read the file.
+- **The daemon does not come back by itself.** `aquaman daemon` is gone after a reboot or logout, and Hermes' provider calls fail until the person starts it again. Tell them.
 
 ## Good to know
 
