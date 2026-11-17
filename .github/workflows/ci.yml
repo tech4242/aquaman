@@ -110,7 +110,9 @@ jobs:
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage/lcov.info
+          # Line data merged from the test process and the processes the tests start.
+          files: coverage/merged.lcov
+          disable_search: true
           fail_ci_if_error: true
 
   e2e-openclaw:

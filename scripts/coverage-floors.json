@@ -1,1 +1,11 @@
-{ "all": 0 }
+{
+  "all": 95,
+  "packages/proxy": 95,
+  "packages/coder": 95,
+  "packages/plugin": 95,
+  "packages/proxy/src/daemon.ts": 97,
+  "packages/proxy/src/broker-scope.ts": 98,
+  "packages/proxy/src/request-policy.ts": 98,
+  "packages/proxy/src/request-target.ts": 100,
+  "packages/proxy/src/credential-prompt.ts": 98
+}
