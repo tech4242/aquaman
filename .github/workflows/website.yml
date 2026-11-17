@@ -41,4 +41,3 @@ jobs:
             case "$slug" in docs/[0-9]*.[0-9]*.[0-9]*/*) continue ;; esac
             grep -q "/$slug.md" dist/llms.txt || { echo "/$slug.md is not in llms.txt"; exit 1; }
           done
-
