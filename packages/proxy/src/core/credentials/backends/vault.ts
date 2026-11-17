@@ -46,7 +46,7 @@ export class VaultStore implements CredentialStore {
   private getPath(service: string, key: string): string {
     this.validateName('service', service);
     this.validateName('key', key);
-    return `${AQUAMAN_PATH_PREFIX}/${service}/${key}`;
+    return `${AQUAMAN_PATH_PREFIX}/${encodeURIComponent(service)}/${encodeURIComponent(key)}`;
   }
 
   private getHeaders(): Record<string, string> {
@@ -106,7 +106,9 @@ export class VaultStore implements CredentialStore {
 
   private getListPath(service?: string): string {
     if (service) {
-      return `${this.mountPath}/metadata/${AQUAMAN_PATH_PREFIX}/${service}`;
+      // A name becomes a path segment of the request to Vault, so it is checked here as on every other path.
+      this.validateName('service', service);
+      return `${this.mountPath}/metadata/${AQUAMAN_PATH_PREFIX}/${encodeURIComponent(service)}`;
     }
     return `${this.mountPath}/metadata/${AQUAMAN_PATH_PREFIX}`;
   }
@@ -193,6 +195,8 @@ export class VaultStore implements CredentialStore {
 
         for (const svc of services) {
           const cleanService = svc.replace(/\/$/, '');
+          // Anything under the prefix that is not a name aquaman could have written is not ours to list.
+          if (!SAFE_CRED_NAME.test(cleanService)) continue;
           const serviceCredentials = await this.list(cleanService);
           credentials.push(...serviceCredentials);
         }
