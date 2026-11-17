@@ -238,7 +238,9 @@ export function navGroups(pages: Page[]) {
 /** A page's Markdown with links to other pages pointing at their .md twins, as full URLs so they still resolve once the text is pasted somewhere else. */
 export function markdownFor(page: Page, site: URL): string {
   const twin = (slug: string) => new URL(docTwin(slug, page.version), site).href;
-  return rewriteMarkdownLinks(page.entry.body ?? '', page.repoPath, twin, page.version ? `v${page.version}` : 'main').trim() + '\n';
+  // The diagram is a picture for the site; the numbered list under it says the same in text.
+  const body = (page.entry.body ?? '').replace(/^<!-- diagram: [a-z-]+ -->\n\n/gm, '');
+  return rewriteMarkdownLinks(body, page.repoPath, twin, page.version ? `v${page.version}` : 'main').trim() + '\n';
 }
 
 export function llmsIndex(pages: Page[], site: URL): string {

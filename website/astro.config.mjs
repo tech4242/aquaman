@@ -5,6 +5,7 @@ import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import { unified } from '@astrojs/markdown-remark';
 import { remarkDocLinks } from './src/lib/links.mjs';
+import { remarkDiagrams } from './src/lib/diagram.mjs';
 import { prepareVersions } from './src/lib/versions.mjs';
 
 // Docs of earlier releases are copied out of git before content is loaded.
@@ -50,7 +51,7 @@ export default defineConfig({
     }),
   ],
   markdown: {
-    processor: unified({ remarkPlugins: [remarkDocLinks] }),
+    processor: unified({ remarkPlugins: [remarkDocLinks, remarkDiagrams] }),
     shikiConfig: { themes: { light: 'github-light', dark: 'github-dark-dimmed' } },
   },
 });

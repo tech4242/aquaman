@@ -2,6 +2,15 @@
 
 By default aquaman sets a key as an environment variable for each command a coding agent runs, so the command, and the app it starts, hold the key while they run. This page is the other mode: the app is sent through aquaman's local proxy and holds only a local token. The proxy adds the real key on the way to the API, and your request policies apply to what the app sends.
 
+<!-- diagram: route -->
+
+How a request travels:
+
+1. Your app sends its request to aquaman on `127.0.0.1`, with a local token where the key would be. The token and the address come from its environment.
+2. aquaman checks your request policy, reads the real key from your vault, puts it in place of the token and logs the use.
+3. The request goes on to the API over HTTPS with the real key.
+
+
 Requires aquaman 0.18.1 or later, and an app that reads its API base URL from the environment.
 
 ## Set up
