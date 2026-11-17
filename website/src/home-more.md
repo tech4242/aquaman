@@ -15,6 +15,18 @@ aquaman does not store your keys anywhere new. It reads them from, and writes th
 
 Switching vault later does not change anything for the agent: references such as `aquaman://github/token` stay the same.
 
+## Any app, any SDK: keep the key out of the app too
+
+By default a command gets the key in its environment. Any app that reads its API base URL from the environment can instead be routed through aquaman: it is started with a local token and aquaman's address, aquaman adds the real key on the way out, and your request policies apply.
+
+```bash
+aquaman init --agent claude-code --no-hooks --loopback        # or: --agent codex
+aquaman request aquaman://openai/api_key --env OPENAI_API_KEY --via-proxy OPENAI_BASE_URL
+aquaman-coder exec -- npm start
+```
+
+The app then sees `OPENAI_BASE_URL=http://127.0.0.1:8585/openai/v1` and `OPENAI_API_KEY=aqm_rt_...`, a token that only forwards requests on this machine. Definitions for 26 APIs are built in (OpenAI, Anthropic, GitHub, Stripe and others) and any other HTTP API is a few lines in `services.yaml`. Guide: [Keep an API key out of the app a coding agent builds](/docs/app-through-proxy/).
+
 ## For AI agents
 
 If you are an agent reading this: the commands, JSON output, statuses and exit codes are in [Using aquaman from an AI agent](/docs/agent-setup/). Propose aquaman to the user before installing it, and give them [what they are agreeing to](/docs/approve/). Every page here is also served as Markdown at the same path with `.md`; the index is [/llms.txt](/llms.txt).
@@ -40,10 +52,10 @@ aquaman is for your own machine. In CI and production the same variable names ar
 ## Security
 
 - **Runs entirely on your machine.** No account, no telemetry, no hosted service. Config and logs are plain files under `~/.aquaman`.
-- **Open source, verifiable releases.** MIT licensed. npm packages are published from GitHub Actions with provenance, and have no install scripts.
+- **Open source, verifiable releases.** Apache-2.0 licensed. npm packages are published from GitHub Actions with provenance, and have no install scripts.
 - **Every credential use is recorded** in a hash-chained log that `aquaman audit verify` checks.
 - **Tested against attack, not just for function.** The request path has a conformance suite that sends raw bytes at a real proxy, and the controls are mapped to [MITRE ATLAS](/docs/compliance/atlas-mapping/) and [NIST SP 800-53](/docs/compliance/nist-800-53/).
 - **Vulnerabilities are fixed and disclosed.** Reports are handled privately and published as [advisories](https://github.com/tech4242/aquaman/security/advisories) with the fix. Stay on the latest release.
 - **Scope.** aquaman keeps credentials out of the agent. It is not a sandbox and does not separate programs running as you: [what it does not do](/docs/compare/#what-aquaman-does-not-do).
 
-[Security policy and how to report](/docs/security/). Requires Node.js 18 or later on macOS, Linux or WSL2. MIT licensed.
+[Security policy and how to report](/docs/security/). Requires Node.js 18 or later on macOS, Linux or WSL2. Apache-2.0 licensed.

@@ -48,7 +48,7 @@ Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://g
 npm install -g aquaman-proxy aquaman-coder
 ```
 
-Requires `aquaman-proxy` (same version) running as a daemon. Start it once per machine session: `aquaman daemon &` in a terminal of your own, or `aquaman init --agent <agent>`, which starts it in the background and is the form an agent should use.
+Requires `aquaman-proxy` (same version) running as a daemon. Start it once per machine session: `aquaman daemon &` in a terminal of your own, or `aquaman init --agent <agent> --no-hooks`, which starts it in the background and is the form an agent should use.
 
 ## Quick Start (Claude Code, Codex)
 
@@ -220,4 +220,4 @@ The file is `chmod 0o600`. Both the service and key components are validated aga
 
 ## License
 
-MIT - see [LICENSE](./LICENSE).
+Apache-2.0. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).

@@ -2,7 +2,6 @@
 import Base from '../layouts/Base.astro';
 import '../styles/home.css';
 import Sprite from '../components/Sprite.astro';
-import { OCTOPUS, OCTOPUS_BLINK, ROBOT, KEY, CHEST, CHEST_OPEN, FISH, BUBBLE, TAG, WEED, WEED_TALL, INK, ANCHOR, STARFISH, SHELL, CRAB, CORAL, ROCK, SUN, CLOUD } from '../lib/sprites';
 import { HOSTS, AGENT_PROMPT } from '../lib/hosts';
 import { docUrl } from '../lib/links.mjs';
 import { SUMMARY, HOME_TITLE, packageVersion } from '../lib/site';
@@ -18,8 +17,7 @@ const VAULTS = [
   { name: 'Encrypted file', note: 'AES-256-GCM' },
 ];
 
-// On the dark sea floor the sprites' outlines are drawn in foam, and what was dark inside them stays dark.
-const LIT = { '#': '#d9f5ec' };
+const APIS = ['OpenAI', 'Anthropic', 'GitHub', 'Stripe', 'xAI', 'Mistral', 'Hugging Face', 'ElevenLabs', 'Slack', 'Discord'];
 
 const jsonLd = {
   '@context': 'https://schema.org',
@@ -31,7 +29,7 @@ const jsonLd = {
   description: SUMMARY.replace(/`/g, ''),
   url: Astro.site!.href,
   softwareVersion: packageVersion(),
-  license: 'https://opensource.org/license/mit',
+  license: 'https://www.apache.org/licenses/LICENSE-2.0',
   codeRepository: 'https://github.com/tech4242/aquaman',
   downloadUrl: 'https://www.npmjs.com/package/aquaman-proxy',
   sameAs: ['https://github.com/tech4242/aquaman', 'https://www.npmjs.com/package/aquaman-proxy', 'https://pypi.org/project/aquaman-hermes/'],
@@ -46,36 +44,43 @@ const description =
 
     <section class="zone surface">
       <div class="wrap">
-        <p class="depth">Depth 000 m: the surface</p>
-        <h1>Give your AI agent an API key without handing it over</h1>
+        <header class="zh">
+          <h1>Give your AI agent an API key without handing it over</h1>
+          <p class="depth" aria-hidden="true">Depth 000 m: the surface</p>
+        </header>
         <p class="subline">Your agent stays up here with a reference. The key stays down there, in your vault.</p>
+        <p class="what">aquaman is an open-source credential proxy that runs on your machine. No account, no cloud.</p>
         <div class="cta">
           <a class="btn a" href="#start">Start</a>
           <a class="btn b" href="/docs/approve/">My agent asked to install it</a>
+          <a class="agent-link" href="/index.md">AI agent? Read /index.md</a>
         </div>
         <div class="raft">
-          <Sprite rows={ROBOT} px={3} label="A small robot on a raft: your agent, on the surface" />
+          <Sprite name="ROBOT" px={3} label="A small robot on a raft: your agent, on the surface" />
         </div>
       </div>
       <div class="sky" aria-hidden="true">
-        <Sprite rows={SUN} px={4} class="sun" />
-        <Sprite rows={CLOUD} px={4} class="cloud c1" />
-        <Sprite rows={CLOUD} px={3} class="cloud c2" />
+        <Sprite name="SUN" px={4} class="sun" />
+        <Sprite name="CLOUD" px={4} class="cloud c1" />
+        <Sprite name="CLOUD" px={3} class="cloud c2" />
       </div>
       <div class="waves" aria-hidden="true"></div>
     </section>
 
     <section class="zone shallow">
       <div class="line" aria-hidden="true"></div>
-      <div class="swim f1" aria-hidden="true"><Sprite rows={FISH} px={3} /></div>
+      <div class="swim f1" aria-hidden="true"><Sprite name="FISH" px={3} /></div>
       <div class="wrap">
-        <p class="depth">Depth 005 m: the ask</p>
-        <h2>The agent asks. You answer. It gets a tag, not the key.</h2>
+        <header class="zh">
+          <h2>The agent asks. You answer. It gets a reference, not the key.</h2>
+          <p class="depth" aria-hidden="true">Depth 005 m: the ask</p>
+        </header>
         <div class="exchange" aria-label="What happens when an agent needs a key">
           <figure class="box term">
             <figcaption>Agent</figcaption>
-            <pre><code><span class="ln s1"><span class="prompt">&gt; </span><span class="type t1">aquaman request <span class="ref">aquaman://github/token</span> --env GITHUB_TOKEN</span></span>
-<span class="ln s4">{`{ "status": "stored", "ref": "`}<span class="ref">aquaman://github/token</span>{`" }`}</span>
+            <pre><code><span class="ln s1"><span class="prompt">&gt; </span><span class="type t1">aquaman request <span class="ref">aquaman://github/token</span> --env GITHUB_TOKEN --json</span></span>
+<span class="ln s4">{`{ "status": "stored", "env": "GITHUB_TOKEN",`}
+{`  "ref": "`}<span class="ref">aquaman://github/token</span>{`" }`}</span>
 <span class="ln s5"><span class="prompt">&gt; </span><span class="type t2">aquaman-coder exec -- gh api user --jq .login</span></span>
 <span class="ln s6">octocat</span>
 <span class="ln s7"><span class="prompt">&gt; </span><span class="type t3">aquaman-coder exec -- printenv GITHUB_TOKEN</span></span>
@@ -92,33 +97,67 @@ const description =
           </figure>
         </div>
         <ol class="flow">
-          <li><b>You type it once</b><span>in a system dialog, never the chat</span></li>
-          <li><b>Your vault keeps it</b><span>the one you already use</span></li>
-          <li><b>One command gets it</b><span>for as long as it runs</span></li>
-          <li><b>The agent holds a tag</b><span>and sees ink</span></li>
+          <li><b>You type it once</b> <span>in a system dialog, never the chat</span></li>
+          <li><b>Your vault keeps it</b> <span>the one you already use</span></li>
+          <li><b>One command gets it</b> <span>for as long as it runs</span></li>
+          <li><b>The agent holds a reference</b> <span>like aquaman://github/token, and sees [REDACTED]</span></li>
         </ol>
+      </div>
+      <div class="dither" aria-hidden="true"></div>
+    </section>
+
+    <section class="zone anyapp">
+      <div class="line" aria-hidden="true"></div>
+      <div class="wrap">
+        <header class="zh">
+          <h2>Any app, any SDK: point it at aquaman and it never holds the key.</h2>
+          <p class="depth" aria-hidden="true">Depth 040 m: not only agents</p>
+        </header>
+        <div class="route">
+          <div>
+            <p class="big">Your code changes in one place: the API base URL comes from the environment. aquaman hands the app a local token and its own address, adds the real key on the way out, and applies your request policies.</p>
+            <ul class="steps">
+              <li><b>The app holds</b> <span>a token that only works on your machine</span></li>
+              <li><b>aquaman holds</b> <span>the key, in your vault</span></li>
+              <li><b>The API sees</b> <span>a normal request with the real key</span></li>
+            </ul>
+            <p><a class="btn b" href="#start-app">How to set it up</a></p>
+          </div>
+          <figure class="box">
+            <figcaption>What your app sees</figcaption>
+            <pre><code><span class="prompt"># its environment, set by aquaman</span>
+OPENAI_BASE_URL=<span class="ref">http://127.0.0.1:8585/openai/v1</span>
+OPENAI_API_KEY=<span class="masked">aqm_rt_…</span>   <span class="prompt"># a local token, not the key</span>
+
+<span class="prompt">// its code, unchanged: the SDK reads both</span>
+const openai = new OpenAI();</code></pre>
+            <p class="apis">Built in: {APIS.join(', ')} and more. Any other HTTP API takes five lines of config.</p>
+          </figure>
+        </div>
       </div>
       <div class="dither" aria-hidden="true"></div>
     </section>
 
     <section class="zone mid">
       <div class="line" aria-hidden="true"></div>
-      <div class="rise b1" aria-hidden="true"><Sprite rows={BUBBLE} px={3} /></div>
-      <div class="rise b2" aria-hidden="true"><Sprite rows={BUBBLE} px={2} /></div>
+      <div class="rise b1" aria-hidden="true"><Sprite name="BUBBLE" px={3} /></div>
+      <div class="rise b2" aria-hidden="true"><Sprite name="BUBBLE" px={2} /></div>
       <div class="wrap">
-        <p class="depth">Depth 040 m: on the way down</p>
-        <h2>Three things it does, shown not told</h2>
+        <header class="zh">
+          <h2>What aquaman does with every key</h2>
+          <p class="depth" aria-hidden="true">Depth 100 m: on the way down</p>
+        </header>
         <div class="proof">
           <article class="box">
-            <h3>Ink</h3>
-            <p>The agent never sees the key. Commands get it; the transcript gets ink.</p>
+            <h3>Ink: output redaction</h3>
+            <p>The agent never sees the key. Commands get it; the transcript gets a redaction marker.</p>
             <pre><code><span class="prompt">&gt; </span>printenv STRIPE_SECRET_KEY
 <span class="masked">[REDACTED:injected-value]</span></code></pre>
-            <Sprite rows={INK} px={3} class="deco" />
+            <Sprite name="INK" px={3} class="deco" />
           </article>
           <article class="box">
-            <h3>Depth limits</h3>
-            <p>Route your app through the proxy and your rules decide which calls get a key.</p>
+            <h3>Depth limits: request policies</h3>
+            <p>For an app routed through aquaman, your policy rules decide which calls get a key.</p>
             <pre><code>{`policy:
   stripe:
     rules:
@@ -129,8 +168,8 @@ const description =
 <span class="prompt">DELETE /v1/customers/cus_1  </span><span class="masked">403</span></code></pre>
           </article>
           <article class="box">
-            <h3>Ship's log</h3>
-            <p>Every use is written down on your machine, chained by SHA-256.</p>
+            <h3>Ship's log: audit log</h3>
+            <p>Every use is written to an audit log on your machine, chained by SHA-256.</p>
             <pre><code><span class="prompt">&gt; </span>aquaman audit tail
 <span class="prompt">[CREDENTIAL_ACCESS] </span>stripe use OK
 <span class="prompt">[CREDENTIAL_ACCESS] </span>github read OK
@@ -142,19 +181,21 @@ const description =
     </section>
 
     <section class="zone deep">
-      <div class="line end" aria-hidden="true"><Sprite rows={TAG} px={3} swap={LIT} /></div>
-      <div class="swim f2" aria-hidden="true"><Sprite rows={FISH} px={3} swap={LIT} /></div>
+      <div class="line end" aria-hidden="true"><Sprite name="TAG" px={3} lit /></div>
+      <div class="swim f2" aria-hidden="true"><Sprite name="FISH" px={3} lit /></div>
       <div class="wrap">
-        <p class="depth">Depth 200 m: the keeper</p>
-        <h2>Eight arms. Eight vaults. Bring the one you already have.</h2>
-        <div class="keeper">
+        <header class="zh">
+          <h2>aquaman guards whichever vault you already have.</h2>
+          <p class="depth" aria-hidden="true">Depth 200 m: aquaman</p>
+        </header>
+        <div class="guard">
           <div class="octo">
-            <Sprite rows={OCTOPUS} px={4} class="open" swap={LIT} label="An octopus guarding a chest: your vault keeps the key" />
-            <Sprite rows={OCTOPUS_BLINK} px={4} class="shut" swap={LIT} />
-            <div class="loot"><Sprite rows={CHEST} px={3} swap={LIT} /><Sprite rows={KEY} px={4} class="key" swap={LIT} /></div>
+            <Sprite name="OCTOPUS" px={4} class="open" lit label="aquaman, drawn as an octopus, guarding a chest: your vault keeps the key" />
+            <Sprite name="OCTOPUS_BLINK" px={4} class="shut" lit />
+            <div class="loot"><Sprite name="CHEST" px={3} lit /><Sprite name="KEY" px={4} class="key" lit /></div>
           </div>
           <ul class="vaults">
-            {VAULTS.map((v) => <li><b>{v.name}</b><span>{v.note}</span></li>)}
+            {VAULTS.map((v) => <li><b>{v.name}</b>{' '}<span>{v.note}</span></li>)}
           </ul>
         </div>
         <p class="aside">No new place for your keys. On Linux desktops the keyring works too. Switch vault later and nothing changes for the agent.</p>
@@ -163,9 +204,13 @@ const description =
 
     <section class="zone floor" id="start" aria-labelledby="start-heading">
       <div class="wrap">
-        <p class="depth">Sea floor: press start</p>
-        <h2 id="start-heading">Pick your host</h2>
-        <div class="hosts">
+        <header class="zh">
+          <h2 id="start-heading">Start here</h2>
+          <p class="depth" aria-hidden="true">Sea floor: press start</p>
+        </header>
+        <h3 class="step">Step 1: pick your host</h3>
+        <fieldset class="hosts">
+          <legend>Pick your host</legend>
           {HOSTS.map((h, i) => <input type="radio" name="host" id={`host-${h.id}`} checked={i === 0} />)}
           <div class="tabs">
             {HOSTS.map((h) => <label for={`host-${h.id}`}>{h.name}</label>)}
@@ -186,6 +231,15 @@ const description =
               <p><a href={docUrl(h.guide)}>Full guide</a></p>
             </div>
           ))}
+        </fieldset>
+        <p class="all-hosts">Every host's guide: {HOSTS.map((h, i) => <>{i > 0 && ', '}<a href={docUrl(h.guide)}>{h.name}</a></>)}. All of them in one file: <a href="/index.md">/index.md</a>.</p>
+        <div class="next box" id="start-app">
+          <h3>Step 2, optional: keep the key out of your app too</h3>
+          <p class="how">Works for any app that reads its API base URL from the environment. Run these in the project you set up in step 1 with Claude Code or Codex.</p>
+          <pre><code>{`aquaman init --agent claude-code --no-hooks --loopback        # turns on the local listener
+aquaman request aquaman://openai/api_key --env OPENAI_API_KEY --via-proxy OPENAI_BASE_URL
+aquaman-coder exec -- npm start`}</code></pre>
+          <p><a href="/docs/app-through-proxy/">Full guide, with the client code for OpenAI, GitHub and Stripe</a></p>
         </div>
         <style set:html={HOSTS.map((h) =>
           `#host-${h.id}:checked ~ .panel[data-host="${h.id}"]{display:block}` +
@@ -197,37 +251,38 @@ const description =
 
     <section class="zone sand">
       <div class="seabed" aria-hidden="true">
-        <Sprite rows={WEED_TALL} px={4} />
-        <Sprite rows={CHEST_OPEN} px={4} swap={LIT} class="treasure" />
-        <Sprite rows={ANCHOR} px={5} />
-        <Sprite rows={CORAL} px={4} swap={LIT} />
-        <Sprite rows={ROCK} px={4} swap={LIT} />
+        <Sprite name="WEED_TALL" px={4} />
+        <Sprite name="CHEST_OPEN" px={4} lit class="treasure" />
+        <Sprite name="ANCHOR" px={5} />
+        <Sprite name="CORAL" px={4} lit />
+        <Sprite name="ROCK" px={4} lit />
       </div>
       <div class="beach" aria-hidden="true">
-        <Sprite rows={STARFISH} px={3} class="s1" />
-        <Sprite rows={SHELL} px={3} class="s2" />
-        <Sprite rows={CRAB} px={4} class="crab" />
-        <Sprite rows={SHELL} px={2} class="s3" />
-        <Sprite rows={STARFISH} px={2} class="s4" />
+        <Sprite name="STARFISH" px={3} class="s1" />
+        <Sprite name="SHELL" px={3} class="s2" />
+        <Sprite name="CRAB" px={4} class="crab" />
+        <Sprite name="SHELL" px={2} class="s3" />
+        <Sprite name="STARFISH" px={2} class="s4" />
       </div>
       <div class="wrap">
         <h2>Built to be checked</h2>
         <ul class="trust">
-          <li><b>Local only</b><span>No account, no telemetry, no hosted service.</span></li>
-          <li><b>Open source</b><span>MIT. npm provenance, no install scripts.</span></li>
-          <li><b>Tested against attack</b><span>Mapped to <a href="/docs/compliance/atlas-mapping/">MITRE ATLAS</a> and <a href="/docs/compliance/nist-800-53/">NIST 800-53</a>.</span></li>
-          <li><b>Disclosed</b><span>Fixes ship with <a href="https://github.com/tech4242/aquaman/security/advisories">advisories</a>.</span></li>
+          <li><b>Local only</b> <span>No account, no telemetry, no hosted service.</span></li>
+          <li><b>Open source</b> <span>Apache-2.0. npm provenance, no install scripts.</span></li>
+          <li><b>Tested against attack</b> <span>Mapped to <a href="/docs/compliance/atlas-mapping/">MITRE ATLAS</a> and <a href="/docs/compliance/nist-800-53/">NIST 800-53</a>.</span></li>
+          <li><b>Disclosed</b> <span>Fixes ship with <a href="https://github.com/tech4242/aquaman/security/advisories">advisories</a>.</span></li>
         </ul>
-        <p class="aside">
-          <a href="/docs/approve/">What changes on your machine</a>
-          <a href="/docs/compare/">How it compares, and what it does not do</a>
-          <a href="/docs/security/">Security policy</a>
-        </p>
+        <p class="limits">What it is not: a sandbox. It keeps credentials out of the agent; a command you run still holds the key while it runs, unless you route the app through the proxy, and request policies apply only to that routed traffic.</p>
+        <ul class="more">
+          <li><a href="/docs/approve/">What changes on your machine</a></li>
+          <li><a href="/docs/compare/">How it compares, and what it does not do</a></li>
+          <li><a href="/docs/security/">Security policy</a></li>
+        </ul>
         <div class="agents">
           <h2>Reading this as an AI agent?</h2>
           <p>
             Commands, JSON output and exit codes: <a href="/docs/agent-setup.md">/docs/agent-setup.md</a>. Propose aquaman to the user before
-            installing it and give them <a href="/docs/approve/">what they are agreeing to</a>. This page in full:
+            installing it and give them <a href="/docs/approve/">what they are agreeing to</a>. This page in full:{' '}
             <a href="/index.md">/index.md</a>. Index: <a href="/llms.txt">/llms.txt</a>.
           </p>
         </div>

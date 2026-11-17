@@ -7,32 +7,32 @@ Codex runs shell commands with whatever is in the environment and can read `.env
 ```bash
 npm install -g aquaman-proxy aquaman-coder
 cd ~/code/my-app
-aquaman init --agent codex
+aquaman init --agent codex --no-hooks
 ```
 
-That starts the aquaman daemon, writes hooks to `~/.codex/hooks.json` (user level; they act only in directories registered with aquaman), installs the `aquaman-credentials` skill in `~/.agents/skills/`, registers the directory as a project and adds a short block to `AGENTS.md`. The full list of what it changes, and how to undo it, is in [Using aquaman from an AI agent](agent-setup.md#what-init-changes).
+That starts the aquaman daemon, installs the `aquaman-credentials` skill in `~/.agents/skills/`, registers the directory as a project and adds a short block to `AGENTS.md`. It writes no `hooks.json`, so there is nothing to trust at startup. Codex then runs the commands that need a key as `aquaman-coder exec -- <command>`. The full list of what it changes, and how to undo it, is in [Your agent asked to use aquaman](approve.md).
 
-Two things only you can do, and `init` lists them:
+One thing only you can do, and `init` lists it:
 
-1. **Trust the hooks.** Start `codex` and approve the aquaman hooks in the startup hook review. Codex skips new hooks until you do.
-2. **Let the sandbox reach the daemon.** Add a permissions profile to `~/.codex/config.toml`; `aquaman coder setup codex` prints it with your paths:
+**Let the sandbox reach the daemon.** Add a permissions profile to `~/.codex/config.toml`, with the socket path for your home directory; `aquaman coder doctor` checks it:
 
-   ```toml
-   default_permissions = "aquaman"
+```toml
+default_permissions = "aquaman"
 
-   [permissions.aquaman]
-   extends = ":workspace"
+[permissions.aquaman]
+extends = ":workspace"
 
-   [permissions.aquaman.network]
-   enabled = true
-   unix_sockets = { "/Users/you/.aquaman/proxy.sock" = "allow" }
-   ```
+[permissions.aquaman.network]
+enabled = true
+unix_sockets = { "/Users/you/.aquaman/proxy.sock" = "allow" }
+```
 
-   On Codex 0.169 `enabled = true` gives sandboxed commands outbound network access and every Unix socket, not only this one. Check that against your own policy.
 
-## Without the hooks
+On Codex 0.169 `enabled = true` gives sandboxed commands outbound network access and every Unix socket, not only this one. Check that against your own policy.
 
-`aquaman init --agent codex --no-hooks` writes no `hooks.json`, so there is nothing to trust at startup. Codex then runs the commands that need a key as `aquaman-coder exec -- <command>`. The sandbox still has to reach the daemon (step 2 above).
+## With the hooks, so commands need no prefix
+
+`aquaman init --agent codex` also writes hooks to `~/.codex/hooks.json` (user level; they act only in directories registered with aquaman). Start `codex` and approve the aquaman hooks in the startup hook review: Codex skips new hooks until you do. Every shell command in the project is then wrapped for you.
 
 ## Add a credential
 
@@ -48,7 +48,7 @@ Your app does not change: it reads `GITHUB_TOKEN` from its environment as before
 
 - Output of wrapped commands is scrubbed of injected values. Codex gives hooks no way to rewrite other output, so for unwrapped commands aquaman can only warn.
 - For Codex's own model key, use `aquaman get` as the provider auth command: `[model_providers.openai.auth] command = "aquaman"`, `args = ["get", "aquaman://openai/api_key"]`.
-- If the daemon is not running, the hook refuses shell commands in the project instead of running them without their credentials. `aquaman` commands are never refused. The daemon is not a system service: after a reboot, run `aquaman init --agent codex` again.
+- If the daemon is not running, the hook refuses shell commands in the project instead of running them without their credentials. `aquaman` commands are never refused. The daemon is not a system service: after a reboot, run `aquaman init --agent codex --no-hooks` again (it leaves installed hooks in place).
 - Codex's own credential masking is under development and off by default (`credential_masking` in its feature list, read 2026-11-16). When it ships it will cover values that are already in environment variables or files; aquaman's part is getting them out of those and into a vault.
 - `aquaman coder doctor` checks the hooks, their trust state and the sandbox profile.
 

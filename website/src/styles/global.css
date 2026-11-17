@@ -132,3 +132,6 @@ h1, h2, h3 { line-height: 1.15; letter-spacing: -0.015em; text-wrap: balance; }
   .site-header nav a { padding: 0.8rem 0; border-bottom: 1px solid var(--line); font-size: 1.05rem; }
   .site-header nav .stars { align-self: flex-start; margin-top: 0.9rem; padding: 0.4rem 0.7rem; border-bottom: 1px solid var(--line); }
 }
+
+.wordmark { display: inline-flex; align-items: center; gap: 0.5rem; }
+.wordmark .sprite { display: block; image-rendering: pixelated; }
