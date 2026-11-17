@@ -10,7 +10,13 @@ prepareVersions();
 
 // The public origin. Set SITE_URL for a real build; every absolute URL the
 // site prints (canonical, sitemap, llms.txt, the .md twins) is built from it.
-const site = process.env.SITE_URL ?? 'http://localhost:4399';
+// On Vercel without SITE_URL, the project's production domain is used. A
+// hosted build must never print the local address.
+const vercelHost = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+const site = process.env.SITE_URL ?? (vercelHost ? `https://${vercelHost}` : 'http://localhost:4399');
+if (process.env.VERCEL && site.includes('localhost')) {
+  throw new Error('Set SITE_URL: a build on Vercel has no public address to print.');
+}
 
 export default defineConfig({
   site,
