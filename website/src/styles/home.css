@@ -281,14 +281,15 @@
 .anyapp .dither { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 2' shape-rendering='crispEdges'%3E%3Cpath fill='%230f5560' d='M0 0h1v1H0zM1 1h1v1H1z'/%3E%3C/svg%3E"); }
 .mid .dither { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 2' shape-rendering='crispEdges'%3E%3Cpath fill='%230b2a3a' d='M0 0h1v1H0zM1 1h1v1H1z'/%3E%3C/svg%3E"); }
 .anyapp h2 { max-width: 40ch; }
+.where { max-width: 80%; margin-bottom: 3.5rem; }
+.where .dia { margin-top: 2.6rem; }
+.where .dia-note { font-size: 1.1rem; max-width: 62ch; }
 .route { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 3rem; align-items: start; max-width: 80%; }
 .route .big { font-size: 1.22rem; margin: 0 0 1.5rem; }
-.route .steps { list-style: none; margin: 0 0 2rem; padding: 0; }
-.route .steps li { border-left: var(--px) solid var(--y); padding: 0.2rem 0 0.2rem 0.9rem; margin-bottom: 0.7rem; }
-.route .steps b { color: var(--y); font-weight: 650; }
 .route pre { font-size: 0.74rem; overflow-x: auto; }
 .route .apis { margin: 1rem 0 0; font-size: 0.91rem; }
 @media (max-width: 62rem) { .route { grid-template-columns: minmax(0, 1fr); max-width: none; gap: 2rem; } }
+@media (max-width: 62rem) { .where { max-width: none; } }
 
 .surface .what { font-size: 1.03rem; max-width: 46ch; margin: 0.9rem 0 0; opacity: 0.8; }
 .sand .more { list-style: none; margin: 1.75rem 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem 1.75rem; font-size: 0.99rem; }
