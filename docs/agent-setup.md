@@ -20,6 +20,8 @@ cd <the project directory>
 aquaman init --agent claude-code --no-hooks --json       # or: --agent codex
 ```
 
+The packages are `aquaman-proxy` and `aquaman-coder`; the command they install is `aquaman`. The npm package named `aquaman` is an unrelated project: do not install it or run `npx aquaman`.
+
 There are two forms, and which one you run decides how commands get their credentials later:
 
 | Form | What it installs in the agent host | How a command gets the variables | `mode` in the output |

@@ -190,7 +190,7 @@ const description =
               <li><b>aquaman holds</b> <span>the key, in your vault</span></li>
               <li><b>The API sees</b> <span>a normal request with the real key</span></li>
             </ul>
-            <p><a class="btn b" href="#start" onclick="document.getElementById('host-your-app').checked = true">How to set it up</a></p>
+            <p><a class="btn b" href="#start" data-check="host-your-app">How to set it up</a></p>
           </div>
           <figure class="box">
             <figcaption>What your app sees</figcaption>
@@ -283,4 +283,5 @@ const openai = new OpenAI();</code></pre>
       </div>
     </section>
   </div>
+  <script is:inline src="/select-host.js" defer></script>
 </Base>
