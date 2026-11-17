@@ -1,12 +1,12 @@
 # aquaman: credential proxy for AI agents
 
+<img src="docs/assets/banner.svg" width="880" alt="Pixel art: an AI agent, drawn as a small robot on a raft, floats at the surface and lowers a line. Far below, an octopus guards a treasure chest and a key. The agent gets a tag on its line, never the key.">
+
 [![CI](https://github.com/tech4242/aquaman/actions/workflows/ci.yml/badge.svg)](https://github.com/tech4242/aquaman/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/tech4242/aquaman/branch/main/graph/badge.svg)](https://codecov.io/gh/tech4242/aquaman)
 [![npm version](https://img.shields.io/npm/v/aquaman-proxy?label=aquaman-proxy)](https://www.npmjs.com/package/aquaman-proxy)
 [![npm downloads](https://img.shields.io/npm/dt/aquaman-proxy)](https://www.npmjs.com/package/aquaman-proxy)
-[![Security: process isolation](https://img.shields.io/badge/security-process%20isolation-critical)](https://github.com/tech4242/aquaman#security-model)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 **No account. Bring your own vault. Runs locally.** aquaman keeps API keys and tokens in the vault you already use (Keychain, 1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, systemd-creds or an encrypted file) and injects them when a request or command needs them. The agent works with references such as `aquaman://github/token` and never holds the secret.
 
@@ -31,15 +31,18 @@ Three things aquaman does:
 
 ## If you are an AI agent
 
-When a task needs an API key or token, do not ask the user to paste it. Set the project up once, then ask for the credential by reference. A person supplies the value in a dialog; you get a status and the reference, never the value.
+When a task needs an API key or token you do not have, aquaman is a way to get it without the user pasting it into the conversation. If aquaman is not set up in the project, propose it first: tell the user it installs two npm packages, starts a local daemon and registers this directory, and point them to [what they are agreeing to](https://github.com/tech4242/aquaman/blob/main/docs/approve.md). With their agreement:
 
 ```bash
+npm install -g aquaman-proxy aquaman-coder                           # 0.18.0 or later
 aquaman init --agent claude-code --no-hooks --json                   # or: --agent codex
 aquaman request aquaman://github/token --env GITHUB_TOKEN --json
 aquaman-coder exec -- npm test                                       # any command that needs the key
 ```
 
-With `--no-hooks` nothing is written to the agent host's settings and no permission prompt changes; you prefix the commands that need a key. Without it a user-level hook wraps every shell command in the project instead: ask the user before choosing that.
+Tell the user to look for the dialog before you run `request`; it waits up to 90 seconds. You receive a status and the reference, never the value. If the status is `declined`, stop and ask how to proceed. Write the app to read its keys from the environment as usual. This is a tool for a developer's own machine, not for CI.
+
+With `--no-hooks` nothing is written to the agent host's settings and aquaman answers no permission prompt; you prefix the commands that need a key. Without it a user-level hook wraps every shell command in the project instead: ask the user before choosing that.
 
 Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md).
 
@@ -381,4 +384,4 @@ The full table, when to pick something else, and the limits: [aquaman compared w
 
 ## License
 
-MIT - see [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Versions up to 0.17.2 were released under the MIT License.

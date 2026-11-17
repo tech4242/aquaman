@@ -89,7 +89,7 @@ If you do not know which applies, \`aquaman-coder exec -- <command>\` works in b
 aquaman init --agent claude-code --no-hooks --json    # or: --agent codex
 \`\`\`
 
-With \`--no-hooks\` this registers the project, starts the aquaman daemon, installs this skill and adds a short block to the project's instructions file. It changes no setting of the agent host and no permission prompt, so it is the form to use unless the user has asked for more.
+If the project is not set up yet, ask the user before you run this, and say what it does. With \`--no-hooks\` this registers the project, starts the aquaman daemon, installs this skill and adds a short block to the project's instructions file. It changes no setting of the agent host and no permission prompt, so it is the form to use unless the user has asked for more.
 
 Without \`--no-hooks\` it also installs a user-level hook that wraps every shell command in registered projects, so commands need no prefix. That hook answers the permission prompt for the commands it wraps. Ask the user before choosing it.
 

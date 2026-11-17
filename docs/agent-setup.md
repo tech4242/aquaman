@@ -6,6 +6,12 @@ Requires Node.js 18 or later on macOS, Linux or WSL2, and aquaman 0.18.0 or late
 
 **Where this fits.** Write the app to read its keys from the environment (`process.env.GITHUB_TOKEN`, `os.environ["GITHUB_TOKEN"]`) as you would anyway. aquaman is how those variables get set on the user's machine while you work, without the value passing through you or a `.env` file. It is not a replacement for the environment, and in CI and production the same variable names are filled by that platform's own secrets: see [CI and production](#ci-and-production).
 
+## When to propose it, and when not
+
+Propose aquaman when a task needs a secret you do not have and the alternative is asking the user to paste it or writing it into a `.env` file. Do not propose it when the user has already said how secrets are handled in the project, when the work runs in CI or on a server, or when no secret is involved.
+
+If aquaman is not installed or the project is not set up, ask before you install or run anything. Tell the user it installs two npm packages, starts a local daemon and registers this directory, and give them [what they are agreeing to](approve.md). If it is already set up (`aquaman coder status --json` shows this directory as a project), go straight to step 2.
+
 ## 1. Set up the project
 
 ```bash
@@ -64,7 +70,7 @@ The daemon shows a dialog on the user's machine. They type the value, or approve
 | `error` | 4 | The daemon is not running or does not take requests | Run step 1, then retry |
 | `error` | 1 | The command was wrong: bad reference, bad `--env` or `--timeout`, or `--env` used outside a project | Read `error` and `fix` |
 
-With `--env NAME` the reference is bound to that variable for the project covering the current directory, so every shell command run there has the variable set. Run it from the project directory. Where no project covers the directory the command stops with exit 1 before any dialog is shown; it never creates a project.
+With `--env NAME` the reference is bound to that variable for the project covering the current directory, so commands run there through `aquaman-coder exec`, or through the hook in hook mode, have the variable set. Run it from the project directory. Where no project covers the directory the command stops with exit 1 before any dialog is shown; it never creates a project.
 
 Output fields:
 
@@ -88,7 +94,7 @@ Output fields:
 ```
 
 ```json
-{ "status": "error", "ref": "aquaman://github/token", "error": "Cannot reach the aquaman proxy at /Users/you/.aquaman/proxy.sock", "code": "proxy_unreachable", "fix": "Start the daemon in the background: aquaman init --agent <agent>   (in a terminal of your own: aquaman daemon)" }
+{ "status": "error", "ref": "aquaman://github/token", "error": "Cannot reach the aquaman proxy at /Users/you/.aquaman/proxy.sock", "code": "proxy_unreachable", "fix": "Start the daemon in the background: aquaman init --agent <agent> --no-hooks   (in a terminal of your own: aquaman daemon)" }
 ```
 
 The wording of `reason`, `error` and `fix` can change between versions; branch on `status` and the exit code.
@@ -156,7 +162,7 @@ aquaman coder doctor --json    # { ok, issues, checks: [{ name, ok, detail, fix 
 While it is down, `aquaman-coder exec` stops before running the command and names the fix. In hook mode, in a project that has bindings, the hook refuses shell commands instead of running them without their credentials. The refusal names the fix. aquaman's own commands (`aquaman ...`, `aquaman-coder ...`) are never refused, so:
 
 ```bash
-aquaman init --agent claude-code --json    # starts the daemon again; changes nothing else
+aquaman init --agent claude-code --no-hooks --json    # starts the daemon again; changes nothing else, and leaves a hook that is already installed in place
 ```
 
 Do not run `aquaman daemon` yourself: it stays in the foreground and your command will not return.
@@ -172,7 +178,7 @@ Do not run `aquaman daemon` yourself: it stays in the foreground and your comman
 | `~/.claude/skills/aquaman-credentials/` or `~/.agents/skills/aquaman-credentials/` | The skill that tells an agent to use `aquaman request` | User level |
 | `CLAUDE.md` or `AGENTS.md` in the project | A short block between `<!-- aquaman:start -->` and `<!-- aquaman:end -->` | The project. `--no-instructions` skips it |
 
-Two things the user should know before agreeing:
+What the user should know before agreeing:
 
 - **Permission prompts change in the project (Claude Code, hook mode only).** Once the project has a binding with a credential behind it, the hook answers `allow` for each shell command it wraps. A project whose bindings all point at nothing is left alone: commands run unwrapped, with the usual prompts. The user's `deny` and `ask` rules still apply to the original command, but a command that no rule matches runs without a prompt. A user who relies on being asked should add `ask` rules.
 - **Without the hook, output of other tools is not scrubbed.** `aquaman-coder exec` redacts the output of the command it runs. The hook additionally redacts secret-shaped strings in every tool's output on Claude Code; `--no-hooks` gives that up.

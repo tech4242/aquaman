@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { AGENT_NOTE } from '../lib/site';
+import { agentNote } from '../lib/site';
 
 // Agents probe this path. It answers with the short instruction and where the contract is.
 export const GET: APIRoute = ({ site }) =>
@@ -7,9 +7,7 @@ export const GET: APIRoute = ({ site }) =>
     [
       '# aquaman, for agents',
       '',
-      AGENT_NOTE,
-      '',
-      'Needs aquaman 0.18.0 or later. Write the app to read its keys from the environment as usual.',
+      agentNote(site!),
       '',
       `- Contract (fields, statuses, exit codes, what init changes): ${new URL('/docs/agent-setup.md', site!).href}`,
       `- Index of this site in Markdown: ${new URL('/llms.txt', site!).href}`,

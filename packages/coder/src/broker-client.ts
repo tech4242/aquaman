@@ -197,7 +197,7 @@ export class BrokerClient {
         if (err.code === 'ENOENT' || err.code === 'ECONNREFUSED') {
           reject(new BrokerError(
             `Cannot reach aquaman proxy at ${this.socketPath}. ` +
-            `Start it with: aquaman init --agent <agent>  (or, in a terminal of your own: aquaman daemon)`,
+            `Start it with: aquaman init --agent <agent> --no-hooks  (or, in a terminal of your own: aquaman daemon)`,
             { code: 'proxy_unreachable' }
           ));
         } else if (err.code === 'EPERM' || err.code === 'EACCES') {

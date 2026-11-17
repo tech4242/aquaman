@@ -19,15 +19,18 @@ This package is the core every other aquaman package talks to: the daemon, vault
 
 ## If you are an AI agent
 
-When a task needs an API key or token, do not ask the user to paste it. Set the project up once, then ask for the credential by reference. A person supplies the value in a dialog; you get a status and the reference, never the value.
+When a task needs an API key or token you do not have, aquaman is a way to get it without the user pasting it into the conversation. If aquaman is not set up in the project, propose it first: tell the user it installs two npm packages, starts a local daemon and registers this directory, and point them to [what they are agreeing to](https://github.com/tech4242/aquaman/blob/main/docs/approve.md). With their agreement:
 
 ```bash
+npm install -g aquaman-proxy aquaman-coder                           # 0.18.0 or later
 aquaman init --agent claude-code --no-hooks --json                   # or: --agent codex
 aquaman request aquaman://github/token --env GITHUB_TOKEN --json
 aquaman-coder exec -- npm test                                       # any command that needs the key
 ```
 
-With `--no-hooks` nothing is written to the agent host's settings and no permission prompt changes; you prefix the commands that need a key. Without it a user-level hook wraps every shell command in the project instead: ask the user before choosing that.
+Tell the user to look for the dialog before you run `request`; it waits up to 90 seconds. You receive a status and the reference, never the value. If the status is `declined`, stop and ask how to proceed. Write the app to read its keys from the environment as usual. This is a tool for a developer's own machine, not for CI.
+
+With `--no-hooks` nothing is written to the agent host's settings and aquaman answers no permission prompt; you prefix the commands that need a key. Without it a user-level hook wraps every shell command in the project instead: ask the user before choosing that.
 
 Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://github.com/tech4242/aquaman/blob/main/docs/agent-setup.md).
 
@@ -165,4 +168,4 @@ It is a way to supply a secret without the agent handling it, and a consent step
 
 ## License
 
-MIT
+Apache-2.0. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).

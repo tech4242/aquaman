@@ -36,7 +36,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, base
   : {});
 ```
 
-These three were run against a local server to confirm the path and header each sends (sdk@1.0.0, @octokit/rest@22.0.1, openai@7.57.0, stripe@23.1.0).
+These three were run against a local server to confirm the path and header each sends (openai 7.57.0, @octokit/rest 22.0.1, stripe 23.1.0).
 
 ```bash
 aquaman request aquaman://openai/api_key --env OPENAI_API_KEY --via-proxy OPENAI_BASE_URL    # URL ends in /openai/v1
