@@ -61,6 +61,7 @@ export {
 // Audit
 export {
   type AuditLoggerOptions,
+  type ChainVerification,
   AuditLogger,
   createAuditLogger,
   redactSensitiveParams

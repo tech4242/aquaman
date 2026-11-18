@@ -11,12 +11,12 @@ How aquaman relates to 2026 guidance on agentic AI security. These are documenta
 | Recommendation theme | aquaman alignment |
 |---|---|
 | **Incremental deployment** | aquaman ships as a plugin / adapter that can be added to existing agent setups without re-architecting. `aquaman doctor` validates the integration before any credential flows. |
-| **Strong governance** | A hash-chained audit log records every credential use, policy denial and broker read; a value is not handed out unless its entry was written. What the chain detects and what it does not is stated under AU-9 in the [NIST mapping](nist-800-53.md). |
+| **Strong governance** | A hash-chained audit log records every credential use, policy denial and broker read; a value is not handed out unless its entry was written. What the chain and its anchor detect and what they do not is stated under AU-9 in the [NIST mapping](nist-800-53.md). |
 | **Continuous monitoring** | Per-credential-access audit events with timestamp, service, operation and outcome. `aquaman audit tail` for live monitoring. |
 | **Supply-chain controls** | aquaman pins its own dependencies exactly (no semver ranges on `aquaman-proxy` from `aquaman-plugin` or `aquaman-coder`). Versions cross-pin between packages. ClawScan + VirusTotal third-party audit posture: Passed. |
 | **Expanded attack surface mitigation** | Process isolation: credentials live in a separate proxy process, not in the agent's address space. UDS-only socket (chmod 0o600), no network exposure. |
 | **Privilege creep prevention** | Broker endpoint materializes credentials per tool call (default 60s TTL, max 3600s). Agent's shell holds the credential only for the duration of one command. Project-scoped credential maps (v0.12.0+) limit which services each project sees. |
-| **Obscure event records (anti-tampering)** | The hash chain makes an entry altered, inserted or deleted inside the log detectable via `aquaman audit verify`. A log cut short at the end, deleted or rebuilt is not detected; nothing outside the file anchors it. |
+| **Obscure event records (anti-tampering)** | `aquaman audit verify` detects an entry altered, inserted or deleted inside the log through the hash chain, and a log cut short, emptied, deleted or rebuilt through the anchor the serving process keeps in the credential store. Not detected: the removal of entries written since the last anchor (at most `audit.anchorIntervalSeconds`, 60 by default), and a change made by software that can also write to the credential store. Details under AU-9 in the [NIST mapping](nist-800-53.md#the-audit-logs-anchor). |
 
 ## CSA MAESTRO — Multi-Agent Environment, Security, Threats, Risks & Outcomes
 

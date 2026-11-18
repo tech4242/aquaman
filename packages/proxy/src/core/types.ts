@@ -27,6 +27,11 @@ export interface ToolResult {
 
 export interface AuditEntry {
   id: string;
+  /**
+   * Position in the log, starting at 1 and never restarting, covered by the
+   * entry hash. An entry without one counts by its line position in its file.
+   */
+  seq?: number;
   timestamp: Date;
   type: 'tool_call' | 'tool_result' | 'credential_access';
   sessionId: string;
@@ -41,6 +46,8 @@ export interface CredentialAccess {
   operation: 'read' | 'use' | 'rotate';
   success: boolean;
   error?: string;
+  /** Free text for an entry that records something other than a request, such as an anchor reset. */
+  note?: string;
 }
 
 export interface ServiceConfig {
@@ -97,6 +104,12 @@ export interface CredentialsConfig {
 export interface AuditConfig {
   enabled: boolean;
   logDir: string;
+  /**
+   * How often, at most, the process that writes the audit log stores the
+   * log's anchor in the credential store, in seconds. Default 60. `0` turns
+   * anchoring off.
+   */
+  anchorIntervalSeconds?: number;
 }
 
 export interface ServicesConfig {

@@ -28,6 +28,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { CredentialBackend } from '../types.js';
+import { isReservedService } from './reserved.js';
 
 export type LinkScheme = 'op' | 'bw' | 'vault' | 'keychain' | 'keepassxc' | 'keeper';
 
@@ -90,7 +91,9 @@ const LINK_NAME = /^([a-z0-9][a-z0-9._-]*)\/([a-zA-Z0-9][a-zA-Z0-9._-]*)$/;
 export function parseLinkName(text: string): { service: string; key: string; name: string } | null {
   const bare = text.startsWith('aquaman://') ? text.slice('aquaman://'.length) : text;
   const m = LINK_NAME.exec(bare);
-  return m ? { service: m[1], key: m[2], name: `${m[1]}/${m[2]}` } : null;
+  // aquaman's own records are never read from, or redirected to, another item.
+  if (!m || isReservedService(m[1])) return null;
+  return { service: m[1], key: m[2], name: `${m[1]}/${m[2]}` };
 }
 
 // 1Password secret references take these characters only; an item whose name
