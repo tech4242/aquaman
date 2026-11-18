@@ -14,7 +14,7 @@ pip install -U aquaman-hermes                     # Hermes users
 
 The guides now show the cases people asked about: an item that is already in your vault on every host page, Bitwarden with Docker Sandboxes, OpenAI and Linux for Hermes, the model provider step for OpenClaw, and a new page for MCP servers.
 
-Three fixes come with it, listed at the end. Everything the guides describe works with 0.19.0.
+Four fixes come with it, listed at the end. Everything the guides describe works with 0.19.0.
 
 ### A new page: credentials for MCP servers
 
@@ -44,6 +44,7 @@ The [section of that name](https://aquaman.sh/docs/compare/#what-to-know-before-
 
 - **`aquaman openclaw setup` could replace your `openclaw.json`.** If the file was not strict JSON, for example because it had comments or a trailing comma, setup started from an empty configuration and wrote that back, so everything else in the file was lost. Setup now stops, says why and leaves the file as it is. If you ran `aquaman openclaw setup` on such a file, restore it from your own copy.
 - **`aquaman policy test` was wrong for `defaultAction: deny` policies.** A request that an `allow` rule matched was reported as "no matching rule", and a request that no rule matched ended in an error. It now names the rule or the default that decided. The proxy's own decisions were always right; only this command's output was not.
+- **Commands on the KeePassXC vault printed their result and never returned.** `aquaman credentials list`, `aquaman audit verify` and other one-shot commands kept running because the vault's file watch held the process open. They exit now. The daemon was not affected.
 - **`aquaman audit tail` could fail when the daemon rotated the log at that moment.** It reported "no such file". It now lists what is there. Nothing in the log was affected.
 
 ## 0.19.0

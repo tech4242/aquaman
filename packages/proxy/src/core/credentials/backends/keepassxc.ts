@@ -146,6 +146,10 @@ export class KeePassXCStore implements CredentialStore {
         // External modification — invalidate cache so next access reloads
         this.db = null;
       });
+      // The watcher is a convenience for a long-running process. It must not
+      // be what keeps a process alive: a command that reads one credential
+      // and is done has to exit.
+      this.watcher.unref();
     } catch {
       // Watch not supported on this filesystem — acceptable fallback
     }
