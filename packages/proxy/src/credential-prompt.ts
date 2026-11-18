@@ -42,6 +42,11 @@ export interface PromptRequest {
    * shown as such. Only an approval is asked for: nothing is typed.
    */
   from?: string;
+  /**
+   * With `from`: the reference is linked and not declared, so the value is
+   * injected by the proxy and not handed to commands. Picks the wording.
+   */
+  linkOnly?: boolean;
 }
 
 export type PromptResult =
@@ -138,6 +143,7 @@ const CONSEQUENCE = {
   link: {
     declared: 'Allow makes aquaman read that item whenever this credential is used. aquaman does not change or delete the item. Commands the agent runs in this project will be given the value, and other software running as you can ask aquaman for it. Deny if you did not expect this, or if the item named below is not one you want used this way.',
     routed: 'Allow makes aquaman read that item whenever this credential is used. aquaman does not change or delete the item. The app in this project gets a local token, not the key: aquaman adds the key to its requests on the way out. Deny if you did not expect this, or if the item named below is not one you want used this way.',
+    only: 'Allow makes aquaman read that item whenever this credential is used. aquaman does not change or delete the item. The value is added to requests aquaman forwards for this service; it is not given to commands unless the credential is also declared (aquaman broker allow). Deny if you did not expect this, or if the item named below is not one you want used this way.',
   },
 } as const;
 
@@ -160,7 +166,9 @@ export function promptMessage(request: PromptRequest, kind: 'value' | 'approval'
     '',
     `Credential: ${displayText(`${request.service}/${request.key}`, 140)}`,
     '',
-    CONSEQUENCE[what][request.routed === true ? 'routed' : 'declared'],
+    what === 'link' && request.linkOnly === true && request.routed !== true
+      ? CONSEQUENCE.link.only
+      : CONSEQUENCE[what][request.routed === true ? 'routed' : 'declared'],
     '',
     'aquaman never asks for your login, Apple ID or password-manager password.',
   ];

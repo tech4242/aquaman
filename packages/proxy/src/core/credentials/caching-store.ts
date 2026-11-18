@@ -91,6 +91,19 @@ export class CachingStore implements CredentialStore {
     return this.inner.linkStamp?.(service, key) ?? '';
   }
 
+  async approveLink(service: string, key: string, locator: string): Promise<void> {
+    if (!this.inner.approveLink) throw new Error('This credential store does not record link approvals');
+    await this.inner.approveLink(service, key, locator);
+  }
+
+  async revokeLink(service: string, key: string): Promise<boolean> {
+    return (await this.inner.revokeLink?.(service, key)) === true;
+  }
+
+  async linkApproved(name: string, locator: string): Promise<boolean> {
+    return (await this.inner.linkApproved?.(name, locator)) === true;
+  }
+
   /** Drop every cached value (next reads go to the backend). */
   flush(): void {
     this.cache.clear();

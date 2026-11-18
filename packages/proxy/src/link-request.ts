@@ -22,13 +22,14 @@ function shellQuote(text: string): string {
 }
 
 /** `undefined` when the request has no `from`: it is not about a link. */
-export function linkRequestPlan(
+export async function linkRequestPlan(
   linker: CredentialLinker | undefined,
   service: string,
   key: string,
   from: unknown,
   routed: boolean,
-): LinkRequestPlan | undefined {
+  declares: boolean = true,
+): Promise<LinkRequestPlan | undefined> {
   if (from === undefined) return undefined;
   if (!linker) {
     return {
@@ -54,13 +55,15 @@ export function linkRequestPlan(
   }
   const plan = linker.plan(service, key, from);
   if (!plan.ok) return { ...plan, status: plan.code === 'link_exists' ? 409 : 400 };
-  if (plan.linked) return { ok: true, pending: false };
+  // In place means in config.yaml and approved. A link that is only in the
+  // file was put there without a person agreeing, and is asked about.
+  if (plan.linked && await linker.approved(service, key, plan.locator)) return { ok: true, pending: false };
   const link = `aquaman credentials link ${service}/${key} ${shellQuote(plan.locator)}`;
   return {
     ok: true,
     pending: true,
     locator: plan.locator,
-    manual: routed ? link : `${link} && aquaman broker allow aquaman://${service}/${key}`,
+    manual: routed || !declares ? link : `${link} && aquaman broker allow aquaman://${service}/${key}`,
   };
 }
 

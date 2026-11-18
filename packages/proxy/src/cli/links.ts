@@ -3,16 +3,21 @@
  * `delete`, `list`, `doctor` and `request --from`.
  *
  * A link makes aquaman read a vault item it did not write, so making one is
- * a person's decision. `credentials link` therefore needs a terminal on stdin
- * and stdout; without one it points at `aquaman request --from`, where the
- * person decides in a dialog the daemon shows. This is a prompt against a
- * mistake, not a boundary: software running as the same user can edit
- * config.yaml directly.
+ * a person's decision, and the decision is taken in the dialog the daemon
+ * shows: `credentials link` asks the daemon exactly as `aquaman request
+ * --from` does. A terminal is not taken as proof of a person, because a
+ * program can give itself one. Only where the daemon reports that it cannot
+ * show a dialog at all (a machine without a desktop session) does the command
+ * ask at the terminal, and it then records the approval with its own access
+ * to the vault.
  */
 
 import type { Command } from 'commander';
+import * as readline from 'node:readline';
+import * as path from 'node:path';
 import {
   getConfigPath,
+  getConfigDir,
   loadConfig,
   parseLinkName,
   parseLocatorFor,
@@ -85,13 +90,35 @@ export function checkRequestLocator(locator: string): { ok: true } | { ok: false
   return parsed.ok ? { ok: true } : { ok: false, error: parsed.error, fix: parsed.fix, code: parsed.code };
 }
 
+/** How the command reaches the daemon; the CLI's own helper is passed in. */
+export type LinkProxyPost = (
+  socketPath: string,
+  urlPath: string,
+  body: Record<string, unknown>,
+  timeoutMs: number,
+) => Promise<{ status: number; json: any } | { error: string; code: string }>;
+
+/** Seconds the dialog waits when the person runs the command themselves. */
+const LINK_DIALOG_SECONDS = 90;
+
+function askYes(question: string): Promise<boolean> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim().toLowerCase() === 'yes');
+    });
+  });
+}
+
 export function registerLinkCommands(
   credentials: Command,
   openStore: (config: WrapperConfig) => Promise<CredentialStore>,
+  proxyPost: LinkProxyPost,
 ): void {
   credentials
     .command('link <ref> <locator>')
-    .description('Read a reference from an item that already exists in your vault. aquaman reads the item and never writes to it')
+    .description('Read a reference from an item that already exists in your vault. You approve it in a dialog; aquaman reads the item and never writes to it')
     .addHelpText('after', `
 Locators, one form per backend:
   1password   op://<vault>/<item>/[<section>/]<field>
@@ -101,25 +128,66 @@ Locators, one form per backend:
   keepassxc   keepassxc://<Group/.../Entry title>[#<field>]
   keeper      keeper://<record UID>[/<field>]
 
-Needs a terminal: a link is a person's decision. An agent asks with
-  aquaman request <ref> --from <locator>
-and the person decides in a dialog.
+The running daemon shows a dialog that names the item, and the link is made
+when you allow it. The reference is linked and not declared: the proxy can add
+the value to requests it forwards, and commands are given it only after
+  aquaman broker allow <ref>
+To link and declare in one step: aquaman request <ref> --from <locator>
 
 Example:
   aquaman credentials link github/token 'op://Private/GitHub/token'`)
     .action(async (ref: string, locator: string) => {
       const target = parseLinkName(ref);
       if (!target) fail(`Invalid reference: ${ref}`, 'Write it as <service>/<key> or aquaman://<service>/<key>, e.g. github/token');
-      if (!process.stdin.isTTY || !process.stdout.isTTY) {
-        fail(
-          'A link makes aquaman read a vault item it did not write, so it is made by a person at a terminal.',
-          `aquaman request aquaman://${target.name} --from ${shellQuote(locator)}   (the person decides in a dialog)`,
-        );
-      }
       const config = loadConfig();
       const parsed = parseLocatorFor(config.credentials.backend, locator);
       if (!parsed.ok) fail(parsed.error, parsed.fix);
 
+      const done = () => {
+        console.log(`Linked ${target.name} to ${locator}`);
+        console.log('aquaman reads that item and never writes to it or deletes it.');
+        console.log(`To let commands be given the value: aquaman broker allow aquaman://${target.name}`);
+        console.log(`To remove the link: aquaman credentials unlink ${target.name}`);
+      };
+
+      console.error('Asking in a dialog on this machine. Look for it and allow the item if it is the one you mean.');
+      const response = await proxyPost(
+        path.join(getConfigDir(), 'proxy.sock'),
+        '/broker/request',
+        { service: target.service, key: target.key, from: locator, declare: false, project: process.cwd(), timeout_seconds: LINK_DIALOG_SECONDS },
+        (LINK_DIALOG_SECONDS + 30) * 1000,
+      );
+      if ('error' in response) {
+        fail('The daemon shows the dialog a link is approved in, and it is not running.', 'aquaman daemon &   (then run this command again)');
+      }
+      const { status, json } = response;
+      if (status !== 200) fail(json.error ?? `The daemon refused the request (${status})`, json.fix);
+      if (json.status === 'linked' || json.status === 'ready') {
+        done();
+        return;
+      }
+      if (json.status === 'declined') {
+        console.error(`Not linked: ${json.reason ?? 'declined'}`);
+        process.exit(2);
+      }
+      if (json.code !== 'prompt_unavailable') {
+        console.error(`Not linked: ${json.reason ?? 'nobody answered the dialog'}. Run the command again.`);
+        process.exit(3);
+      }
+
+      // No dialog can be shown on this machine, so the question is put here.
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        fail(
+          `No dialog can be shown on this machine (${json.reason}), and this command is not at a terminal, so nobody can be asked.`,
+          `Run it yourself in a terminal: aquaman credentials link ${target.name} ${shellQuote(locator)}`,
+        );
+      }
+      console.error(`No dialog can be shown on this machine (${json.reason}).`);
+      console.error(`This makes aquaman read ${locator} from your vault whenever ${target.name} is used. aquaman does not change or delete the item.`);
+      if (!(await askYes('Type yes to link it: '))) {
+        console.error('Not linked.');
+        process.exit(2);
+      }
       let store: CredentialStore;
       try {
         store = await openStore(config);
@@ -129,23 +197,28 @@ Example:
       const linker = createCredentialLinker({ store, backend: config.credentials.backend, configPath: getConfigPath() });
       const made = await linker.establish(target.service, target.key, locator);
       if (!made.ok) fail(made.error, made.fix);
-
-      console.log(`Linked ${target.name} to ${locator}`);
-      console.log('aquaman reads that item and never writes to it or deletes it.');
-      console.log(`To let commands be given the value: aquaman broker allow aquaman://${target.name}`);
-      console.log(`To remove the link: aquaman credentials unlink ${target.name}`);
+      done();
     });
 
   credentials
     .command('unlink <ref>')
-    .description('Remove a link. The vault item is not touched')
-    .action((ref: string) => {
+    .description('Remove a link and its approval. The vault item is not touched')
+    .action(async (ref: string) => {
       const target = parseLinkName(ref);
       if (!target) fail(`Invalid reference: ${ref}`, 'Write it as <service>/<key> or aquaman://<service>/<key>, e.g. github/token');
-      if (writeCredentialLink(getConfigPath(), target.name, null)) {
-        console.log(`Unlinked ${target.name}. The vault item is unchanged.`);
-      } else {
+      if (!writeCredentialLink(getConfigPath(), target.name, null)) {
         console.log(`Not linked: ${target.name}`);
+        return;
+      }
+      console.log(`Unlinked ${target.name}. The vault item is unchanged.`);
+      // The link is gone either way. The approval record is aquaman's own
+      // item in the vault; if the vault cannot be opened from here it stays,
+      // and does nothing without the link.
+      try {
+        const store = await openStore(loadConfig());
+        await store.revokeLink?.(target.service, target.key);
+      } catch (err) {
+        console.error(`The approval record in the vault could not be updated (${err instanceof Error ? err.message : String(err)}). The link itself is removed.`);
       }
     });
 }

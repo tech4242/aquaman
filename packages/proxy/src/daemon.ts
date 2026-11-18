@@ -1102,7 +1102,7 @@ export class CredentialProxy {
         return;
       }
     }
-    let body: { service?: unknown; key?: unknown; project?: unknown; timeout_seconds?: unknown; routed?: unknown; from?: unknown };
+    let body: { service?: unknown; key?: unknown; project?: unknown; timeout_seconds?: unknown; routed?: unknown; from?: unknown; declare?: unknown };
     try {
       body = JSON.parse(bodyBuf);
     } catch {
@@ -1179,9 +1179,17 @@ export class CredentialProxy {
     // Until the person has agreed, only the locator's syntax and the link map
     // are looked at: reading or probing the item here would let a request
     // find out which items exist.
-    const link = linkRequestPlan(requests.links, service, key, body.from, routed);
+    // `declare: false` with `from` links the reference and leaves it
+    // undeclared: the proxy can inject the value, nothing is handed out.
+    const linkOnly = body.from !== undefined && body.declare === false && !routed;
+    const link = await linkRequestPlan(requests.links, service, key, body.from, routed, !linkOnly);
     if (link && !link.ok) {
       reply(link.status, { error: link.error, fix: link.fix, code: link.code });
+      return;
+    }
+    if (linkOnly && link && !link.pending) {
+      // Already linked to this item with a person's approval: nothing to ask.
+      reply(200, { status: 'ready', ref });
       return;
     }
     const linkFrom = link?.pending ? link.locator : undefined;
@@ -1238,9 +1246,10 @@ export class CredentialProxy {
       // person agrees. A routed request leaves the value out of reach only
       // while the reference is not declared some other way; one that is
       // already declared is handed out, and the dialog must say so.
-      const keptFromCallers = routed && !scope.check(service, key, 'uds').allowed;
+      const handedOut = scope.check(service, key, 'uds').allowed;
+      const keptFromCallers = routed && !handedOut;
       result = linkFrom !== undefined
-        ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds, routed: keptFromCallers, from: linkFrom })
+        ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds, routed: keptFromCallers, from: linkFrom, linkOnly: linkOnly && !handedOut })
         : exists
           ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds, routed: keptFromCallers })
           : await requests.prompter.askValue({ service, key, project, timeoutSeconds, routed: keptFromCallers });
@@ -1264,6 +1273,9 @@ export class CredentialProxy {
         status: 'pending',
         ref,
         reason: result.outcome === 'timeout' ? 'nobody answered the dialog' : result.reason,
+        // Told apart from "nobody answered": on a machine that cannot show a
+        // dialog, a command at a terminal has its own way to ask the person.
+        ...(result.outcome === 'unavailable' ? { code: 'prompt_unavailable' } : {}),
         fix: manual,
       });
       return;
@@ -1285,7 +1297,7 @@ export class CredentialProxy {
       if (result.outcome === 'entered' && !(await this.options.store.exists(service, key))) {
         await this.options.store.set(service, key, result.value);
       }
-      if (!declared && !routed) await requests.declare(service, key);
+      if (!declared && !routed && !linkOnly) await requests.declare(service, key);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       audit(message);

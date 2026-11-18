@@ -42,6 +42,10 @@ export interface CredentialStore {
   readLinked?(locator: ParsedLocator): Promise<string | null>;
   /** The locator a reference is linked to right now, or `''`. A cache uses it to notice a link that changed. */
   linkStamp?(service: string, key: string): string;
+  /** Link approvals, on a store that honours links (`LinkedStore`) and on wrappers around one. */
+  approveLink?(service: string, key: string, locator: string): Promise<void>;
+  revokeLink?(service: string, key: string): Promise<boolean>;
+  linkApproved?(name: string, locator: string): Promise<boolean>;
 }
 
 export interface CredentialStoreOptions {

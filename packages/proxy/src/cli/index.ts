@@ -3234,7 +3234,7 @@ credentials
     }
   });
 
-registerLinkCommands(credentials, (config) => createCredentialStore(storeOptionsFromConfig(config)));
+registerLinkCommands(credentials, (config) => createCredentialStore({ ...storeOptionsFromConfig(config), links: 'always' }), proxyPost);
 
 credentials
   .command('delete <service> <key>')

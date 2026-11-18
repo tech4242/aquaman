@@ -36,7 +36,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { getConfigDir } from './core/utils/config.js';
-import { isReservedService } from './core/credentials/reserved.js';
+import { isReservedService, RESERVED_SERVICE } from './core/credentials/reserved.js';
 
 /** `aquaman://service/key` — same grammar as the daemon's service/key validation. */
 const AQUAMAN_REF = /^aquaman:\/\/([a-z0-9][a-z0-9._-]*)\/([a-zA-Z0-9][a-zA-Z0-9._-]*)$/;
@@ -56,7 +56,7 @@ export function formatAquamanRef(service: string, key: string): string {
  * join service and key with one, and a hyphen in the service name would be
  * read back as part of the key.
  */
-export const RESERVED_SERVICE = 'aquaman_internal';
+export { RESERVED_SERVICE };
 
 /**
  * Whether a service name is reserved for aquaman's own records. A reserved
