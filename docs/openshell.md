@@ -28,6 +28,7 @@ openshell provider create --name claude --type anthropic \
 ## Good to know
 
 - A reference must be declared (`aquaman broker allow`) and exist in the vault. `aquaman broker revoke` stops it resolving.
+- A reference can point at an item you already keep in your vault, so the key is not typed again: `aquaman credentials link anthropic/api_key '<locator>'`, which you approve in a dialog, then `aquaman broker allow` ([locator forms](agent-setup.md#an-item-that-is-already-in-the-vault)).
 - A plain value (`--credential KEY=sk-...`) is stored in your vault under the `openshell` service.
 - OpenShell resolves when a sandbox starts, not per request, so expect one audit entry per sandbox start.
 - Since OpenShell 0.1.8 a credential without placement metadata is only injected into `Authorization`. For `x-api-key` or another header, set the placement in the provider profile.
