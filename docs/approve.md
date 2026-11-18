@@ -17,7 +17,7 @@ aquaman init --agent claude-code --no-hooks        # or: --agent codex
 |---|---|
 | Global npm packages | `aquaman-proxy` and `aquaman-coder`. Published from GitHub Actions with provenance; no install scripts |
 | `~/.aquaman/` | A config file, the list of projects, an audit log, and the daemon's socket and log |
-| A background process | `aquaman daemon`, running as you until you log out or reboot |
+| A background process | `aquaman daemon`, running as you until you log out or reboot. It starts at every login only if you approve that (`aquaman service install`, [autostart](autostart.md)) |
 | `~/.claude/skills/aquaman-credentials/` (Claude Code) or `~/.agents/skills/aquaman-credentials/` (Codex) | A short instruction file that tells the agent to use aquaman when it needs a credential |
 | `CLAUDE.md` or `AGENTS.md` in this project | A short marked block saying the project uses aquaman |
 

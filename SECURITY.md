@@ -25,7 +25,8 @@ The four packages (`aquaman-proxy`, `aquaman-plugin`, `aquaman-coder` on npm; `a
 
 - Credential exposure to the agent process (values reaching the agent's memory, transcript, or environment outside the documented broker flow)
 - Bypasses of the request-policy engine, the loopback token gate, or UDS/file permissions
-- Audit-log tampering that `verifyIntegrity()` fails to detect, within what it is documented to detect: an entry altered, inserted or deleted inside the chain. A truncated, emptied, deleted or rebuilt log is a [documented limit](docs/compliance/nist-800-53.md)
+- Audit-log tampering that `aquaman audit verify` fails to detect, within what it is documented to detect: an entry altered, inserted or deleted inside the chain, and a log cut short, emptied, deleted or rebuilt behind its anchor. Entries written since the last anchor, a change by software that can write to your vault, and a deleted old archive are [documented limits](docs/compliance/nist-800-53.md)
+- A way to read, move or redirect the audit anchor through aquaman, or to link a vault item or install the login item without the person's approval
 - A credential value handed out without an audit entry
 - Vulnerabilities in the packages' own code or their published artifacts (including the release pipeline)
 

@@ -66,9 +66,11 @@ aquaman keeps secrets in the user's vault (Keychain, 1Password, Bitwarden, Hashi
    \`\`\`
 
    Run it from the project directory. A dialog opens on the user's machine and the command waits for it, up to 90 seconds (\`--timeout <seconds>\` changes that). Tell the user to look for the dialog before you run the command. They type the value there, or approve one that is already stored.
+
+   If the user says the secret is already in their vault (1Password, Bitwarden, HashiCorp Vault, the Keychain, KeePassXC, Keeper), ask them for the item's locator and add \`--from <locator>\`, for example \`--from op://Private/GitHub/token\`. The dialog then names that item and the user approves it; nothing is typed. Do not guess a locator and do not try several: each one is a dialog on their screen.
 3. Read \`status\` in the JSON:
    - \`ready\` (exit 0): the credential was already in the vault and usable. No dialog was shown and nobody was asked; do not tell the user they entered anything. The variable is now bound for this project (see "Running commands"). Continue with the task.
-   - \`stored\`, \`approved\` (exit 0): the user typed the value, or allowed one that was already stored. The variable is now bound for this project. Continue with the task.
+   - \`stored\`, \`approved\`, \`linked\` (exit 0): the user typed the value, allowed one that was already stored, or allowed the vault item named with \`--from\`. The variable is now bound for this project. Continue with the task.
    - \`declined\` (exit 2): the user said no. Do not ask again; ask them how they want to proceed.
    - \`pending\` (exit 3): nobody answered, or nobody could be asked. If the user is there, run the same command once more. Otherwise show them the \`fix\` command from the output and wait.
    - \`error\` (exit 4): aquaman is not running. Run the setup below, then retry. aquaman's own commands always run, even when other commands in this project are being refused because the proxy is down.

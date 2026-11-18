@@ -267,7 +267,7 @@ On the proxy paths the agent sees a local endpoint plus a marker: the `aquaman-p
 | **Broker scope** | Only `aquaman daemon` hands out values, and only for refs you declared; OpenClaw-hosted proxies never do (v0.15.0+) | An agent can't pull arbitrary vault entries through the socket |
 | **Service allowlisting** | `proxiedServices` controls which APIs the agent can reach | Agent can't talk to services you didn't authorize |
 | **Request policies** | Method + path rules per service, enforced before credential injection | Agent can reach Anthropic but not its admin API; can draft emails but not send them |
-| **Audit trail** | SHA-256 hash-chained logs of every credential use | Post-incident forensics, tamper detection, compliance evidence |
+| **Audit trail** | SHA-256 hash-chained log of every credential use, with its last position anchored in your vault | Post-incident forensics, compliance evidence; `aquaman audit verify` notices an altered entry and a log cut short, emptied or rebuilt ([limits](docs/compliance/nist-800-53.md)) |
 | **Per-tool-call broker (coder)** | `aquaman-coder exec` materializes creds for one command at a time | Credentials don't sprawl across the agent's shell environment |
 | **Output redaction (coder)** | `aquaman-coder exec` pipes stdout/stderr through a redactor that scrubs each value it just injected verbatim - plus generic provider patterns as a fallback | Even arbitrary, shape-less credentials never reach the agent transcript |
 
@@ -357,7 +357,7 @@ policy:
 
 ## Credential Backends
 
-Bring your own vault - aquaman has no house store. Pick the backend you already run; secrets stay there, and the proxy reads them in place.
+Bring your own vault - aquaman has no house store. Pick the backend you already run; secrets stay there, and the proxy reads them in place. A reference can point at an item you already have (`aquaman credentials link github/token op://Private/GitHub/token`), so nothing is typed twice.
 
 | Backend | Best For | Setup |
 |---|---|---|
