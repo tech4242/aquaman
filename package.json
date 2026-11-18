@@ -76,6 +76,9 @@
     },
     "ajv": {
       "fast-uri": "^4.1.4"
+    },
+    "c8": {
+      "minimatch": "^11.0.1"
     }
   },
   "engines": {
