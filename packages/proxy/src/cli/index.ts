@@ -3057,9 +3057,11 @@ audit
   .option('-n, --lines <count>', 'Number of lines', '20')
   .action(async (options) => {
     const config = loadConfig();
+    // Opened for reading: a proxy may be writing this log right now.
     const auditLogger = createAuditLogger({
       logDir: config.audit.logDir,
-      enabled: true
+      enabled: true,
+      readOnly: true
     });
     await auditLogger.initialize();
 

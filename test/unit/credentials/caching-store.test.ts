@@ -215,6 +215,23 @@ describe('CachingStore', () => {
     });
   });
 
+  describe('getFresh()', () => {
+    it('reads from the backend although the value is cached, and caches what it read', async () => {
+      await memory.set('aquaman_internal', 'audit_anchor', 'first');
+      expect(await store.get('aquaman_internal', 'audit_anchor')).toBe('first');
+      expect(await store.get('aquaman_internal', 'audit_anchor')).toBe('first');
+      expect(inner.gets).toBe(1);
+
+      // Another process writes the backend; this one's cache still holds the old value.
+      await memory.set('aquaman_internal', 'audit_anchor', 'second');
+      expect(await store.get('aquaman_internal', 'audit_anchor')).toBe('first');
+      expect(await store.getFresh('aquaman_internal', 'audit_anchor')).toBe('second');
+      expect(inner.gets).toBe(2);
+      expect(await store.get('aquaman_internal', 'audit_anchor')).toBe('second');
+      expect(inner.gets).toBe(2);
+    });
+  });
+
   describe('flush()', () => {
     it('drops all cached values — next gets refetch', async () => {
       await memory.set('openai', 'api_key', 'sk-openai');

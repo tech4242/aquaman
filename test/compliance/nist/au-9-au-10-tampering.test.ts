@@ -5,19 +5,20 @@
  * A real log is written by `AuditLogger` and anchored the way a serving
  * process anchors it, then changed on disk the way a process running as the
  * user could change it. Each row asserts that the change is detected by the
- * check `aquaman audit verify` runs: a new `AuditLogger` on the directory,
- * its chain walked, and the log compared with the anchor in the credential
- * store.
+ * check `aquaman audit verify` runs: a new `AuditLogger` opened for reading
+ * on the directory, its chain walked, and the log compared with the anchor
+ * in the credential store.
  *
  * Two things detect a change. The chain links each entry to the one before
  * it and numbers them, so a change inside the retained files breaks it. The
- * anchor records the sequence and hash the log had reached, so a log that is
- * shorter than that, gone, or holds a different entry there is caught even
- * when its chain is valid on its own terms.
+ * anchor records the sequence and hash the log had reached and the sequence
+ * it is supposed to begin at (`from`), so a log that is shorter than that at
+ * either end, gone, or holds a different entry there is caught even when its
+ * chain is valid on its own terms.
  *
  * What is left is stated as `it.fails` rows: entries written after the last
- * anchor, software that can write to the credential store, and archives
- * removed from the old end. Each asserts what should hold and turns into a
+ * anchor, software that can write to the credential store, and an anchor
+ * written without `from`. Each asserts what should hold and turns into a
  * failure the day it does.
  */
 
@@ -280,6 +281,24 @@ const ANCHOR_ATTACKS: Attack[] = [
       write(file, current);
     },
   },
+  {
+    // The log never rotated, so nothing was ever pruned. A first line above
+    // sequence 1 in an archive, with nothing before it, is what pruning leaves.
+    name: 'delete every entry before the anchored one and move the anchored entry, untouched, into an archive file (made to look like pruning)',
+    anchor: 'head_missing',
+    tamper({ logDir, file, entries }) {
+      write(path.join(logDir, 'archive', 'audit-2026-01-01T00-00-00-000Z.jsonl'), entries.slice(-1));
+      fs.rmSync(file);
+    },
+  },
+  {
+    name: 'delete the first seven entries, leave the eighth as "the newest archive" and the rest in the current file',
+    anchor: 'head_missing',
+    tamper({ logDir, file, entries }) {
+      write(path.join(logDir, 'archive', 'audit-2026-01-01T00-00-00-000Z.jsonl'), entries.slice(7, 8));
+      write(file, entries.slice(8));
+    },
+  },
 ];
 
 describe('NIST AU-9 / AU-10: tampering with the audit log', () => {
@@ -320,9 +339,9 @@ describe('NIST AU-9 / AU-10: tampering with the audit log', () => {
     fs.rmSync(scene.logDir, { recursive: true, force: true });
   });
 
-  /** What `aquaman audit verify` does: a fresh logger on the directory, and the anchor from the store. */
+  /** What `aquaman audit verify` does: a fresh logger opened for reading on the directory, and the anchor from the store. */
   async function verify(store = scene.store): Promise<AuditVerification> {
-    const logger = new AuditLogger({ logDir: scene.logDir });
+    const logger = new AuditLogger({ logDir: scene.logDir, readOnly: true });
     await logger.initialize();
     return verifyAuditLog({ logger, openStore: async () => store, anchoring: true });
   }
@@ -334,7 +353,7 @@ describe('NIST AU-9 / AU-10: tampering with the audit log', () => {
     expect(result.valid).toBe(true);
     expect(result.chain).toMatchObject({ valid: true, errors: [], entries: ENTRIES, lastSeq: ENTRIES, verifiedFrom: 1 });
     expect(result.anchor).toMatchObject({ status: 'matches', seq: ENTRIES, unanchored: 0 });
-    expect(await readAuditAnchor(scene.store)).toMatchObject({ v: 1, seq: ENTRIES, hash: scene.entries[ENTRIES - 1].hash });
+    expect(await readAuditAnchor(scene.store)).toMatchObject({ v: 1, seq: ENTRIES, hash: scene.entries[ENTRIES - 1].hash, from: 1 });
   });
 
   it('the rebuilt-chain helper produces what the logger would: re-linking the untouched log changes nothing', () => {
@@ -480,19 +499,111 @@ describe('NIST AU-9 / AU-10: tampering with the audit log', () => {
       expect(result.chain.errors[0]).toMatch(/^The log starts at sequence 19, but archive audit-.*\.jsonl ends at sequence 12$/);
     });
 
-    it('pruned archives are named, not hidden: the result says which sequence the retained log was verified from', async () => {
-      const logger = new AuditLogger({ logDir: scene.logDir, maxArchives: 1 });
+    /**
+     * A logger that rotates after every entry and keeps two archives, with an
+     * anchor writer beside it as in a serving process. Six entries: archives
+     * 1-13, 14 ... 18, of which the last two are kept.
+     */
+    async function pruned(store = scene.store): Promise<{ logger: AuditLogger; stop(): Promise<void> }> {
+      const logger = new AuditLogger({ logDir: scene.logDir, maxArchives: 2, maxLogSizeBytes: 1 });
       await logger.initialize();
-      const first = await logger.rotateLog();
-      await log(logger, 4, 50);
-      await logger.rotateLog();
-      await log(logger, 2, 60);
-      await anchor(logger);
-      // What auto-rotation's pruning does with maxArchives: 1.
-      fs.rmSync(first);
+      const writer = createAuditAnchorWriter({ logger, store, intervalSeconds: 3600, report: () => {} });
+      await writer.ready;
+      await log(logger, 6, 50);
+      return { logger, stop: () => writer.stop() };
+    }
+    const archiveNames = () => fs.readdirSync(path.join(scene.logDir, 'archive')).sort();
+
+    it('pruned archives are named, not hidden: the anchor records where the log begins now, and the result says which sequence it was verified from', async () => {
+      const { stop } = await pruned();
+      await stop();
+      expect(archiveNames()).toHaveLength(2);
       const result = await verify();
       expect(result.valid).toBe(true);
-      expect(result.chain).toMatchObject({ lastSeq: 18, verifiedFrom: 13 });
+      expect(result.chain).toMatchObject({ lastSeq: 18, verifiedFrom: 17 });
+      expect(result.anchor).toMatchObject({ status: 'matches', seq: 18, from: 17 });
+    });
+
+    it('the anchor follows pruning at once, not at the next interval: a process killed right after it pruned leaves a log that verifies', async () => {
+      // An hour between anchor writes, and the process is never stopped cleanly.
+      await pruned();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(await readAuditAnchor(scene.store)).toMatchObject({ seq: 18, from: 17 });
+      expect((await verify()).valid).toBe(true);
+    });
+
+    it('detected: the oldest archive deleted (it looks like pruning, and the anchor says nothing was pruned)', async () => {
+      const logger = new AuditLogger({ logDir: scene.logDir });
+      await logger.initialize();
+      const oldest = await logger.rotateLog();
+      await log(logger, 4, 90);
+      await logger.rotateLog();
+      await log(logger, 2, 95);
+      await anchor(logger);
+      fs.rmSync(oldest);
+      const result = await verify();
+      expect(result.valid).toBe(false);
+      expect(result.chain).toMatchObject({ valid: true, verifiedFrom: 13 });
+      expect(result.anchor).toMatchObject({ status: 'head_missing', seq: 18, from: 1 });
+      expect(result.anchor.message).toMatch(/^entries 1 to 12 are missing: they were on disk when the anchor was written \(.*\), and the log now begins at sequence 13$/);
+      expect(result.fix).toContain('aquaman audit accept');
+    });
+
+    it('detected: after pruning, the oldest archive that was kept deleted', async () => {
+      const { stop } = await pruned();
+      await stop();
+      fs.rmSync(path.join(scene.logDir, 'archive', archiveNames()[0]));
+      const result = await verify();
+      expect(result.valid).toBe(false);
+      expect(result.anchor).toMatchObject({ status: 'head_missing', from: 17 });
+      expect(result.anchor.message).toContain('entries 17 to 17 are missing');
+    });
+
+    it('detected: an archive deleted between a prune and the anchor write that follows it', async () => {
+      // The store stands in for the moment between the two: it deletes the
+      // oldest archive pruning kept just before it takes the anchor.
+      const store = new MemoryStore();
+      const set = store.set.bind(store);
+      store.set = async (service, key, value) => {
+        if (archiveNames().length === 2) fs.rmSync(path.join(scene.logDir, 'archive', archiveNames()[0]));
+        return set(service, key, value);
+      };
+      const logger = new AuditLogger({ logDir: scene.logDir, maxArchives: 2, maxLogSizeBytes: 1 });
+      await logger.initialize();
+      const writer = createAuditAnchorWriter({ logger, store, intervalSeconds: 3600, report: () => {} });
+      await writer.ready;
+      // Archives 1-13, 14 and 15; the first is pruned, so the log is supposed to begin at 14.
+      await log(logger, 3, 50);
+      await writer.flush();
+      const result = await verify(store);
+      expect(result.valid).toBe(false);
+      expect(result.anchor).toMatchObject({ status: 'head_missing', seq: 15, from: 14 });
+      expect(result.anchor.message).toContain('entries 14 to 14 are missing');
+    });
+
+    it('a process that starts on a log whose head was removed reports it and leaves the anchor alone', async () => {
+      const logger = new AuditLogger({ logDir: scene.logDir });
+      await logger.initialize();
+      const oldest = await logger.rotateLog();
+      await log(logger, 4, 90);
+      await anchor(logger);
+      const anchored = await scene.store.get(RESERVED_SERVICE, AUDIT_ANCHOR_KEY);
+      fs.rmSync(oldest);
+
+      const restarted = new AuditLogger({ logDir: scene.logDir });
+      await restarted.initialize();
+      const reports: string[] = [];
+      const writer = createAuditAnchorWriter({ logger: restarted, store: scene.store, intervalSeconds: 60, report: (l) => reports.push(l) });
+      await writer.ready;
+      await log(restarted, 3, 96);
+      await writer.stop();
+
+      expect(writer.isPaused()).toBe(true);
+      expect(reports).toHaveLength(1);
+      expect(reports[0]).toMatch(/^AUDIT FAILURE: the audit log does not match its anchor: entries 1 to 12 are missing: they were on disk when the anchor was written/);
+      expect(reports[0]).toContain('aquaman audit accept');
+      expect(await scene.store.get(RESERVED_SERVICE, AUDIT_ANCHOR_KEY)).toBe(anchored);
+      expect((await verify()).anchor.status).toBe('head_missing');
     });
   });
 
@@ -572,18 +683,75 @@ describe('NIST AU-9 / AU-10: tampering with the audit log', () => {
       expect((await verify()).valid).toBe(false);
     });
 
-    // Current limit: pruning removes archives from the old end, and a deleted
-    // old archive looks the same as a pruned one.
-    it.fails('should be detected, is not: the oldest archive deleted (indistinguishable from pruning; reported as "verified from sequence N")', async () => {
+    /** The head of the log removed so that what is left looks pruned: entries 1 to 8 gone, 9 in an archive, the rest current. */
+    function removeHead(): void {
+      write(path.join(scene.logDir, 'archive', 'audit-2026-01-01T00-00-00-000Z.jsonl'), scene.entries.slice(8, 9));
+      write(scene.file, scene.entries.slice(9));
+    }
+
+    // Current limit: the same store write, on the other end of the log.
+    it.fails('should be detected, is not: the early entries removed and the anchor\'s `from` raised by software that can write to the credential store', async () => {
+      removeHead();
+      const stored = JSON.parse((await scene.store.get(RESERVED_SERVICE, AUDIT_ANCHOR_KEY))!);
+      await scene.store.set(RESERVED_SERVICE, AUDIT_ANCHOR_KEY, JSON.stringify({ ...stored, from: 9 }));
+      expect((await verify()).valid).toBe(false);
+    });
+
+    // Current limit: an anchor without `from` says where the log ended and
+    // nothing about where it began. No release wrote one; a store that holds
+    // one gets `from` at the next anchor write, taken from the log as it is then.
+    it.fails('should be detected, is not: the early entries removed from a log whose anchor was written without `from` (reported as "not checked for missing early entries")', async () => {
+      const { from: _from, ...withoutFrom } = JSON.parse((await scene.store.get(RESERVED_SERVICE, AUDIT_ANCHOR_KEY))!);
+      await scene.store.set(RESERVED_SERVICE, AUDIT_ANCHOR_KEY, JSON.stringify(withoutFrom));
+      removeHead();
+      expect((await verify()).valid).toBe(false);
+    });
+
+    it('an anchor without `from` on a log that begins later than sequence 1 passes, and the result says the early entries were not checked for', async () => {
+      const { from: _from, ...withoutFrom } = JSON.parse((await scene.store.get(RESERVED_SERVICE, AUDIT_ANCHOR_KEY))!);
+      await scene.store.set(RESERVED_SERVICE, AUDIT_ANCHOR_KEY, JSON.stringify(withoutFrom));
+      // On a log that begins at 1 there is nothing to say.
+      const whole = await verify();
+      expect(whole.anchor.message).not.toContain('not checked');
+      expect(whole.anchor.from).toBeUndefined();
+
+      removeHead();
+      const result = await verify();
+      expect(result.valid).toBe(true);
+      expect(result.chain.verifiedFrom).toBe(9);
+      expect(result.anchor.status).toBe('matches');
+      expect(result.anchor.message).toMatch(/; the log begins at sequence 9 and this anchor does not record where it should begin, so it was not checked for missing early entries$/);
+
+      // The next process to anchor the log records where it begins, as the log is by then.
       const logger = new AuditLogger({ logDir: scene.logDir });
       await logger.initialize();
-      const oldest = await logger.rotateLog();
-      await log(logger, 4, 90);
-      await logger.rotateLog();
-      await log(logger, 2, 95);
+      await log(logger, 1, 99);
       await anchor(logger);
-      fs.rmSync(oldest);
-      expect((await verify()).valid).toBe(false);
+      expect(await readAuditAnchor(scene.store)).toMatchObject({ seq: 13, from: 9 });
+    });
+
+    // Not a missed detection but a false one, and it stays until a person
+    // looks: pruning deletes the files before the anchor can say so.
+    it('a process that stops between pruning and the anchor write that follows leaves a log that fails verification until a person accepts it', async () => {
+      const logger = new AuditLogger({ logDir: scene.logDir, maxArchives: 2, maxLogSizeBytes: 1 });
+      await logger.initialize();
+      const writer = createAuditAnchorWriter({ logger, store: scene.store, intervalSeconds: 3600, report: () => {} });
+      await writer.ready;
+      // Archives 1-13 and 14, nothing pruned yet, anchored at 14.
+      await log(logger, 2, 50);
+      await writer.flush();
+      expect(await readAuditAnchor(scene.store)).toMatchObject({ seq: 14, from: 1 });
+
+      // The next entry prunes the first archive, and the anchor write that follows never happens.
+      scene.store.set = async () => { throw new Error('the process was killed here'); };
+      await log(logger, 1, 60);
+      await writer.flush();
+
+      const result = await verify();
+      expect(result.valid).toBe(false);
+      expect(result.anchor).toMatchObject({ status: 'head_missing', seq: 14, from: 1 });
+      expect(result.anchor.message).toContain('entries 1 to 13 are missing');
+      expect(result.fix).toContain('aquaman audit accept');
     });
   });
 });

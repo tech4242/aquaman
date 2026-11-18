@@ -63,6 +63,16 @@ export class CachingStore implements CredentialStore {
     return value;
   }
 
+  /**
+   * Read from the backend whatever the cache holds, and cache what comes
+   * back. For a value another process may have written since this one last
+   * read it: the audit anchor.
+   */
+  async getFresh(service: string, key: string): Promise<string | null> {
+    this.cache.delete(this.cacheKey(service, key));
+    return this.get(service, key);
+  }
+
   async set(service: string, key: string, value: string, metadata?: Record<string, string>): Promise<void> {
     await this.inner.set(service, key, value, metadata);
     this.cache.delete(this.cacheKey(service, key));
