@@ -32,9 +32,11 @@ import {
   DEFAULT_LOOPBACK_PORT,
   wrapWithCache,
   resolveCacheTtl,
+  createCredentialLinker,
   type CredentialStoreOptions,
   type WrapperConfig
 } from '../core/index.js';
+import { registerLinkCommands, refuseIfLinked, listedCredential, reportLinks, checkRequestLocator } from './links.js';
 
 import { fileURLToPath } from 'node:url';
 
@@ -117,7 +119,9 @@ function storeOptionsFromConfig(config: WrapperConfig): CredentialStoreOptions {
     bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
     bitwardenCollectionId: config.credentials.bitwardenCollectionId,
     keeperFolderUid: config.credentials.keeperFolderUid,
-    keeperConfigPath: config.credentials.keeperConfigPath
+    keeperConfigPath: config.credentials.keeperConfigPath,
+    // A daemon outlives the config it started with, so a link made later has to reach it.
+    links: 'always'
   };
 }
 
@@ -587,6 +591,7 @@ program
         const creds = await store.list();
         console.log(`    \u2713 ${config.credentials.backend} backend (${creds.length} credential${creds.length !== 1 ? 's' : ''})`);
         printOnePasswordModeHint(config);
+        issues += reportLinks(config.credentials.backend);
       } catch (err) {
         console.log(`    \u2717 Backend not accessible: ${(err as Error).message}`);
         console.log('      \u2192 Run: aquaman setup');
@@ -1079,6 +1084,7 @@ program
         ? {
             prompter: createNativePrompter(),
             declare: (service, key) => { writeBrokerAllowedRefs([formatAquamanRef(service, key)], 'allow'); },
+            links: createCredentialLinker({ store: credentialStore, backend: config.credentials.backend, configPath: getConfigPath() }),
           }
         : undefined,
       // Returned, so the proxy knows whether the entry was written.
@@ -3053,6 +3059,7 @@ credentials
   .action(async (service: string, key: string, options) => {
     validateCredName('service', service);
     validateCredName('key', key);
+    refuseIfLinked(service, key);
 
     const config = loadConfig();
     const backend = options.backend || config.credentials.backend;
@@ -3152,9 +3159,11 @@ credentials
 
     console.log('Stored credentials:');
     for (const cred of creds) {
-      console.log(`  ${cred.service}/${cred.key}`);
+      console.log(`  ${listedCredential(cred)}`);
     }
   });
+
+registerLinkCommands(credentials, (config) => createCredentialStore(storeOptionsFromConfig(config)));
 
 credentials
   .command('delete <service> <key>')
@@ -3162,6 +3171,7 @@ credentials
   .action(async (service: string, key: string) => {
     validateCredName('service', service);
     validateCredName('key', key);
+    refuseIfLinked(service, key);
 
     const config = loadConfig();
     let store;
@@ -3619,6 +3629,7 @@ program
   .option('--env <NAME>', 'Also bind the ref to this env var for the project covering the current directory')
   .option('--via-proxy <URL_ENV>', 'With --env: route the program through the proxy. NAME gets the proxy token, URL_ENV the proxy URL; the program never holds the credential')
   .option('--base-path <path>', 'With --via-proxy: path appended to the proxy URL (default /v1 for openai)')
+  .option('--from <locator>', 'Use an item that already exists in your vault instead of asking for the value (see: aquaman credentials link --help)')
   .option('--timeout <seconds>', `How long the dialog waits for an answer (${PROMPT_TIMEOUT_MIN_SECONDS}-${PROMPT_TIMEOUT_MAX_SECONDS})`, String(PROMPT_TIMEOUT_SECONDS))
   .option('--json', 'Print one JSON object and nothing else')
   .addHelpText('after', `
@@ -3630,14 +3641,15 @@ Statuses and exit codes:
   ready     0   stored and usable already; nobody was asked
   stored    0   a person typed the value; it is in the vault now
   approved  0   it was already in the vault; a person allowed its use
+  linked    0   --from named an existing vault item; a person allowed it and it could be read
   declined  2   a person said no
   pending   3   nobody could be asked (no desktop session, no answer); the output says what to run by hand
-  error     4   the daemon is not running or does not take requests
-  error     1   the command was wrong: bad reference, bad --env, --env outside a project
+  error     4   the daemon is not running, does not take requests, or refused: "code" says which
+  error     1   the command was wrong: bad reference, bad --env, --env outside a project, bad --from
 
 Example:
   aquaman request aquaman://github/token --env GITHUB_TOKEN --json`)
-  .action(async (ref: string, opts: { env?: string; json?: boolean; timeout: string; viaProxy?: string; basePath?: string }) => {
+  .action(async (ref: string, opts: { env?: string; json?: boolean; timeout: string; viaProxy?: string; basePath?: string; from?: string }) => {
     const out = (result: Record<string, unknown>, code: number): never => {
       if (opts.json) {
         console.log(JSON.stringify(result, null, 2));
@@ -3663,6 +3675,10 @@ Example:
       out({ status: 'error', ref, error: `Invalid --timeout: ${opts.timeout}`, fix: `Give a whole number of seconds between ${PROMPT_TIMEOUT_MIN_SECONDS} and ${PROMPT_TIMEOUT_MAX_SECONDS}` }, 1);
     }
     const timeoutSeconds = clampPromptTimeout(Number(opts.timeout));
+    if (opts.from !== undefined) {
+      const locator = checkRequestLocator(opts.from);
+      if (!locator.ok) out({ status: 'error', ref, error: locator.error, code: locator.code, fix: locator.fix }, 1);
+    }
 
     // A binding needs a project to live in. Checked before anyone is asked
     // for a value, so a dialog is never shown for a request that cannot finish.
@@ -3713,7 +3729,7 @@ Example:
     const response = await proxyPost(
       path.join(getConfigDir(), 'proxy.sock'),
       '/broker/request',
-      { service: parsed!.service, key: parsed!.key, project: process.cwd(), timeout_seconds: timeoutSeconds, ...(routeArgs.length ? { routed: true } : {}) },
+      { service: parsed!.service, key: parsed!.key, project: process.cwd(), timeout_seconds: timeoutSeconds, ...(routeArgs.length ? { routed: true } : {}), ...(opts.from !== undefined ? { from: opts.from } : {}) },
       (timeoutSeconds + 30) * 1000,
     );
     if ('error' in response) {
@@ -3725,7 +3741,7 @@ Example:
     }
 
     const result: Record<string, unknown> = { status: json.status, ref, reason: json.reason, fix: json.fix };
-    const usable = json.status === 'ready' || json.status === 'stored' || json.status === 'approved';
+    const usable = json.status === 'ready' || json.status === 'stored' || json.status === 'approved' || json.status === 'linked';
     if (!usable && opts.env && typeof result.fix === 'string') {
       // The by-hand route has to end in the same place this command would have.
       result.fix = `${result.fix} && aquaman coder bind ${bindSpec}${routeArgs.length ? ` ${routeArgs.join(' ')}` : ''}`;

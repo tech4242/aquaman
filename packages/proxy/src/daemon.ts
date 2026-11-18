@@ -17,6 +17,8 @@ import { matchPolicy, type PolicyConfig } from './request-policy.js';
 import { parseRequestTarget, policyPathInterpretations, policyMethods, policyPathOverrides } from './request-target.js';
 import { clampPromptTimeout, type CredentialPrompter, type PromptResult } from './credential-prompt.js';
 import type { BrokerScope } from './broker-scope.js';
+import type { CredentialLinker } from './core/credentials/linked-store.js';
+import { linkRequestPlan, linkUnreadableReply } from './link-request.js';
 
 // Service name validation: lowercase alphanum, dots, hyphens, underscores
 const SAFE_SERVICE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
@@ -141,6 +143,11 @@ export interface CredentialProxyOptions {
     prompter: CredentialPrompter;
     /** Persist the ref as declared, so the broker scope serves it from now on. */
     declare(service: string, key: string): void | Promise<void>;
+    /**
+     * Makes links to items that already exist in the vault (`from` in the
+     * request). Without it a request that names an item is refused.
+     */
+    links?: CredentialLinker;
   };
 }
 
@@ -836,6 +843,7 @@ export class CredentialProxy {
    *   200 { status: "ready" }     already stored and declared; nothing asked
    *   200 { status: "stored" }    the human typed it; now stored and declared
    *   200 { status: "approved" }  already stored; the human allowed its use
+   *   200 { status: "linked" }    `from` named a vault item; the human allowed it and it resolved
    *   200 { status: "declined" }  the human said no (or did so recently)
    *   200 { status: "pending" }   nobody could be asked; `fix` says what to run
    *   404 { code }                broker off here, or not the Unix socket
@@ -1048,7 +1056,7 @@ export class CredentialProxy {
         return;
       }
     }
-    let body: { service?: unknown; key?: unknown; project?: unknown; timeout_seconds?: unknown; routed?: unknown };
+    let body: { service?: unknown; key?: unknown; project?: unknown; timeout_seconds?: unknown; routed?: unknown; from?: unknown };
     try {
       body = JSON.parse(bodyBuf);
     } catch {
@@ -1080,7 +1088,7 @@ export class CredentialProxy {
     // Asked for on behalf of a binding made through the proxy: the value is
     // stored, and the reference is not declared for handing out.
     const routed = body.routed === true;
-    const manual = routed
+    let manual = routed
       ? `aquaman credentials add ${service} ${key}`
       : `aquaman credentials add ${service} ${key} && aquaman broker allow ${ref}`;
 
@@ -1114,9 +1122,21 @@ export class CredentialProxy {
       return;
     }
 
+    // `from` asks for a link to an item that already exists in the vault.
+    // Until the person has agreed, only the locator's syntax and the link map
+    // are looked at: reading or probing the item here would let a request
+    // find out which items exist.
+    const link = linkRequestPlan(requests.links, service, key, body.from, routed);
+    if (link && !link.ok) {
+      reply(link.status, { error: link.error, fix: link.fix, code: link.code });
+      return;
+    }
+    const linkFrom = link?.pending ? link.locator : undefined;
+    if (link?.pending) manual = link.manual;
+
     let exists: boolean;
     try {
-      exists = await this.options.store.exists(service, key);
+      exists = linkFrom === undefined && await this.options.store.exists(service, key);
     } catch (err) {
       reply(500, {
         error: `Vault backend error checking ${service}/${key}: ${err instanceof Error ? err.message : String(err)}`,
@@ -1129,6 +1149,12 @@ export class CredentialProxy {
       : scope.check(service, key, 'uds').allowed;
     if (exists && declared) {
       reply(200, { status: 'ready', ref });
+      return;
+    }
+    // A linked reference whose item cannot be read is not asked for as a new
+    // value: a typed value is never written over a link.
+    if (!exists && linkFrom === undefined && requests.links?.linkOf(service, key) !== undefined) {
+      reply(404, linkUnreadableReply(service, key));
       return;
     }
 
@@ -1157,9 +1183,11 @@ export class CredentialProxy {
     try {
       // `routed` picks the dialog's wording: what the person is told has to
       // match what a caller can obtain once they agree.
-      result = exists
-        ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds, routed })
-        : await requests.prompter.askValue({ service, key, project, timeoutSeconds, routed });
+      result = linkFrom !== undefined
+        ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds, routed, from: linkFrom })
+        : exists
+          ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds, routed })
+          : await requests.prompter.askValue({ service, key, project, timeoutSeconds, routed });
     } catch (err) {
       result = { outcome: 'unavailable', reason: err instanceof Error ? err.message : String(err) };
     } finally {
@@ -1186,6 +1214,17 @@ export class CredentialProxy {
     }
 
     try {
+      if (linkFrom !== undefined) {
+        // The person agreed, so the item is read here for the first time. A
+        // link is written only if it resolves and nothing is stored under the
+        // reference; this refusal may say the item is missing.
+        const made = await requests.links!.establish(service, key, linkFrom);
+        if (!made.ok) {
+          audit(`${made.code}: ${service}/${key}`);
+          reply(404, { error: made.error, fix: made.fix, code: made.code });
+          return;
+        }
+      }
       // Checked again: the dialog was open for a while, and a stored value is never replaced.
       if (result.outcome === 'entered' && !(await this.options.store.exists(service, key))) {
         await this.options.store.set(service, key, result.value);
@@ -1198,7 +1237,7 @@ export class CredentialProxy {
       return;
     }
     audit();
-    reply(200, { status: result.outcome === 'entered' ? 'stored' : 'approved', ref });
+    reply(200, { status: linkFrom !== undefined ? 'linked' : result.outcome === 'entered' ? 'stored' : 'approved', ref });
   }
 
   private async handleBrokerResolve(
