@@ -8,7 +8,7 @@ An MCP server that talks to an API needs a token, and the usual place for it is 
 | Remote, and takes a fixed token in a request header | Claude Code's `headersHelper`, running `aquaman get` |
 | Local, started by the host over stdio | A start command that reads the token with `aquaman get` |
 
-Facts about Claude Code on this page are from its [MCP documentation](https://code.claude.com/docs/en/mcp), read on 2026-11-18. The two aquaman forms below were run against a real aquaman daemon with a stand-in MCP server started the way a host starts one. They were not run inside Claude Code.
+Facts about Claude Code on this page are from its [MCP documentation](https://code.claude.com/docs/en/mcp), read on 2026-11-18. Both aquaman forms below were run inside Claude Code 2.1.327 with aquaman 0.19.0, a stand-in remote server that refuses a request without the right token, and a stand-in stdio server: both servers connected, a tool call on each worked, and neither token appeared in Claude Code's output.
 
 ## A remote server with OAuth
 
@@ -103,10 +103,10 @@ The setup is the same as above: the token stored or linked as `github/token`, `a
 - **Where the token is:** in the environment of the server process, for as long as it runs. It is not in `.mcp.json`, not in the host's own environment, and not in the environment of the commands the agent runs. Each server start is one entry in `aquaman audit tail`.
 - **The server holds the real value.** This keeps the token out of files and out of the agent's reach through its shell; it does not keep it from the server itself. Nothing redacts what the server sends back, so a server that returns its own token in a tool result puts it in the conversation.
 - **The token is read once, at start.** After you replace it in the vault, restart the server (in Claude Code, reconnect it from `/mcp`).
-- `aquaman` has to be on the `PATH` the host starts servers with. If it is not, write the absolute paths of `node` and `aquaman`. A relative path such as `./mcp/server.js` depends on the directory the host starts servers in; write an absolute one if you are not sure.
+- `aquaman` has to be on the `PATH` the host starts servers with. If it is not, write the absolute paths of `node` and `aquaman`. Claude Code starts a stdio server in the project folder, so a relative path such as `./mcp/server.js` is found there.
 - Claude Code expands `${VAR}` in `command`, `args` and `env` from its own environment. The line above uses `$(...)` and no `${...}`, so nothing in it is expanded by Claude Code. A token supplied as `${GITHUB_TOKEN}` would have to be in Claude Code's own environment, which is what this page avoids.
 
-What was run: the `args` line and the script above, each started as a host starts a server (the command executed directly, JSON-RPC over its pipes), with a stand-in server that reports whether its variable is set and never the value, the `encrypted-file` vault and a real daemon. The stand-in answered both requests at once with the variable set, and with the reference revoked it did not start and stderr carried aquaman's fix.
+What was run, in Claude Code 2.1.327: the entry above, with a stand-in server that reports whether its variable is set and never the value. The server connected, its tool answered with the variable set, and `aquaman audit tail` showed one read for the start. Outside Claude Code, with the reference revoked, the server did not start and its stderr carried aquaman's fix.
 
 ### Do not wrap a stdio server in `aquaman-coder exec`
 

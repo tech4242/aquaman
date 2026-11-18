@@ -20,7 +20,7 @@ Three fixes come with it, listed at the end. Everything the guides describe work
 
 [Credentials for MCP servers](https://aquaman.sh/docs/mcp/) covers three cases. A remote server with OAuth needs the host's own sign-in and not aquaman. A remote server that takes a fixed token in a header gets it from Claude Code's `headersHelper` running `aquaman get`. A stdio server gets a start command that reads the token with `aquaman get`, so nothing is in `.mcp.json`.
 
-- Both aquaman forms were run against a real daemon with a stand-in server. They were not run inside Claude Code.
+- Both aquaman forms were run inside Claude Code 2.1.327 with stand-in servers: both connected, and neither token appeared in Claude Code's output.
 - `aquaman-coder exec` cannot wrap a stdio MCP server: its output redaction holds back the end of each reply until more output arrives. The page says so and gives the form that works.
 
 ### An item that is already in your vault, on every host page
