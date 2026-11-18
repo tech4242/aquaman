@@ -51,14 +51,18 @@ Hermes and OpenClaw each build their own HTTP client and cannot dial a socket. T
    - `basic`: Twilio, BlueBubbles, Nextcloud Talk
    - `oauth`: client-credentials exchange (MS Teams, Feishu, Google Chat)
    - `none`: at-rest storage only, traffic rejected (Nostr, Tlon)
-5. Forward upstream, pipe the response back, append a hash-chained audit entry.
+5. Forward upstream, append a hash-chained audit entry, pipe the response back.
+
+The audit entry gates what is handed out. `/broker/resolve` (so `aquaman get` and `aquaman-coder exec`) and the OpenShell driver's Resolve write the entry first and refuse with `audit_unavailable` and a fix if the write fails. A forwarded request has already gone upstream by the time its outcome is known, so there the response is withheld (500 `audit_unavailable`) rather than the request. Refusals and errors hand nothing out and stand even when their own entry cannot be written. An audit failure is printed as `AUDIT FAILURE: ...` on stderr and never takes the daemon down: `onRequest` must return the logger's promise, and `recordRequest()` in `daemon.ts` is the only caller. Conformance: `test/compliance/audit-fail-closed.test.ts`.
 
 The request target is read once, by `parseRequestTarget()` in `packages/proxy/src/request-target.ts`, and that one reading supplies the service name, the path policy sees and the path sent upstream. It refuses (400) anything two parsers could read differently: backslashes, `.`/`..` segments in any encoding, encoded backslashes and control characters, double-encoded separators, malformed escapes, fragments. The query is split off and never part of policy matching. Rules for anyone touching this path:
 
 - Never build the upstream URL with `new URL(clientPath, upstream)`. A client path that parses as scheme-relative (`//host`, or `/\host`, since WHATWG URL treats `\` as `/`) replaces the host, and the injected credential goes with it. The daemon sets `pathname` and `search` on the upstream origin and checks the origin did not change.
-- Policy must allow every reading an upstream might apply: `policyPathInterpretations()` adds the path as seen by a server that decodes `%2F` or drops `;params`, and `policyMethods()` adds any method named by `X-HTTP-Method-Override`, `X-Method-Override` or `X-HTTP-Method`. One denied combination denies the request.
+- Policy is evaluated over every reading of the request the proxy knows an upstream might apply: `policyPathInterpretations()` adds the path as seen by a server that decodes `%2F` or drops `;params`; `policyPathOverrides()` adds a path named by `X-Original-URL` or `X-Rewrite-URL` (one the parser refuses denies the request for a service that has rules); `policyMethods()` adds every method named by `X-HTTP-Method-Override`, `X-Method-Override`, `X-HTTP-Method` (a comma-separated value and a repeated header count as several) or a `_method` query parameter. One denied combination denies the request.
+- A deny rule matches its path without regard to case; an allow rule matches exactly. Lower-casing a reading for allow rules would deny paths a default-deny policy legitimately allows (`/sendMessage`), so the folding lives in `matchPolicy()`, on deny rules only.
+- Not covered, and written as `it.fails` rows so they are visible: a segment with a trailing dot or space, Unicode compatibility forms, and a `_method` field in a request body (the body is streamed, not read).
 - The proxy does not follow upstream redirects; the client gets the 3xx.
-- Conformance: `test/compliance/request-target-integrity.test.ts` sends raw bytes to a real proxy with a second upstream standing in for an attacker's host. Add a case there for any new way of spelling a path.
+- Conformance: `test/compliance/request-target-integrity.test.ts` sends raw bytes to a real proxy with a second upstream standing in for an attacker's host, and `test/compliance/policy-evasion.test.ts` attacks one deny rule with every spelling, one table row each. Add a row for any new way of spelling a path or a method.
 
 Builtin service definitions cannot be overridden through `services.yaml` or `register()`, so a poisoned config can't redirect real credentials to an attacker's host. `override()` is test-only; `ServiceRegistry.isBuiltinService()` is the check.
 
@@ -214,6 +218,7 @@ Two commands exist so an agent can set aquaman up and obtain credentials without
 - **`aquaman-coder exec --raw` needs a terminal on stdout.** With `--no-hooks` the agent composes the `exec` command itself, and unredacted output captured by a shell tool is the value in the transcript. In exec mode the user's deny and ask rules also do not see the command behind the prefix (there is no hook to add the permission tail); the docs and the skill say so and tell the agent not to use the prefix around a rule.
 - `aquaman request <ref> [--env NAME]` posts to `POST /broker/request` on the daemon. The daemon, not the CLI, shows the dialog (`packages/proxy/src/credential-prompt.ts`: `/usr/bin/osascript` on macOS, `zenity` on Linux with a desktop session, both by absolute path with a fixed environment and the message passed as an argument, never as script text). The value goes from the dialog into the vault and the ref is added to `broker.allowedRefs`. Statuses: `ready`, `stored`, `approved`, `declined`, `pending`; exit codes 0, 0, 0, 2, 3, 4 when the daemon cannot take the request, and 1 for a wrong command. The dialog waits 90 seconds by default (`--timeout`, clamped to 10-600 by the daemon), which is under the two minutes Claude Code allows a Bash call.
 - Rules for the endpoint: it never returns a value and never replaces a stored one (checked again after the dialog closes); Unix socket only; off without a broker scope, so OpenClaw-hosted proxies answer `broker_disabled`; one dialog at a time, at most six per ten minutes, and a declined ref is not asked about again for ten minutes; every dialog outcome is audited (`rotate`; a `ready` answer and 4xx refusals are not). A `declined` reply carries no `fix`: a command that completes what the person refused must not be handed back.
+- The dialog says what a caller can obtain once the person agrees, and it differs by request (`CONSEQUENCE` in `credential-prompt.ts`): an ordinary request ends with the ref declared, so the dialog says commands in the project are given the value and other software running as the user can ask for it; a `routed: true` request ends with the value stored and not declared, so it says the app gets a local token and the proxy adds the key. Never write a sentence there that is false for the case it is shown in. Conformance: `test/compliance/owasp-agentic/asi09-human-in-the-loop.test.ts` compares each dialog with what `/broker/resolve` then does.
 - The dialog is where a person decides, and the caller chooses the ref and the `project` string. `displayText()` reduces caller text to one bounded line (control and format characters, bidi overrides, U+2028/2029 and backslashes removed), service and key are capped at 64 characters, and the reported line comes last, after aquaman's own wording. Do not move caller text above the fixed sentences. zenity 3.44 (checked in a container): `--entry` swallows a single `_` and turns `\n` into a newline, so entry text doubles underscores; `--question --no-markup` shows both literally.
 - The hook wraps and answers `allow` only when `POST /broker/available` says at least one of the project's refs would resolve; otherwise it returns context only and the command runs under the host's own permissions. Without that check, `init` plus a made-up binding switched permission prompts off. If the proxy cannot answer the question the hook wraps, and `exec` refuses to run a command for which nothing resolved. `/broker/available` returns booleans, scope before vault, never a value.
 - `aquaman-coder init` refuses the home directory or an ancestor of it as a project, and the instructions block and skill are never written through a symlink.
@@ -254,7 +259,7 @@ OpenShell (NVIDIA) keeps provider credentials behind driver-owned opaque handles
 
 - Reference mode: a submitted value that is an `aquaman://` ref must be declared (broker scope, `uds` caller) and exist in the vault; the ref becomes the handle and nothing is stored. Copy mode: anything else goes to the vault as `openshell/<objectId>.<credentialKey>`.
 - A handle's meaning comes from its namespace (`aquaman://openshell/...` = copy), never from metadata the gateway echoes back. References are re-checked on every Resolve, so `aquaman broker revoke` takes effect. Delete on a reference is a no-op.
-- Audit: resolves log `read` (agent `openshell`), copy writes and deletes log `rotate`, successful reference validation logs nothing. No values anywhere.
+- Audit: resolves log `read` (agent `openshell`), copy writes and deletes log `rotate`, successful reference validation logs nothing. No values anywhere. A Resolve whose entry cannot be written returns an `internal` error and no value.
 - gRPC deps are lazily loaded optional peers (packaging-posture test pins it). protobufjs's install script is not needed at runtime.
 
 Verified against live gateways v0.1.1 through v0.1.4 (2026-10-02, re-run on v0.1.3/v0.1.4 2026-10-14, `scripts/e2e-openshell.sh`, CI `openshell-compat.yml` runs it nightly on latest + previous and was green on v0.1.7/v0.1.8 on 2026-11-14; protos have no non-comment change from v0.1.4 to v0.1.8):
@@ -320,7 +325,11 @@ npx vitest run test/compliance/   # ATLAS + NIST conformance suite
 
 A vitest globalSetup (`test/helpers/ensure-build.ts`) builds missing package dists and restores the exec bit on bin entrypoints, because several e2e tests spawn a CLI from source or via the installed bin and those child processes don't get vitest's aliases.
 
-Compliance tests are source-repo only, never shipped, and named for the control they exercise: MITRE ATLAS v5.4.0 (T0055, T0012, T0062, T0090, T0098) and NIST SP 800-53 Rev 5 (IA-5, AC-3, AC-6, AU-2/9/10, SC-12/28, SI-10). Mapping docs live in `docs/compliance/`. CISA/Five-Eyes, CSA MAESTRO and OWASP Agentic Top 10 are alignment narratives.
+Compliance tests are source-repo only, never shipped, and named for the control they exercise: MITRE ATLAS v5.4.0 (T0055, T0012, T0062, T0090, T0098), NIST SP 800-53 Rev 5 (IA-5, AC-3, AC-6, AU-2/9/10, SC-12/28, SI-10), BSI TR-02102-1 Version 2026-01 (`bsi/`) and the OWASP Agentic and LLM Top 10 categories aquaman makes a claim under (`owasp-agentic/`). Mapping docs live in `docs/compliance/`. CISA/Five-Eyes and CSA MAESTRO are alignment narratives.
+
+A compliance test tries to break the control, not only to use it: one table row per attack, so the next variant is one line. An attack the code does not stop is an `it.fails` row whose assertion says what should happen and whose name states the limit; it becomes a failure the day the limit is fixed, and the mapping doc states the same limit. Never weaken the assertion to make a row pass.
+
+The audit log's limit, stated once: the chain is an unkeyed SHA-256 with nothing outside the file anchoring it. `verifyIntegrity()` detects an entry altered, inserted or deleted inside the log; a truncated tail, an emptied or deleted file and a rebuilt chain pass (`test/compliance/nist/au-9-au-10-tampering.test.ts`). Do not write "tamper-evident" or "tampering is detectable" without that qualification.
 
 Manual smoke recipes (install paths, all auth modes, policy denials, real-gateway checks, publish pipeline) live in OPERATIONS.md. Run them against isolated `HOME`/`AQUAMAN_CONFIG_DIR` dirs: several would otherwise overwrite your real Keychain entries or config.
 
@@ -352,7 +361,7 @@ Tests mirror these names under `test/unit`, `test/e2e` and `test/compliance`.
 
 ## Design principles
 
-Credentials never in agent memory. Tamper-evident audit for every use. Bring your own vault. Follow each host's native patterns rather than fighting them.
+Credentials never in agent memory. A hash-chained audit entry for every use. Bring your own vault. Follow each host's native patterns rather than fighting them.
 
 ## Maintainer resources
 

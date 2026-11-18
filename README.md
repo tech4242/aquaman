@@ -23,7 +23,7 @@ Three things aquaman does:
 
 1. **Keeps the key out of the agent.** Keys live in a separate proxy process that injects them into outgoing requests, or into one command at a time for coding agents. The agent holds a reference or a placeholder.
 2. **Limits what a key can do, for traffic through the proxy.** Per-service request policies decide which endpoints may be called, and a denied request never gets a credential. This covers OpenClaw, Hermes and any client pointed at the proxy. A coding agent's commands receive the key in their environment by default, so policies do not apply to them unless the app is [routed through the proxy](https://aquaman.sh/docs/app-through-proxy/).
-3. **Keeps evidence.** Every credential use goes into a log chained by SHA-256, so tampering is detectable.
+3. **Keeps evidence.** Every credential use goes into a log chained by SHA-256, so an altered or inserted entry is detectable.
 
 **Guides:** [Claude Code](https://aquaman.sh/docs/claude-code/) · [Codex](https://aquaman.sh/docs/codex/) · [OpenClaw](https://aquaman.sh/docs/openclaw/) · [Hermes](https://aquaman.sh/docs/hermes/) · [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/) · [NVIDIA OpenShell](https://aquaman.sh/docs/openshell/) · [for agents](https://aquaman.sh/docs/agent-setup/) · [compared with alternatives](https://aquaman.sh/docs/compare/)
 
@@ -130,7 +130,7 @@ GITHUB_TOKEN=[REDACTED:injected-value]
 ⏺ GITHUB_TOKEN is set and available (injected via aquaman vault).
 ```
 
-The *child* process saw the real key (your tests, builds, MCP servers, import scripts - anything that actually needs it works). The *agent* - the thing that decides what code to run on your machine - never sees the value, and so neither does the conversation history, neither does the model provider's logs, neither does anyone who later screenshots your terminal.
+The *child* process saw the real key (your tests, builds, MCP servers, import scripts - anything that actually needs it works). The *agent* - the thing that decides what code to run on your machine - is shown the redaction marker in place of the value, and so are the conversation history, the model provider's logs and anyone who later screenshots your terminal.
 
 **Use it from your own terminal too.** The same wrapper works without the agent. Just `cd` into a covered project and prefix your command:
 
@@ -305,8 +305,10 @@ Aquaman ships runnable conformance tests under `test/compliance/` mapped to:
 
 - **MITRE ATLAS** v5.4.0: techniques AML.T0055, T0012, T0062, T0090, T0098 (`test/compliance/atlas/`)
 - **NIST SP 800-53 Rev 5**: IA-5, AC-3, AC-6, AU-2/9/10, SC-12/28, SI-10 (`test/compliance/nist/`)
+- **BSI TR-02102-1** Version 2026-01: the `encrypted-file` vault's parameters and the local tokens (`test/compliance/bsi/`)
+- **OWASP Top 10 for Agentic Applications 2026** and **for LLM Applications 2025**: ASI02, ASI03, ASI04, ASI09, LLM02, LLM06 (`test/compliance/owasp-agentic/` and the tests the mapping links)
 
-Plus alignment narratives for CISA/Five-Eyes "Careful Adoption of Agentic AI Services" (April 2026), CSA MAESTRO, and OWASP Top 10 for Agentic Applications. The tests run as part of `npm test`. See [`docs/compliance/`](docs/compliance/) for the mappings.
+Plus alignment narratives for CISA/Five-Eyes "Careful Adoption of Agentic AI Services" (April 2026) and CSA MAESTRO. An attack the code does not stop is written as a known-limit row in the test and stated in the mapping. The tests run as part of `npm test`. See [`docs/compliance/`](docs/compliance/) for the mappings.
 
 
 ## Request Policies
