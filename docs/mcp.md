@@ -69,7 +69,7 @@ Limits:
 - If the daemon is not running, the script exits 1 and prints nothing to stdout, and aquaman's message on stderr names the command that starts it. The server then has no header until the daemon is back and you reconnect from `/mcp`.
 - With a vault that asks you to unlock for a read (1Password in desktop-app mode), the first connection can take longer than the 10 seconds Claude Code allows. Reconnect from `/mcp`.
 - Whether a given vendor's MCP server accepts a fixed token in a header at all is the vendor's decision. Check their documentation.
-- `headersHelper` is a Claude Code setting. Other hosts were not checked for an equivalent.
+- `headersHelper` is a Claude Code setting.
 
 ## A stdio server the host starts
 

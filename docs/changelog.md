@@ -28,7 +28,7 @@ Four fixes come with it, listed at the end. Everything the guides describe works
 Pointing a reference at an existing vault item (`aquaman request --from`, `aquaman credentials link`, since 0.19.0) was only described in the agent contract. It is now in the README, the agent contract's opening, `llms.txt` and each host guide.
 
 - [Claude Code](https://aquaman.sh/docs/claude-code/) and [Codex](https://aquaman.sh/docs/codex/): a worked example with two tokens that are already in 1Password, for `npm test` and `npm publish --dry-run`, and what that gives and does not give compared with `op run`.
-- [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/): the flow for an existing 1Password or Bitwarden item, where the Bitwarden session lives and why a daemon started at login does not have it, `sbx secret set-custom` for a service `sbx` has no definition for (from Docker's documentation; not run against `sbx`), and that cloud sandboxes take no `--command` source.
+- [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/): the flow for an existing 1Password or Bitwarden item, where the Bitwarden session lives and why a daemon started at login does not have it, `sbx secret set-custom` for a service `sbx` has no definition for (run with `sbx` 0.54.0), and that cloud sandboxes take no `--command` source.
 
 ### Host guides
 
@@ -39,6 +39,17 @@ Pointing a reference at an existing vault item (`aquaman request --from`, `aquam
 ### What to know before trusting it
 
 The [section of that name](https://aquaman.sh/docs/compare/#what-to-know-before-trusting-it) on the comparison page states the same facts in a different order: first what you can check yourself (provenance, no install scripts, local and without an account, the test count and coverage floors, the attack tests and their pinned limits, the 0.18.2 assessment), then what counts against the project (one maintainer, no third-party audit, started in February 2026 and still 0.x, the advisory GHSA-9qh6-wffq-9m9v). Nothing was removed.
+
+### Run by hand for this release
+
+With the published 0.19.0 packages on macOS, before these pages were written:
+
+- The dialogs: typing a value, approving a stored credential, approving a link to an existing vault item. Each ended in the status the contract documents, and a link written into `config.yaml` by hand was refused.
+- The login item: `aquaman service install` approved in its dialog, launchd running the daemon, a restart one second after the daemon was killed, no restart after `aquaman stop`, a repeat install answering `already_installed`, and `aquaman service uninstall` leaving nothing behind.
+- Both MCP recipes inside Claude Code 2.1.327, and an app on the Claude Agent SDK 0.3.327 routed with `--via-proxy`.
+- `sbx` 0.54.0 storing a built-in and a custom secret whose source is `aquaman get`.
+
+These used a KeePassXC database made for the run. Reads from 1Password, Bitwarden, HashiCorp Vault and Keeper items are covered by the automated tests against stand-ins for those tools, not by a live account.
 
 ### Fixes
 

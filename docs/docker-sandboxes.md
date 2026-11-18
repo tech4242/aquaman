@@ -74,7 +74,7 @@ sbx secret set-custom \
   --command "$(command -v node) $(command -v aquaman) get aquaman://stripe/secret_key"
 ```
 
-What is and is not confirmed here: the flags are the ones in [Docker's credentials guide](https://docs.docker.com/ai/sandboxes/configuration/credentials/), read on 2026-11-18, which shows `set-custom` with `--host`, `--env` and `--command`, says custom secrets from a command are resolved on demand by default, and marks custom secrets as experimental ("Behavior, flags, and the placeholder format may change without notice"). The aquaman side (`aquaman get` printing a declared reference) is tested. The `set-custom` command above was not run against `sbx` for this page, so check it with `sbx secret ls --host api.stripe.com` and one request from a sandbox.
+Run with `sbx` 0.54.0 and aquaman 0.19.0: `sbx` stored the secret, printed the placeholder it generated for the variable, and listed the command as an on-demand source; aquaman's audit log showed the read `sbx` made to check it. The same run stored a built-in service with `sbx secret set github --command ... --refresh on-demand`, which `sbx` answered with "command resolved successfully". `sbx` calls custom secrets experimental, and says a command source runs from a fresh temporary directory, which is why the command holds absolute paths.
 
 ## Cloud sandboxes
 
