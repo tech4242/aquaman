@@ -52,13 +52,14 @@ export interface AuditSink {
  * change the vault (`rotate`). Validating a reference at create time hands
  * nothing out, so only its refusals are recorded.
  */
-export function auditDriverAccess(audit: AuditSink, e: DriverAccessEvent): void {
+export function auditDriverAccess(audit: AuditSink, e: DriverAccessEvent): unknown {
   let operation: 'read' | 'rotate';
   if (e.op === 'resolve') operation = 'read';
   else if (e.mode === 'copy') operation = 'rotate';
   else if (!e.success) operation = 'read';
-  else return;
-  audit.logCredentialAccess('system', 'openshell', {
+  else return undefined;
+  // Returned so the driver can tell whether the entry was written.
+  return audit.logCredentialAccess('system', 'openshell', {
     service: e.service,
     operation,
     success: e.success,

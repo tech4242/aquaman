@@ -286,7 +286,10 @@ function probeLoopbackHealth(host: string, port: number, timeoutMs = 1500): Prom
 const getPidFile = () => path.join(getConfigDir(), 'daemon.pid');
 
 const writePidFile = () => {
-  fs.writeFileSync(getPidFile(), process.pid.toString(), 'utf-8');
+  const pidFile = getPidFile();
+  fs.writeFileSync(pidFile, process.pid.toString(), { encoding: 'utf-8', mode: 0o600 });
+  // The mode above applies only when the file is created.
+  fs.chmodSync(pidFile, 0o600);
 };
 
 const readPidFile = (): number | null => {
@@ -900,8 +903,9 @@ openclaw
       serviceRegistry,
       policyConfig,
       loopback: loadLoopbackOptions(config),
+      // Returned, so the proxy knows whether the entry was written.
       onRequest: (info) => {
-        auditLogger.logCredentialAccess('system', 'system', {
+        return auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
           // A broker resolve hands the value out; everything else injects it.
           operation: info.method === 'BROKER' ? 'read' : 'use',
@@ -1077,8 +1081,9 @@ program
             declare: (service, key) => { writeBrokerAllowedRefs([formatAquamanRef(service, key)], 'allow'); },
           }
         : undefined,
+      // Returned, so the proxy knows whether the entry was written.
       onRequest: (info) => {
-        auditLogger.logCredentialAccess('system', 'system', {
+        return auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
           // A broker resolve hands the value out, a broker request stores or
           // declares one, everything else injects it.
@@ -1173,8 +1178,9 @@ openclaw
       serviceRegistry,
       policyConfig: policyConfig3,
       loopback: loadLoopbackOptions(config),
+      // Returned, so the proxy knows whether the entry was written.
       onRequest: (info) => {
-        auditLogger.logCredentialAccess('system', 'system', {
+        return auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
           // A broker resolve hands the value out; everything else injects it.
           operation: info.method === 'BROKER' ? 'read' : 'use',

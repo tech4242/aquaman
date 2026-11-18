@@ -704,11 +704,21 @@ describe('OpenShell driver core: failure paths', () => {
     expect(await code(core().store({ value: '', provider_id: 'p1', credential_key: 'K' }))).toBe('invalid_argument');
   });
 
-  it('an audit sink that throws does not break the driver', async () => {
+  it('a resolve whose audit entry cannot be written returns no value; other operations keep their own result', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     await store.set('github', 'token', 'ghp_value');
-    const c = createOpenShellDriverCore({ store, scope, version: 'test', onAccess: () => { throw new Error('audit disk full'); } });
-    expect(await c.resolve([{ request_id: 'r1', handle: { driver: 'aquaman', handle: 'aquaman://github/token' } }]))
-      .toEqual([{ request_id: 'r1', value: 'ghp_value' }]);
+    for (const onAccess of [() => { throw new Error('audit disk full'); }, async () => { throw new Error('audit disk full'); }]) {
+      const c = createOpenShellDriverCore({ store, scope, version: 'test', onAccess });
+      const attempt = c.resolve([{ request_id: 'r1', handle: { driver: 'aquaman', handle: 'aquaman://github/token' } }]);
+      await expect(attempt).rejects.toThrow(/the audit log could not be written, so aquaman:\/\/github\/token was not resolved\. Fix: /);
+      expect(await code(attempt)).toBe('internal');
+      await expect(attempt).rejects.not.toThrow(/ghp_value/);
+      // A copy-mode store hands nothing out, so it succeeds and the failure is reported.
+      expect((await c.store({ value: 'sk-copy', provider_id: 'p1', credential_key: 'K' })).handle.handle).toBe('aquaman://openshell/p1.K');
+    }
+    await new Promise((r) => setImmediate(r));
+    expect(errors).toHaveBeenCalledWith(expect.stringMatching(/^AUDIT FAILURE: could not record OpenShell resolve of aquaman:\/\/github\/token: audit disk full/));
+    errors.mockRestore();
   });
 
   it('without a broker scope every reference is refused and nothing is listed', async () => {

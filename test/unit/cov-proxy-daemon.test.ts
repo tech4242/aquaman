@@ -184,17 +184,67 @@ describe('proxy daemon: failure and refusal paths', () => {
   describe('request handling', () => {
     it('answers 500 rather than hanging when handling a request throws', async () => {
       const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const registry = createServiceRegistry();
+      registry.get = () => { throw new Error('registry is broken'); };
+      await start({ registry });
+      const res = await udsFetch(socketPath, '/github/user');
+      expect(res.status).toBe(500);
+      expect(res.body).toBe('Internal proxy error');
+      expect(res.body).not.toContain('registry is broken');
+      expect(errors).toHaveBeenCalledWith('Proxy error:', expect.objectContaining({ message: 'registry is broken' }));
+      // The proxy keeps serving.
+      expect((await udsFetch(socketPath, '/_health')).status).toBe(200);
+    });
+
+    it('a refusal stands when its audit entry cannot be written, and the failure is reported', async () => {
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
       await start({
         policyConfig: { github: { defaultAction: 'deny', rules: [] } },
         onRequest: () => { throw new Error('audit sink is down'); },
       });
       const res = await udsFetch(socketPath, '/github/user');
-      expect(res.status).toBe(500);
-      expect(res.body).toBe('Internal proxy error');
+      expect(res.status).toBe(403);
       expect(res.body).not.toContain('audit sink');
-      expect(errors).toHaveBeenCalledWith('Proxy error:', expect.objectContaining({ message: 'audit sink is down' }));
-      // The proxy keeps serving.
+      expect(errors).toHaveBeenCalledWith(expect.stringMatching(/^AUDIT FAILURE: .*audit sink is down/));
       expect((await udsFetch(socketPath, '/_health')).status).toBe(200);
+    });
+
+    it('a broker resolve body that is JSON but not an object is a 400, not a 500', async () => {
+      await start();
+      for (const body of ['null', '42', '"text"', 'true']) {
+        const res = await post('/broker/resolve', body);
+        expect(res.status, body).toBe(400);
+        expect(JSON.parse(res.body), body).toEqual({
+          error: 'Broker request body is not a JSON object',
+          fix: 'POST a JSON body with { service, key, ttl_seconds }',
+        });
+      }
+    });
+
+    it('the loopback listener takes a Host that is a loopback name and nothing more', async () => {
+      await start({ loopback: true });
+      const [, port] = proxy!.getLoopbackAddress()!.split(':');
+      const status = (host: string | null) => new Promise<number>((resolve, reject) => {
+        const socket = net.connect(Number(port), '127.0.0.1');
+        let raw = '';
+        socket.on('data', (c) => { raw += c; });
+        socket.on('close', () => resolve(Number(/^HTTP\/1\.[01] (\d{3})/.exec(raw)?.[1] ?? 0)));
+        socket.on('error', reject);
+        socket.write(host === null
+          ? 'GET /_health HTTP/1.0\r\n\r\n'
+          : `GET /_health HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+      });
+      const rows: Array<[string | null, number]> = [
+        ['127.0.0.1', 200], [`127.0.0.1:${port}`, 200], ['localhost', 200], [`LocalHost:${port}`, 200], ['[::1]', 200], [`[::1]:${port}`, 200],
+        // HTTP/1.0 without a Host header: nothing a browser sends.
+        [null, 200],
+        ['[::1]evil.example', 403], [`[::1]evil.example:${port}`, 403], ['[::1]:80evil.example', 403], ['[::1', 403],
+        ['127.0.0.1.evil.example', 403], ['localhost.evil.example', 403], ['evil.example', 403], ['127.0.0.1:80:90', 403],
+        ['127.0.0.1:evil', 403], ['[::1]:', 403],
+      ];
+      for (const [host, expected] of rows) {
+        expect(await status(host), String(host)).toBe(expected);
+      }
     });
 
     it('answers 404 for a configured service the registry has no definition for, without a vault lookup', async () => {
