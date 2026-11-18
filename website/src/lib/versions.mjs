@@ -27,13 +27,31 @@ function git(args, opts = {}) {
   return execFileSync('git', args, { cwd: REPO, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024, ...opts });
 }
 
+const REMOTE = 'https://github.com/tech4242/aquaman.git';
+
+/**
+ * A hosted build's checkout may come without release tags (a preview build of
+ * a branch, a shallow clone). The version menu and the "unreleased" label are
+ * read from tags, and page dates from history, so on a hosted build both are
+ * fetched from the public repository first: tags always, and the full history
+ * when the checkout is shallow. Failure is not an error; the build then shows
+ * whatever the checkout had.
+ */
+function fetchReleaseTags() {
+  if (!process.env.VERCEL && !process.env.DOCS_FETCH_TAGS) return;
+  try {
+    const shallow = git(['rev-parse', '--is-shallow-repository']).toString().trim() === 'true';
+    git(['fetch', '--quiet', '--tags', ...(shallow ? ['--unshallow'] : []), REMOTE], { timeout: 120_000 });
+  } catch { /* offline, or no git */ }
+}
+
 /**
  * Extract the docs of every earlier release and write `versions.json`.
- * Without git history (a tarball, a shallow clone without tags) there are
- * simply no earlier versions.
+ * Without git (a tarball) there are simply no earlier versions.
  */
 export function prepareVersions() {
   const current = JSON.parse(fs.readFileSync(path.join(REPO, 'packages/proxy/package.json'), 'utf-8')).version;
+  fetchReleaseTags();
   let tags = [];
   try {
     tags = git(['tag', '--list', 'v*']).toString().split('\n').map((t) => t.trim()).filter((t) => /^v\d+\.\d+\.\d+$/.test(t));
