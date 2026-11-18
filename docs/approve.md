@@ -1,6 +1,6 @@
 # Your agent asked to use aquaman
 
-Your coding agent needs an API key or token for the task you gave it. Instead of asking you to paste the key into the conversation, it is proposing aquaman: a small open-source tool that runs on your machine, keeps the key in the vault you already use, and sets it for the commands that need it. The agent works with a reference such as `aquaman://github/token` and never receives the value.
+Your coding agent needs an API key or token for the task you gave it. Instead of asking you to paste the key into the conversation, it is proposing aquaman: a small open-source tool that runs on your machine, keeps the key in the vault you already use, and sets it for the commands that need it. The agent works with a reference such as `aquaman://github/token`; the value goes to those commands, not into the conversation.
 
 This page is what you are agreeing to.
 
@@ -25,7 +25,7 @@ Nothing is written to your agent's settings and no permission prompt changes. Th
 
 ## What you will see
 
-When the agent asks for a key, a system dialog titled "aquaman" opens on your screen. It names the credential, for example `github/token`, and says where the request came from. You type the value and choose "Store in vault", or you choose "Cancel".
+When the agent asks for a key, a system dialog titled "aquaman" opens on your screen. It names the credential, for example `github/token`, says what happens to the value if you agree, and says where the request came from. You type the value and choose "Store in vault", or you choose "Cancel".
 
 - The value goes from the dialog into your vault: the macOS Keychain by default on a Mac, or 1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, systemd-creds or an encrypted file.
 - The agent is told `stored` and gets the reference. If you cancel, it is told `declined` and is instructed not to ask again or work around it.
@@ -36,10 +36,10 @@ After that the agent runs commands that need the key as `aquaman-coder exec -- <
 ## What the agent can and cannot do afterwards
 
 - It can run commands in this project that use the key. Those commands hold the real value while they run, the same as with a `.env` file.
-- It cannot read the value from aquaman, and it is not in the conversation, the transcript or any file in your repository.
+- The value is not put in the conversation, the transcript or any file in your repository. aquaman hands it to this project's commands, so a command the agent writes can read it; where it would appear in a command's output, the agent sees a redaction marker.
 - Every use is written to a log on your machine: `aquaman audit tail`.
 
-aquaman keeps the key out of the agent. It is not a sandbox and does not separate programs running as you. The full statement of its limits is in [what aquaman does not do](compare.md#what-aquaman-does-not-do).
+aquaman keeps the key out of the conversation. It is not a sandbox and does not separate programs running as you. The full statement of its limits is in [what aquaman does not do](compare.md#what-aquaman-does-not-do).
 
 ## Two things the agent may ask for later
 

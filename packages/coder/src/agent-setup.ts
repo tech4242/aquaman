@@ -54,7 +54,7 @@ description: Use when a task needs an API key, access token, password or other s
 
 # Credentials through aquaman
 
-aquaman keeps secrets in the user's vault (Keychain, 1Password, Bitwarden, HashiCorp Vault and others) and injects them into commands when they run. You work with references such as \`aquaman://github/token\`. You never see, type or store a secret value.
+aquaman keeps secrets in the user's vault (Keychain, 1Password, Bitwarden, HashiCorp Vault and others) and injects them into commands when they run. You work with references such as \`aquaman://github/token\`. You have no need to see, type or store a secret value.
 
 ## When a task needs a credential
 
