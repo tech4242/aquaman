@@ -746,3 +746,42 @@ describe('listing entries beside a writer', () => {
     expect((await reader.verifyChain()).valid).toBe(false);
   });
 });
+
+describe('listing entries while another process rotates the log', () => {
+  let dir: string;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aq-rot-')); });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    syncBuiltinESMExports();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a log that was there a moment ago and has just been rotated away lists nothing and does not throw', async () => {
+    const writer = new AuditLogger({ logDir: dir });
+    await writer.initialize();
+    await writer.logCredentialAccess('s', 'a', { service: 'github', operation: 'read', success: true });
+    const file = path.join(dir, 'current.jsonl');
+    const reader = new AuditLogger({ logDir: dir, readOnly: true });
+
+    // The rotation lands between the reader looking at the file and reading it.
+    const readFileSync = nodeFs.readFileSync;
+    nodeFs.readFileSync = ((target: unknown, ...rest: unknown[]) => {
+      if (target === file) {
+        nodeFs.readFileSync = readFileSync;
+        syncBuiltinESMExports();
+        fs.renameSync(file, path.join(dir, 'archive', 'audit-rotated-by-another-process.jsonl'));
+      }
+      return (readFileSync as (...a: unknown[]) => unknown)(target, ...rest);
+    }) as typeof nodeFs.readFileSync;
+    syncBuiltinESMExports();
+
+    expect(await reader.getEntries()).toEqual([]);
+    expect(await reader.tail(5)).toEqual([]);
+  });
+
+  it('a read that fails for another reason is not swallowed', async () => {
+    fs.mkdirSync(path.join(dir, 'current.jsonl'), { recursive: true });
+    const reader = new AuditLogger({ logDir: dir, readOnly: true });
+    await expect(reader.getEntries()).rejects.toThrow(/EISDIR/);
+  });
+});
