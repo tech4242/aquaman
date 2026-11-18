@@ -24,6 +24,8 @@ import {
 } from 'aquaman-core';
 import { linkRequestPlan, linkUnreadableReply } from '../../packages/proxy/src/link-request.js';
 import { promptMessage } from '../../packages/proxy/src/credential-prompt.js';
+import { LinkApprovals } from '../../packages/proxy/src/core/credentials/linked-store.js';
+import { RESERVED_SERVICE, LINK_APPROVALS_KEY } from '../../packages/proxy/src/core/credentials/reserved.js';
 import { LinkableStore } from '../helpers/linkable-store.js';
 
 const GH = 'vault://secret/apps/github#token';
@@ -43,12 +45,20 @@ describe('links: store layer', () => {
   });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
+  /** The link as config.yaml holds it, and nothing else: what anything running as the user can write. */
   const link = (name: string, locator: string | null) => writeCredentialLink(config, name, locator);
+  /** The link and the record that a person approved it, as `establish()` leaves them. */
+  const approved = async (name: string, locator: string, s: CredentialStore = store) => {
+    link(name, locator);
+    const slash = name.indexOf('/');
+    await s.approveLink!(name.slice(0, slash), name.slice(slash + 1), locator);
+  };
+  const record = async () => JSON.parse((await backend.get(RESERVED_SERVICE, LINK_APPROVALS_KEY)) ?? 'null');
 
   describe('LinkedStore', () => {
     it('reads a linked reference from the item, and everything else from the backend', async () => {
       await backend.set('openai', 'api_key', 'sk-stored');
-      link('github/token', GH);
+      await approved('github/token', GH);
       expect(await store.get('github', 'token')).toBe('ghp_linked');
       expect(await store.exists('github', 'token')).toBe(true);
       expect(await store.get('openai', 'api_key')).toBe('sk-stored');
@@ -59,7 +69,7 @@ describe('links: store layer', () => {
     });
 
     it('a linked item that is gone reads as not stored', async () => {
-      link('github/token', 'vault://secret/apps/gone#token');
+      await approved('github/token', 'vault://secret/apps/gone#token');
       expect(await store.get('github', 'token')).toBeNull();
       expect(await store.exists('github', 'token')).toBe(false);
     });
@@ -75,7 +85,7 @@ describe('links: store layer', () => {
     });
 
     it('delete on a linked reference removes nothing and says to unlink', async () => {
-      link('github/token', GH);
+      await approved('github/token', GH);
       await expect(store.delete('github', 'token')).rejects.toThrow(/does not delete.*aquaman credentials unlink github\/token/);
       expect(backend.items.get(GH)).toBe('ghp_linked');
       expect(await store.get('github', 'token')).toBe('ghp_linked');
@@ -106,11 +116,11 @@ describe('links: store layer', () => {
       await backend.set('github', 'token', 'ghp_stored');
       expect(await store.get('github', 'token')).toBe('ghp_stored');
       expect(store.linkStamp('github', 'token')).toBe('');
-      link('github/token', GH);
+      await approved('github/token', GH);
       expect(await store.get('github', 'token')).toBe('ghp_linked');
       expect(store.linkStamp('github', 'token')).toBe(GH);
       link('github/token', null);
-      link('github/token', GH2);
+      await approved('github/token', GH2);
       expect(await store.get('github', 'token')).toBe('ghp_linked_new');
       link('github/token', null);
       expect(await store.get('github', 'token')).toBe('ghp_stored');
@@ -118,12 +128,13 @@ describe('links: store layer', () => {
 
     it('a link the configured backend cannot read is an error with the fix, never a silent fallback to a stored value', async () => {
       await backend.set('github', 'token', 'ghp_stored');
-      link('github/token', 'op://Private/GitHub/token');
+      await approved('github/token', 'op://Private/GitHub/token');
       await expect(store.get('github', 'token')).rejects.toThrow(/belongs to the 1password backend.*aquaman credentials unlink github\/token/);
       await expect(store.exists('github', 'token')).rejects.toThrow(/cannot be used/);
       expect(backend.linkedReads).toEqual([]);
 
       const file = new LinkedStore(new MemoryStore(), 'encrypted-file', createLinkSource(config));
+      await file.approveLink('github', 'token', 'op://Private/GitHub/token');
       await expect(file.get('github', 'token')).rejects.toThrow(/holds only what aquaman wrote/);
     });
 
@@ -131,8 +142,166 @@ describe('links: store layer', () => {
       const opLocator = { scheme: 'op', backend: '1password', text: 'op://a/b/c', path: ['a', 'b'], field: 'c' } as const;
       await expect(store.readLinked(opLocator)).rejects.toThrow(/vault backend cannot read op:\/\/a\/b\/c/);
       const plain = new LinkedStore(new MemoryStore(), 'vault', createLinkSource(config));
-      link('github/token', GH);
+      await approved('github/token', GH, plain);
       await expect(plain.get('github', 'token')).rejects.toThrow(/vault backend cannot read/);
+    });
+  });
+
+  describe('LinkApprovals', () => {
+    it('starts empty, records an approval as one item under the reserved service, and removes it again', async () => {
+      const approvals = new LinkApprovals(backend);
+      expect(await approvals.has('github/token', GH)).toBe(false);
+      expect(await record()).toBeNull();
+
+      await approvals.approve('github/token', GH);
+      await approvals.approve('stripe/secret_key', GH2);
+      expect(await record()).toEqual({ v: 1, links: { 'github/token': GH, 'stripe/secret_key': GH2 } });
+      expect(await backend.list()).toEqual([{ service: RESERVED_SERVICE, key: LINK_APPROVALS_KEY }]);
+      expect(await approvals.has('github/token', GH)).toBe(true);
+
+      expect(await approvals.revoke('github/token')).toBe(true);
+      expect(await approvals.revoke('github/token')).toBe(false);
+      expect(await approvals.has('github/token', GH)).toBe(false);
+      expect(await record()).toEqual({ v: 1, links: { 'stripe/secret_key': GH2 } });
+    });
+
+    it('an approval is for one name and one locator, exactly', async () => {
+      const approvals = new LinkApprovals(backend);
+      await approvals.approve('github/token', GH);
+      expect(await approvals.has('github/token', GH2)).toBe(false);
+      expect(await approvals.has('github/deploy', GH)).toBe(false);
+      expect(await approvals.has('github/token', `${GH} `)).toBe(false);
+      expect(await approvals.has('GitHub/token', GH)).toBe(false);
+      // Approving another item for the name replaces the earlier approval.
+      await approvals.approve('github/token', GH2);
+      expect(await approvals.has('github/token', GH)).toBe(false);
+      expect(await approvals.has('github/token', GH2)).toBe(true);
+    });
+
+    it.each([
+      ['text that is not JSON', 'not json at all'],
+      ['JSON null', 'null'],
+      ['a list', JSON.stringify([{ 'github/token': GH }])],
+      ['another version', JSON.stringify({ v: 2, links: { 'github/token': GH } })],
+      ['no version', JSON.stringify({ links: { 'github/token': GH } })],
+      ['links as a list', JSON.stringify({ v: 1, links: [GH] })],
+      ['links as a string', JSON.stringify({ v: 1, links: GH })],
+      ['the bare map with no envelope', JSON.stringify({ 'github/token': GH })],
+      ['a locator that is not a string', JSON.stringify({ v: 1, links: { 'github/token': { locator: GH } } })],
+      ['a locator that is `true`', JSON.stringify({ v: 1, links: { 'github/token': true } })],
+    ])('a record that is %s approves nothing', async (_name, raw) => {
+      await backend.set(RESERVED_SERVICE, LINK_APPROVALS_KEY, raw);
+      expect(await new LinkApprovals(backend).has('github/token', GH)).toBe(false);
+    });
+
+    it('keeps the well-formed entries of a record and drops the others when it next writes', async () => {
+      await backend.set(RESERVED_SERVICE, LINK_APPROVALS_KEY, JSON.stringify({ v: 1, links: { 'github/token': GH, 'x/y': 7 } }));
+      const approvals = new LinkApprovals(backend);
+      expect(await approvals.has('github/token', GH)).toBe(true);
+      await approvals.approve('stripe/secret_key', GH2);
+      expect(await record()).toEqual({ v: 1, links: { 'github/token': GH, 'stripe/secret_key': GH2 } });
+    });
+
+    it('two instances over one store: an approval written by one is seen by the other, which read the record before it existed', async () => {
+      const daemon = new LinkApprovals(backend);
+      const cli = new LinkApprovals(backend);
+      expect(await daemon.has('github/token', GH)).toBe(false);
+      await cli.approve('github/token', GH);
+      expect(await daemon.has('github/token', GH)).toBe(true);
+      // Each writes on top of what is in the vault, not on top of its own copy.
+      await daemon.approve('stripe/secret_key', GH2);
+      expect(await record()).toEqual({ v: 1, links: { 'github/token': GH, 'stripe/secret_key': GH2 } });
+      expect(await cli.has('stripe/secret_key', GH2)).toBe(true);
+    });
+
+    it('an approval it has seen is answered from memory until it is told to forget', async () => {
+      const gets = vi.spyOn(backend, 'get');
+      const daemon = new LinkApprovals(backend);
+      await new LinkApprovals(backend).approve('github/token', GH);
+      gets.mockClear();
+      expect(await daemon.has('github/token', GH)).toBe(true);
+      expect(await daemon.has('github/token', GH)).toBe(true);
+      expect(gets).toHaveBeenCalledTimes(1);
+
+      await new LinkApprovals(backend).revoke('github/token');
+      daemon.forget();
+      expect(await daemon.has('github/token', GH)).toBe(false);
+    });
+
+    it('a vault that cannot be read is an error, not a missing approval', async () => {
+      vi.spyOn(backend, 'get').mockRejectedValue(new Error('Vault API error (503): sealed'));
+      await expect(new LinkApprovals(backend).has('github/token', GH)).rejects.toThrow(/sealed/);
+    });
+  });
+
+  describe('LinkedStore and a link nobody approved', () => {
+    it('get refuses with the two commands a person can run, exists is false, and the item is not read', async () => {
+      link('github/token', GH);
+      await expect(store.get('github', 'token')).rejects.toThrow(
+        `github/token is linked to ${GH} in config.yaml, and no approval for that link is recorded in the vault, so the item is not read. A person approves it with: aquaman credentials link github/token '${GH}' (or removes the link: aquaman credentials unlink github/token)`,
+      );
+      expect(await store.exists('github', 'token')).toBe(false);
+      expect(backend.linkedReads).toEqual([]);
+    });
+
+    it('does not fall back to a value stored under the same name', async () => {
+      await backend.set('github', 'token', 'ghp_stored');
+      link('github/token', GH);
+      await expect(store.get('github', 'token')).rejects.toThrow(/no approval/);
+      expect(await store.exists('github', 'token')).toBe(false);
+    });
+
+    it('list still shows the link, and set and delete are refused as for any link', async () => {
+      link('github/token', GH);
+      expect(await store.list()).toEqual([{ service: 'github', key: 'token', linked: GH }]);
+      await expect(store.set('github', 'token', 'x')).rejects.toThrow(/aquaman credentials unlink github\/token/);
+      await expect(store.delete('github', 'token')).rejects.toThrow(/aquaman credentials unlink github\/token/);
+    });
+
+    it('approveLink, linkApproved and revokeLink are the record: approved reads, revoked does not', async () => {
+      link('github/token', GH);
+      expect(await store.linkApproved('github/token', GH)).toBe(false);
+      await store.approveLink('github', 'token', GH);
+      expect(await store.linkApproved('github/token', GH)).toBe(true);
+      expect(await record()).toEqual({ v: 1, links: { 'github/token': GH } });
+      expect(await store.get('github', 'token')).toBe('ghp_linked');
+
+      expect(await store.revokeLink('github', 'token')).toBe(true);
+      expect(await store.revokeLink('github', 'token')).toBe(false);
+      await expect(store.get('github', 'token')).rejects.toThrow(/no approval/);
+      expect(backend.linkedReads).toEqual([GH]);
+    });
+
+    it('an approval for another locator or another name does not cover a link', async () => {
+      await store.approveLink('github', 'token', GH);
+      link('github/token', GH2);
+      await expect(store.get('github', 'token')).rejects.toThrow(/no approval/);
+      link('github/deploy', GH);
+      await expect(store.get('github', 'deploy')).rejects.toThrow(/no approval/);
+      expect(backend.linkedReads).toEqual([]);
+    });
+
+    it('an approval recorded by another process after this one started is seen', async () => {
+      link('github/token', GH);
+      await expect(store.get('github', 'token')).rejects.toThrow(/no approval/);
+      // The command line, with its own store over the same vault.
+      await new LinkedStore(backend, 'vault', createLinkSource(config)).approveLink('github', 'token', GH);
+      expect(await store.get('github', 'token')).toBe('ghp_linked');
+    });
+
+    it('a link removed with its approval by another process and written back by hand is not read on the old approval', async () => {
+      const touch = (() => { let n = 0; return () => { const t = new Date(Date.now() + (++n) * 2000); fs.utimesSync(config, t, t); }; })();
+      await approved('github/token', GH);
+      expect(await store.get('github', 'token')).toBe('ghp_linked');
+
+      // `aquaman credentials unlink` in another process: the link and the approval go.
+      const cli = new LinkedStore(backend, 'vault', createLinkSource(config));
+      await createCredentialLinker({ store: cli, backend: 'vault', configPath: config }).remove('github', 'token');
+      // The same link, written into the file with no person asked. This store did nothing in between.
+      link('github/token', GH); touch();
+      await expect(store.get('github', 'token')).rejects.toThrow(/no approval/);
+      expect(await store.exists('github', 'token')).toBe(false);
+      expect(backend.linkedReads).toEqual([GH]);
     });
   });
 
@@ -147,14 +316,14 @@ describe('links: store layer', () => {
       expect(await cached.get('github', 'token')).toBe('ghp_stored');
       expect(counting.gets).toBe(1);
 
-      link('github/token', GH);
+      await approved('github/token', GH);
       expect(await cached.get('github', 'token')).toBe('ghp_linked');
       expect(await cached.get('github', 'token')).toBe('ghp_linked');
       expect(counting.gets).toBe(2);
       expect(backend.linkedReads).toEqual([GH]); // the second read came from the cache
 
       link('github/token', null);
-      link('github/token', GH2);
+      await approved('github/token', GH2);
       expect(await cached.get('github', 'token')).toBe('ghp_linked_new');
       expect(counting.gets).toBe(3);
 
@@ -188,6 +357,34 @@ describe('links: store layer', () => {
       expect(await bare.readLinked(parsed)).toBeNull();
       expect(bare.linkStamp('github', 'token')).toBe('');
     });
+
+    it('passes link approvals through to the store that keeps them', async () => {
+      const cached = new CachingStore(store, 900);
+      link('github/token', GH);
+      expect(await cached.linkApproved('github/token', GH)).toBe(false);
+      await cached.approveLink('github', 'token', GH);
+      expect(await store.linkApproved('github/token', GH)).toBe(true);
+      expect(await cached.linkApproved('github/token', GH)).toBe(true);
+      expect(await cached.get('github', 'token')).toBe('ghp_linked');
+      expect(await cached.revokeLink('github', 'token')).toBe(true);
+      expect(await cached.revokeLink('github', 'token')).toBe(false);
+      expect(await store.linkApproved('github/token', GH)).toBe(false);
+    });
+
+    it('above a store that keeps no approvals: nothing is approved, nothing is revoked, and approving is an error', async () => {
+      const bare = new CachingStore(new MemoryStore(), 900);
+      expect(await bare.linkApproved('github/token', GH)).toBe(false);
+      expect(await bare.revokeLink('github', 'token')).toBe(false);
+      await expect(bare.approveLink('github', 'token', GH)).rejects.toThrow('This credential store does not record link approvals');
+    });
+
+    it('a refusal for a missing approval is not cached: the value is served once a person approved', async () => {
+      const cached = new CachingStore(store, 900);
+      link('github/token', GH);
+      await expect(cached.get('github', 'token')).rejects.toThrow(/no approval/);
+      await store.approveLink('github', 'token', GH);
+      expect(await cached.get('github', 'token')).toBe('ghp_linked');
+    });
   });
 
   describe('createCredentialStore', () => {
@@ -208,6 +405,7 @@ describe('links: store layer', () => {
       link('github/token', GH);
       const s = await open();
       expect(s).toBeInstanceOf(LinkedStore);
+      await s.approveLink!('github', 'token', GH);
       // encrypted-file takes no links: the reference fails with the reason instead of reading anything.
       await expect(s.get('github', 'token')).rejects.toThrow(/holds only what aquaman wrote/);
     });
@@ -268,9 +466,12 @@ describe('links: store layer', () => {
       expect(JSON.stringify(elsewhere)).not.toContain(GH);
     });
 
-    it('establish reads the item, then writes the link', async () => {
+    it('establish reads the item, records the approval, then writes the link', async () => {
       expect(await linker().establish('github', 'token', GH)).toEqual({ ok: true });
       expect(backend.linkedReads).toEqual([GH]);
+      expect(await record()).toEqual({ v: 1, links: { 'github/token': GH } });
+      expect(await linker().approved('github', 'token', GH)).toBe(true);
+      expect(await linker().approved('github', 'token', GH2)).toBe(false);
       expect(await store.get('github', 'token')).toBe('ghp_linked');
       // Asking for the same link again is a no-op that does not read the item.
       expect(await linker().establish('github', 'token', GH)).toEqual({ ok: true });
@@ -316,11 +517,77 @@ describe('links: store layer', () => {
       expect(backend.linkedReads).toEqual([]);
     });
 
+    it('establish records the approval before the link is in config.yaml', async () => {
+      const order: string[] = [];
+      const approve = vi.spyOn(store, 'approveLink').mockImplementation(async (service, key, locator) => {
+        // At this moment the file has no link yet.
+        order.push(`approve ${service}/${key} ${locator}; link in config: ${createLinkSource(config)().has('github/token')}`);
+        await store.approvals.approve(`${service}/${key}`, locator);
+      });
+      expect(await linker().establish('github', 'token', GH)).toEqual({ ok: true });
+      expect(order).toEqual([`approve github/token ${GH}; link in config: false`]);
+      expect(approve).toHaveBeenCalledTimes(1);
+      expect(createLinkSource(config)().get('github/token')).toBe(GH);
+    });
+
+    it('an approval that cannot be written leaves no link, and the answer names the vault', async () => {
+      vi.spyOn(backend, 'set').mockRejectedValue(new Error('Vault API error (403): permission denied'));
+      const r = await linker().establish('github', 'token', GH);
+      expect(r).toEqual({
+        ok: false,
+        code: 'link_unreadable',
+        error: 'Could not record the approval in the vault: Vault API error (403): permission denied',
+        fix: 'Check that the vault is unlocked and writable (aquaman doctor), then ask again',
+      });
+      expect(fs.existsSync(config)).toBe(false);
+      expect(await record()).toBeNull();
+    });
+
+    it('a store that reads items and keeps no approvals makes no link', async () => {
+      const r = await linker(backend).establish('github', 'token', GH);
+      expect(r).toEqual({ ok: false, code: 'links_unavailable', error: 'This credential store does not record link approvals', fix: 'Run: aquaman doctor' });
+      expect(fs.existsSync(config)).toBe(false);
+      expect(await linker(backend).approved('github', 'token', GH)).toBe(false);
+    });
+
+    it('establish on a link that is in config.yaml without an approval reads the item and records the approval', async () => {
+      link('github/token', GH);
+      expect(await linker().approved('github', 'token', GH)).toBe(false);
+      expect(await linker().establish('github', 'token', GH)).toEqual({ ok: true });
+      expect(backend.linkedReads).toEqual([GH]);
+      expect(await record()).toEqual({ v: 1, links: { 'github/token': GH } });
+    });
+
+    it('approved answers no when the record cannot be read', async () => {
+      await approved('github/token', GH);
+      const fresh = new LinkedStore(backend, 'vault', createLinkSource(config));
+      vi.spyOn(backend, 'get').mockRejectedValue(new Error('locked'));
+      expect(await linker(fresh).approved('github', 'token', GH)).toBe(false);
+    });
+
+    it('remove deletes the link and its approval, so the link written back by hand reads nothing', async () => {
+      const l = linker();
+      await l.establish('github', 'token', GH);
+      expect(await l.remove('github', 'token')).toBe(true);
+      expect(await record()).toEqual({ v: 1, links: {} });
+      link('github/token', GH);
+      await expect(store.get('github', 'token')).rejects.toThrow(/no approval/);
+      expect(backend.linkedReads).toEqual([GH]);
+      // An approval left behind without its link is removed too.
+      link('github/token', null);
+      await store.approveLink('github', 'token', GH);
+      expect(await l.remove('github', 'token')).toBe(false);
+      expect(await record()).toEqual({ v: 1, links: {} });
+      // Through a store that keeps no approvals, the link is removed all the same.
+      link('github/token', GH);
+      expect(await linker(new MemoryStore()).remove('github', 'token')).toBe(true);
+    });
+
     it('remove deletes the link and leaves the item alone', async () => {
       const l = linker();
       await l.establish('github', 'token', GH);
-      expect(l.remove('github', 'token')).toBe(true);
-      expect(l.remove('github', 'token')).toBe(false);
+      expect(await l.remove('github', 'token')).toBe(true);
+      expect(await l.remove('github', 'token')).toBe(false);
       expect(l.linkOf('github', 'token')).toBeUndefined();
       expect(backend.items.get(GH)).toBe('ghp_linked');
     });
@@ -329,43 +596,63 @@ describe('links: store layer', () => {
   describe('linkRequestPlan', () => {
     const linker = () => createCredentialLinker({ store, backend: 'vault', configPath: config });
 
-    it('a request without `from` is not about a link', () => {
-      expect(linkRequestPlan(linker(), 'github', 'token', undefined, false)).toBeUndefined();
-      expect(linkRequestPlan(undefined, 'github', 'token', undefined, false)).toBeUndefined();
+    it('a request without `from` is not about a link', async () => {
+      expect(await linkRequestPlan(linker(), 'github', 'token', undefined, false)).toBeUndefined();
+      expect(await linkRequestPlan(undefined, 'github', 'token', undefined, false)).toBeUndefined();
     });
 
-    it('a proxy that makes no links refuses `from`', () => {
-      expect(linkRequestPlan(undefined, 'github', 'token', GH, false)).toMatchObject({ ok: false, status: 404, code: 'links_unavailable' });
+    it('a proxy that makes no links refuses `from`', async () => {
+      expect(await linkRequestPlan(undefined, 'github', 'token', GH, false)).toMatchObject({ ok: false, status: 404, code: 'links_unavailable' });
     });
 
-    it('a new link needs a dialog; the by-hand command quotes the locator and declares only an ordinary request', () => {
-      expect(linkRequestPlan(linker(), 'github', 'token', GH, false)).toEqual({
+    it('a new link needs a dialog; the by-hand command quotes the locator and declares only an ordinary request', async () => {
+      expect(await linkRequestPlan(linker(), 'github', 'token', GH, false)).toEqual({
         ok: true,
         pending: true,
         locator: GH,
         manual: `aquaman credentials link github/token '${GH}' && aquaman broker allow aquaman://github/token`,
       });
-      expect(linkRequestPlan(linker(), 'stripe', 'secret_key', "vault://secret/it's#key", true)).toEqual({
+      expect(await linkRequestPlan(linker(), 'stripe', 'secret_key', "vault://secret/it's#key", true)).toEqual({
         ok: true,
         pending: true,
         locator: "vault://secret/it's#key",
         manual: `aquaman credentials link stripe/secret_key 'vault://secret/it'\\''s#key'`,
       });
+      // A link-only request declares nothing, and neither does the command a person is told to run.
+      expect(await linkRequestPlan(linker(), 'github', 'token', GH, false, false)).toMatchObject({
+        pending: true,
+        manual: `aquaman credentials link github/token '${GH}'`,
+      });
     });
 
-    it('syntax and scheme problems are 400, a reference linked elsewhere is 409, the same link is an ordinary request', () => {
-      expect(linkRequestPlan(linker(), 'github', 'token', 'vault://x', false)).toMatchObject({ ok: false, status: 400, code: 'link_invalid_locator' });
-      expect(linkRequestPlan(linker(), 'github', 'token', 'bw://GitHub/password', false)).toMatchObject({ ok: false, status: 400, code: 'link_backend_mismatch' });
+    it('a link that is only in config.yaml is not in place: it is asked about, and its approval is what makes it an ordinary request', async () => {
       link('github/token', GH);
-      expect(linkRequestPlan(linker(), 'github', 'token', GH2, false)).toMatchObject({ ok: false, status: 409, code: 'link_exists' });
-      expect(linkRequestPlan(linker(), 'github', 'token', GH, false)).toEqual({ ok: true, pending: false });
+      expect(await linkRequestPlan(linker(), 'github', 'token', GH, false)).toMatchObject({ ok: true, pending: true, locator: GH });
+      expect(backend.linkedReads).toEqual([]);
+      await store.approveLink('github', 'token', GH);
+      expect(await linkRequestPlan(linker(), 'github', 'token', GH, false)).toEqual({ ok: true, pending: false });
+      expect(backend.linkedReads).toEqual([]);
+    });
+
+    it('a locator outside printable ASCII is refused, and the fix does not send the caller back to the same refusal', async () => {
+      const r = await linkRequestPlan(linker(), 'github', 'token', 'vault://secret/apps/g\u0456thub#token', false);
+      expect(r).toMatchObject({ ok: false, status: 400, code: 'link_invalid_locator' });
+      expect((r as { fix: string }).fix).toBe("Use the item's ID where the vault has one, or give the item a name in plain ASCII");
+    });
+
+    it('syntax and scheme problems are 400, a reference linked elsewhere is 409, the same approved link is an ordinary request', async () => {
+      expect(await linkRequestPlan(linker(), 'github', 'token', 'vault://x', false)).toMatchObject({ ok: false, status: 400, code: 'link_invalid_locator' });
+      expect(await linkRequestPlan(linker(), 'github', 'token', 'bw://GitHub/password', false)).toMatchObject({ ok: false, status: 400, code: 'link_backend_mismatch' });
+      await approved('github/token', GH);
+      expect(await linkRequestPlan(linker(), 'github', 'token', GH2, false)).toMatchObject({ ok: false, status: 409, code: 'link_exists' });
+      expect(await linkRequestPlan(linker(), 'github', 'token', GH, false)).toEqual({ ok: true, pending: false });
     });
 
     it('the reply for a link whose item cannot be read names the reference and how to stop using the item', () => {
       expect(linkUnreadableReply('github', 'token')).toEqual({
         code: 'link_unreadable',
         error: 'github/token is linked to a vault item, and nothing could be read there',
-        fix: 'Check the item in your vault. To stop using it, run: aquaman credentials unlink github/token',
+        fix: 'Check the item in your vault. A link that no person approved is not read either; a person approves it with: aquaman credentials link github/token <locator>. To stop using it, run: aquaman credentials unlink github/token',
       });
     });
   });
@@ -393,6 +680,19 @@ describe('links: store layer', () => {
       expect(text).toContain('The app in this project gets a local token, not the key: aquaman adds the key to its requests on the way out.');
       expect(text).not.toContain('will be given the value');
       expect(text).not.toContain('can ask aquaman for it');
+    });
+
+    it('a link that is not declared says the proxy adds the value and commands are not given it', () => {
+      const lines = promptMessage({ ...base, from: GH, linkOnly: true }, 'approval').split('\n');
+      expect(lines[4]).toBe('Allow makes aquaman read that item whenever this credential is used. aquaman does not change or delete the item. The value is added to requests aquaman forwards for this service; it is not given to commands unless the credential is also declared (aquaman broker allow). Deny if you did not expect this, or if the item named below is not one you want used this way.');
+      expect(lines.join('\n')).not.toContain('will be given the value');
+      // Everything around that sentence is the ordinary link dialog.
+      const ordinary = promptMessage({ ...base, from: GH }, 'approval').split('\n');
+      expect([...lines.slice(0, 4), ...lines.slice(5)]).toEqual([...ordinary.slice(0, 4), ...ordinary.slice(5)]);
+      // The wording belongs to a link: routed wins, and without `from` the flag changes nothing.
+      expect(promptMessage({ ...base, from: GH, linkOnly: true, routed: true }, 'approval')).toBe(promptMessage({ ...base, from: GH, routed: true }, 'approval'));
+      expect(promptMessage({ ...base, linkOnly: true }, 'approval')).toBe(promptMessage(base, 'approval'));
+      expect(promptMessage({ ...base, linkOnly: true }, 'value')).toBe(promptMessage(base, 'value'));
     });
 
     it('shows a locator of the maximum length whole, and without a project the item line is still last', () => {

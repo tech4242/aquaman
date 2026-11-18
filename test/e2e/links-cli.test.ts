@@ -7,21 +7,32 @@
  * directory. The vault is the HashiCorp Vault backend pointed at a server on
  * 127.0.0.1 that the test owns: it holds one item of "the user's" and
  * records every request, so a test can assert that nothing was written or
- * deleted there. No dialog is shown: where the daemon would ask a person, a
- * server the test owns sits on the proxy socket and plays the daemon.
+ * deleted there.
+ *
+ * No dialog is shown. A real daemon on a desktop machine shows a real dialog
+ * for `POST /broker/request`, so no test here sends that request to one:
+ * where the daemon would ask a person, a server the test owns sits on the
+ * proxy socket and answers as the daemon does afterwards. The real daemon is
+ * started only for what it does without asking anyone (`aquaman get`), and a
+ * link it is to serve is made in this process by the code the dialog path
+ * ends in.
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { createCredentialStore, createCredentialLinker } from 'aquaman-core';
 import { startFakeVault, type FakeVault } from '../helpers/fake-vault.js';
 import { createSandbox, fakeProxy, json, startDaemon, PROXY_CLI, TSX, T, type FakeProxy, type Sandbox } from './cov-cli-core-helpers.js';
 
 const ITEM = 'vault://secret/apps/github#token';
 const ITEM_VALUE = 'ghp_value_of_the_users_own_vault_item_0123';
 const REF = 'aquaman://github/token';
+/** Where the Vault backend keeps aquaman's record of approved links. */
+const APPROVALS_PATH = '/v1/secret/data/aquaman/aquaman_internal/link_approvals';
+const QUESTION = 'Type yes to link it:';
 
 const SCRIPT = '/usr/bin/script';
 // `script` wants a real pipe or a terminal on its stdin, so it is fed through `cat` by a shell.
@@ -66,109 +77,274 @@ describe('links: command line', () => {
   const linksInConfig = () => (fs.existsSync(configFile()) ? parseYaml(fs.readFileSync(configFile(), 'utf-8'))?.credentials?.links : undefined);
   const writes = () => vault.writes();
 
-  /** Runs the CLI on a pseudo-terminal, so stdin and stdout are both terminals in the child. */
-  function runAtTerminal(args: string[], env: Record<string, string | undefined> = vaultEnv()): Promise<{ code: number | null; output: string }> {
+  /**
+   * Runs the CLI on a pseudo-terminal, so stdin and stdout are both terminals
+   * in the child. `typed` is sent once the command has asked its question.
+   * The exit status is printed after the command by the shell, because the
+   * pipeline itself only ends when its input is closed.
+   */
+  function runAtTerminal(args: string[], env: Record<string, string | undefined> = vaultEnv(), typed?: string): Promise<{ code: number | null; output: string }> {
     const command = [TSX, PROXY_CLI, ...args];
     const scriptArgs = process.platform === 'darwin' ? command : [command.map(shellQuote).join(' ')];
     return new Promise((resolve, reject) => {
-      const child = spawn('/bin/sh', ['-c', SCRIPT_CALL, 'sh', ...scriptArgs], { cwd: sb.project, env: sb.env(env), stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawn('/bin/sh', ['-c', `cat | ( ${SCRIPT_CALL.replace('cat | ', '')}; echo "__EXIT:$?" )`, 'sh', ...scriptArgs], { cwd: sb.project, env: sb.env(env), stdio: ['pipe', 'pipe', 'pipe'] });
       let output = '';
-      const onData = (d: Buffer) => { output += d.toString(); };
+      let answered = false;
+      const onData = (d: Buffer) => {
+        output += d.toString();
+        if (!answered && typed !== undefined && output.includes(QUESTION)) {
+          answered = true;
+          child.stdin.write(typed);
+        }
+        if (/__EXIT:\d+/.test(output)) child.stdin.end();
+      };
       child.stdout.on('data', onData);
       child.stderr.on('data', onData);
+      child.stdin.on('error', () => { /* the pipeline has gone */ });
       child.on('error', reject);
-      child.on('close', (code) => resolve({ code, output }));
-      child.stdin.end();
+      child.on('close', () => {
+        const code = /__EXIT:(\d+)/.exec(output);
+        resolve({ code: code ? Number(code[1]) : null, output: output.replace(/__EXIT:\d+\s*$/, '') });
+      });
     });
   }
 
-  describe('credentials link without a terminal', () => {
-    it('is refused with the command an agent uses instead, and neither the config nor the vault is touched', async () => {
+  /** What a daemon on a machine with no desktop session answers a link request. */
+  const NO_DIALOG = { status: 'pending', ref: REF, code: 'prompt_unavailable', reason: 'the daemon has no desktop session (no DISPLAY or WAYLAND_DISPLAY)', fix: `aquaman credentials link github/token '${ITEM}'` };
+  const daemonAnswers = async (status: number, body: unknown) => {
+    proxy = await fakeProxy(sb.socket, (_req, res) => json(res, status, body));
+  };
+  const approvalInVault = () => {
+    const raw = vault.secrets[APPROVALS_PATH]?.credential;
+    return raw === undefined ? undefined : JSON.parse(raw);
+  };
+  /** Requests that reached the user's own item, as opposed to aquaman's records. */
+  const itemRequests = () => seen.filter((r) => !r.url.includes('/aquaman/'));
+
+  // The dialog belongs to the daemon. A real daemon on this machine would
+  // show a real one, so the daemon here is a server the test owns on the
+  // proxy socket, answering what the daemon answers once a person has (or
+  // has not) decided. The daemon's side of the same exchange is in
+  // test/compliance/vault-links.test.ts, with a scripted prompter.
+  describe('credentials link asks the running daemon', () => {
+    it('sends a link-only request for the dialog and, once the person allowed it, says what was linked and how to declare or remove it', async () => {
+      await daemonAnswers(200, { status: 'linked', ref: REF });
       const r = await run(['credentials', 'link', 'github/token', ITEM]);
-      expect(r.code).toBe(1);
+      expect(r.code, r.stderr).toBe(0);
+      expect(proxy!.requests).toEqual([{
+        method: 'POST',
+        url: '/broker/request',
+        body: { service: 'github', key: 'token', from: ITEM, declare: false, project: sb.project, timeout_seconds: 90 },
+      }]);
+      expect(r.stderr).toContain('Asking in a dialog on this machine.');
+      expect(r.stdout.split('\n')).toEqual([
+        `Linked github/token to ${ITEM}`,
+        'aquaman reads that item and never writes to it or deletes it.',
+        `To let commands be given the value: aquaman broker allow ${REF}`,
+        'To remove the link: aquaman credentials unlink github/token',
+        '',
+      ]);
+      // The command neither reads the vault nor writes the link: the daemon does both after the dialog.
+      expect(seen).toEqual([]);
+      expect(linksInConfig()).toBeUndefined();
+    }, T);
+
+    it('accepts the aquaman:// form, and a link that is already in place and approved is success too', async () => {
+      await daemonAnswers(200, { status: 'ready', ref: REF });
+      const r = await run(['credentials', 'link', REF, ITEM]);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toContain(`Linked github/token to ${ITEM}`);
+      expect(proxy!.requests[0].body).toMatchObject({ service: 'github', key: 'token', declare: false });
+    }, T);
+
+    it('needs no terminal: the dialog is where the person is, and a terminal proves nothing', async () => {
+      await daemonAnswers(200, { status: 'linked', ref: REF });
+      const piped = await run(['credentials', 'link', 'github/token', ITEM], vaultEnv(), '');
+      expect(piped.code).toBe(0);
+      expect(piped.stdout).toContain('Linked github/token');
+    }, T);
+
+    it('declined is exit 2 with the reason and no command to run instead', async () => {
+      await daemonAnswers(200, { status: 'declined', ref: REF, reason: 'the person at the dialog said no' });
+      const r = await run(['credentials', 'link', 'github/token', ITEM]);
+      expect(r.code).toBe(2);
       expect(r.stdout).toBe('');
-      expect(r.stderr).toContain('made by a person at a terminal');
-      expect(r.stderr).toContain(`Fix: aquaman request ${REF} --from '${ITEM}'`);
+      expect(r.stderr).toContain('Not linked: the person at the dialog said no');
+      expect(r.stderr).not.toContain('Fix:');
       expect(linksInConfig()).toBeUndefined();
       expect(seen).toEqual([]);
     }, T);
 
-    it('accepts the aquaman:// form of the reference and quotes a locator for the shell', async () => {
-      const r = await run(['credentials', 'link', REF, "vault://secret/it's/x#y"], vaultEnv(), '');
+    it.each([
+      ['nobody answered', { status: 'pending', ref: REF, reason: 'nobody answered the dialog', fix: 'x' }, 'Not linked: nobody answered the dialog. Run the command again.'],
+      ['too many requests', { status: 'pending', ref: REF, reason: 'too many credential requests in a short time', fix: 'x' }, 'Not linked: too many credential requests in a short time. Run the command again.'],
+      ['a pending answer with no reason', { status: 'pending', ref: REF }, 'Not linked: nobody answered the dialog. Run the command again.'],
+      ['a declined answer with no reason', { status: 'declined', ref: REF }, 'Not linked: declined'],
+    ])('%s: nothing is linked and the command does not fall back to asking at the terminal', async (_name, body, message) => {
+      await daemonAnswers(200, body);
+      const r = hasScript ? await runAtTerminal(['credentials', 'link', 'github/token', ITEM]) : await run(['credentials', 'link', 'github/token', ITEM]).then((x) => ({ code: x.code, output: x.stdout + x.stderr }));
+      expect(r.code).toBe(body.status === 'declined' ? 2 : 3);
+      expect(r.output).toContain(message);
+      expect(r.output).not.toContain(QUESTION);
+      expect(linksInConfig()).toBeUndefined();
+      expect(seen).toEqual([]);
+    }, T);
+
+    it.each([
+      [409, { error: 'github/token is already linked to another item', fix: 'Remove that link first: aquaman credentials unlink github/token', code: 'link_exists' }, 'Fix: Remove that link first: aquaman credentials unlink github/token'],
+      [404, { error: 'Nothing could be read at vault://secret/apps/github#token', fix: 'Check the item and field names in your vault, then ask again with the corrected locator', code: 'link_unreadable' }, 'Fix: Check the item and field names'],
+      [404, { error: 'github/token already has a value stored by aquaman, and a link does not replace it', fix: 'To use the vault item instead, first run: aquaman credentials delete github token', code: 'link_value_stored' }, 'Fix: To use the vault item instead'],
+      [404, { error: 'Credential requests are disabled on this proxy', fix: 'OpenClaw-hosted proxies never take credential requests. Run: aquaman daemon', code: 'broker_disabled' }, 'Fix: OpenClaw-hosted proxies never take credential requests. Run: aquaman daemon'],
+    ])('a refusal by the daemon (%i %o) is exit 1 with its error and fix', async (status, body, fix) => {
+      await daemonAnswers(status, body);
+      const r = await run(['credentials', 'link', 'github/token', ITEM]);
       expect(r.code).toBe(1);
-      expect(r.stderr).toContain(`Fix: aquaman request ${REF} --from 'vault://secret/it'\\''s/x#y'`);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toContain(body.error);
+      expect(r.stderr).toContain(fix);
+      expect(linksInConfig()).toBeUndefined();
+    }, T);
+
+    it('a refusal that carries no message is still reported with its status', async () => {
+      await daemonAnswers(500, {});
+      const r = await run(['credentials', 'link', 'github/token', ITEM]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('The daemon refused the request (500)');
+      expect(r.stderr).not.toContain('Fix:');
+    }, T);
+
+    it('something on the socket that does not answer as the daemon does is reported as that, not as a daemon that is not running', async () => {
+      proxy = await fakeProxy(sb.socket, (_req, res) => { res.writeHead(502); res.end('<html>bad gateway</html>'); });
+      const r = await run(['credentials', 'link', 'github/token', ITEM]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('The daemon could not be asked: Proxy returned a non-JSON response (HTTP 502)');
+      expect(r.stderr).toContain('Fix: aquaman doctor');
+      expect(r.stderr).not.toContain('is not running');
+      expect(linksInConfig()).toBeUndefined();
+    }, T);
+
+    it('with no daemon running it says the daemon shows the dialog and how to start it, and does not ask at the terminal instead', async () => {
+      const r = hasScript ? await runAtTerminal(['credentials', 'link', 'github/token', ITEM]) : await run(['credentials', 'link', 'github/token', ITEM]).then((x) => ({ code: x.code, output: x.stdout + x.stderr }));
+      expect(r.code).toBe(1);
+      expect(r.output).toContain('The daemon shows the dialog a link is approved in, and it is not running.');
+      expect(r.output).toContain('Fix: aquaman daemon &   (then run this command again)');
+      expect(r.output).not.toContain(QUESTION);
+      expect(linksInConfig()).toBeUndefined();
+      expect(seen).toEqual([]);
+    }, T);
+
+    it.each([
+      ['a locator of another backend', 'op://Private/GitHub/token', vaultEnv, /op:\/\/ locator belongs to the 1password backend, and the configured backend is vault/, /Fix: For the vault backend write it as vault:\/\//],
+      ['a locator that does not parse', 'vault://secret/../sys#token', vaultEnv, /Not a usable vault locator/, /Fix: For the vault backend/],
+      ['a backend that holds only what aquaman wrote', ITEM, () => ({}), /The encrypted-file backend holds only what aquaman wrote/, /Fix: Store the value instead \(aquaman credentials add <service> <key>\)/],
+    ])('%s is a wrong command: refused with a fix before the daemon is asked', async (_name, locator, env, error, fix) => {
+      await daemonAnswers(200, { status: 'linked', ref: REF });
+      const r = await run(['credentials', 'link', 'github/token', locator], env());
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(error);
+      expect(r.stderr).toMatch(fix);
+      expect(proxy!.requests).toEqual([]);
+      expect(seen).toEqual([]);
     }, T);
 
     it('a reference that is not one is a wrong command, for link and for unlink', async () => {
-      for (const args of [['credentials', 'link', 'GitHub Token', ITEM], ['credentials', 'unlink', '../x']]) {
+      await daemonAnswers(200, { status: 'linked', ref: REF });
+      for (const args of [['credentials', 'link', 'GitHub Token', ITEM], ['credentials', 'link', 'aquaman_internal/link_approvals', ITEM], ['credentials', 'unlink', '../x']]) {
         const r = await run(args);
         expect(r.code).toBe(1);
         expect(r.stderr).toContain('Invalid reference');
         expect(r.stderr).toContain('Fix: Write it as <service>/<key>');
       }
-    }, T * 2);
+      expect(proxy!.requests).toEqual([]);
+    }, T * 3);
   });
 
-  describe.skipIf(!hasScript)('credentials link at a terminal', () => {
-    it('reads the item, writes the link at 0600 and never shows the value', async () => {
-      const r = await runAtTerminal(['credentials', 'link', 'github/token', ITEM]);
-      expect(r.output).toContain(`Linked github/token to ${ITEM}`);
-      expect(r.output).toContain('never writes to it or deletes it');
-      expect(r.output).toContain(`aquaman broker allow ${REF}`);
-      expect(r.output).toContain('aquaman credentials unlink github/token');
-      expect(r.output).not.toContain(ITEM_VALUE);
-      expect(r.code).toBe(0);
+  describe('credentials link where the daemon cannot show a dialog', () => {
+    beforeEach(async () => {
+      await daemonAnswers(200, NO_DIALOG);
+      vault.acceptWrites = true;
+    });
 
-      expect(linksInConfig()).toEqual({ 'github/token': ITEM });
-      expect(fs.statSync(configFile()).mode & 0o777).toBe(0o600);
-      // Values that exist only in the environment were not written with it.
-      const written = fs.readFileSync(configFile(), 'utf-8');
-      expect(written).not.toContain('hvs.links-cli-test');
-      expect(written).not.toContain(vaultAddr);
-      // The item was read and nothing was sent that could change it.
-      expect(seen).toContainEqual({ method: 'GET', url: '/v1/secret/data/apps/github' });
-      expect(writes()).toEqual([]);
-    }, T);
-
-    it.each([
-      ['a locator of another backend', 'op://Private/GitHub/token', /op:\/\/ locator belongs to the 1password backend, and the configured backend is vault/, /Fix: For the vault backend write it as vault:\/\//],
-      ['a locator that does not parse', 'vault://secret/../sys#token', /Not a usable vault locator/, /Fix: For the vault backend/],
-      ['an item that is not there', 'vault://secret/apps/gitlab#token', /Nothing could be read at vault:\/\/secret\/apps\/gitlab#token/, /Fix: Check the item and field names/],
-      ['a field the item does not have', 'vault://secret/apps/github#password', /Nothing could be read/, /Fix: /],
-    ])('%s is refused with a fix and no link is written', async (_name, locator, error, fix) => {
-      const r = await runAtTerminal(['credentials', 'link', 'github/token', locator]);
+    it('without a terminal nobody can be asked: refused with the command to run in one, and nothing is read or written', async () => {
+      const r = await run(['credentials', 'link', 'github/token', "vault://secret/it's/x#y"], vaultEnv(), 'yes\n');
       expect(r.code).toBe(1);
-      expect(r.output).toMatch(error);
-      expect(r.output).toMatch(fix);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).toContain('No dialog can be shown on this machine (the daemon has no desktop session (no DISPLAY or WAYLAND_DISPLAY)), and this command is not at a terminal, so nobody can be asked.');
+      expect(r.stderr).toContain(`Fix: Run it yourself in a terminal: aquaman credentials link github/token 'vault://secret/it'\\''s/x#y'`);
+      expect(r.stderr).not.toContain(QUESTION);
       expect(linksInConfig()).toBeUndefined();
-      expect(writes()).toEqual([]);
+      expect(seen).toEqual([]);
     }, T);
 
-    it('a reference that already has a value stored by aquaman is not linked', async () => {
-      vault.secrets['/v1/secret/data/aquaman/github/token'] = { credential: 'ghp_stored_by_aquaman' };
-      const r = await runAtTerminal(['credentials', 'link', 'github/token', ITEM]);
-      expect(r.code).toBe(1);
-      expect(r.output).toContain('already has a value stored by aquaman');
-      expect(r.output).toContain('Fix: To use the vault item instead, first run: aquaman credentials delete github token');
-      expect(linksInConfig()).toBeUndefined();
-      expect(seen.map((s) => s.url)).not.toContain('/v1/secret/data/apps/github');
-    }, T);
+    describe.skipIf(!hasScript)('at a terminal', () => {
+      it('says what the link does and asks; a typed yes reads the item, records the approval in the vault, writes the link at 0600 and never shows the value', async () => {
+        const r = await runAtTerminal(['credentials', 'link', 'github/token', ITEM], vaultEnv(), 'yes\n');
+        expect(r.output).toContain('No dialog can be shown on this machine (the daemon has no desktop session (no DISPLAY or WAYLAND_DISPLAY)).');
+        expect(r.output).toContain(`This makes aquaman read ${ITEM} from your vault whenever github/token is used. aquaman does not change or delete the item.`);
+        expect(r.output).toContain(`Linked github/token to ${ITEM}`);
+        expect(r.output).toContain(`aquaman broker allow ${REF}`);
+        expect(r.output).not.toContain(ITEM_VALUE);
+        expect(r.code, r.output).toBe(0);
 
-    it('a backend that holds only what aquaman wrote takes no links, and says so', async () => {
-      const r = await runAtTerminal(['credentials', 'link', 'github/token', ITEM], {});
-      expect(r.code).toBe(1);
-      expect(r.output).toContain('The encrypted-file backend holds only what aquaman wrote');
-      expect(r.output).toContain('Fix: Store the value instead (aquaman credentials add <service> <key>)');
-      expect(linksInConfig()).toBeUndefined();
-    }, T);
+        expect(linksInConfig()).toEqual({ 'github/token': ITEM });
+        expect(fs.statSync(configFile()).mode & 0o777).toBe(0o600);
+        expect(approvalInVault()).toEqual({ v: 1, links: { 'github/token': ITEM } });
+        // Values that exist only in the environment were not written with the link.
+        const written = fs.readFileSync(configFile(), 'utf-8');
+        expect(written).not.toContain('hvs.links-cli-test');
+        expect(written).not.toContain(vaultAddr);
+        // The item was read, and the one thing written to the vault is aquaman's own record.
+        expect(itemRequests()).toEqual([{ method: 'GET', url: '/v1/secret/data/apps/github' }]);
+        expect(writes()).toEqual([{ method: 'POST', url: APPROVALS_PATH }]);
+        // Nothing was declared.
+        expect(parseYaml(written).broker).toBeUndefined();
+      }, T);
 
-    it('a vault that cannot be opened is reported with a fix', async () => {
-      const r = await runAtTerminal(['credentials', 'link', 'github/token', ITEM], { AQUAMAN_BACKEND: 'vault', VAULT_ADDR: vaultAddr });
-      expect(r.code).toBe(1);
-      expect(r.output).toContain('Credential store not available: Vault token required');
-      expect(r.output).toContain('Fix: aquaman doctor');
-      expect(linksInConfig()).toBeUndefined();
-    }, T);
+      it.each([
+        ['no', 'no\n'],
+        ['y, which is not the word asked for', 'y\n'],
+        ['an empty line', '\n'],
+        ['the end of input (Ctrl-D)', '\x04'],
+      ])('%s is a no: exit 2, and nothing is read, recorded or linked', async (_name, typed) => {
+        const r = await runAtTerminal(['credentials', 'link', 'github/token', ITEM], vaultEnv(), typed);
+        expect(r.output).toContain(QUESTION);
+        expect(r.output).toContain('Not linked.');
+        expect(r.code).toBe(2);
+        expect(linksInConfig()).toBeUndefined();
+        expect(seen).toEqual([]);
+      }, T);
+
+      it.each([
+        ['an item that is not there', 'vault://secret/apps/gitlab#token', /Nothing could be read at vault:\/\/secret\/apps\/gitlab#token/, /Fix: Check the item and field names/],
+        ['a field the item does not have', 'vault://secret/apps/github#password', /Nothing could be read/, /Fix: /],
+      ])('after a yes, %s makes no link and records no approval', async (_name, locator, error, fix) => {
+        const r = await runAtTerminal(['credentials', 'link', 'github/token', locator], vaultEnv(), 'yes\n');
+        expect(r.code).toBe(1);
+        expect(r.output).toMatch(error);
+        expect(r.output).toMatch(fix);
+        expect(linksInConfig()).toBeUndefined();
+        expect(writes()).toEqual([]);
+      }, T);
+
+      it('after a yes, a reference that already has a value stored by aquaman is not linked and the item is not read', async () => {
+        vault.secrets['/v1/secret/data/aquaman/github/token'] = { credential: 'ghp_stored_by_aquaman' };
+        const r = await runAtTerminal(['credentials', 'link', 'github/token', ITEM], vaultEnv(), 'yes\n');
+        expect(r.code).toBe(1);
+        expect(r.output).toContain('already has a value stored by aquaman');
+        expect(r.output).toContain('Fix: To use the vault item instead, first run: aquaman credentials delete github token');
+        expect(linksInConfig()).toBeUndefined();
+        expect(itemRequests()).toEqual([]);
+        expect(writes()).toEqual([]);
+      }, T);
+
+      it('after a yes, a vault that cannot be opened is reported with a fix', async () => {
+        const r = await runAtTerminal(['credentials', 'link', 'github/token', ITEM], { AQUAMAN_BACKEND: 'vault', VAULT_ADDR: vaultAddr }, 'yes\n');
+        expect(r.code).toBe(1);
+        expect(r.output).toContain('Credential store not available: Vault token required');
+        expect(r.output).toContain('Fix: aquaman doctor');
+        expect(linksInConfig()).toBeUndefined();
+      }, T);
+    });
   });
 
   describe('a linked reference', () => {
@@ -215,18 +391,43 @@ describe('links: command line', () => {
       expect(r.stdout).toContain('Credential not found: openai/api_key');
     }, T);
 
-    it('credentials unlink removes the link, keeps the rest of the config, and never contacts the vault', async () => {
+    it('credentials unlink removes the link, keeps the rest of the config, and looks only at aquaman\'s own record in the vault', async () => {
       const r = await run(['credentials', 'unlink', REF]);
       expect(r.code).toBe(0);
       expect(r.stdout.trim()).toBe('Unlinked github/token. The vault item is unchanged.');
+      expect(r.stderr).toBe('');
       expect(parseYaml(fs.readFileSync(configFile(), 'utf-8'))).toEqual({ credentials: { backend: 'vault' } });
       expect(fs.statSync(configFile()).mode & 0o777).toBe(0o600);
-      expect(seen).toEqual([]);
+      // There was no approval to remove, so the record was read and nothing was written. The item was not touched.
+      expect(seen).toEqual([{ method: 'GET', url: APPROVALS_PATH }]);
 
+      vault.requests.length = 0;
       const again = await run(['credentials', 'unlink', 'github/token']);
       expect(again.code).toBe(0);
       expect(again.stdout.trim()).toBe('Not linked: github/token');
+      expect(seen).toEqual([]);
     }, T * 2);
+
+    it('credentials unlink removes the approval with the link, and leaves the approvals of other links', async () => {
+      vault.acceptWrites = true;
+      vault.secrets[APPROVALS_PATH] = { credential: JSON.stringify({ v: 1, links: { 'github/token': ITEM, 'stripe/secret_key': 'vault://secret/apps/stripe#key' } }) };
+      const r = await run(['credentials', 'unlink', 'github/token']);
+      expect(r.code, r.stderr).toBe(0);
+      expect(linksInConfig()).toBeUndefined();
+      expect(approvalInVault()).toEqual({ v: 1, links: { 'stripe/secret_key': 'vault://secret/apps/stripe#key' } });
+      expect(itemRequests()).toEqual([]);
+    }, T);
+
+    it('credentials unlink with a vault that cannot be opened still removes the link, and says the approval record stayed', async () => {
+      vault.secrets[APPROVALS_PATH] = { credential: JSON.stringify({ v: 1, links: { 'github/token': ITEM } }) };
+      const r = await run(['credentials', 'unlink', 'github/token'], { AQUAMAN_BACKEND: 'vault', VAULT_ADDR: vaultAddr });
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe('Unlinked github/token. The vault item is unchanged.');
+      expect(r.stderr).toContain('The approval record in the vault could not be updated (Vault token required');
+      expect(r.stderr).toContain('The link itself is removed.');
+      expect(linksInConfig()).toBeUndefined();
+      expect(seen).toEqual([]);
+    }, T);
 
     it('doctor counts links that fit the backend', async () => {
       const r = await run(['doctor']);
@@ -357,10 +558,22 @@ describe('links: command line', () => {
     }, T * 2);
   });
 
-  describe.skipIf(!hasScript)('a running daemon', () => {
+  describe('a running daemon', () => {
     const get = () => run(['get', REF]);
 
-    it('serves a link made after it started, stops when the link is removed, and never changes the item', async () => {
+    /**
+     * What the daemon does once a person allowed a link in its dialog, done
+     * here with a store of the test's own over the same vault and config.yaml:
+     * the item is read, the approval recorded, the link written.
+     */
+    async function approveAsThePersonDid(): Promise<void> {
+      const store = await createCredentialStore({ backend: 'vault', vaultAddress: vaultAddr, vaultToken: 'hvs.links-cli-test', links: 'always', linksConfigPath: configFile() });
+      const made = await createCredentialLinker({ store, backend: 'vault', configPath: configFile() }).establish('github', 'token', ITEM);
+      expect(made).toEqual({ ok: true });
+    }
+
+    it('serves a link approved after it started, stops when the link is removed, does not serve it written back by hand, and never changes the item', async () => {
+      vault.acceptWrites = true;
       // A cache TTL, so that a value read through the link would outlive it if nothing dropped it.
       sb.writeConfig('credentials:\n  backend: vault\n  cacheTtlSeconds: 900\n');
       await startDaemon(sb, { env: vaultEnv() });
@@ -370,29 +583,54 @@ describe('links: command line', () => {
       expect(before.code).toBe(1);
       expect(before.stderr).toContain('No credential found for github/token');
 
-      const linked = await runAtTerminal(['credentials', 'link', 'github/token', ITEM]);
-      expect(linked.code, linked.output).toBe(0);
+      await approveAsThePersonDid();
       const value = await get();
       expect(value.code, value.stderr).toBe(0);
       expect(value.stdout).toBe(ITEM_VALUE);
       // Read again: served from the daemon's cache this time.
-      const reads = seen.filter((r) => r.url === '/v1/secret/data/apps/github').length;
+      const reads = () => seen.filter((r) => r.url === '/v1/secret/data/apps/github').length;
+      const readsSoFar = reads();
       expect((await get()).stdout).toBe(ITEM_VALUE);
-      expect(seen.filter((r) => r.url === '/v1/secret/data/apps/github').length).toBe(reads);
+      expect(reads()).toBe(readsSoFar);
 
       expect((await run(['credentials', 'unlink', 'github/token'])).code).toBe(0);
+      expect(approvalInVault()).toEqual({ v: 1, links: {} });
       const after = await get();
       expect(after.code).toBe(1);
       expect(after.stdout).not.toContain(ITEM_VALUE);
       expect(after.stderr).toContain('No credential found for github/token');
+
+      // The same link, put back into config.yaml with no person asked: the daemon reads nothing.
+      const raw = parseYaml(fs.readFileSync(configFile(), 'utf-8'));
+      raw.credentials.links = { 'github/token': ITEM };
+      fs.writeFileSync(configFile(), stringifyYaml(raw), { mode: 0o600 });
+      const byHand = await get();
+      expect(byHand.code).toBe(1);
+      expect(byHand.stdout).toBe('');
+      expect(byHand.stderr).toContain('no approval for that link is recorded in the vault, so the item is not read');
+      expect(reads()).toBe(readsSoFar);
 
       // Both changes are in the audit log, next to the reads they explain.
       const tail = await run(['audit', 'tail']);
       expect(tail.stdout).toContain(`link set: github/token is read from ${ITEM}`);
       expect(tail.stdout).toContain('link removed: github/token');
 
-      expect(writes()).toEqual([]);
-    }, T * 4);
+      // Everything written to the vault is under aquaman's own reserved service; the item was only read.
+      expect(writes().filter((w) => !w.url.startsWith('/v1/secret/data/aquaman/aquaman_internal/'))).toEqual([]);
+      expect(itemRequests().every((r) => r.method === 'GET')).toBe(true);
+    }, T * 5);
+
+    it('a link and a declaration written into config.yaml by hand hand out nothing: the item is never read', async () => {
+      sb.writeConfig(`credentials:\n  backend: vault\n  links:\n    github/token: ${ITEM}\nbroker:\n  allowedRefs:\n    - ${REF}\n`);
+      await startDaemon(sb, { env: vaultEnv() });
+      const r = await get();
+      expect(r.code).toBe(1);
+      expect(r.stdout).toBe('');
+      expect(r.stderr).not.toContain(ITEM_VALUE);
+      expect(r.stderr).toContain('no approval for that link is recorded in the vault, so the item is not read');
+      expect(r.stderr).toContain(`aquaman credentials link github/token '${ITEM}'`);
+      expect(seen.map((s) => s.url)).not.toContain('/v1/secret/data/apps/github');
+    }, T * 2);
 
     it('does not hand out a linked reference that is not declared', async () => {
       sb.writeConfig(`credentials:\n  backend: vault\n  links:\n    github/token: ${ITEM}\n`);
