@@ -10,6 +10,36 @@ openclaw plugins install clawhub:aquaman-plugin   # OpenClaw users
 pip install -U aquaman-hermes                     # Hermes users
 ```
 
+## 0.20.0
+
+The guides now show the cases people asked about: an item that is already in your vault on every host page, Bitwarden with Docker Sandboxes, OpenAI and Linux for Hermes, the model provider step for OpenClaw, and a new page for MCP servers.
+
+No change to the packages' behaviour. Everything described here works with 0.19.0.
+
+### A new page: credentials for MCP servers
+
+[Credentials for MCP servers](https://aquaman.sh/docs/mcp/) covers three cases. A remote server with OAuth needs the host's own sign-in and not aquaman. A remote server that takes a fixed token in a header gets it from Claude Code's `headersHelper` running `aquaman get`. A stdio server gets a start command that reads the token with `aquaman get`, so nothing is in `.mcp.json`.
+
+- Both aquaman forms were run against a real daemon with a stand-in server. They were not run inside Claude Code.
+- `aquaman-coder exec` cannot wrap a stdio MCP server: its output redaction holds back the end of each reply until more output arrives. The page says so and gives the form that works.
+
+### An item that is already in your vault, on every host page
+
+Pointing a reference at an existing vault item (`aquaman request --from`, `aquaman credentials link`, since 0.19.0) was only described in the agent contract. It is now in the README, the agent contract's opening, `llms.txt` and each host guide.
+
+- [Claude Code](https://aquaman.sh/docs/claude-code/) and [Codex](https://aquaman.sh/docs/codex/): a worked example with two tokens that are already in 1Password, for `npm test` and `npm publish --dry-run`, and what that gives and does not give compared with `op run`.
+- [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/): the flow for an existing 1Password or Bitwarden item, where the Bitwarden session lives and why a daemon started at login does not have it, `sbx secret set-custom` for a service `sbx` has no definition for (from Docker's documentation; not run against `sbx`), and that cloud sandboxes take no `--command` source.
+
+### Host guides
+
+- [Hermes](https://aquaman.sh/docs/hermes/): the OpenAI variables next to the Anthropic ones, exactly as `aquaman hermes setup` writes them; which vault `aquaman setup` picks on Linux and what each needs; a full `secrets.aquaman.env` example.
+- [OpenClaw](https://aquaman.sh/docs/openclaw/): which model providers are routed (Anthropic and OpenAI), what setup writes into `openclaw.json` for each, how to replace a key after rotating it, and two things setup does that were not written down: a key that is already in `openclaw.json` as plain text is left there and that provider is not routed until you remove it, and an `openclaw.json` that is not strict JSON is replaced.
+- [Keep an API key out of the app](https://aquaman.sh/docs/app-through-proxy/): the `services.yaml` entry for a basic-auth service on your own host with every field explained, what the app sends as its basic-auth pair, and the request policy syntax with a complete example. It also notes that `aquaman policy test` gives wrong output for `defaultAction: deny` policies in 0.19.0; the proxy's own decision is not affected.
+
+### What to know before trusting it
+
+The [section of that name](https://aquaman.sh/docs/compare/#what-to-know-before-trusting-it) on the comparison page states the same facts in a different order: first what you can check yourself (provenance, no install scripts, local and without an account, the test count and coverage floors, the attack tests and their pinned limits, the 0.18.2 assessment), then what counts against the project (one maintainer, no third-party audit, started in February 2026 and still 0.x, the advisory GHSA-9qh6-wffq-9m9v). Nothing was removed.
+
 ## 0.19.0
 
 Use the secrets already in your vault, keep the daemon running across reboots, route apps that use basic auth, and an audit log that notices when it has been cut short.
