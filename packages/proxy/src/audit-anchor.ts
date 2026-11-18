@@ -46,12 +46,24 @@ const FIX_ACCEPT =
   'If the change was intended (a backup restored, a log deleted on purpose), stop the proxy and run: aquaman audit accept';
 
 /**
- * Seconds between anchor writes: `audit.anchorIntervalSeconds`, default 60.
- * `0` (or anything below) is off. A value that is not a number is ignored.
+ * Backends where each write starts a vendor CLI, which can ask the person to
+ * unlock the vault. An anchor a minute would be a prompt a minute.
  */
-export function resolveAnchorInterval(config: { audit?: { anchorIntervalSeconds?: unknown } }): number {
+const PROMPTING_BACKENDS: readonly string[] = ['1password', 'bitwarden', 'keeper'];
+export const PROMPTING_BACKEND_ANCHOR_INTERVAL_SECONDS = 900;
+
+/**
+ * Seconds between anchor writes: `audit.anchorIntervalSeconds` when set.
+ * Unset, 60, or 900 for a backend whose writes can prompt. `0` (or anything
+ * below) is off. A value that is not a number is ignored.
+ */
+export function resolveAnchorInterval(config: { audit?: { anchorIntervalSeconds?: unknown }; credentials?: { backend?: string } }): number {
   const value = config.audit?.anchorIntervalSeconds;
-  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_ANCHOR_INTERVAL_SECONDS;
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return PROMPTING_BACKENDS.includes(config.credentials?.backend ?? '')
+      ? PROMPTING_BACKEND_ANCHOR_INTERVAL_SECONDS
+      : DEFAULT_ANCHOR_INTERVAL_SECONDS;
+  }
   return Math.max(0, value);
 }
 

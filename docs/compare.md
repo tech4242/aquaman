@@ -68,7 +68,7 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 
 - It is not a sandbox. It keeps credentials away from the agent; it does not confine what the agent runs.
 - Any process running as your user can send requests through the proxy, within your policy, and can fetch references you declared. The audit log records it.
-- The audit log is anchored in your vault at most once a minute, not per entry. `aquaman audit verify` detects an entry altered, inserted or deleted inside the log, and a log cut short, emptied, deleted or rebuilt; it does not detect the removal of entries written since the last anchor, or a change made by software that can also write to the vault.
+- The audit log is anchored in your vault at most once a minute (every 15 minutes with 1Password, Bitwarden or Keeper), not per entry. `aquaman audit verify` detects an entry altered, inserted or deleted inside the log, and a log cut short, emptied, deleted or rebuilt; it does not detect the removal of entries written since the last anchor, or a change made by software that can also write to the vault.
 - On the coding-agent path the wrapped command receives the real value for its lifetime. Output redaction catches accidental exposure, not a command that deliberately transforms the value.
 - The proxy only sees traffic from clients that can be pointed at it, for services it has a definition for (26 are built in; others are added in `services.yaml`).
 - No Windows support outside WSL2. No team sharing, and it does not run in CI or production. An app that reads its keys from the environment needs nothing from aquaman there: the same variable names are filled from that platform's secrets.

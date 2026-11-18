@@ -75,6 +75,11 @@ describe('audit anchor', () => {
   describe('resolveAnchorInterval', () => {
     it.each([
       ['unset', {}, DEFAULT_ANCHOR_INTERVAL_SECONDS],
+      ['unset, keychain', { credentials: { backend: 'keychain' } }, DEFAULT_ANCHOR_INTERVAL_SECONDS],
+      ['unset, 1password (a write can prompt)', { credentials: { backend: '1password' } }, 900],
+      ['unset, bitwarden', { credentials: { backend: 'bitwarden' } }, 900],
+      ['unset, keeper', { credentials: { backend: 'keeper' } }, 900],
+      ['set, 1password', { audit: { anchorIntervalSeconds: 30 }, credentials: { backend: '1password' } }, 30],
       ['no audit section', { audit: undefined }, 60],
       ['a number', { audit: { anchorIntervalSeconds: 5 } }, 5],
       ['a fraction', { audit: { anchorIntervalSeconds: 0.5 } }, 0.5],
