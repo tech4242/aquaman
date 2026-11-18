@@ -522,7 +522,10 @@ describe('one audit log, several loggers', () => {
       const logger = new AuditLogger({ logDir: dir });
       await log(logger);
       // Inside the append, the lock changes hands.
-      const catchUp = vi.spyOn(logger as any, 'catchUp').mockImplementationOnce(() => holdLock(process.ppid));
+      const catchUp = vi.spyOn(logger as any, 'catchUp').mockImplementationOnce(() => {
+        fs.rmSync(lock());
+        holdLock(process.ppid);
+      });
       await log(logger);
       expect(catchUp).toHaveBeenCalled();
       expect(JSON.parse(fs.readFileSync(lock(), 'utf-8')).pid).toBe(process.ppid);
@@ -677,9 +680,8 @@ describe('one audit log, several loggers', () => {
 
       vi.restoreAllMocks();
       syncBuiltinESMExports();
-      // The lock file is read back once per write, to release it. Nothing else is read.
-      expect(opened.filter((f) => f !== lock())).toEqual([]);
-      expect(opened.length).toBe(1000);
+      // Nothing is opened for reading: not the log, not the archives, not the lock.
+      expect(opened).toEqual([]);
       expect(seqs()).toHaveLength(1005);
       expect((await verify()).valid).toBe(true);
     }, 120_000);

@@ -429,14 +429,17 @@ export class AuditLogger {
   private async locked<T>(work: () => T): Promise<T> {
     const deadline = Date.now() + this.lockWaitMs;
     for (let wait = 1; ; wait = Math.min(wait * 2, 25)) {
-      const token = this.tryLock();
-      if (token !== null) {
+      const made = this.tryLock();
+      if (made !== null) {
         try {
           return work();
         } finally {
           // Removed only while it is still this writer's: a process that was
-          // stopped for longer than the stale age has had its lock taken.
-          if (this.lockText() === token) fs.rmSync(this.lockPath, { force: true });
+          // stopped for longer than the stale age has had its lock taken. The
+          // file is recognised by inode and time, not read back: opening it
+          // costs more than everything else the lock does.
+          const now = fs.statSync(this.lockPath, { throwIfNoEntry: false });
+          if (now?.ino === made.ino && now.mtimeMs === made.mtimeMs) fs.rmSync(this.lockPath, { force: true });
         }
       }
       if (Date.now() >= deadline) {
@@ -457,13 +460,13 @@ export class AuditLogger {
     }
   }
 
-  /** Create the lock file, removing an abandoned one first. `null` while another writer holds it. */
-  private tryLock(): string | null {
+  /** Create the lock file, removing an abandoned one first, and say which file it is. `null` while another writer holds it. */
+  private tryLock(): fs.Stats | null {
     const token = JSON.stringify({ pid: process.pid, at: new Date().toISOString(), id: generateId() });
     for (let attempt = 1; ; attempt++) {
       try {
         fs.writeFileSync(this.lockPath, token, { flag: 'wx', mode: 0o600 });
-        return token;
+        return fs.statSync(this.lockPath);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       }
