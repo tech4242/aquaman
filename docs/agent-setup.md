@@ -79,10 +79,11 @@ The daemon shows a dialog on the user's machine. They type the value, or approve
 | `ready` | 0 | Already stored and usable; nobody was asked | Continue |
 | `stored` | 0 | The user typed it; it is in the vault now | Continue |
 | `approved` | 0 | It was in the vault; the user allowed its use | Continue |
+| `linked` | 0 | `--from` named an item that already exists in the vault; the user allowed it and it could be read | Continue |
 | `declined` | 2 | The user said no. No `fix` is returned | Do not ask again and do not work around it; ask how to proceed |
 | `pending` | 3 | Nobody answered, or nobody could be asked (no desktop session) | Ask once more if the user is there; otherwise show them the `fix` command and wait |
-| `error` | 4 | The daemon is not running or does not take requests | Run step 1, then retry |
-| `error` | 1 | The command was wrong: bad reference, bad `--env` or `--timeout`, or `--env` used outside a project | Read `error` and `fix` |
+| `error` | 4 | The daemon is not running or does not take requests, or it refused the request: `code` says which | Run step 1, then retry. For a `link_` code, read [the codes](#an-item-that-is-already-in-the-vault) |
+| `error` | 1 | The command was wrong: bad reference, bad `--env`, `--timeout` or `--from`, or `--env` used outside a project | Read `error` and `fix` |
 
 With `--env NAME` the reference is bound to that variable for the project covering the current directory, so commands run there through `aquaman-coder exec`, or through the hook in hook mode, have the variable set. Run it from the project directory. Where no project covers the directory the command stops with exit 1 before any dialog is shown; it never creates a project.
 
@@ -92,7 +93,7 @@ Output fields:
 |---|---|---|
 | `status` | Always | One of the values above |
 | `ref` | Always | The reference you asked for |
-| `env` | With `--env`, on `ready`, `stored` or `approved` | The variable now bound to the reference in this project |
+| `env` | With `--env`, on `ready`, `stored`, `approved` or `linked` | The variable now bound to the reference in this project |
 | `reason` | On `declined` and `pending` | Why, in words |
 | `fix` | On `pending`, and on `error` | A command that gets past the problem. For `pending` it is one for the user to run in their own terminal. Never present on `declined` |
 | `error`, `code` | On `error` | What went wrong, and the daemon's machine-readable code when it has one |
@@ -116,6 +117,57 @@ The wording of `reason`, `error` and `fix` can change between versions; branch o
 One reference per call. For several keys, run the command once for each; the dialogs appear one after another.
 
 The daemon shows one dialog at a time and at most six in ten minutes, and does not ask again about a declined reference for ten minutes.
+
+### An item that is already in the vault
+
+When the user already keeps the secret in their password manager, they do not have to type it again. A link makes aquaman read a reference from that item:
+
+```bash
+aquaman request aquaman://github/token --from 'op://Private/GitHub/token' --env GITHUB_TOKEN --json
+```
+
+Use `--from` only with a locator the user gave you. Do not guess item names: the dialog shows the user exactly what you wrote, and a wrong guess is a dialog they have to refuse.
+
+The dialog is an approval; nothing is typed. It names the reference and the item, and says what happens if the user agrees. aquaman does not read the item, or check whether it exists, until the user has agreed. Then it reads it once. If that works it records the link and answers `linked`; if not it records nothing and answers with a `code`.
+
+One locator form per vault backend. A locator only works with the backend that is configured:
+
+| Backend | Locator |
+|---|---|
+| 1Password | `op://<vault>/<item>/[<section>/]<field>` |
+| Bitwarden | `bw://<item id or exact item name>/<field>`, where the field is `password`, `username`, `notes` or the name of a custom field |
+| HashiCorp Vault | `vault://<mount>/<path>#<field>` (KV v2) |
+| macOS Keychain, libsecret | `keychain://<service>/<account>` (a generic password) |
+| KeePassXC | `keepassxc://<Group/.../Entry title>#<field>`; the field defaults to `Password` |
+| Keeper | `keeper://<record UID>/<field>`; the field defaults to `password` |
+| encrypted file, systemd-creds | None. These hold only what aquaman wrote |
+
+A locator is at most 200 characters, has no control characters and no backslash, and no part of it starts with `-` or is `.` or `..`. A `/` inside a name is written `%2F` (not in `op://` or `keeper://` locators, which take no escapes; address such a 1Password item by its ID).
+
+**aquaman only reads a linked item.** It never writes to it or deletes it. `aquaman credentials add` and `delete` on a linked reference are refused; `aquaman credentials unlink <ref>` removes the link and leaves the item as it was. A link never replaces a value aquaman stored, and a typed value is never stored over a link.
+
+`--from` works with `--env`, `--via-proxy`, `--base-path`, `--timeout` and `--json` as in any other request. With `--via-proxy` the reference is linked and not declared, so the value is still not handed to commands.
+
+| `code` | Exit | When | Meaning |
+|---|---|---|---|
+| `link_invalid_locator` | 1 | Before any dialog | The locator does not parse. `fix` shows the form for the configured backend |
+| `link_backend_mismatch` | 1 | Before any dialog | The locator's scheme belongs to another backend |
+| `link_unsupported_backend` | 1 | Before any dialog | The configured backend holds only what aquaman wrote |
+| `link_exists` | 4 | Before any dialog | The reference is already linked to a different item. The user removes that link first |
+| `link_unreadable` | 4 | After the user agreed | Nothing could be read at the locator, or the vault failed. Nothing was recorded. Ask the user for the correct locator |
+| `link_value_stored` | 4 | After the user agreed | aquaman already stores a value under this reference. Nothing was recorded. Request it without `--from`, or the user deletes the stored value first |
+
+```json
+{ "status": "linked", "ref": "aquaman://github/token", "env": "GITHUB_TOKEN" }
+```
+
+```json
+{ "status": "error", "ref": "aquaman://github/token", "error": "Nothing could be read at op://Private/GitHub/token", "code": "link_unreadable", "fix": "Check the item and field names in your vault, then ask again with the corrected locator" }
+```
+
+A `pending` answer carries the command for the user: `aquaman credentials link <service>/<key> '<locator>'`. That command needs a terminal on stdin and stdout and is for the user to run, not you; run without one it stops and names `aquaman request --from`. `aquaman credentials list` shows a linked reference with its locator, and `aquaman doctor` reports a link whose scheme does not fit the configured backend.
+
+Links are kept in `credentials.links` in `~/.aquaman/config.yaml`, as `<service>/<key>: <locator>`. A running daemon picks up a change to that file; nothing needs restarting.
 
 ## 3. Use it
 
@@ -221,6 +273,9 @@ Then delete the skill directory and the marked block. Stored credentials stay in
 
 - The wrapped command receives the real value, so a command can misuse it. Redaction catches accidental exposure, not a command that deliberately transforms the value.
 - `aquaman request` is a convenience and a consent step, not a boundary against other software running as the same user.
+- The same holds for links. The dialog, and the terminal `aquaman credentials link` asks for, put the decision in front of a person. Software running as the user can write `credentials.links` into `~/.aquaman/config.yaml` itself.
+- A linked item is read with whatever access the configured vault session has. The link names one field of one item, and aquaman reads only that.
+- Link reads were tested against stand-ins for `op`, `bw`, Keeper Commander, HashiCorp Vault and the keychain library, and against a generated KeePassXC database, not against live accounts.
 - Commands started with Claude Code's Monitor tool are not wrapped.
 - This is a tool for one person's machine. It has no team sharing and does not run in CI or production: see [CI and production](#ci-and-production).
 - The project is young and has one maintainer: [what to know before trusting it](compare.md#what-to-know-before-trusting-it).
