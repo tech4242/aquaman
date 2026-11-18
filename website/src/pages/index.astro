@@ -146,7 +146,7 @@ import { routeDiagramHtml } from '../lib/diagram.mjs';
         <div class="proof">
           <article class="box">
             <h3>Ink: output redaction</h3>
-            <p>The agent never sees the key. Commands get it; the transcript gets a redaction marker.</p>
+            <p>The key stays out of the conversation. Commands get it; the transcript gets a redaction marker.</p>
             <pre><code><span class="prompt">&gt; </span>printenv STRIPE_SECRET_KEY
 <span class="masked">[REDACTED:injected-value]</span></code></pre>
             <Sprite name="INK" px={3} class="deco" />

@@ -53,3 +53,6 @@ packages/hermes/dist/
 .pytest_cache/
 .coverage
 .coverage.*
+
+# Per-area coverage runs (scripts/coverage.mjs --out)
+coverage-part/

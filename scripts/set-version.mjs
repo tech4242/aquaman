@@ -3,7 +3,7 @@
  * Set every version field across the monorepo to a single value.
  *
  * Source of truth for a release is the git tag; CD calls this with the tag
- * version so the 9 fields the version-gate checks can never drift out of sync.
+ * version so the 10 fields the version-gate checks can never drift out of sync.
  * Also runnable locally before tagging: `npm run set-version 0.13.1`.
  *
  * Uses targeted line replacement (not JSON reformatting) to keep diffs minimal,
@@ -29,6 +29,7 @@ const edits = [
   ['packages/coder/package.json',         /^(\s*"aquaman-proxy":\s*")[^"]*(",?)/m,    'coder->aquaman-proxy dep'],
   ['packages/hermes/pyproject.toml',      /^(version\s*=\s*")[^"]*(")/m,              'pyproject.toml'],
   ['packages/hermes/aquaman_hermes/plugin.yaml', /^(version:\s*")[^"]*(")/m,          'hermes plugin.yaml'],
+  ['packages/hermes/aquaman_hermes/__init__.py', /^(__version__\s*=\s*")[^"]*(")/m,   'hermes __init__.py'],
 ];
 
 let failed = false;

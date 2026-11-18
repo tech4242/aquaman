@@ -117,22 +117,100 @@ export function policyPathInterpretations(segments: string[]): string[] {
 const METHOD_OVERRIDE_HEADERS = ['x-http-method-override', 'x-method-override', 'x-http-method'];
 
 /**
+ * Query parameters some frameworks honour as the real method (`?_method=DELETE`:
+ * Rails, Laravel, Express method-override).
+ */
+const METHOD_OVERRIDE_PARAMS = ['_method'];
+
+/** `?query` as name/value pairs, percent-decoded where that is possible. */
+function queryPairs(search: string): Array<[string, string]> {
+  const decode = (text: string): string => {
+    try {
+      return decodeURIComponent(text.replace(/\+/g, ' '));
+    } catch {
+      return text;
+    }
+  };
+  const pairs: Array<[string, string]> = [];
+  for (const part of search.replace(/^\?/, '').split(/[&;]/)) {
+    if (part === '') continue;
+    const eq = part.indexOf('=');
+    pairs.push(eq === -1 ? [decode(part), ''] : [decode(part.slice(0, eq)), decode(part.slice(eq + 1))]);
+  }
+  return pairs;
+}
+
+/**
  * The methods policy must allow for this request: the one on the request line,
- * plus any a method-override header names. `POST` with
- * `X-HTTP-Method-Override: DELETE` is a DELETE on upstreams that honour the
- * header, so a `deny DELETE` rule has to see it.
+ * plus any a method-override header or `_method` query parameter names. `POST`
+ * with `X-HTTP-Method-Override: DELETE` is a DELETE on upstreams that honour
+ * the header, so a `deny DELETE` rule has to see it.
+ *
+ * A header sent twice reaches us joined with a comma, and a client can write
+ * the list itself (`DELETE, GET`). Which entry an upstream takes is its own
+ * business, so every entry counts as a method the request may be.
  */
 export function policyMethods(
   method: string,
   headers: Record<string, string | string[] | undefined>,
+  search = '',
 ): string[] {
   const methods = [method.toUpperCase()];
-  for (const name of METHOD_OVERRIDE_HEADERS) {
-    const value = headers[name];
-    for (const v of Array.isArray(value) ? value : value ? [value] : []) {
-      const m = v.trim().toUpperCase();
+  const add = (text: string) => {
+    for (const token of text.split(/[\s,;]+/)) {
+      const m = token.toUpperCase();
       if (m && !methods.includes(m)) methods.push(m);
     }
+  };
+  for (const name of METHOD_OVERRIDE_HEADERS) {
+    const value = headers[name];
+    for (const v of Array.isArray(value) ? value : value ? [value] : []) add(v);
+  }
+  for (const [name, value] of queryPairs(search)) {
+    if (METHOD_OVERRIDE_PARAMS.includes(name.toLowerCase())) add(value);
   }
   return methods;
+}
+
+/** Headers some upstreams and the proxies in front of them honour as the real path of the request. */
+const PATH_OVERRIDE_HEADERS = ['x-original-url', 'x-rewrite-url'];
+
+/**
+ * Paths named by a path-override header, for policy evaluation alongside the
+ * path on the request line. `GET /v1/models` with `X-Original-URL: /v1/admin`
+ * is a request for `/v1/admin` on an upstream that honours the header, so a
+ * deny rule on that path has to see it.
+ *
+ * Each value is read by the same strict parser as the request line. One that
+ * the parser refuses is reported as `ok: false`: the proxy cannot say what an
+ * upstream would make of it, so the request is not forwarded.
+ */
+export function policyPathOverrides(
+  headers: Record<string, string | string[] | undefined>,
+): { ok: true; paths: string[] } | { ok: false; reason: string } {
+  const paths: string[] = [];
+  for (const name of PATH_OVERRIDE_HEADERS) {
+    const value = headers[name];
+    for (const joined of Array.isArray(value) ? value : value ? [value] : []) {
+      for (const raw of joined.split(',')) {
+        let text = raw.trim();
+        if (text === '') continue;
+        // Some senders give a full URL; only its path matters to a rule.
+        // Cut by position, not by one pattern over the whole value: the value is
+        // attacker-supplied, and the cut has to stay linear in its length.
+        const scheme = /^https?:\/\//i.exec(text);
+        if (scheme) {
+          const rest = text.slice(scheme[0].length);
+          const start = rest.search(/[/?#]/);
+          text = start === -1 ? '/' : rest.slice(start);
+        }
+        const target = parseRequestTarget(text);
+        if (!target.ok) return { ok: false, reason: `${name} header: ${target.reason}` };
+        for (const p of policyPathInterpretations(target.segments)) {
+          if (!paths.includes(p)) paths.push(p);
+        }
+      }
+    }
+  }
+  return { ok: true, paths };
 }

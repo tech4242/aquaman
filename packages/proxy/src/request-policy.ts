@@ -93,7 +93,13 @@ export function matchPolicy(
     const methodMatches = rule.method === '*' || rule.method.toUpperCase() === method.toUpperCase();
     if (!methodMatches) continue;
 
-    if (matchPathPattern(rule.path, remainingPath)) {
+    // A deny rule ignores case: many upstream routers do, so `/v1/Admin` must
+    // not pass a rule written for `/v1/admin`. Allow rules stay exact, because
+    // loosening them would let through paths nobody wrote a rule for.
+    const pathMatches = rule.action === 'deny'
+      ? matchPathPattern(rule.path.toLowerCase(), remainingPath.toLowerCase())
+      : matchPathPattern(rule.path, remainingPath);
+    if (pathMatches) {
       return {
         allowed: rule.action === 'allow',
         matchedRule: rule

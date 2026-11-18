@@ -306,8 +306,17 @@ export class ProxyManager {
       return;
     }
 
+    // A child that never started (spawn failed) or has already gone emits no
+    // further 'exit' event, so there is nothing to wait for.
+    const current = this.process;
+    if (current.pid === undefined || current.exitCode !== null || current.signalCode !== null) {
+      this.process = null;
+      this.connectionInfo = null;
+      return;
+    }
+
     return new Promise((resolve) => {
-      const proc = this.process!;
+      const proc = current;
 
       const timeout = setTimeout(() => {
         proc.kill('SIGKILL');

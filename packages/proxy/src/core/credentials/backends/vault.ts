@@ -114,22 +114,17 @@ export class VaultStore implements CredentialStore {
   }
 
   async get(service: string, key: string): Promise<string | null> {
-    try {
-      const result = await this.request('GET', this.getDataPath(service, key));
+    // request() reports a 404 status as { status: 404 }. Any other failure
+    // throws and is passed on: "not stored" must never stand in for an error.
+    const result = await this.request('GET', this.getDataPath(service, key));
 
-      if (result.status === 404) {
-        return null;
-      }
-
-      // KV v2 wraps data in another data object
-      const kvData = result.data as { data?: Record<string, string> };
-      return kvData?.data?.credential || null;
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('404')) {
-        return null;
-      }
-      throw error;
+    if (result.status === 404) {
+      return null;
     }
+
+    // KV v2 wraps data in another data object
+    const kvData = result.data as { data?: Record<string, string> };
+    return kvData?.data?.credential || null;
   }
 
   async set(
@@ -155,60 +150,46 @@ export class VaultStore implements CredentialStore {
   }
 
   async delete(service: string, key: string): Promise<boolean> {
-    try {
-      // For KV v2, we need to delete the metadata to fully remove the secret
-      const result = await this.request('DELETE', this.getMetadataPath(service, key));
-      return result.status === 204 || result.status === 200;
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('404')) {
-        return false;
-      }
-      throw error;
-    }
+    // For KV v2, we need to delete the metadata to fully remove the secret
+    const result = await this.request('DELETE', this.getMetadataPath(service, key));
+    return result.status === 204 || result.status === 200;
   }
 
   async list(service?: string): Promise<Array<{ service: string; key: string }>> {
     const credentials: Array<{ service: string; key: string }> = [];
 
-    try {
-      if (service) {
-        // List keys for a specific service
-        const result = await this.request('LIST', this.getListPath(service));
-        if (result.status === 404) {
-          return [];
-        }
-
-        const keys = (result.data as { keys?: string[] })?.keys || [];
-        for (const key of keys) {
-          // Remove trailing slash if present (indicates directory)
-          const cleanKey = key.replace(/\/$/, '');
-          credentials.push({ service, key: cleanKey });
-        }
-      } else {
-        // List all services first, then keys for each
-        const servicesResult = await this.request('LIST', this.getListPath());
-        if (servicesResult.status === 404) {
-          return [];
-        }
-
-        const services = (servicesResult.data as { keys?: string[] })?.keys || [];
-
-        for (const svc of services) {
-          const cleanService = svc.replace(/\/$/, '');
-          // Anything under the prefix that is not a name aquaman could have written is not ours to list.
-          if (!SAFE_CRED_NAME.test(cleanService)) continue;
-          const serviceCredentials = await this.list(cleanService);
-          credentials.push(...serviceCredentials);
-        }
-      }
-
-      return credentials;
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('404')) {
+    if (service) {
+      // List keys for a specific service
+      const result = await this.request('LIST', this.getListPath(service));
+      if (result.status === 404) {
         return [];
       }
-      throw error;
+
+      const keys = (result.data as { keys?: string[] })?.keys || [];
+      for (const key of keys) {
+        // Remove trailing slash if present (indicates directory)
+        const cleanKey = key.replace(/\/$/, '');
+        credentials.push({ service, key: cleanKey });
+      }
+    } else {
+      // List all services first, then keys for each
+      const servicesResult = await this.request('LIST', this.getListPath());
+      if (servicesResult.status === 404) {
+        return [];
+      }
+
+      const services = (servicesResult.data as { keys?: string[] })?.keys || [];
+
+      for (const svc of services) {
+        const cleanService = svc.replace(/\/$/, '');
+        // Anything under the prefix that is not a name aquaman could have written is not ours to list.
+        if (!SAFE_CRED_NAME.test(cleanService)) continue;
+        const serviceCredentials = await this.list(cleanService);
+        credentials.push(...serviceCredentials);
+      }
     }
+
+    return credentials;
   }
 
   async exists(service: string, key: string): Promise<boolean> {

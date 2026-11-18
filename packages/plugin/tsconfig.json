@@ -20,10 +20,7 @@
   "exclude": [
     "node_modules",
     "dist",
-    "test",
-    "src/plugin.ts",
-    "src/index.ts",
-    "src/commands.ts"
+    "test"
   ],
   "references": [
     { "path": "../proxy" }

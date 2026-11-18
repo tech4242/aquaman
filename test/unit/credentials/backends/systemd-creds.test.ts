@@ -66,10 +66,17 @@ describe('SystemdCredsStore (mocked)', () => {
       }
 
       if (op === 'encrypt') {
-        const input = (opts?.input ?? '').toString();
-        encryptedByName.set(name, input);
-        cb(null, `ENC:${name}:${Buffer.from(input).toString('base64')}` , '');
-        return {} as any;
+        // The store writes the value to the child's stdin, never into argv or
+        // options, so that is where the stand-in reads it from.
+        let input = '';
+        const stdin = {
+          write: (chunk: string) => { input += chunk; },
+          end: () => {
+            encryptedByName.set(name, input);
+            cb(null, `ENC:${name}:${Buffer.from(input).toString('base64')}`, '');
+          },
+        };
+        return { stdin } as any;
       }
 
       if (op === 'decrypt') {
@@ -109,6 +116,13 @@ describe('SystemdCredsStore (mocked)', () => {
 
     expect(value).toBe('sk-ant-123');
     expect(mockExecFile).toHaveBeenCalled();
+
+    // A second store has nothing in memory: it reads the file back through
+    // `systemd-creds decrypt`, which only has the value if stdin delivered it.
+    const fresh = new SystemdCredsStore({ credsDir: testDir });
+    expect(await fresh.get('anthropic', 'api_key')).toBe('sk-ant-123');
+    const written = fs.readdirSync(testDir).map((f) => fs.readFileSync(`${testDir}/${f}`, 'utf-8')).join('\n');
+    expect(written).toContain(Buffer.from('sk-ant-123').toString('base64'));
   });
 
   it('passes secret via stdin and not argv', async () => {

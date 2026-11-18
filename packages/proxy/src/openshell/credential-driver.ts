@@ -104,7 +104,11 @@ export interface OpenShellDriverOptions {
   /** Declared-ref scope shared with the broker. Absent means the broker is off: references are refused. */
   scope?: BrokerScope;
   version: string;
-  onAccess?: (event: DriverAccessEvent) => void;
+  /**
+   * Writes the audit entry. If it throws or rejects for a successful resolve,
+   * the entry was not written and the value is not returned.
+   */
+  onAccess?: (event: DriverAccessEvent) => unknown;
 }
 
 export interface OpenShellDriverCore {
@@ -126,8 +130,20 @@ function parseHandle(handle: string): ParsedHandle | null {
 export function createOpenShellDriverCore(opts: OpenShellDriverOptions): OpenShellDriverCore {
   const { store, scope, onAccess } = opts;
 
+  // For outcomes that hand nothing out: a failed audit write is reported and
+  // the operation's own result stands.
   const emit = (e: DriverAccessEvent) => {
-    try { onAccess?.(e); } catch { /* auditing must not break the driver */ }
+    void record(e);
+  };
+
+  const record = async (e: DriverAccessEvent): Promise<boolean> => {
+    try {
+      await onAccess?.(e);
+      return true;
+    } catch (err) {
+      console.error(`AUDIT FAILURE: could not record OpenShell ${e.op} of ${e.ref}: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
   };
 
   const checkScope = (service: string, key: string): void => {
@@ -225,7 +241,11 @@ export function createOpenShellDriverCore(opts: OpenShellDriverOptions): OpenShe
           if (err instanceof DriverError) throw err;
           throw new DriverError('internal', `aquaman: vault read failed for ${h.ref}: ${(err as Error).message}`);
         }
-        emit({ op: 'resolve', mode: h.mode, ref: h.ref, service: h.service, provider, success: true });
+        // A value leaves the driver only once its read is on record.
+        if (!(await record({ op: 'resolve', mode: h.mode, ref: h.ref, service: h.service, provider, success: true }))) {
+          throw new DriverError('internal',
+            `aquaman: the audit log could not be written, so ${h.ref} was not resolved. Fix: check that the audit directory (~/.aquaman/audit by default) is writable and the disk is not full, then run: aquaman doctor`);
+        }
         out.push({ request_id: r.request_id ?? '', value });
       }
       return out;

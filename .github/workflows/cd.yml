@@ -47,6 +47,7 @@ jobs:
           assert "coder->aquaman-proxy dep"   "$(jq -r '.dependencies["aquaman-proxy"]' packages/coder/package.json)"
           assert "pyproject.toml"             "$(python3 -c "import tomllib;print(tomllib.load(open('packages/hermes/pyproject.toml','rb'))['project']['version'])")"
           assert "hermes plugin.yaml"         "$(grep -E '^version:' packages/hermes/aquaman_hermes/plugin.yaml | sed -E 's/^version:[[:space:]]*"?([^"]*)"?/\1/')"
+          assert "hermes __init__.py"         "$(sed -nE 's/^__version__[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' packages/hermes/aquaman_hermes/__init__.py)"
           if [ "$fail" = 1 ]; then echo "::error::version mismatch — aborting release"; exit 1; fi
           echo "version=$TAG" >> "$GITHUB_OUTPUT"
 
@@ -256,3 +257,23 @@ jobs:
           gh pr create --base main --head "$BRANCH" \
             --title "release: sync versions to $VERSION" \
             --body "Automated post-publish sync: stamps all version fields to match the released tag \`v$VERSION\`. The published npm/PyPI artifacts already carry this version; merge to keep \`main\` in sync."
+
+  # The site is deployed by Vercel on pushes to main, and a release tag is not
+  # one, so without this the docs keep calling the new version unreleased until
+  # the next merge. The hook URL is a Vercel Deploy Hook for the main branch;
+  # without the secret this job does nothing.
+  site-redeploy:
+    name: Redeploy the website
+    needs: [npm-publish, pypi-publish]
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+    steps:
+      - name: Call the Vercel deploy hook
+        run: |
+          if [ -z "$VERCEL_DEPLOY_HOOK_URL" ]; then
+            echo "No VERCEL_DEPLOY_HOOK_URL secret: the site will update on the next merge to main."
+            exit 0
+          fi
+          curl --fail --silent --show-error -X POST "$VERCEL_DEPLOY_HOOK_URL" > /dev/null
+          echo "Site redeploy requested."

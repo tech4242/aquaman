@@ -90,12 +90,14 @@ export const NAV: { heading: string; slugs: string[]; labels?: Record<string, st
   },
   {
     heading: 'Reference',
-    slugs: ['compare', 'security', 'compliance/atlas-mapping', 'compliance/nist-800-53', 'compliance/agentic-ai-guidance'],
+    slugs: ['changelog', 'compare', 'security', 'compliance/atlas-mapping', 'compliance/nist-800-53', 'compliance/bsi-tr-02102', 'compliance/agentic-ai-guidance'],
     labels: {
+      changelog: 'Changelog',
       compare: 'Compared with alternatives',
       security: 'Security policy',
       'compliance/atlas-mapping': 'MITRE ATLAS mapping',
       'compliance/nist-800-53': 'NIST SP 800-53 mapping',
+      'compliance/bsi-tr-02102': 'BSI TR-02102-1 mapping',
       'compliance/agentic-ai-guidance': 'Agentic AI guidance',
     },
   },
@@ -116,11 +118,13 @@ const META: Record<string, { title?: string; description: string }> = {
   'hermes': { description: "Point Hermes at aquaman's local proxy so provider API keys stay in your vault and are never in the Hermes agent process." },
   'docker-sandboxes': { title: 'Docker Sandboxes secrets from your own vault', description: 'Source Docker Sandboxes (sbx) secrets from 1Password, Bitwarden or any vault aquaman supports, with an allow-list and an audit entry per read.' },
   'openshell': { title: 'NVIDIA OpenShell credential driver for your vault', description: 'Make aquaman the credential driver for NVIDIA OpenShell, so sandboxes take keys from your own vault by reference, with an audit trail.' },
+  'changelog': { description: 'What changed in each release of aquaman, newest first: fixes, new commands, breaking changes and what to check when you update.' },
   'compare': { title: 'aquaman vs other agent credential tools', description: 'Where aquaman fits among agent credential tools such as op run, Infisical, Doppler and fnox, and when something else is the better choice.' },
   'security': { description: "aquaman's security policy: how to report a vulnerability privately, what is in scope, and which versions receive fixes." },
   'compliance/atlas-mapping': { description: "How aquaman's controls map to MITRE ATLAS v5.4.0 techniques for AI systems, with the test that exercises each one." },
   'compliance/nist-800-53': { description: 'How aquaman maps to NIST SP 800-53 Rev 5 controls for authentication, access enforcement, key management and audit.' },
-  'compliance/agentic-ai-guidance': { description: 'How aquaman aligns with 2026 guidance on agentic AI security from CISA, CSA MAESTRO and OWASP. Alignment, not certification.' },
+  'compliance/bsi-tr-02102': { description: "How aquaman's own cryptography compares with BSI TR-02102-1 (2026-01): AES-256-GCM vault file, key derivation, tokens. A self-assessment." },
+  'compliance/agentic-ai-guidance': { description: 'How aquaman relates to 2026 agentic AI security guidance from CISA, CSA MAESTRO and OWASP, with the test behind each OWASP claim. Not a certification.' },
 };
 
 function plain(markdown: string): string {

@@ -119,6 +119,32 @@ describe('matchPolicy', () => {
     expect(matchPolicy('anthropic', 'DELETE', '/v1/organizations/org123', config).allowed).toBe(false);
   });
 
+  it('a deny rule ignores the case of the path; an allow rule does not', () => {
+    const denyOnly: PolicyConfig = {
+      svc: { defaultAction: 'allow', rules: [{ method: '*', path: '/v1/admin/**', action: 'deny' }, { method: '*', path: '/api/Admin.*', action: 'deny' }] }
+    };
+    for (const p of ['/v1/admin/users', '/v1/Admin/users', '/V1/ADMIN/users', '/v1/aDmIn', '/api/admin.users.list', '/API/ADMIN.USERS.LIST']) {
+      expect(matchPolicy('svc', 'GET', p, denyOnly).allowed, p).toBe(false);
+    }
+    expect(matchPolicy('svc', 'GET', '/v1/administrators', denyOnly).allowed).toBe(true);
+
+    // Default-deny with allow rules: the allowed path is the one written, and nothing else.
+    const allowList: PolicyConfig = {
+      telegram: { defaultAction: 'deny', rules: [{ method: 'POST', path: '/sendMessage', action: 'allow' }, { method: 'GET', path: '/repos/MyOrg/**', action: 'allow' }] }
+    };
+    expect(matchPolicy('telegram', 'POST', '/sendMessage', allowList).allowed).toBe(true);
+    expect(matchPolicy('telegram', 'GET', '/repos/MyOrg/app', allowList).allowed).toBe(true);
+    expect(matchPolicy('telegram', 'POST', '/sendmessage', allowList).allowed).toBe(false);
+    expect(matchPolicy('telegram', 'GET', '/repos/myorg/app', allowList).allowed).toBe(false);
+
+    // A deny rule ahead of an allow rule wins for every case of the path.
+    const mixed: PolicyConfig = {
+      svc: { defaultAction: 'deny', rules: [{ method: '*', path: '/v1/admin/**', action: 'deny' }, { method: '*', path: '/v1/**', action: 'allow' }] }
+    };
+    expect(matchPolicy('svc', 'GET', '/v1/Admin/users', mixed)).toEqual({ allowed: false, matchedRule: mixed.svc.rules[0] });
+    expect(matchPolicy('svc', 'GET', '/v1/models', mixed).allowed).toBe(true);
+  });
+
   it('case-insensitive method matching', () => {
     const config: PolicyConfig = {
       openai: {

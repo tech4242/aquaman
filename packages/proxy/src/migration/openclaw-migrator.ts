@@ -354,25 +354,9 @@ export async function migrateFromOpenClaw(
 
   // Migrate each credential
   for (const mapping of mappings) {
-    const value = getNestedValue(config, mapping.jsonPath);
-    if (!value) {
-      result.skipped.push({
-        service: mapping.service,
-        key: mapping.key,
-        reason: 'Value is empty or not a string',
-      });
-      continue;
-    }
-
-    // Skip placeholder values
-    if (isAquamanPlaceholder(value)) {
-      result.skipped.push({
-        service: mapping.service,
-        key: mapping.key,
-        reason: 'Already managed by aquaman',
-      });
-      continue;
-    }
+    // extractCredentials() only maps fields that hold a non-empty string
+    // which is not an aquaman placeholder.
+    const value = getNestedValue(config, mapping.jsonPath)!;
 
     if (options.dryRun) {
       result.migrated.push({
@@ -591,10 +575,13 @@ export function cleanupSources(
       const content = fs.readFileSync(configPath, 'utf-8');
       const config = JSON.parse(content);
 
+      // Reported only once the file is written: until then nothing on disk
+      // has been replaced.
+      const replaced: CleanupResult['deleted'] = [];
       for (const m of configMigrations) {
         const jsonPath = m.source.split('.');
         if (setNestedValue(config, jsonPath, 'aquaman-proxy-managed')) {
-          result.deleted.push({
+          replaced.push({
             source: `openclaw.json → ${m.source}`,
             description: `Replaced ${m.service}/${m.key} with placeholder`,
           });
@@ -602,6 +589,7 @@ export function cleanupSources(
       }
 
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+      result.deleted.push(...replaced);
     } catch (err) {
       result.errors.push({
         source: 'openclaw.json',

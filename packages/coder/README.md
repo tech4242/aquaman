@@ -93,7 +93,7 @@ ANTHROPIC_API_KEY=[REDACTED:injected-value]
 ⏺ ANTHROPIC_API_KEY is set and available (injected via aquaman vault). 
 ```
 
-The *child* process saw the real key (your tests, builds, MCP servers, import scripts - anything that actually needs it works). The *agent* - the thing that decides what code to run on your machine - never sees the value, and so neither does the conversation history, neither does the model provider's logs, neither does anyone who later screenshots your terminal.
+The *child* process saw the real key (your tests, builds, MCP servers, import scripts - anything that actually needs it works). The *agent* - the thing that decides what code to run on your machine - is shown the redaction marker in place of the value, and so are the conversation history, the model provider's logs and anyone who later screenshots your terminal.
 
 **Use it from your own terminal too.** The same wrapper works without the agent. Just `cd` into a covered project and prefix your command:
 

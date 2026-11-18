@@ -128,7 +128,7 @@ The token is a capability to reach the local proxy, not a credential: generated 
 
 **Audit log**
 
-- Every credential use is recorded in `~/.aquaman/audit/current.jsonl` with a SHA-256 hash chain so tampering is detectable. The log stays local - no telemetry.
+- Every credential use is recorded in `~/.aquaman/audit/current.jsonl` with a SHA-256 hash chain so an altered or inserted entry is detectable. The log stays local - no telemetry.
 - `aquaman openclaw doctor` surfaces audit log issues; `aquaman audit tail` shows recent entries.
 - Operators can constrain which upstream endpoints get proxied (and therefore credentialed) via the `policy` config in `~/.aquaman/config.yaml`. Denied requests return 403 before any credential is injected.
 

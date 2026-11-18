@@ -5,6 +5,8 @@
  * without ever handling the value: the request goes to the daemon, the daemon
  * shows a native dialog, and the human types the value there. It goes from
  * the dialog into the vault. The agent gets back a status and the reference.
+ * What can be done with the reference afterwards depends on the request, and
+ * the dialog says which (see CONSEQUENCE).
  *
  * The dialog is shown by the daemon, not by the CLI the agent ran, so the
  * value never passes through that command or its output. The helper binaries are
@@ -13,8 +15,9 @@
  *
  * What this is not: a security boundary against a process running as the
  * same user. Such a process can already edit the files that declare refs.
- * The dialog keeps the value out of the agent's hands and makes the human the
- * one who decides; it does not stop a hostile local process from asking.
+ * The dialog keeps the value out of the request and its output and makes the
+ * human the one who decides; it does not stop a hostile local process from
+ * asking.
  */
 
 import { spawn } from 'node:child_process';
@@ -27,6 +30,12 @@ export interface PromptRequest {
   project?: string;
   /** How long the dialog stays up. Defaults to PROMPT_TIMEOUT_SECONDS. */
   timeoutSeconds?: number;
+  /**
+   * The credential is for a program routed through the proxy: it is stored
+   * (or approved) without being declared for handing out. The dialog says
+   * something different in that case, because something different happens.
+   */
+  routed?: boolean;
 }
 
 export type PromptResult =
@@ -79,6 +88,24 @@ export function displayText(text: string, max = 120): string {
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
 }
 
+/**
+ * What the person is told happens if they agree. One sentence set per case,
+ * and each has to be true of that case: an ordinary request ends with the
+ * reference declared, so commands (and anything else running as the user) can
+ * be handed the value; a routed request ends with the value stored and not
+ * declared, so the program holds a local token and the proxy adds the key.
+ */
+const CONSEQUENCE = {
+  value: {
+    declared: 'Type the value to store it in your vault. Commands the agent runs in this project will be given the value, and other software running as you can ask aquaman for it. Cancel if you did not expect this.',
+    routed: 'Type the value to store it in your vault. The app in this project gets a local token, not the key: aquaman adds the key to its requests on the way out. Cancel if you did not expect this.',
+  },
+  approval: {
+    declared: 'Allow lets any aquaman project on this machine be given the value. Deny if you did not expect this.',
+    routed: 'Allow lets an app in this project send its requests through aquaman, which adds the key on the way out. The app gets a local token, not the key. Deny if you did not expect this.',
+  },
+} as const;
+
 export function promptMessage(request: PromptRequest, kind: 'value' | 'approval'): string {
   const lines = [
     kind === 'value'
@@ -87,9 +114,7 @@ export function promptMessage(request: PromptRequest, kind: 'value' | 'approval'
     '',
     `Credential: ${displayText(`${request.service}/${request.key}`, 140)}`,
     '',
-    kind === 'value'
-      ? 'Type the value to store it in your vault. The agent receives a reference, never the value. Cancel if you did not expect this.'
-      : 'Allow lets any aquaman project on this machine be given the value. Deny if you did not expect this.',
+    CONSEQUENCE[kind][request.routed === true ? 'routed' : 'declared'],
     '',
     'aquaman never asks for your login, Apple ID or password-manager password.',
   ];

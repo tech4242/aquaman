@@ -14,7 +14,7 @@ import { type CredentialStore, generateId } from './core/index.js';
 import { ServiceRegistry, createServiceRegistry, type ServiceDefinition, type AuthMode } from './service-registry.js';
 import { OAuthTokenCache, createOAuthTokenCache } from './oauth-token-cache.js';
 import { matchPolicy, type PolicyConfig } from './request-policy.js';
-import { parseRequestTarget, policyPathInterpretations, policyMethods } from './request-target.js';
+import { parseRequestTarget, policyPathInterpretations, policyMethods, policyPathOverrides } from './request-target.js';
 import { clampPromptTimeout, type CredentialPrompter, type PromptResult } from './credential-prompt.js';
 import type { BrokerScope } from './broker-scope.js';
 
@@ -79,7 +79,11 @@ export function findUrlPathCredentialSlot(
 /** The Host header names this machine's loopback interface (any port). */
 function isLoopbackHostHeader(host: string | undefined): boolean {
   if (!host) return true; // HTTP/1.0 clients; a browser always sends one
-  const name = host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.split(':')[0];
+  // The whole header is matched: a name, then at most a port. Anything after
+  // the closing bracket of an IPv6 literal other than a port is not this host.
+  const m = /^(\[[^\]]*\]|[^:]*)(?::\d{1,5})?$/.exec(host);
+  if (!m) return false;
+  const name = m[1].toLowerCase();
   return name === '127.0.0.1' || name === 'localhost' || name === '[::1]';
 }
 
@@ -103,7 +107,13 @@ export interface CredentialProxyOptions {
   socketPath: string;
   store: CredentialStore;
   allowedServices: string[];
-  onRequest?: (info: RequestInfo) => void;
+  /**
+   * Called once per request with what happened; the CLI writes the audit
+   * entry here. If it throws or rejects, the entry was not written: a broker
+   * resolve then refuses to return the value, and a forwarded request's
+   * response is withheld from the client.
+   */
+  onRequest?: (info: RequestInfo) => unknown;
   serviceRegistry?: ServiceRegistry;
   requestTimeout?: number; // Upstream request timeout in ms, defaults to 30000 (30s)
   policyConfig?: PolicyConfig;
@@ -133,6 +143,13 @@ export interface CredentialProxyOptions {
     declare(service: string, key: string): void | Promise<void>;
   };
 }
+
+const AUDIT_UNAVAILABLE_FIX = 'Check that the audit directory (~/.aquaman/audit by default) is writable and the disk is not full. Run: aquaman doctor';
+const AUDIT_UNAVAILABLE_FORWARD = {
+  error: 'The audit log could not be written, so the response was withheld',
+  fix: AUDIT_UNAVAILABLE_FIX,
+  code: 'audit_unavailable',
+};
 
 /** A ref the human declined is not asked about again for this long. */
 const REQUEST_DECLINE_COOLDOWN_MS = 10 * 60 * 1000;
@@ -507,12 +524,18 @@ export class CredentialProxy {
 
     // Policy check — before credential retrieval. The request must be allowed
     // under every reading an upstream might apply: each path interpretation
-    // (encoded slashes, `;params`) and each method a method-override header
-    // names. One denied combination denies the request.
+    // (encoded slashes, `;params`, a path named by `X-Original-URL` or
+    // `X-Rewrite-URL`) and each method a method-override header or `_method`
+    // query parameter names. One denied combination denies the request.
     if (this.options.policyConfig) {
       const policyConfig = this.options.policyConfig;
-      const denied = policyMethods(req.method || 'GET', req.headers).some((method) =>
-        policyPathInterpretations(canonicalSegments).some((p) => !matchPolicy(service, method, p, policyConfig).allowed));
+      // A path-override header the parser refuses cannot be evaluated, so a
+      // service that has rules does not get the request.
+      const overrides = policyPathOverrides(req.headers);
+      const paths = [...policyPathInterpretations(canonicalSegments), ...(overrides.ok ? overrides.paths : [])];
+      const denied = (!overrides.ok && policyConfig[service] !== undefined) ||
+        policyMethods(req.method || 'GET', req.headers, target.search).some((method) =>
+          paths.some((p) => !matchPolicy(service, method, p, policyConfig).allowed));
       if (denied) {
         requestInfo.error = `Policy denied: ${req.method || 'GET'} ${remainingPath}`;
         requestInfo.statusCode = 403;
@@ -695,20 +718,33 @@ export class CredentialProxy {
 
       const proxyReq = transport.request(options, (proxyRes) => {
         requestInfo.statusCode = proxyRes.statusCode;
-        this.emitRequest(requestInfo);
-
-        // Copy response headers (except those that shouldn't be forwarded)
-        const responseHeaders = proxyRes.headers;
-        for (const [key, value] of Object.entries(responseHeaders)) {
-          if (key.toLowerCase() === 'transfer-encoding') continue;
-          if (value) {
-            clientRes.setHeader(key, value);
+        // The upstream has answered, so the credential was used. The client
+        // gets that answer only once the use is on record.
+        void this.recordRequest(requestInfo).then((recorded) => {
+          if (!recorded) {
+            proxyRes.resume();
+            if (!clientRes.headersSent) {
+              clientRes.setHeader('Content-Type', 'application/json');
+              clientRes.statusCode = 500;
+              clientRes.end(JSON.stringify(AUDIT_UNAVAILABLE_FORWARD));
+            }
+            resolve();
+            return;
           }
-        }
 
-        clientRes.statusCode = proxyRes.statusCode || 200;
-        proxyRes.pipe(clientRes);
-        proxyRes.on('end', resolve);
+          // Copy response headers (except those that shouldn't be forwarded)
+          const responseHeaders = proxyRes.headers;
+          for (const [key, value] of Object.entries(responseHeaders)) {
+            if (key.toLowerCase() === 'transfer-encoding') continue;
+            if (value) {
+              clientRes.setHeader(key, value);
+            }
+          }
+
+          clientRes.statusCode = proxyRes.statusCode || 200;
+          proxyRes.pipe(clientRes);
+          proxyRes.on('end', resolve);
+        });
       });
 
       proxyReq.on('error', (error) => {
@@ -744,10 +780,28 @@ export class CredentialProxy {
     });
   }
 
-  private emitRequest(info: RequestInfo): void {
-    if (this.options.onRequest) {
-      this.options.onRequest(info);
+  /**
+   * Hand one request to `onRequest` (the audit log) and say whether that
+   * worked. Never throws and never rejects: a log that cannot be written is
+   * reported on stderr and to the caller, and the daemon keeps running.
+   */
+  private async recordRequest(info: RequestInfo): Promise<boolean> {
+    if (!this.options.onRequest) return true;
+    try {
+      await this.options.onRequest(info);
+      return true;
+    } catch (err) {
+      console.error(
+        `AUDIT FAILURE: could not record ${info.method} ${info.service} (${info.path}): ${err instanceof Error ? err.message : String(err)}. ` +
+        'Credential values are not handed out until the audit log can be written.',
+      );
+      return false;
     }
+  }
+
+  /** Record a request whose outcome hands nothing out (a refusal, an error). */
+  private emitRequest(info: RequestInfo): void {
+    void this.recordRequest(info);
   }
 
   /**
@@ -1101,9 +1155,11 @@ export class CredentialProxy {
     this.requestPromptTimes.push(now);
     let result: PromptResult;
     try {
+      // `routed` picks the dialog's wording: what the person is told has to
+      // match what a caller can obtain once they agree.
       result = exists
-        ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds })
-        : await requests.prompter.askValue({ service, key, project, timeoutSeconds });
+        ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds, routed })
+        : await requests.prompter.askValue({ service, key, project, timeoutSeconds, routed });
     } catch (err) {
       result = { outcome: 'unavailable', reason: err instanceof Error ? err.message : String(err) };
     } finally {
@@ -1170,6 +1226,12 @@ export class CredentialProxy {
     } catch {
       res.statusCode = 400;
       res.end(JSON.stringify({ error: 'Broker request body is not valid JSON', fix: 'POST a JSON body with { service, key, ttl_seconds }' }));
+      return;
+    }
+
+    if (body === null || typeof body !== 'object') {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ error: 'Broker request body is not a JSON object', fix: 'POST a JSON body with { service, key, ttl_seconds }' }));
       return;
     }
 
@@ -1285,13 +1347,9 @@ export class CredentialProxy {
       return;
     }
 
-    const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
-    res.statusCode = 200;
-    res.end(JSON.stringify({ value, expires_at: expiresAt }));
-
-    // Audit: broker call resolved (value not logged — only service/key
-    // metadata, matching the rest of the audit log's content discipline).
-    this.emitRequest({
+    // The audit entry comes first (service and outcome, never the value): a
+    // value leaves this process only once its read is on record.
+    const recorded = await this.recordRequest({
       id: requestId,
       service,
       method: 'BROKER',
@@ -1300,6 +1358,19 @@ export class CredentialProxy {
       authenticated: true,
       statusCode: 200,
     });
+    if (!recorded) {
+      res.statusCode = 500;
+      res.end(JSON.stringify({
+        error: `The audit log could not be written, so ${service}/${key} was not handed out`,
+        fix: AUDIT_UNAVAILABLE_FIX,
+        code: 'audit_unavailable',
+      }));
+      return;
+    }
+
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+    res.statusCode = 200;
+    res.end(JSON.stringify({ value, expires_at: expiresAt }));
   }
 
   async stop(): Promise<void> {

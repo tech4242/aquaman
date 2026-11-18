@@ -25,7 +25,8 @@ The four packages (`aquaman-proxy`, `aquaman-plugin`, `aquaman-coder` on npm; `a
 
 - Credential exposure to the agent process (values reaching the agent's memory, transcript, or environment outside the documented broker flow)
 - Bypasses of the request-policy engine, the loopback token gate, or UDS/file permissions
-- Audit-log tampering that `verifyIntegrity()` fails to detect
+- Audit-log tampering that `verifyIntegrity()` fails to detect, within what it is documented to detect: an entry altered, inserted or deleted inside the chain. A truncated, emptied, deleted or rebuilt log is a [documented limit](docs/compliance/nist-800-53.md)
+- A credential value handed out without an audit entry
 - Vulnerabilities in the packages' own code or their published artifacts (including the release pipeline)
 
 **Out of scope:**
@@ -39,7 +40,7 @@ The four packages (`aquaman-proxy`, `aquaman-plugin`, `aquaman-coder` on npm; `a
 
 This file is the **process**: how to report, what's supported. It intentionally makes no design claims of its own. For those:
 
-- **Design** — the security model in the [README](README.md#security-model) (process isolation, request policies, tamper-evident audit, credential caching trade-offs)
-- **Control evidence** — [`docs/compliance/`](docs/compliance/): MITRE ATLAS and NIST SP 800-53 mappings, each claim backed by a runnable conformance test under [`test/compliance/`](test/compliance/) (`npx vitest run test/compliance/`)
+- **Design** — the security model in the [README](README.md#security-model) (process isolation, request policies, hash-chained audit, credential caching trade-offs)
+- **Control evidence** — [`docs/compliance/`](docs/compliance/): MITRE ATLAS, NIST SP 800-53, OWASP and BSI TR-02102-1 mappings, each claim backed by a runnable conformance test under [`test/compliance/`](test/compliance/) (`npx vitest run test/compliance/`)
 
 If this file and those documents ever disagree, those documents win — and please report the discrepancy.

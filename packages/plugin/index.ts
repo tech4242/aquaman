@@ -268,6 +268,17 @@ function loopbackRoutedServices(stateDir: string): Set<string> {
   return routed;
 }
 
+/**
+ * The environment variable that carries a service's sentinel base URL.
+ * configureEnvironment() sets it and the status surfaces read it back, so
+ * both go through this one function: GitHub clients read GITHUB_API_URL, and
+ * a hyphen is not valid in a variable name.
+ */
+function sentinelEnvName(service: string): string {
+  if (service === "github") return "GITHUB_API_URL";
+  return `${service.toUpperCase().replace(/-/g, "_")}_BASE_URL`;
+}
+
 function configureEnvironment(log: OpenClawPluginApi["logger"], services: string[]): void {
   const stateDir = process.env.OPENCLAW_STATE_DIR || path.join(os.homedir(), ".openclaw");
   const routed = loopbackRoutedServices(stateDir);
@@ -280,24 +291,9 @@ function configureEnvironment(log: OpenClawPluginApi["logger"], services: string
     if (routed.has(service)) continue;
     const serviceUrl = `http://aquaman.local/${service}`;
 
-    switch (service) {
-      case "anthropic":
-        process.env["ANTHROPIC_BASE_URL"] = serviceUrl;
-        log.info(`Set ANTHROPIC_BASE_URL=${serviceUrl}`);
-        break;
-      case "openai":
-        process.env["OPENAI_BASE_URL"] = serviceUrl;
-        log.info(`Set OPENAI_BASE_URL=${serviceUrl}`);
-        break;
-      case "github":
-        process.env["GITHUB_API_URL"] = serviceUrl;
-        log.info(`Set GITHUB_API_URL=${serviceUrl}`);
-        break;
-      default:
-        const envKey = `${service.toUpperCase().replace(/-/g, "_")}_BASE_URL`;
-        process.env[envKey] = serviceUrl;
-        log.info(`Set ${envKey}=${serviceUrl}`);
-    }
+    const envKey = sentinelEnvName(service);
+    process.env[envKey] = serviceUrl;
+    log.info(`Set ${envKey}=${serviceUrl}`);
   }
 }
 
@@ -316,12 +312,7 @@ function getStatus(services: string[]) {
     ...(!cliInstalled ? {} : proxyManager === null ? { fix: "Run: aquaman openclaw setup" } : {}),
     environmentVariables: Object.fromEntries(
       services.map((s) => {
-        const key =
-          s === "anthropic"
-            ? "ANTHROPIC_BASE_URL"
-            : s === "openai"
-              ? "OPENAI_BASE_URL"
-              : `${s.toUpperCase()}_BASE_URL`;
+        const key = sentinelEnvName(s);
         return [key, process.env[key] ?? null];
       })
     ),
@@ -626,12 +617,7 @@ const plugin: OpenClawPluginDefinition = {
               if (status.proxyRunning) {
                 console.log("\nEnvironment Variables:");
                 for (const service of configuredServices) {
-                  const envKey =
-                    service === "anthropic"
-                      ? "ANTHROPIC_BASE_URL"
-                      : service === "openai"
-                        ? "OPENAI_BASE_URL"
-                        : `${service.toUpperCase()}_BASE_URL`;
+                  const envKey = sentinelEnvName(service);
                   console.log(`  ${envKey}=${process.env[envKey] ?? "(not set)"}`);
                 }
               }
