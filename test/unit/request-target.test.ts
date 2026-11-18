@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { parseRequestTarget, policyPathInterpretations, policyMethods } from 'aquaman-proxy';
+import { parseRequestTarget, policyPathInterpretations, policyMethods, policyPathOverrides } from 'aquaman-proxy';
 
 const ok = (url: string) => {
   const t = parseRequestTarget(url);
@@ -102,5 +102,76 @@ describe('policyMethods', () => {
     expect(policyMethods('POST', { 'x-method-override': ['PUT', 'PATCH'], 'x-http-method': ' DELETE ' }))
       .toEqual(['POST', 'PUT', 'PATCH', 'DELETE']);
     expect(policyMethods('POST', { 'x-http-method-override': 'POST' })).toEqual(['POST']);
+  });
+
+  it('reads a list in one header value, and a header sent twice, as several methods', () => {
+    const rows: Array<[string | string[], string[]]> = [
+      ['DELETE, GET', ['POST', 'DELETE', 'GET']],
+      ['GET, DELETE', ['POST', 'GET', 'DELETE']],
+      ['DELETE,GET', ['POST', 'DELETE', 'GET']],
+      ['DELETE;', ['POST', 'DELETE']],
+      ['get delete', ['POST', 'GET', 'DELETE']],
+      [' , ', ['POST']],
+      [['DELETE', 'GET'], ['POST', 'DELETE', 'GET']],
+      [['PUT, PATCH', 'DELETE'], ['POST', 'PUT', 'PATCH', 'DELETE']],
+    ];
+    for (const name of ['x-http-method-override', 'x-method-override', 'x-http-method']) {
+      for (const [value, expected] of rows) {
+        expect(policyMethods('POST', { [name]: value }), `${name}: ${JSON.stringify(value)}`).toEqual(expected);
+      }
+    }
+  });
+
+  it('adds a method named by a _method query parameter, however the parameter is spelled', () => {
+    const rows: Array<[string, string[]]> = [
+      ['?_method=DELETE', ['POST', 'DELETE']],
+      ['?x=1&_method=delete', ['POST', 'DELETE']],
+      ['?x=1;_method=DELETE', ['POST', 'DELETE']],
+      ['?%5Fmethod=DELETE', ['POST', 'DELETE']],
+      ['?_method=%44ELETE', ['POST', 'DELETE']],
+      ['?_METHOD=PUT', ['POST', 'PUT']],
+      ['?_method=GET&_method=DELETE', ['POST', 'GET', 'DELETE']],
+      ['?_method=PUT+PATCH', ['POST', 'PUT', 'PATCH']],
+      // Not the parameter, no value, or nothing at all.
+      ['?my_method=DELETE', ['POST']],
+      ['?_method', ['POST']],
+      ['?_method=', ['POST']],
+      ['?&&', ['POST']],
+      ['', ['POST']],
+      // An escape that does not decode is taken as written.
+      ['?_method=%zzDELETE', ['POST', '%ZZDELETE']],
+    ];
+    for (const [search, expected] of rows) {
+      expect(policyMethods('POST', {}, search), search).toEqual(expected);
+    }
+  });
+});
+
+describe('policyPathOverrides', () => {
+  it('is empty when no path-override header is present', () => {
+    expect(policyPathOverrides({})).toEqual({ ok: true, paths: [] });
+    expect(policyPathOverrides({ 'x-original-url': '', 'x-rewrite-url': ' , ' })).toEqual({ ok: true, paths: [] });
+  });
+
+  it('returns every reading of each path a header names', () => {
+    const rows: Array<[Record<string, string | string[]>, string[]]> = [
+      [{ 'x-original-url': '/v1/admin/users' }, ['/v1/admin/users']],
+      [{ 'x-rewrite-url': '/v1/admin/users?x=1' }, ['/v1/admin/users']],
+      [{ 'x-original-url': '/v1%2Fadmin/users;p=1' }, ['/v1%2Fadmin/users;p=1', '/v1/admin/users']],
+      [{ 'x-original-url': 'https://api.example/v1/admin' }, ['/v1/admin']],
+      [{ 'x-original-url': 'HTTP://api.example' }, ['/']],
+      [{ 'x-original-url': '/a, /b' }, ['/a', '/b']],
+      [{ 'x-original-url': ['/a', '/b'], 'x-rewrite-url': '/a' }, ['/a', '/b']],
+    ];
+    for (const [headers, paths] of rows) {
+      expect(policyPathOverrides(headers), JSON.stringify(headers)).toEqual({ ok: true, paths });
+    }
+  });
+
+  it('reports a value the strict parser refuses, naming the header', () => {
+    expect(policyPathOverrides({ 'x-original-url': '/v1/x/../admin' }))
+      .toEqual({ ok: false, reason: 'x-original-url header: path contains a dot segment' });
+    expect(policyPathOverrides({ 'x-rewrite-url': 'v1/admin' }))
+      .toEqual({ ok: false, reason: 'x-rewrite-url header: request target must start with /' });
   });
 });

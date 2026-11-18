@@ -139,6 +139,7 @@ export {
   parseRequestTarget,
   policyPathInterpretations,
   policyMethods,
+  policyPathOverrides,
 } from './request-target.js';
 
 // Core (merged from aquaman-core)
