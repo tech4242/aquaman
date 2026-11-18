@@ -32,6 +32,16 @@ The API key prompts of `aquaman setup` and `aquaman openclaw setup`, and the Kee
 
 The loopback token was written into an existing `.env` without tightening its permissions. The file is now set to `0600`, as a newly created one always was. Run `aquaman hermes setup` again, or `chmod 600 ~/.hermes/.env`.
 
+#### The credential dialog said the agent never receives the value
+
+The dialog that `aquaman request` opens said "The agent receives a reference, never the value". For an ordinary request that stopped being true once you agreed: the reference is then declared, and aquaman hands the value to the commands the agent runs in the project, and to any other program running as you that asks for it. The dialog now says so. For a request made with `--via-proxy`, where the reference is not declared, it says what happens there instead: the app gets a local token and aquaman adds the key on the way out.
+
+Only the wording changed, not what is stored or handed out. The page a person reads before agreeing to aquaman ([approve](https://aquaman.sh/docs/approve/)) said the agent "cannot read the value from aquaman"; it now says that the project's commands are given the value and the conversation is not.
+
+#### A credential could be handed out without an audit entry
+
+If the audit log could not be written (a full disk, a directory that had become read-only), `aquaman get` and `aquaman-coder exec` still received the value with no record of the read, and the daemon then exited. A value is now handed out only after its audit entry is written. When the write fails, the read is refused with an error and a fix (`audit_unavailable`), the OpenShell driver refuses its resolve the same way, a request forwarded through the proxy is answered with a 500 in place of the upstream's response, and the daemon keeps running and prints `AUDIT FAILURE` to its output. A forwarded request has already been sent upstream by the time its entry is written, so on that path it is the response that is withheld, not the request.
+
 ### Other fixes
 
 - **Re-running `aquaman openclaw setup` no longer resets `config.yaml`.** It used to rebuild the file from defaults: a new loopback token (so the one in `openclaw.json` and `~/.hermes/.env` stopped working), the default port, and no declared broker references, request policies or custom proxied services. It now keeps all of that and changes only the backend, policy presets for newly stored services that have none, and the loopback listener. A first run is unchanged.
@@ -41,6 +51,11 @@ The loopback token was written into an existing `.env` without tightening its pe
 - **OpenClaw plugin status** shows the sentinel URL for GitHub and for services with a hyphen in the name, instead of "(not set)". Display only; routing was not affected.
 - **OpenClaw plugin:** stopping the proxy returns when the proxy had failed to start, instead of waiting forever.
 - **Hermes plugin:** `aquaman_hermes.__version__` reports the package version (it said 0.13.0).
+- **Request policy: a deny rule could be passed by respelling the request.** A method-override header that carried a list (`X-HTTP-Method-Override: DELETE, GET`) or was sent twice was read as one unknown method; a deny rule for `/v1/admin/**` did not match `/v1/Admin/users`; and `X-Original-URL`, `X-Rewrite-URL` and a `?_method=` parameter were not looked at. Each matters only against an upstream that honours that spelling. Policy now counts every entry of a list as a method, matches deny rules without regard to case (allow rules stay exact), and evaluates the method or path those headers and that parameter name. Your policy config needs no change.
+- **`encrypted-file` vault:** a vault file whose GCM authentication tag had been cut down, to as little as 32 bits, was accepted. Only the full 128-bit tag is accepted now. Files aquaman wrote are unaffected.
+- **Loopback listener:** a `Host` header such as `[::1]evil.example` passed the check that the request names this machine. The whole header is checked now.
+- **`/broker/resolve`** answers 400, not 500, to a JSON body that is not an object.
+- **`daemon.pid`** is created `0600`. It was `0644`, inside a `0700` directory.
 
 ### Removed exports
 
@@ -48,11 +63,17 @@ The certificate and signing helpers are no longer exported from `aquaman-proxy`:
 
 ### Tests
 
-Coverage is now measured over everything that ships, including both CLIs, the plugin entry point and the code that only runs in the processes the tests start (the CLI, the daemon, the hook). Measured that way, line coverage went from 67.3% to about 99%, and CI enforces a floor of 95% overall and per package. Every fix above came out of that work and has a test that fails without it.
+Coverage is now measured over everything that ships, including both CLIs, the plugin entry point and the code that only runs in the processes the tests start (the CLI, the daemon, the hook). Measured that way, line coverage went from 67.3% to about 99%, and CI enforces a floor of 95% overall and per package. The setup, backend and plugin fixes above came out of that work. Every fix in this release has a test that fails without it.
+
+Before release, this version was assessed against OWASP ASVS 5.0, the OWASP Top 10 for Agentic Applications and for LLM Applications, the OWASP API Security Top 10, NIST SP 800-53, NIST SSDF and BSI TR-02102-1. The dialog, audit and policy fixes above came out of that. The compliance tests now try to break each control, one table row per attack: tampering with the audit log, getting past a deny rule, the vault's cryptographic parameters, the dialog's wording against what a caller can then obtain, and output redaction.
+
+Where the code does not stop an attack, the test row is marked as a known limit and the mapping states it. One of them changes an earlier claim: `aquaman audit verify` detects an entry that was altered, inserted or deleted inside the log, and does not detect a log cut short at the end, emptied, deleted or rebuilt, because nothing outside the file anchors the chain. The others are two output shapes that redaction misses, four spellings a deny rule does not cover, and PBKDF2 where BSI TR-02102-1 recommends Argon2id.
+
+The [NIST SP 800-53 mapping](https://aquaman.sh/docs/compliance/nist-800-53/) states what an audit entry records and what the chain detects, the [agentic AI page](https://aquaman.sh/docs/compliance/agentic-ai-guidance/) links each OWASP claim to its test, and there is a new [BSI TR-02102-1 mapping](https://aquaman.sh/docs/compliance/bsi-tr-02102/).
 
 ### Breaking changes
 
-The removed exports above, if you imported them. Nothing else changes: no config format, endpoint, hook or manifest change, and no action needed beyond the checks under "Fixes that affect your secrets".
+The removed exports above, if you imported them. Nothing else changes: no config format, endpoint, hook or manifest change, and no action needed beyond the checks under "Fixes that affect your secrets". Two behaviours are stricter: a credential read is refused while the audit log cannot be written, and a request policy's deny rules match more spellings of the same request.
 
 ## 0.18.1
 
