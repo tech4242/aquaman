@@ -36,6 +36,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { getConfigDir } from './core/utils/config.js';
+import { isReservedService, RESERVED_SERVICE } from './core/credentials/reserved.js';
 
 /** `aquaman://service/key` — same grammar as the daemon's service/key validation. */
 const AQUAMAN_REF = /^aquaman:\/\/([a-z0-9][a-z0-9._-]*)\/([a-zA-Z0-9][a-zA-Z0-9._-]*)$/;
@@ -47,6 +48,51 @@ export function parseAquamanRef(ref: string): { service: string; key: string } |
 
 export function formatAquamanRef(service: string, key: string): string {
   return `aquaman://${service}/${key}`;
+}
+
+/**
+ * The service name aquaman keeps its own records under in the credential
+ * store (the audit log's anchor). It has no hyphen: 1Password item names
+ * join service and key with one, and a hyphen in the service name would be
+ * read back as part of the key.
+ */
+export { RESERVED_SERVICE };
+
+/**
+ * Whether a service name is reserved for aquaman's own records. A reserved
+ * service is never declared, resolved, requested, routed, forwarded for,
+ * added or deleted on a caller's behalf: a caller that could write it could
+ * move the audit anchor, and one that could read it has no use for it.
+ *
+ * Every entry point that takes a service name from a caller asks this one
+ * function. The look-alike spellings are reserved too, so nothing a caller
+ * stores can be mistaken for the real record.
+ */
+export { isReservedService };
+
+/**
+ * The refusal for a reference to a reserved service, or `null` for any other.
+ * The broker scope answers with it, and so does each endpoint that takes a
+ * reference without going through the scope.
+ */
+export function reservedServiceRefusal(service: string, key: string):
+  { allowed: false; code: 'broker_ref_reserved'; reason: string; fix: string } | null {
+  if (!isReservedService(service)) return null;
+  return {
+    allowed: false,
+    code: 'broker_ref_reserved',
+    reason: `${formatAquamanRef(service, key)} is not handed out: "${service}" ${RESERVED_SERVICE_REASON}`,
+    fix: 'Use a different service name. To check the audit log against its anchor, run: aquaman audit verify',
+  };
+}
+
+/** The rest of a sentence that starts with the name, for every refusal. */
+export const RESERVED_SERVICE_REASON = "is reserved for aquaman's own records and cannot be used as a credential";
+
+/** A well-formed ref that names a service a caller may declare. */
+function isDeclarableRef(ref: unknown): ref is string {
+  const parsed = typeof ref === 'string' ? parseAquamanRef(ref) : null;
+  return parsed !== null && !isReservedService(parsed.service);
 }
 
 /** Default location of the coding-agent project map (honors AQUAMAN_CONFIG_DIR). */
@@ -98,7 +144,8 @@ export function loadProjectRefs(projectsPath: string = defaultProjectsPath()): D
     if (!env || typeof env !== 'object') continue;
     const routes = cfg.routes && typeof cfg.routes === 'object' && !Array.isArray(cfg.routes) ? cfg.routes : {};
     for (const [envName, ref] of Object.entries(env)) {
-      if (typeof ref !== 'string' || !parseAquamanRef(ref)) continue;
+      // A reserved ref in a project map declares nothing and routes nothing.
+      if (!isDeclarableRef(ref)) continue;
       const route = Object.hasOwn(routes, envName) ? routes[envName] : undefined;
       if (route && typeof route === 'object' && typeof route.url_env === 'string') routedRefs.add(ref);
       else refs.add(ref);
@@ -129,7 +176,7 @@ export function loadConfigAllowedRefs(configPath: string): DeclaredRefsResult {
   const list = parsed?.broker?.allowedRefs;
   const refs = new Set<string>();
   if (Array.isArray(list)) {
-    for (const ref of list) if (typeof ref === 'string' && parseAquamanRef(ref)) refs.add(ref);
+    for (const ref of list) if (isDeclarableRef(ref)) refs.add(ref);
   }
   return { refs };
 }
@@ -157,7 +204,7 @@ export type BrokerCaller = 'uds' | 'loopback';
 
 export type BrokerDecision =
   | { allowed: true }
-  | { allowed: false; code: 'broker_ref_not_declared' | 'broker_ref_isolated'; reason: string; fix: string };
+  | { allowed: false; code: 'broker_ref_not_declared' | 'broker_ref_isolated' | 'broker_ref_reserved'; reason: string; fix: string };
 
 export interface BrokerScopeOptions {
   /** projects.yaml to read declared refs from. Default: `<configDir>/projects.yaml`. */
@@ -187,7 +234,7 @@ export interface BrokerScope {
 export function createBrokerScope(opts: BrokerScopeOptions = {}): BrokerScope {
   const projectRefs = mtimeCached(opts.projectsPath ?? defaultProjectsPath(), loadProjectRefs);
   const configFileRefs = opts.configPath ? mtimeCached(opts.configPath, loadConfigAllowedRefs) : () => ({ refs: new Set<string>() }) as DeclaredRefsResult;
-  const staticRefs = new Set((opts.allowedRefs ?? []).filter(r => typeof r === 'string' && parseAquamanRef(r)));
+  const staticRefs = new Set((opts.allowedRefs ?? []).filter(isDeclarableRef));
   const loopbackDenied = new Set(opts.loopbackDeniedServices ?? []);
 
   const configRefs = (): DeclaredRefsResult => {
@@ -202,6 +249,10 @@ export function createBrokerScope(opts: BrokerScopeOptions = {}): BrokerScope {
   return {
     check(service, key, caller) {
       const ref = formatAquamanRef(service, key);
+
+      // First, and whatever the declaring files say.
+      const reserved = reservedServiceRefusal(service, key);
+      if (reserved) return reserved;
 
       if (caller === 'loopback' && loopbackDenied.has(service)) {
         return {

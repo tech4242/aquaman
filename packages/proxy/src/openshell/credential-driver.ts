@@ -32,7 +32,7 @@
  */
 
 import type { CredentialStore } from '../core/credentials/store.js';
-import { formatAquamanRef, parseAquamanRef, type BrokerScope } from '../broker-scope.js';
+import { formatAquamanRef, parseAquamanRef, reservedServiceRefusal, type BrokerScope } from '../broker-scope.js';
 
 export const OPENSHELL_PROTOCOL = { major: 1, minor: 0 } as const;
 export const CREDENTIALS_CONTRACT = 'openshell.credentials.contract';
@@ -147,6 +147,9 @@ export function createOpenShellDriverCore(opts: OpenShellDriverOptions): OpenShe
   };
 
   const checkScope = (service: string, key: string): void => {
+    // aquaman's own records are never a reference, whatever the scope says.
+    const reserved = reservedServiceRefusal(service, key);
+    if (reserved) throw new DriverError('failed_precondition', `aquaman: ${reserved.reason}. Fix: ${reserved.fix}`);
     if (!scope) {
       throw new DriverError('failed_precondition',
         `aquaman: the broker is disabled (broker.enabled: false), so ${formatAquamanRef(service, key)} cannot be resolved. Fix: enable the broker in ~/.aquaman/config.yaml`);

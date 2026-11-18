@@ -8,7 +8,7 @@ Aquaman is a monorepo with three packages. Each has a sharp, named role. We keep
 
 **Owns:**
 - Vault backend abstraction + 7 backend implementations (Keychain, 1Password, HashiCorp Vault, KeePassXC, encrypted-file, systemd-creds, Bitwarden) — `src/core/credentials/`
-- Hash-chained tamper-evident audit log — `src/core/audit/`
+- Hash-chained audit log, anchored in the credential store (`src/audit-anchor.ts`) — `src/core/audit/`
 - HTTP/UDS proxy daemon with credential header injection — `src/daemon.ts`
 - Service registry (builtin service definitions) — `src/service-registry.ts`
 - Request policy engine — `src/request-policy.ts`

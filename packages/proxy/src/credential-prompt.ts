@@ -36,6 +36,17 @@ export interface PromptRequest {
    * something different in that case, because something different happens.
    */
   routed?: boolean;
+  /**
+   * The locator of an item that already exists in the vault, which the caller
+   * asks to have read as this credential (a link). Chosen by the caller, so
+   * shown as such. Only an approval is asked for: nothing is typed.
+   */
+  from?: string;
+  /**
+   * With `from`: the reference is linked and not declared, so the value is
+   * injected by the proxy and not handed to commands. Picks the wording.
+   */
+  linkOnly?: boolean;
 }
 
 export type PromptResult =
@@ -50,7 +61,32 @@ export interface CredentialPrompter {
   askValue(request: PromptRequest): Promise<PromptResult>;
   /** Ask the human whether a credential that is already in the vault may be used. */
   askApproval(request: PromptRequest): Promise<PromptResult>;
+  /**
+   * Ask the human whether aquaman may start at every login. An approval:
+   * nothing is typed, and the wording is fixed, with no text from the caller.
+   */
+  askLoginItem(request: LoginItemRequest): Promise<PromptResult>;
 }
+
+export interface LoginItemRequest {
+  /** How long the dialog stays up. Defaults to PROMPT_TIMEOUT_SECONDS. */
+  timeoutSeconds?: number;
+}
+
+/**
+ * The whole text of the login-item dialog. It says what agreeing does (the
+ * daemon starts at every login and keeps running) and how to undo it, and it
+ * carries nothing the requesting command chose.
+ */
+export const LOGIN_ITEM_MESSAGE = [
+  'A command is asking aquaman to start at every login and keep running in the background.',
+  '',
+  'Allow adds a login item for the aquaman daemon to your account. Deny if you did not expect this.',
+  '',
+  'To remove it later, run: aquaman service uninstall',
+  '',
+  'aquaman never asks for your login, Apple ID or password-manager password.',
+].join('\n');
 
 /**
  * How long a dialog stays up before it counts as unanswered. Shorter than the
@@ -104,22 +140,43 @@ const CONSEQUENCE = {
     declared: 'Allow lets any aquaman project on this machine be given the value. Deny if you did not expect this.',
     routed: 'Allow lets an app in this project send its requests through aquaman, which adds the key on the way out. The app gets a local token, not the key. Deny if you did not expect this.',
   },
+  link: {
+    declared: 'Allow makes aquaman read that item whenever this credential is used. aquaman does not change or delete the item. Commands the agent runs in this project will be given the value, and other software running as you can ask aquaman for it. Deny if you did not expect this, or if the item named below is not one you want used this way.',
+    routed: 'Allow makes aquaman read that item whenever this credential is used. aquaman does not change or delete the item. The app in this project gets a local token, not the key: aquaman adds the key to its requests on the way out. Deny if you did not expect this, or if the item named below is not one you want used this way.',
+    only: 'Allow makes aquaman read that item whenever this credential is used. aquaman does not change or delete the item. The value is added to requests aquaman forwards for this service; it is not given to commands unless the credential is also declared (aquaman broker allow). Deny if you did not expect this, or if the item named below is not one you want used this way.',
+  },
 } as const;
 
+/**
+ * Room for a whole locator (links.ts caps one at 200 characters), so the
+ * person sees all of what they are agreeing to and never a shortened form.
+ */
+const LOCATOR_DISPLAY_MAX = 220;
+
 export function promptMessage(request: PromptRequest, kind: 'value' | 'approval'): string {
+  // An approval that names a vault item is a different decision from one
+  // about a stored credential, and is worded as such.
+  const what = kind === 'approval' && request.from !== undefined ? 'link' : kind;
   const lines = [
-    kind === 'value'
+    what === 'value'
       ? 'An agent is asking aquaman for a credential that is not in your vault.'
-      : 'An agent is asking to use a credential that is already in your vault.',
+      : what === 'approval'
+        ? 'An agent is asking to use a credential that is already in your vault.'
+        : 'An agent is asking aquaman to use an item that already exists in your vault as the credential below.',
     '',
     `Credential: ${displayText(`${request.service}/${request.key}`, 140)}`,
     '',
-    CONSEQUENCE[kind][request.routed === true ? 'routed' : 'declared'],
+    what === 'link' && request.linkOnly === true && request.routed !== true
+      ? CONSEQUENCE.link.only
+      : CONSEQUENCE[what][request.routed === true ? 'routed' : 'declared'],
     '',
     'aquaman never asks for your login, Apple ID or password-manager password.',
   ];
-  // Last, and one line: everything above it is aquaman's own wording.
-  if (request.project) lines.push('', `Requested from (as the caller reports it): ${displayText(request.project)}`);
+  // Last, and one line each: everything above is aquaman's own wording.
+  const reported: string[] = [];
+  if (what === 'link') reported.push(`Vault item (as the caller wrote it): ${displayText(request.from!, LOCATOR_DISPLAY_MAX)}`);
+  if (request.project) reported.push(`Requested from (as the caller reports it): ${displayText(request.project)}`);
+  if (reported.length > 0) lines.push('', ...reported);
   return lines.join('\n');
 }
 
@@ -192,6 +249,12 @@ function macPrompter(defaultSeconds: number): CredentialPrompter {
       if (r.code !== 0) return failed(r);
       return r.stdout.trim() === 'Allow' ? { outcome: 'approved' } : { outcome: 'declined' };
     },
+    async askLoginItem(request) {
+      const seconds = request.timeoutSeconds ?? defaultSeconds;
+      const r = await run(OSASCRIPT, osaArgs(osaApproval(seconds), LOGIN_ITEM_MESSAGE), seconds);
+      if (r.code !== 0) return failed(r);
+      return r.stdout.trim() === 'Allow' ? { outcome: 'approved' } : { outcome: 'declined' };
+    },
   };
 }
 
@@ -225,12 +288,22 @@ function zenityPrompter(zenity: string, defaultSeconds: number): CredentialPromp
       );
       return r.code === 0 ? { outcome: 'approved' } : failed(r);
     },
+    async askLoginItem(request) {
+      const seconds = request.timeoutSeconds ?? defaultSeconds;
+      const r = await run(
+        zenity,
+        ['--question', '--no-markup', ...common(seconds), '--ok-label=Allow', '--cancel-label=Deny', '--default-cancel', `--text=${LOGIN_ITEM_MESSAGE}`],
+        seconds,
+        display,
+      );
+      return r.code === 0 ? { outcome: 'approved' } : failed(r);
+    },
   };
 }
 
 function unavailablePrompter(reason: string): CredentialPrompter {
   const result: PromptResult = { outcome: 'unavailable', reason };
-  return { askValue: async () => result, askApproval: async () => result };
+  return { askValue: async () => result, askApproval: async () => result, askLoginItem: async () => result };
 }
 
 /** The dialog mechanism for this machine, or one that always answers `unavailable`. */

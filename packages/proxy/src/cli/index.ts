@@ -32,9 +32,11 @@ import {
   DEFAULT_LOOPBACK_PORT,
   wrapWithCache,
   resolveCacheTtl,
+  createCredentialLinker,
   type CredentialStoreOptions,
   type WrapperConfig
 } from '../core/index.js';
+import { registerLinkCommands, refuseIfLinked, listedCredential, reportLinks, checkRequestLocator } from './links.js';
 
 import { fileURLToPath } from 'node:url';
 
@@ -50,8 +52,12 @@ import {
 } from '../openclaw/channel-routing.js';
 import { createHermesIntegration, detectHermes } from '../hermes/integration.js';
 import { managedScopeShadowedKeys, hermesManagedEnvPath, HERMES_SUPPORTED_SERVICES, hermesSecretSourceRefs } from '../hermes/config-writer.js';
-import { createBrokerScope, parseAquamanRef, formatAquamanRef, defaultProjectsPath, type BrokerScope } from '../broker-scope.js';
+import { createBrokerScope, parseAquamanRef, formatAquamanRef, defaultProjectsPath, isReservedService, RESERVED_SERVICE_REASON, type BrokerScope } from '../broker-scope.js';
+import { startAuditAnchor } from '../audit-anchor.js';
+import { auditVerifyCommand, auditAcceptCommand } from './audit-commands.js';
+import { routableKeys, routeKeyMismatch } from '../route-auth.js';
 import { createNativePrompter, clampPromptTimeout, PROMPT_TIMEOUT_SECONDS, PROMPT_TIMEOUT_MIN_SECONDS, PROMPT_TIMEOUT_MAX_SECONDS } from '../credential-prompt.js';
+import { registerServiceCommands, loginItemForInit, loginItemPresent, type ServiceCliHelpers } from './service.js';
 import { loadPolicyFromConfig, validatePolicyConfig, lintPolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 
@@ -74,6 +80,20 @@ function validateCredName(label: string, value: string): void {
     console.error(`Invalid ${label}: "${value}". Allowed: lowercase alphanumeric, dots, hyphens, underscores.`);
     process.exit(1);
   }
+  if (label === 'service' && isReservedService(value)) {
+    console.error(`"${value}" ${RESERVED_SERVICE_REASON}.`);
+    console.error('Use a different service name. To check the audit log against its anchor, run: aquaman audit verify');
+    process.exit(1);
+  }
+}
+
+/**
+ * What the vault holds for the user. aquaman's own records (the audit
+ * anchor) are stored there too, and are not credentials: they are not
+ * listed, counted, or taken as a sign that a credential has been stored.
+ */
+async function listCredentials(store: { list(): Promise<Array<{ service: string; key: string }>> }): Promise<Array<{ service: string; key: string }>> {
+  return (await store.list()).filter((cred) => !isReservedService(cred.service));
 }
 
 /**
@@ -97,6 +117,28 @@ function printOnePasswordModeHint(config: WrapperConfig, indent = '    '): void 
 }
 
 /**
+ * For a process that serves credentials: write an audit entry when a link to
+ * a vault item appears, goes away or is re-pointed while it runs, whoever
+ * changed `credentials.links`. A link decides which vault item a reference is
+ * read from, so the change belongs in the same log as the reads.
+ */
+function recordLinkChange(logger: () => ReturnType<typeof createAuditLogger>): (change: { name: string; locator?: string }) => void {
+  return (change) => {
+    const service = change.name.split('/')[0];
+    logger().logCredentialAccess('system', 'system', {
+      service,
+      operation: 'rotate',
+      success: true,
+      note: change.locator === undefined
+        ? `link removed: ${change.name}`
+        : `link set: ${change.name} is read from ${change.locator}`,
+    }).catch((err: unknown) => {
+      console.error(`AUDIT FAILURE: could not record a link change for ${change.name}: ${err instanceof Error ? err.message : err}`);
+    });
+  };
+}
+
+/**
  * Map config.credentials onto CredentialStoreOptions — the single source for
  * every createCredentialStore() call in this CLI. Env fallbacks mirror
  * applyEnvOverrides() (belt and braces for callers that build partial configs).
@@ -117,7 +159,9 @@ function storeOptionsFromConfig(config: WrapperConfig): CredentialStoreOptions {
     bitwardenOrganizationId: config.credentials.bitwardenOrganizationId,
     bitwardenCollectionId: config.credentials.bitwardenCollectionId,
     keeperFolderUid: config.credentials.keeperFolderUid,
-    keeperConfigPath: config.credentials.keeperConfigPath
+    keeperConfigPath: config.credentials.keeperConfigPath,
+    // A daemon outlives the config it started with, so a link made later has to reach it.
+    links: 'always'
   };
 }
 
@@ -189,6 +233,12 @@ function updateBrokerAllowedRefs(refs: string[], mode: 'allow' | 'revoke'): void
   if (invalid.length > 0) {
     console.error(`Invalid ref${invalid.length > 1 ? 's' : ''}: ${invalid.join(', ')}`);
     console.error('Refs look like aquaman://<service>/<key>, e.g. aquaman://github/token');
+    process.exit(1);
+  }
+  const reserved = refs.filter(r => isReservedService(parseAquamanRef(r)!.service));
+  if (reserved.length > 0) {
+    console.error(`Not declared: ${reserved.join(', ')}. "${parseAquamanRef(reserved[0])!.service}" ${RESERVED_SERVICE_REASON}.`);
+    console.error('Use a different service name. To check the audit log against its anchor, run: aquaman audit verify');
     process.exit(1);
   }
 
@@ -584,9 +634,10 @@ program
       try {
         const config = loadConfig();
         const store = await createCredentialStore(storeOptionsFromConfig(config));
-        const creds = await store.list();
+        const creds = await listCredentials(store);
         console.log(`    \u2713 ${config.credentials.backend} backend (${creds.length} credential${creds.length !== 1 ? 's' : ''})`);
         printOnePasswordModeHint(config);
+        issues += reportLinks(config.credentials.backend);
       } catch (err) {
         console.log(`    \u2717 Backend not accessible: ${(err as Error).message}`);
         console.log('      \u2192 Run: aquaman setup');
@@ -610,6 +661,10 @@ program
         console.log('      \u2192 Run: aquaman daemon &');
         issues++;
       }
+      // Informational: never counted as an issue.
+      console.log(loginItemPresent()
+        ? '    \u2022 Daemon starts at login (details: aquaman service status)'
+        : '    \u2022 Daemon does not start at login (to change that: aquaman service install)');
     }
 
     // OpenClaw integration
@@ -881,7 +936,7 @@ openclaw
     // Initialize credential store
     let credentialStore;
     try {
-      credentialStore = wrapWithCache(await createCredentialStore(storeOptionsFromConfig(config)), resolveCacheTtl(config));
+      credentialStore = wrapWithCache(await createCredentialStore({ ...storeOptionsFromConfig(config), onLinkChange: recordLinkChange(() => auditLogger) }), resolveCacheTtl(config));
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
       console.error('Fix the backend configuration and retry. Run: aquaman doctor');
@@ -915,6 +970,7 @@ openclaw
       }
     });
     await credentialProxy.start();
+    const auditAnchor = startAuditAnchor(config, auditLogger, credentialStore);
 
     console.log(`Credential proxy started on ${socketPath}`);
 
@@ -950,6 +1006,7 @@ openclaw
         proc.on('close', async (code) => {
           console.log(`\nOpenClaw exited with code ${code}`);
           await credentialProxy.stop();
+          await auditAnchor.stop();
           process.exit(code ?? 0);
         });
       }
@@ -972,6 +1029,7 @@ openclaw
     const shutdown = async () => {
       console.log('\nShutting down...');
       await credentialProxy.stop();
+      await auditAnchor.stop();
       process.exit(0);
     };
 
@@ -1028,14 +1086,18 @@ program
   .description('Run the credential proxy daemon (for advanced users)')
   .action(async () => {
     // Check if daemon is already running
+    // A pid file can outlive its daemon (a crash, a power loss), and after a
+    // reboot its number may belong to some other process. Only a proxy that
+    // answers on the socket with that pid counts as the daemon still running;
+    // otherwise a daemon started at login would refuse to start for good.
     const existingPid = readPidFile();
-    if (existingPid && isProcessRunning(existingPid)) {
+    const socketPath = path.join(getConfigDir(), 'proxy.sock');
+    if (existingPid && isProcessRunning(existingPid) && (await proxyPid(socketPath)) === existingPid) {
       console.error(`Daemon is already running (PID ${existingPid}). Use 'aquaman stop' first.`);
       process.exit(1);
     }
 
     const config = loadConfig();
-    const socketPath = path.join(getConfigDir(), 'proxy.sock');
 
     console.log('Starting aquaman credential proxy daemon...\n');
 
@@ -1049,7 +1111,7 @@ program
     // Initialize credential store
     let credentialStore;
     try {
-      credentialStore = wrapWithCache(await createCredentialStore(storeOptionsFromConfig(config)), resolveCacheTtl(config));
+      credentialStore = wrapWithCache(await createCredentialStore({ ...storeOptionsFromConfig(config), onLinkChange: recordLinkChange(() => auditLogger) }), resolveCacheTtl(config));
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
       console.error('Fix the backend configuration and retry. Run: aquaman doctor');
@@ -1079,6 +1141,7 @@ program
         ? {
             prompter: createNativePrompter(),
             declare: (service, key) => { writeBrokerAllowedRefs([formatAquamanRef(service, key)], 'allow'); },
+            links: createCredentialLinker({ store: credentialStore, backend: config.credentials.backend, configPath: getConfigPath() }),
           }
         : undefined,
       // Returned, so the proxy knows whether the entry was written.
@@ -1087,13 +1150,14 @@ program
           service: info.service,
           // A broker resolve hands the value out, a broker request stores or
           // declares one, everything else injects it.
-          operation: info.method === 'BROKER' ? 'read' : info.method === 'BROKER_REQUEST' ? 'rotate' : 'use',
+          operation: info.method === 'BROKER' ? 'read' : info.method === 'BROKER_REQUEST' || info.method === 'SERVICE_CONSENT' ? 'rotate' : 'use',
           success: !info.error,
           error: info.error
         });
       }
     });
     await credentialProxy.start();
+    const auditAnchor = startAuditAnchor(config, auditLogger, credentialStore);
 
     // OpenShell external credential driver (v0.17.0+). Opt-in; a failure here
     // is reported but never takes the proxy down.
@@ -1129,6 +1193,7 @@ program
       console.log('\nShutting down daemon...');
       await openshellDriver?.stop();
       await credentialProxy.stop();
+      await auditAnchor.stop();
       removePidFile();
       try { fs.unlinkSync(socketPath); } catch { /* already removed */ }
       process.exit(0);
@@ -1149,7 +1214,7 @@ openclaw
     // Initialize credential store
     let credentialStore;
     try {
-      credentialStore = wrapWithCache(await createCredentialStore(storeOptionsFromConfig(config)), resolveCacheTtl(config));
+      credentialStore = wrapWithCache(await createCredentialStore({ ...storeOptionsFromConfig(config), onLinkChange: recordLinkChange(() => auditLogger) }), resolveCacheTtl(config));
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
       console.error('Fix the backend configuration and retry. Run: aquaman doctor');
@@ -1190,6 +1255,7 @@ openclaw
       }
     });
     await credentialProxy.start();
+    const auditAnchor = startAuditAnchor(config, auditLogger, credentialStore);
 
     // Build host map from service registry for the plugin's interceptor
     const hostMap = serviceRegistry.buildHostMap();
@@ -1212,6 +1278,7 @@ openclaw
     // Handle shutdown
     const shutdown = async () => {
       await credentialProxy.stop();
+      await auditAnchor.stop();
       try { fs.unlinkSync(socketPath); } catch { /* already removed */ }
       process.exit(0);
     };
@@ -1625,7 +1692,7 @@ function proxyPid(socketPath: string): Promise<number | null> {
  * `aquaman init --agent <agent>`: everything an agent can do on its own to get
  * a project using aquaman. No prompts, no secrets, safe to run twice.
  */
-async function initForAgent(agent: string, json: boolean, hooks: boolean, loopback: boolean): Promise<void> {
+async function initForAgent(agent: string, json: boolean, hooks: boolean, loopback: boolean, service: boolean): Promise<void> {
   const say = (line: string) => { if (!json) console.log(line); };
   const result: Record<string, any> = { ok: false, agent, version: VERSION, human_steps: [] as string[] };
   const finish = (code: number): never => {
@@ -1797,6 +1864,16 @@ async function initForAgent(agent: string, json: boolean, hooks: boolean, loopba
   say(coderResult.mode === 'exec' ? '  ✓ Hooks: none installed. Run commands that need credentials as: aquaman-coder exec -- <command>' : `  ✓ Hooks: ${coderResult.hooks?.path}`);
   if (coderResult.skill?.path) say(`  ✓ Skill: ${coderResult.skill.path}`);
   if (coderResult.agents_file?.path) say(`  ✓ Instructions: ${coderResult.agents_file.path}`);
+  if (result.ok) {
+    // Last, after setup has succeeded: a login item is only ever added with a person's yes.
+    const loginItem = await loginItemForInit(serviceCliHelpers, service);
+    if (loginItem.service) {
+      result.service = loginItem.service;
+      say(`  ${loginItem.service.status === 'installed' || loginItem.service.status === 'already_installed' ? '✓' : '•'} Start at login: ${loginItem.service.status}${loginItem.service.error ? ` (${loginItem.service.error})` : ''}`);
+      if (loginItem.service.fix) say(`    → ${loginItem.service.fix}`);
+    }
+    if (loginItem.humanStep) result.human_steps.push(loginItem.humanStep);
+  }
   for (const step of result.human_steps) say(`  → A person needs to: ${step}`);
   say(`\n  ${result.next}`);
   finish(result.ok ? 0 : 1);
@@ -1811,6 +1888,7 @@ program
   .option('--json', 'With --agent: print one JSON object and nothing else')
   .option('--no-hooks', 'With --agent: install no hooks; commands that need credentials are run as `aquaman-coder exec -- <command>`')
   .option('--loopback', 'With --agent: also turn on the token-gated loopback listener, so a program can be routed through the proxy (aquaman request ... --via-proxy)')
+  .option('--service', 'With --agent: also ask the person, in a dialog, to let the daemon start at every login (aquaman service install)')
   .addHelpText('after', `
 With --agent the command never prompts and can be re-run safely. It creates the
 config if missing, starts the daemon, installs the agent's hooks and skill,
@@ -1820,7 +1898,7 @@ settings and no permission prompt changes. Credentials are added later, by a per
   aquaman request aquaman://github/token --env GITHUB_TOKEN`)
   .action(async (options) => {
     if (options.agent) {
-      await initForAgent(String(options.agent), Boolean(options.json), options.hooks !== false, options.loopback === true);
+      await initForAgent(String(options.agent), Boolean(options.json), options.hooks !== false, options.loopback === true, options.service === true);
       return;
     }
     ensureConfigDir();
@@ -2404,6 +2482,9 @@ openclaw
           if (result.migrated > 0) {
             console.log(`  \u2713 Migrated ${result.migrated} plaintext credentials`);
           }
+          for (const s of result.unstorable ?? []) {
+            console.log(`  - Not migrated: plugin ${JSON.stringify(s.service)} in openclaw.json: ${s.reason}`);
+          }
         } catch {
           // Migration is best-effort during setup
         }
@@ -2506,7 +2587,7 @@ openclaw
       });
 
       // 3. Count credentials
-      const creds = await store.list();
+      const creds = await listCredentials(store);
       for (const c of creds) vaultServices.add(c.service);
       if (creds.length > 0) {
         const names = creds.map(c => `${c.service}/${c.key}`).join(', ');
@@ -2976,9 +3057,11 @@ audit
   .option('-n, --lines <count>', 'Number of lines', '20')
   .action(async (options) => {
     const config = loadConfig();
+    // Opened for reading: a proxy may be writing this log right now.
     const auditLogger = createAuditLogger({
       logDir: config.audit.logDir,
-      enabled: true
+      enabled: true,
+      readOnly: true
     });
     await auditLogger.initialize();
 
@@ -2996,31 +3079,30 @@ audit
     }
   });
 
+/** What the audit commands need from this file: the config, the store it names, and whether a proxy is serving. */
+function auditCommandDeps() {
+  const config = loadConfig();
+  return {
+    config,
+    openStore: () => createCredentialStore(storeOptionsFromConfig(config)),
+    proxyRunning: () => proxyHealthy(path.join(getConfigDir(), 'proxy.sock')),
+  };
+}
+
 audit
   .command('verify')
-  .description('Verify audit log integrity')
+  .description('Verify the audit log: its hash chain, and the log against its anchor in the credential store')
+  .option('--chain-only', 'Check the hash chain alone, without reading the anchor from the credential store')
+  .option('--json', 'Print the result as JSON')
+  .action(async (options: { chainOnly?: boolean; json?: boolean }) => {
+    process.exitCode = await auditVerifyCommand(options, auditCommandDeps());
+  });
+
+audit
+  .command('accept')
+  .description('Accept the audit log as it is and move its anchor (after a restored backup or a deliberate deletion). Needs a terminal')
   .action(async () => {
-    const config = loadConfig();
-    const auditLogger = createAuditLogger({
-      logDir: config.audit.logDir,
-      enabled: true
-    });
-    await auditLogger.initialize();
-
-    const result = await auditLogger.verifyIntegrity();
-
-    if (result.valid) {
-      console.log('Audit log integrity verified');
-      const stats = auditLogger.getStats();
-      console.log(`  Entries: ${stats.entryCount}`);
-      console.log(`  Last hash: ${stats.lastHash.slice(0, 16)}...`);
-    } else {
-      console.log('Audit log integrity FAILED');
-      for (const error of result.errors) {
-        console.log(`  - ${error}`);
-      }
-      process.exit(1);
-    }
+    process.exitCode = await auditAcceptCommand(auditCommandDeps());
   });
 
 audit
@@ -3053,6 +3135,7 @@ credentials
   .action(async (service: string, key: string, options) => {
     validateCredName('service', service);
     validateCredName('key', key);
+    refuseIfLinked(service, key);
 
     const config = loadConfig();
     const backend = options.backend || config.credentials.backend;
@@ -3143,7 +3226,7 @@ credentials
       process.exit(1);
     }
 
-    const creds = await store.list();
+    const creds = await listCredentials(store);
 
     if (creds.length === 0) {
       console.log('No credentials stored.');
@@ -3152,9 +3235,11 @@ credentials
 
     console.log('Stored credentials:');
     for (const cred of creds) {
-      console.log(`  ${cred.service}/${cred.key}`);
+      console.log(`  ${listedCredential(cred)}`);
     }
   });
+
+registerLinkCommands(credentials, (config) => createCredentialStore({ ...storeOptionsFromConfig(config), links: 'always' }), proxyPost);
 
 credentials
   .command('delete <service> <key>')
@@ -3162,6 +3247,7 @@ credentials
   .action(async (service: string, key: string) => {
     validateCredName('service', service);
     validateCredName('key', key);
+    refuseIfLinked(service, key);
 
     const config = loadConfig();
     let store;
@@ -3618,7 +3704,8 @@ program
   .argument('<ref>', 'aquaman://service/key')
   .option('--env <NAME>', 'Also bind the ref to this env var for the project covering the current directory')
   .option('--via-proxy <URL_ENV>', 'With --env: route the program through the proxy. NAME gets the proxy token, URL_ENV the proxy URL; the program never holds the credential')
-  .option('--base-path <path>', 'With --via-proxy: path appended to the proxy URL (default /v1 for openai)')
+  .option('--base-path <path>', 'With --via-proxy: path appended to the proxy URL (default /v1 for openai, /api for slack)')
+  .option('--from <locator>', 'Use an item that already exists in your vault instead of asking for the value (see: aquaman credentials link --help)')
   .option('--timeout <seconds>', `How long the dialog waits for an answer (${PROMPT_TIMEOUT_MIN_SECONDS}-${PROMPT_TIMEOUT_MAX_SECONDS})`, String(PROMPT_TIMEOUT_SECONDS))
   .option('--json', 'Print one JSON object and nothing else')
   .addHelpText('after', `
@@ -3630,14 +3717,15 @@ Statuses and exit codes:
   ready     0   stored and usable already; nobody was asked
   stored    0   a person typed the value; it is in the vault now
   approved  0   it was already in the vault; a person allowed its use
+  linked    0   --from named an existing vault item; a person allowed it and it could be read
   declined  2   a person said no
   pending   3   nobody could be asked (no desktop session, no answer); the output says what to run by hand
-  error     4   the daemon is not running or does not take requests
-  error     1   the command was wrong: bad reference, bad --env, --env outside a project
+  error     4   the daemon is not running, does not take requests, or refused: "code" says which
+  error     1   the command was wrong: bad reference, bad --env, --env outside a project, bad --from
 
 Example:
   aquaman request aquaman://github/token --env GITHUB_TOKEN --json`)
-  .action(async (ref: string, opts: { env?: string; json?: boolean; timeout: string; viaProxy?: string; basePath?: string }) => {
+  .action(async (ref: string, opts: { env?: string; json?: boolean; timeout: string; viaProxy?: string; basePath?: string; from?: string }) => {
     const out = (result: Record<string, unknown>, code: number): never => {
       if (opts.json) {
         console.log(JSON.stringify(result, null, 2));
@@ -3663,6 +3751,10 @@ Example:
       out({ status: 'error', ref, error: `Invalid --timeout: ${opts.timeout}`, fix: `Give a whole number of seconds between ${PROMPT_TIMEOUT_MIN_SECONDS} and ${PROMPT_TIMEOUT_MAX_SECONDS}` }, 1);
     }
     const timeoutSeconds = clampPromptTimeout(Number(opts.timeout));
+    if (opts.from !== undefined) {
+      const locator = checkRequestLocator(opts.from);
+      if (!locator.ok) out({ status: 'error', ref, error: locator.error, code: locator.code, fix: locator.fix }, 1);
+    }
 
     // A binding needs a project to live in. Checked before anyone is asked
     // for a value, so a dialog is never shown for a request that cannot finish.
@@ -3674,18 +3766,20 @@ Example:
         out({ status: 'error', ref, error: '--via-proxy needs --env, and --base-path needs --via-proxy', fix: 'aquaman request aquaman://openai/api_key --env OPENAI_API_KEY --via-proxy OPENAI_BASE_URL' }, 1);
       }
       // A route only works for a service the proxy can forward and inject a
-      // header for, with the listener on. Say so before anyone is asked.
+      // header or basic auth for, with the listener on. Say so before anyone
+      // is asked.
       const parsedRef = parseAquamanRef(ref)!;
       const routeConfig = loadConfig();
       const def = createServiceRegistry({ configPath: routeConfig.services.configPath }).get(parsedRef.service);
       if (!def) {
         out({ status: 'error', ref, error: `The proxy has no definition for "${parsedRef.service}", so it cannot forward requests for it`, fix: `Add "${parsedRef.service}" to services.yaml (docs/app-through-proxy.md), or drop --via-proxy to have the variable set to the value instead` }, 1);
       }
-      if ((def!.authMode ?? 'header') !== 'header') {
-        out({ status: 'error', ref, error: `"${parsedRef.service}" does not take its credential in a request header, so a program cannot be routed to it`, fix: 'Drop --via-proxy' }, 1);
+      const routeKeys = routableKeys(def!);
+      if (routeKeys.length === 0) {
+        out({ status: 'error', ref, error: `"${parsedRef.service}" does not take its credential in a request header or as HTTP basic auth, so a program cannot be routed to it`, fix: 'Drop --via-proxy' }, 1);
       }
-      if (def!.credentialKey !== parsedRef.key) {
-        out({ status: 'error', ref, error: `The proxy injects ${parsedRef.service}/${def!.credentialKey} for this service, not ${parsedRef.service}/${parsedRef.key}`, fix: `Use aquaman://${parsedRef.service}/${def!.credentialKey}` }, 1);
+      if (!routeKeys.includes(parsedRef.key)) {
+        out({ status: 'error', ref, ...routeKeyMismatch(parsedRef.service, routeKeys, parsedRef.key) }, 1);
       }
       if (routeConfig.loopback?.enabled !== true || !routeConfig.loopback.token) {
         out({ status: 'error', ref, error: 'The loopback listener is off, so there is nowhere for the program to send its requests', fix: 'aquaman init --agent <agent> --loopback' }, 1);
@@ -3713,7 +3807,7 @@ Example:
     const response = await proxyPost(
       path.join(getConfigDir(), 'proxy.sock'),
       '/broker/request',
-      { service: parsed!.service, key: parsed!.key, project: process.cwd(), timeout_seconds: timeoutSeconds, ...(routeArgs.length ? { routed: true } : {}) },
+      { service: parsed!.service, key: parsed!.key, project: process.cwd(), timeout_seconds: timeoutSeconds, ...(routeArgs.length ? { routed: true } : {}), ...(opts.from !== undefined ? { from: opts.from } : {}) },
       (timeoutSeconds + 30) * 1000,
     );
     if ('error' in response) {
@@ -3725,7 +3819,7 @@ Example:
     }
 
     const result: Record<string, unknown> = { status: json.status, ref, reason: json.reason, fix: json.fix };
-    const usable = json.status === 'ready' || json.status === 'stored' || json.status === 'approved';
+    const usable = json.status === 'ready' || json.status === 'stored' || json.status === 'approved' || json.status === 'linked';
     if (!usable && opts.env && typeof result.fix === 'string') {
       // The by-hand route has to end in the same place this command would have.
       result.fix = `${result.fix} && aquaman coder bind ${bindSpec}${routeArgs.length ? ` ${routeArgs.join(' ')}` : ''}`;
@@ -3822,7 +3916,11 @@ openclaw
           }
 
           // Plugin credentials
-          const pluginMappings = extractPluginCredentials(config);
+          const unstorablePlugins: Array<{ service: string; reason: string }> = [];
+          const pluginMappings = extractPluginCredentials(config, unstorablePlugins);
+          for (const s of unstorablePlugins) {
+            console.log(`  Skipped plugin ${JSON.stringify(s.service)}: ${s.reason}. Its credentials stay in openclaw.json.\n`);
+          }
           for (const m of pluginMappings) {
             let current: any = config;
             for (const key of m.jsonPath) {
@@ -4244,7 +4342,7 @@ openclaw
         keeperFolderUid: config.credentials.keeperFolderUid,
         keeperConfigPath: config.credentials.keeperConfigPath
       });
-      const creds = await store.list();
+      const creds = await listCredentials(store);
       console.log(`\nStored credentials: ${creds.length}`);
     } catch {
       console.log('\nStored credentials: (backend unavailable)');
@@ -4279,7 +4377,7 @@ function formatEntry(entry: any): string {
     case 'tool_result':
       return `Result for ${entry.data.toolCallId}`;
     case 'credential_access':
-      return `${entry.data.service} ${entry.data.operation} ${entry.data.success ? 'OK' : `FAIL: ${entry.data.error || 'unknown'}`}`;
+      return `${entry.data.service} ${entry.data.operation} ${entry.data.success ? 'OK' : `FAIL: ${entry.data.error || 'unknown'}`}${entry.data.note ? ` (${entry.data.note})` : ''}`;
     default:
       return JSON.stringify(entry.data).slice(0, 80);
   }
@@ -4318,6 +4416,12 @@ if (process.argv[2] === 'coder') {
   }
   process.exit(result.status ?? 0);
 }
+
+// `aquaman service`: the login item that keeps the daemon running across reboots.
+const serviceCliHelpers: ServiceCliHelpers = {
+  cliPath: __cliFilename, proxyPost, proxyHealthy, proxyPid, readPidFile, removePidFile, isProcessRunning,
+};
+registerServiceCommands(program, serviceCliHelpers);
 
 // Register the `coder` namespace so it shows up in `aquaman --help`.
 // Its action is unreachable (the intercept above bypasses Commander entirely),

@@ -3,6 +3,7 @@
  * Minimal stand-in for Keeper Commander, emulating only what the aquaman
  * Keeper backend uses (behavior read from Commander v18.1.5 source):
  *   keeper --batch-mode [--config F] get <UID> --format json|password
+ *     (a folder UID lists its records; a record UID prints the record)
  *   keeper --batch-mode [--config F] rm -f <UID>
  *   keeper --batch-mode [--config F] -      (commands on stdin, stops at `q`,
  *                                            exits 1 on the first failure)
@@ -103,6 +104,16 @@ try {
       process.stdout.write(JSON.stringify({ folder_uid: uid, records }, null, 2) + '\n');
     } else if (s.records[uid] && fmt === 'password') {
       process.stdout.write(s.records[uid].password + '\n');
+    } else if (s.records[uid] && fmt === 'json') {
+      // A typed record as Commander prints it: standard fields by type, custom ones by label.
+      const r = s.records[uid];
+      process.stdout.write(JSON.stringify({
+        record_uid: uid,
+        title: r.title,
+        type: 'login',
+        fields: [{ type: 'login', value: r.login ? [r.login] : [] }, { type: 'password', value: [r.password] }],
+        custom: Object.entries(r.custom || {}).map(([label, value]) => ({ type: 'text', label, value: [value] })),
+      }, null, 2) + '\n');
     } else {
       throw new Error('not found');
     }

@@ -30,8 +30,33 @@ export {
   loadProjectRefs,
   parseAquamanRef,
   formatAquamanRef,
-  defaultProjectsPath
+  defaultProjectsPath,
+  RESERVED_SERVICE,
+  RESERVED_SERVICE_REASON,
+  isReservedService,
+  reservedServiceRefusal
 } from './broker-scope.js';
+
+// Audit anchor: the log's last sequence and hash, kept in the credential store
+export {
+  type AuditAnchor,
+  type AuditAnchorWriter,
+  type AuditAnchorWriterOptions,
+  type AnchorComparison,
+  type AuditVerification,
+  type AcceptResult,
+  AuditAnchorFormatError,
+  startAuditAnchor,
+  AUDIT_ANCHOR_KEY,
+  DEFAULT_ANCHOR_INTERVAL_SECONDS,
+  resolveAnchorInterval,
+  readAuditAnchor,
+  writeAuditAnchor,
+  compareLogWithAnchor,
+  createAuditAnchorWriter,
+  verifyAuditLog,
+  acceptAuditLog
+} from './audit-anchor.js';
 
 // Service Registry
 export {
@@ -154,5 +179,6 @@ export {
   PROMPT_TIMEOUT_MAX_SECONDS,
   clampPromptTimeout,
   promptMessage,
+  LOGIN_ITEM_MESSAGE,
   createNativePrompter,
 } from './credential-prompt.js';

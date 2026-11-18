@@ -12,5 +12,5 @@ See ``aquaman_hermes.plugin.register`` for the Hermes plugin entry point.
 
 from .plugin import register  # noqa: F401
 
-__version__ = "0.18.2"
+__version__ = "0.19.0"
 __all__ = ["register", "__version__"]

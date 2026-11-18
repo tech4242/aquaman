@@ -7,6 +7,7 @@ import { MemoryStore } from 'aquaman-core';
 import {
   extractCredentials,
   extractPluginCredentials,
+  unstorableServiceReason,
   extractPluginUpstreamUrls,
   findUpstreamUrl,
   migrateFromOpenClaw,
@@ -196,6 +197,40 @@ describe('OpenClaw Migrator', () => {
       expect(creds).toHaveLength(4);
       const services = creds.map(c => c.service).sort();
       expect(services).toEqual(['discord', 'matrix', 'slack', 'telegram']);
+    });
+  });
+
+  describe('plugin ids that cannot be service names', () => {
+    it.each([
+      ['Notion-Skill', 'an upper-case letter'],
+      ['notion skill', 'a space'],
+      ['../notion', 'a path'],
+      ['-notion', 'a leading hyphen'],
+      ['notion/skill', 'a slash'],
+      ['', 'nothing'],
+      ['notion\nskill', 'a newline'],
+    ])('%j (%s) is skipped with the reason, and the plugins beside it are still found', (id) => {
+      const skipped: Array<{ service: string; reason: string }> = [];
+      const creds = extractPluginCredentials({
+        plugins: { entries: { [id]: { config: { apiToken: 'secret-1' } }, 'weather.v2_x': { config: { apiKey: 'secret-2' } } } },
+      }, skipped);
+      expect(creds.map((c) => `${c.service}/${c.key}`)).toEqual(['weather.v2_x/api_key']);
+      expect(skipped).toEqual([{
+        service: id,
+        reason: 'the plugin id is not a service name aquaman can store under (lowercase letters, digits, dots, hyphens and underscores, starting with a letter or digit)',
+      }]);
+      expect(unstorableServiceReason(id)).toBe(skipped[0].reason);
+    });
+
+    it('a plugin with such an id and nothing that looks like a credential is not reported', () => {
+      const skipped: Array<{ service: string; reason: string }> = [];
+      expect(extractPluginCredentials({ plugins: { entries: { 'Notion Skill': { config: { region: 'eu' } }, aquaman_internal: { config: { apiKey: 'aquaman-proxy-managed' } } } } }, skipped)).toEqual([]);
+      expect(skipped).toEqual([]);
+    });
+
+    it('names every other entry point accepts are storable', () => {
+      for (const name of ['notion-skill', 'weather.v2_x', '9lives', 'a']) expect(unstorableServiceReason(name)).toBeNull();
+      expect(unstorableServiceReason('aquaman_internal')).toBe("the name is reserved for aquaman's own records and cannot be used as a credential");
     });
   });
 

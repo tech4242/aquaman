@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aquaman-hermes"
-version = "0.18.2"
+version = "0.19.0"
 description = "aquaman: credential proxy for AI agents (Hermes). Keeps provider API keys out of the Hermes process; injects them from your own vault through a local proxy."
 readme = "README.md"
 requires-python = ">=3.10"

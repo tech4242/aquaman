@@ -389,6 +389,7 @@ describe('proxy daemon: failure and refusal paths', () => {
         status: 'pending',
         ref: 'aquaman://github/token',
         reason: 'dialog helper crashed',
+        code: 'prompt_unavailable',
         fix: 'aquaman credentials add github token && aquaman broker allow aquaman://github/token',
       });
       expect(await store.get('github', 'token')).toBeNull();

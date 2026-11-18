@@ -199,10 +199,11 @@ jobs:
             echo "Accepted by ClawHub (async prepublication pending). Polling for the release..."
           fi
 
-          # Prepublication worker runs ~every 45 min when healthy; poll 15 min
-          # and fail visibly if the release hasn't materialized — re-running
-          # this job later is safe (see idempotency guard above).
-          for i in $(seq 1 90); do
+          # The security scan decides when the release appears: about an hour
+          # for 0.18.2. Poll 90 minutes and fail visibly if the release hasn't
+          # materialized — re-running this job later is safe (see idempotency
+          # guard above).
+          for i in $(seq 1 540); do
             if [ "$(live)" = "$VERSION" ]; then
               echo "aquaman-plugin@$VERSION is live on ClawHub."
               exit 0

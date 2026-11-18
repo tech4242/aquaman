@@ -43,7 +43,7 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 - Your secrets already live in a password manager or vault and you do not want a second copy or a new account.
 - You want the agent to set things up and ask for credentials itself, without ever handling one: `aquaman init --agent` and `aquaman request` are built for that, with no prompts, JSON output, and a native dialog where a person supplies each value. (fnox has a comparable request flow through its MCP server, off by default, where the person enters the value on a local web page.)
 - You use more than one agent host (say Claude Code, OpenClaw and an OpenShell sandbox) and want one place that holds the keys and one record of their use.
-- You want evidence: every use is written to a log whose entries are chained by SHA-256, so an altered or inserted entry is detectable (`aquaman audit verify`).
+- You want evidence: every use is written to a log whose entries are numbered and chained by SHA-256, and the log's last position is kept in your vault, so an altered or inserted entry and a truncated or replaced log are detectable (`aquaman audit verify`). The limits are under "What aquaman does not do".
 - You route OpenClaw, Hermes or your own client through the proxy and want to limit what a key can do there, per endpoint (`aquaman policy`).
 
 ## Choose something else when
@@ -68,7 +68,7 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 
 - It is not a sandbox. It keeps credentials away from the agent; it does not confine what the agent runs.
 - Any process running as your user can send requests through the proxy, within your policy, and can fetch references you declared. The audit log records it.
-- The audit log's hash chain is not anchored outside the file. `aquaman audit verify` detects an entry altered, inserted or deleted inside the log; it does not detect a log cut short at the end, emptied, deleted or rebuilt.
+- The audit log is anchored in your vault at most once a minute (every 15 minutes with 1Password, Bitwarden or Keeper), not per entry. `aquaman audit verify` detects an entry altered, inserted or deleted inside the log, and a log cut short, emptied, deleted or rebuilt; it does not detect the removal of entries written since the last anchor, or a change made by software that can also write to the vault.
 - On the coding-agent path the wrapped command receives the real value for its lifetime. Output redaction catches accidental exposure, not a command that deliberately transforms the value.
 - The proxy only sees traffic from clients that can be pointed at it, for services it has a definition for (26 are built in; others are added in `services.yaml`).
 - No Windows support outside WSL2. No team sharing, and it does not run in CI or production. An app that reads its keys from the environment needs nothing from aquaman there: the same variable names are filled from that platform's secrets.

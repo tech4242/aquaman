@@ -10,6 +10,92 @@ openclaw plugins install clawhub:aquaman-plugin   # OpenClaw users
 pip install -U aquaman-hermes                     # Hermes users
 ```
 
+## 0.19.0
+
+Use the secrets already in your vault, keep the daemon running across reboots, route apps that use basic auth, and an audit log that notices when it has been cut short.
+
+### Use an item that is already in your vault
+
+A reference can now point at an item you already keep in 1Password, Bitwarden, HashiCorp Vault, the Keychain, KeePassXC or Keeper, so you do not type the secret again.
+
+```bash
+# an agent asks, you approve the named item in a dialog
+aquaman request aquaman://github/token --env GITHUB_TOKEN --from op://Private/GitHub/token
+
+# or you start it yourself; the same dialog asks you
+aquaman credentials link github/token op://Private/GitHub/token
+aquaman credentials unlink github/token
+```
+
+| Vault | Locator |
+|---|---|
+| 1Password | `op://<vault>/<item>/[<section>/]<field>` |
+| Bitwarden | `bw://<item id or exact name>/<field>` |
+| HashiCorp Vault (KV v2) | `vault://<mount>/<path>#<field>` |
+| Keychain, libsecret | `keychain://<service>/<account>` |
+| KeePassXC | `keepassxc://<Group/.../Title>[#<field>]` |
+| Keeper | `keeper://<UID>[/<field>]` |
+
+- aquaman only reads a linked item. It never changes or deletes it, and `credentials add` and `delete` on a linked reference are refused.
+- Linking is your decision, and you take it in a dialog the daemon shows. The dialog names the item, and nothing in your vault is read before you agree. `aquaman request --from` links the reference and declares it for commands (new status `linked`, exit code 0). `aquaman credentials link` links without declaring; it exits 0 when linked, 2 when you deny, 3 when nobody answers and 1 when the daemon refuses or is not running. A terminal is not taken as proof of a person. Only on a machine where no dialog can be shown does `aquaman credentials link` ask for a typed `yes` at the terminal instead.
+- Your approval is recorded in the vault, and a link is read only with it. A link written into `config.yaml` by hand is not read. `aquaman credentials unlink` removes the link and the approval. Software that can write to your vault with the vault's own tools can write the approval record; aquaman does not guard against that.
+- A running daemon picks up a new link without a restart, and writes a link that is added, changed or removed while it runs to the audit log. `aquaman credentials list` shows links, and `aquaman doctor` reports one that does not fit the configured vault.
+- The `encrypted-file` and `systemd-creds` vaults hold only what aquaman wrote, so they take no links.
+- Reading linked items was tested against stand-ins for each vault's tooling, not against live accounts.
+
+Details: [the agent contract](https://aquaman.sh/docs/agent-setup/) and [what you approve](https://aquaman.sh/docs/approve/).
+
+### Keep the daemon running across logins and reboots
+
+```bash
+aquaman service install     # launchd agent on macOS, systemd user unit on Linux
+aquaman service status
+aquaman service uninstall
+```
+
+- You decide: at a terminal the command asks y/N. Run without a terminal, for example by an agent, it asks you in a dialog. No flag skips the question. `aquaman init --agent ... --service` asks through the same dialog.
+- No secret is written into the unit file. The `encrypted-file` vault needs its password in the daemon's environment, so it is refused, with the alternatives named. Settings that exist only in your shell (`VAULT_TOKEN`, `BW_SESSION` and similar) are listed by name, because a daemon started at login will not have them.
+- On Linux without a login session the unit starts at boot only with lingering; aquaman reports `loginctl enable-linger` as a step for you and does not run it.
+- `aquaman daemon` no longer refuses to start because of a pid file left by a crash whose number now belongs to another process.
+
+Guide: [autostart](https://aquaman.sh/docs/autostart/).
+
+### Route an app that uses basic auth
+
+`--via-proxy` now works for APIs that take HTTP basic auth, such as Zendesk and Twilio. The app sends the local token as the user name or the password; aquaman replaces the pair with the stored one.
+
+```bash
+aquaman request aquaman://zendesk/api_token --env ZENDESK_API_TOKEN --via-proxy ZENDESK_API_URL
+```
+
+- A service on your own host (a Zendesk tenant) is a few lines in `services.yaml` with `authMode: basic`. Those entries are now checked: an unknown `authMode` or a malformed key list is refused.
+- Slack bindings default to the `/api` base path, as OpenAI ones default to `/v1`.
+- The [app guide](https://aquaman.sh/docs/app-through-proxy/) has a worked example of an app that calls Anthropic, Stripe read-only, Slack and Zendesk, and every client it shows is run in aquaman's tests: the Anthropic SDK and Slack in JavaScript and Python, OpenAI, Octokit, Stripe, and `fetch`, `requests` and `httpx` with basic auth. The Claude Agent SDK is described and not run in the tests.
+
+### The audit log is anchored in your vault
+
+Until now `aquaman audit verify` could not tell that the end of the log had been cut off, or that the log had been emptied, deleted or rebuilt: each leaves a chain that is valid on its own. The daemon now stores the position and hash of the newest entry in your vault, and `audit verify` compares the log with it.
+
+- The anchor is written at most once a minute while requests arrive (every 15 minutes with 1Password, Bitwarden or Keeper, where a write can ask you to unlock the vault), never while idle, and once more when the daemon is stopped. `audit.anchorIntervalSeconds` sets the interval; `0` turns it off.
+- `aquaman audit verify` now reads the vault, and fails if it cannot. `--chain-only` checks the chain alone; `--json` prints the result as JSON.
+- `aquaman audit accept` sets the anchor to the log as it is, for a log you restored or deleted on purpose. It needs a terminal, a typed yes and no proxy running, and records the reset.
+- Entries carry a sequence number, and the chain continues across log rotation. Existing logs keep working and are not rewritten; a log from before this release reads "not anchored yet" until the daemon writes its first anchor.
+- It also notices entries removed from the beginning of the log: the anchor records where the log is supposed to begin, and that only moves when aquaman itself prunes old archives.
+- `audit verify` and `audit tail` only read. They can be run while the daemon is writing, and they change nothing on disk.
+- Several processes can write one log, for example the daemon and a proxy that OpenClaw starts: each entry is appended under a short lock and continues the chain from what is on disk. A process that cannot get the lock within two seconds refuses the request with `audit_unavailable`.
+- What it does not detect: the removal of entries written since the last anchor, and a change made by software that can also write to your vault.
+
+Fixes on the way: two log rotations within one millisecond no longer overwrite each other's archive; an entry recovered after a crash is no longer written twice; and running `audit verify` or `audit tail` beside a busy daemon could write an entry twice and break the chain, which reading no longer can.
+
+### Behaviour changes to expect
+
+- `aquaman audit verify` exits 1 when the vault cannot be read (locked, password not set). Use `--chain-only` where that is expected.
+- Your vault gains up to two items that aquaman keeps for itself: `aquaman_internal/audit_anchor`, and `aquaman_internal/link_approvals` once you approve a link. Both are hidden from `aquaman credentials list` and cannot be read, declared, linked or changed through aquaman.
+- With 1Password in desktop mode, an active daemon writes the anchor every 15 minutes, which can show an unlock prompt. Set `audit.anchorIntervalSeconds: 0` to turn anchoring off.
+- `aquaman init --agent` adds a step to `human_steps` when the daemon does not start at login.
+- `aquaman openclaw setup` and `aquaman openclaw migrate --auto` skip, and name, a plugin whose id is not a valid service name (uppercase letters, spaces, slashes). Its credentials stay in `openclaw.json`.
+- Every audit write, and `aquaman audit rotate`, waits for a lock that the aquaman processes on one config directory share.
+
 ## 0.18.2
 
 Setup no longer writes secrets to `config.yaml` or shows them as you type.

@@ -18,11 +18,13 @@
  * and should not extend credential residency.
  */
 
-import type { CredentialStore } from './store.js';
+import type { CredentialStore, ParsedLocator } from './store.js';
 
 interface CacheEntry {
   value: string;
   fetchedAt: number;
+  /** What the reference was linked to when the value was read (`''` for none). */
+  link: string;
 }
 
 export class CachingStore implements CredentialStore {
@@ -44,18 +46,31 @@ export class CachingStore implements CredentialStore {
   async get(service: string, key: string): Promise<string | null> {
     const k = this.cacheKey(service, key);
     const entry = this.cache.get(k);
-    if (entry && Date.now() - entry.fetchedAt < this.ttlMs) {
+    // A value read through one link, or from aquaman's own item, is not the
+    // value of the reference once its link is made, changed or removed.
+    const link = this.inner.linkStamp?.(service, key) ?? '';
+    if (entry && entry.link === link && Date.now() - entry.fetchedAt < this.ttlMs) {
       return entry.value;
     }
     const value = await this.inner.get(service, key);
     if (value !== null) {
-      this.cache.set(k, { value, fetchedAt: Date.now() });
+      this.cache.set(k, { value, fetchedAt: Date.now(), link });
     } else {
       // Never cache misses: a just-added credential must be visible on the
       // next read, and a stale hit must not outlive a backend-side removal.
       this.cache.delete(k);
     }
     return value;
+  }
+
+  /**
+   * Read from the backend whatever the cache holds, and cache what comes
+   * back. For a value another process may have written since this one last
+   * read it: the audit anchor.
+   */
+  async getFresh(service: string, key: string): Promise<string | null> {
+    this.cache.delete(this.cacheKey(service, key));
+    return this.get(service, key);
   }
 
   async set(service: string, key: string, value: string, metadata?: Record<string, string>): Promise<void> {
@@ -69,12 +84,34 @@ export class CachingStore implements CredentialStore {
     return deleted;
   }
 
-  async list(service?: string): Promise<Array<{ service: string; key: string }>> {
+  async list(service?: string): Promise<Array<{ service: string; key: string; linked?: string }>> {
     return this.inner.list(service);
   }
 
   async exists(service: string, key: string): Promise<boolean> {
     return this.inner.exists(service, key);
+  }
+
+  /** Passed through and never cached: this is the read that checks a link before it is made. */
+  async readLinked(locator: ParsedLocator): Promise<string | null> {
+    return this.inner.readLinked ? this.inner.readLinked(locator) : null;
+  }
+
+  linkStamp(service: string, key: string): string {
+    return this.inner.linkStamp?.(service, key) ?? '';
+  }
+
+  async approveLink(service: string, key: string, locator: string): Promise<void> {
+    if (!this.inner.approveLink) throw new Error('This credential store does not record link approvals');
+    await this.inner.approveLink(service, key, locator);
+  }
+
+  async revokeLink(service: string, key: string): Promise<boolean> {
+    return (await this.inner.revokeLink?.(service, key)) === true;
+  }
+
+  async linkApproved(name: string, locator: string): Promise<boolean> {
+    return (await this.inner.linkApproved?.(name, locator)) === true;
   }
 
   /** Drop every cached value (next reads go to the backend). */

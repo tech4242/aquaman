@@ -16,7 +16,11 @@ import { OAuthTokenCache, createOAuthTokenCache } from './oauth-token-cache.js';
 import { matchPolicy, type PolicyConfig } from './request-policy.js';
 import { parseRequestTarget, policyPathInterpretations, policyMethods, policyPathOverrides } from './request-target.js';
 import { clampPromptTimeout, type CredentialPrompter, type PromptResult } from './credential-prompt.js';
-import type { BrokerScope } from './broker-scope.js';
+import { handleServiceConsent, SERVICE_CONSENT_PATH, type PromptLimiter } from './service-consent.js';
+import { isReservedService, reservedServiceRefusal, type BrokerScope } from './broker-scope.js';
+import { routableKeys, routeKeyMismatch, basicTokenCandidates, basicValueCarries } from './route-auth.js';
+import type { CredentialLinker } from './core/credentials/linked-store.js';
+import { linkRequestPlan, linkUnreadableReply } from './link-request.js';
 
 // Service name validation: lowercase alphanum, dots, hyphens, underscores
 const SAFE_SERVICE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
@@ -141,6 +145,11 @@ export interface CredentialProxyOptions {
     prompter: CredentialPrompter;
     /** Persist the ref as declared, so the broker scope serves it from now on. */
     declare(service: string, key: string): void | Promise<void>;
+    /**
+     * Makes links to items that already exist in the vault (`from` in the
+     * request). Without it a request that names an item is refused.
+     */
+    links?: CredentialLinker;
   };
 }
 
@@ -297,6 +306,8 @@ export class CredentialProxy {
     if (ownValue) {
       candidates.push(def.authPrefix && ownValue.startsWith(def.authPrefix) ? ownValue.slice(def.authPrefix.length) : ownValue);
     }
+    // A basic client builds the header itself, so the token is one half of the pair.
+    if (def.authMode === 'basic') candidates.push(...basicTokenCandidates(req.headers.authorization));
     return candidates.some(c => timingSafeStrEqual(c, this.routeToken));
   }
 
@@ -329,7 +340,8 @@ export class CredentialProxy {
   /** True for a header value that is, or wraps, one of this proxy's own tokens. Those never go upstream. */
   private carriesLocalToken(value: string): boolean {
     const lb = this.options.loopback?.token;
-    return value.includes(this.routeToken) || (!!lb && value.includes(lb));
+    const tokens = lb ? [this.routeToken, lb] : [this.routeToken];
+    return tokens.some((t) => value.includes(t)) || basicValueCarries(value, tokens);
   }
 
   /**
@@ -446,6 +458,20 @@ export class CredentialProxy {
       return;
     }
 
+    if ((url === SERVICE_CONSENT_PATH || url === `${SERVICE_CONSENT_PATH}/`) && req.method === 'POST') {
+      await handleServiceConsent(req, res, {
+        fromLoopback,
+        // Off wherever credential requests are off: the same dialog machinery.
+        prompter: this.options.broker ? this.options.credentialRequests?.prompter : undefined,
+        limiter: this.promptLimiter,
+        audit: (error) => this.emitRequest({
+          id: requestId, service: 'aquaman-service', method: 'SERVICE_CONSENT', path: SERVICE_CONSENT_PATH,
+          timestamp: new Date(), authenticated: false, statusCode: 200, error,
+        }),
+      });
+      return;
+    }
+
     // One strict reading of the request target, used for the service name,
     // the policy check AND the upstream path. Anything a server could read
     // two ways (backslashes, dot segments, encoded separators) is refused
@@ -466,7 +492,8 @@ export class CredentialProxy {
     const service = pathParts[0];
 
     // Validate service name to prevent path traversal / injection
-    if (service && !SAFE_SERVICE_NAME.test(service)) {
+    // A reserved name is never forwarded for, whatever the config lists.
+    if (service && (!SAFE_SERVICE_NAME.test(service) || isReservedService(service))) {
       res.statusCode = 404;
       res.end('Not found');
       return;
@@ -826,6 +853,17 @@ export class CredentialProxy {
   private requestPromptOpen = false;
   private requestPromptTimes: number[] = [];
   private requestDeclinedAt = new Map<string, number>();
+  /** The dialog limits above, for the other endpoint that shows a dialog: one budget for both. */
+  private readonly promptLimiter: PromptLimiter = {
+    cooldownMs: REQUEST_DECLINE_COOLDOWN_MS,
+    windowMs: REQUEST_WINDOW_MS,
+    maxPerWindow: REQUEST_MAX_PROMPTS_PER_WINDOW,
+    isOpen: () => this.requestPromptOpen,
+    setOpen: (open) => { this.requestPromptOpen = open; },
+    times: () => this.requestPromptTimes,
+    setTimes: (times) => { this.requestPromptTimes = times; },
+    declinedAt: this.requestDeclinedAt,
+  };
 
   /**
    * POST /broker/request  { service, key, project? }
@@ -836,6 +874,7 @@ export class CredentialProxy {
    *   200 { status: "ready" }     already stored and declared; nothing asked
    *   200 { status: "stored" }    the human typed it; now stored and declared
    *   200 { status: "approved" }  already stored; the human allowed its use
+   *   200 { status: "linked" }    `from` named a vault item; the human allowed it and it resolved
    *   200 { status: "declined" }  the human said no (or did so recently)
    *   200 { status: "pending" }   nobody could be asked; `fix` says what to run
    *   404 { code }                broker off here, or not the Unix socket
@@ -853,13 +892,15 @@ export class CredentialProxy {
 
   /**
    * Whether a project has routed a program to this service in a way the
-   * proxy can serve: the service takes its credential in a header, and the
-   * routed reference is the key the proxy injects for it.
+   * proxy can serve: the service takes its credential in a header or as
+   * HTTP basic auth, and the routed reference is a key the proxy injects for
+   * it (route-auth.ts).
    */
   private isServiceRouted(service: string): boolean {
     const def = this.serviceRegistry.get(service);
-    if (!def || (def.authMode ?? 'header') !== 'header') return false;
-    return this.options.broker?.routedRefs?.().has(`aquaman://${service}/${def.credentialKey}`) === true;
+    if (!def) return false;
+    const routed = this.options.broker?.routedRefs?.();
+    return routableKeys(def).some((key) => routed?.has(`aquaman://${service}/${key}`) === true);
   }
 
   /**
@@ -872,8 +913,9 @@ export class CredentialProxy {
    * applies to everything sent with it. So this endpoint never touches a
    * credential value, and the token it returns is refused by every broker
    * endpoint. It answers only over the Unix socket, only for a reference a
-   * project has routed, only for a service the proxy injects a header for,
-   * and only when the reference names the key the proxy would inject.
+   * project has routed, only for a service the proxy injects a header or
+   * basic auth for, only when the reference names a key the proxy would
+   * inject, and only when every key of that injection is stored.
    */
   private async handleBrokerRoute(req: IncomingMessage, res: ServerResponse, fromLoopback: boolean): Promise<void> {
     res.setHeader('Content-Type', 'application/json');
@@ -917,6 +959,11 @@ export class CredentialProxy {
         error: `${code}: ${service}/${key}`,
       });
     };
+    const reserved = reservedServiceRefusal(service, key);
+    if (reserved) {
+      refuse(reserved.code, reserved.reason, reserved.fix);
+      return;
+    }
     if (fromLoopback) {
       refuse('route_socket_only', 'Routes are handed out over the Unix socket only', 'Ask over the proxy socket');
       return;
@@ -942,23 +989,29 @@ export class CredentialProxy {
       refuse('route_service_unknown', `The proxy has no definition for "${service}", so it cannot forward requests for it`, `Add "${service}" to services.yaml (see docs/app-through-proxy.md), or bind the reference without --via-proxy`);
       return;
     }
-    if ((serviceDef.authMode ?? 'header') !== 'header') {
-      refuse('route_unsupported', `"${service}" does not take its credential in a request header, so a program cannot be routed to it this way`, 'Bind the reference without --via-proxy');
+    const keys = routableKeys(serviceDef);
+    if (keys.length === 0) {
+      refuse('route_unsupported', `"${service}" does not take its credential in a request header or as HTTP basic auth, so a program cannot be routed to it this way`, 'Bind the reference without --via-proxy');
       return;
     }
-    if (key !== serviceDef.credentialKey) {
-      refuse('route_key_mismatch', `The proxy injects ${service}/${serviceDef.credentialKey} for this service, not ${service}/${key}`, `Use aquaman://${service}/${serviceDef.credentialKey}`);
+    if (!keys.includes(key)) {
+      const mismatch = routeKeyMismatch(service, keys, key);
+      refuse('route_key_mismatch', mismatch.error, mismatch.fix);
       return;
     }
-    let stored = false;
-    try {
-      stored = (await this.options.store.get(service, key)) !== null;
-    } catch {
-      stored = false;
-    }
-    if (!stored) {
-      refuse('credential_not_found', `Credential not found: ${service}/${key}`, `Run: aquaman credentials add ${service} ${key}`);
-      return;
+    // Every key the proxy injects for the service, the routed one first: a
+    // basic request sent with half a pair would only fail at the upstream.
+    for (const needed of [key, ...keys.filter((k) => k !== key)]) {
+      let stored = false;
+      try {
+        stored = (await this.options.store.get(service, needed)) !== null;
+      } catch {
+        stored = false;
+      }
+      if (!stored) {
+        refuse('credential_not_found', `Credential not found: ${service}/${needed}`, `Run: aquaman credentials add ${service} ${needed}`);
+        return;
+      }
     }
     reply(200, { url: `http://${address}/${service}`, token: this.routeToken });
     this.emitRequest({
@@ -1013,6 +1066,7 @@ export class CredentialProxy {
       if (
         typeof service === 'string' && SAFE_SERVICE_NAME.test(service) &&
         typeof key === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(key) &&
+        !isReservedService(service) &&
         (scope.check(service, key, fromLoopback ? 'loopback' : 'uds').allowed ||
           // A routed reference is usable by its project without being resolvable.
           (!fromLoopback && scope.routedRefs?.().has(`aquaman://${service}/${key}`) === true))
@@ -1048,7 +1102,7 @@ export class CredentialProxy {
         return;
       }
     }
-    let body: { service?: unknown; key?: unknown; project?: unknown; timeout_seconds?: unknown; routed?: unknown };
+    let body: { service?: unknown; key?: unknown; project?: unknown; timeout_seconds?: unknown; routed?: unknown; from?: unknown; declare?: unknown };
     try {
       body = JSON.parse(bodyBuf);
     } catch {
@@ -1074,13 +1128,20 @@ export class CredentialProxy {
       reply(400, { error: `Invalid key name: ${JSON.stringify(key)}`, fix: 'Key names must match /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/' });
       return;
     }
+    // Before the vault is asked anything and before any dialog: a reserved
+    // name is never stored, approved or declared for a caller.
+    const reserved = reservedServiceRefusal(service, key);
+    if (reserved) {
+      reply(404, { error: reserved.reason, fix: reserved.fix, code: reserved.code });
+      return;
+    }
     const project = typeof body.project === 'string' ? body.project : undefined;
     const timeoutSeconds = clampPromptTimeout(body.timeout_seconds);
     const ref = `aquaman://${service}/${key}`;
     // Asked for on behalf of a binding made through the proxy: the value is
     // stored, and the reference is not declared for handing out.
     const routed = body.routed === true;
-    const manual = routed
+    let manual = routed
       ? `aquaman credentials add ${service} ${key}`
       : `aquaman credentials add ${service} ${key} && aquaman broker allow ${ref}`;
 
@@ -1114,9 +1175,29 @@ export class CredentialProxy {
       return;
     }
 
+    // `from` asks for a link to an item that already exists in the vault.
+    // Until the person has agreed, only the locator's syntax and the link map
+    // are looked at: reading or probing the item here would let a request
+    // find out which items exist.
+    // `declare: false` with `from` links the reference and leaves it
+    // undeclared: the proxy can inject the value, nothing is handed out.
+    const linkOnly = body.from !== undefined && body.declare === false && !routed;
+    const link = await linkRequestPlan(requests.links, service, key, body.from, routed, !linkOnly);
+    if (link && !link.ok) {
+      reply(link.status, { error: link.error, fix: link.fix, code: link.code });
+      return;
+    }
+    if (linkOnly && link && !link.pending) {
+      // Already linked to this item with a person's approval: nothing to ask.
+      reply(200, { status: 'ready', ref });
+      return;
+    }
+    const linkFrom = link?.pending ? link.locator : undefined;
+    if (link?.pending) manual = link.manual;
+
     let exists: boolean;
     try {
-      exists = await this.options.store.exists(service, key);
+      exists = linkFrom === undefined && await this.options.store.exists(service, key);
     } catch (err) {
       reply(500, {
         error: `Vault backend error checking ${service}/${key}: ${err instanceof Error ? err.message : String(err)}`,
@@ -1129,6 +1210,12 @@ export class CredentialProxy {
       : scope.check(service, key, 'uds').allowed;
     if (exists && declared) {
       reply(200, { status: 'ready', ref });
+      return;
+    }
+    // A linked reference whose item cannot be read is not asked for as a new
+    // value: a typed value is never written over a link.
+    if (!exists && linkFrom === undefined && requests.links?.linkOf(service, key) !== undefined) {
+      reply(404, linkUnreadableReply(service, key));
       return;
     }
 
@@ -1155,11 +1242,17 @@ export class CredentialProxy {
     this.requestPromptTimes.push(now);
     let result: PromptResult;
     try {
-      // `routed` picks the dialog's wording: what the person is told has to
-      // match what a caller can obtain once they agree.
-      result = exists
-        ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds, routed })
-        : await requests.prompter.askValue({ service, key, project, timeoutSeconds, routed });
+      // The dialog's wording has to match what a caller can obtain once the
+      // person agrees. A routed request leaves the value out of reach only
+      // while the reference is not declared some other way; one that is
+      // already declared is handed out, and the dialog must say so.
+      const handedOut = scope.check(service, key, 'uds').allowed;
+      const keptFromCallers = routed && !handedOut;
+      result = linkFrom !== undefined
+        ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds, routed: keptFromCallers, from: linkFrom, linkOnly: linkOnly && !handedOut })
+        : exists
+          ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds, routed: keptFromCallers })
+          : await requests.prompter.askValue({ service, key, project, timeoutSeconds, routed: keptFromCallers });
     } catch (err) {
       result = { outcome: 'unavailable', reason: err instanceof Error ? err.message : String(err) };
     } finally {
@@ -1180,17 +1273,31 @@ export class CredentialProxy {
         status: 'pending',
         ref,
         reason: result.outcome === 'timeout' ? 'nobody answered the dialog' : result.reason,
+        // Told apart from "nobody answered": on a machine that cannot show a
+        // dialog, a command at a terminal has its own way to ask the person.
+        ...(result.outcome === 'unavailable' ? { code: 'prompt_unavailable' } : {}),
         fix: manual,
       });
       return;
     }
 
     try {
+      if (linkFrom !== undefined) {
+        // The person agreed, so the item is read here for the first time. A
+        // link is written only if it resolves and nothing is stored under the
+        // reference; this refusal may say the item is missing.
+        const made = await requests.links!.establish(service, key, linkFrom);
+        if (!made.ok) {
+          audit(`${made.code}: ${service}/${key}`);
+          reply(404, { error: made.error, fix: made.fix, code: made.code });
+          return;
+        }
+      }
       // Checked again: the dialog was open for a while, and a stored value is never replaced.
       if (result.outcome === 'entered' && !(await this.options.store.exists(service, key))) {
         await this.options.store.set(service, key, result.value);
       }
-      if (!declared && !routed) await requests.declare(service, key);
+      if (!declared && !routed && !linkOnly) await requests.declare(service, key);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       audit(message);
@@ -1198,7 +1305,7 @@ export class CredentialProxy {
       return;
     }
     audit();
-    reply(200, { status: result.outcome === 'entered' ? 'stored' : 'approved', ref });
+    reply(200, { status: linkFrom !== undefined ? 'linked' : result.outcome === 'entered' ? 'stored' : 'approved', ref });
   }
 
   private async handleBrokerResolve(
@@ -1278,14 +1385,14 @@ export class CredentialProxy {
     // treat 401/403 as "bad token" (the Hermes source aborts all refs on
     // those) handle a refusal per ref, like a missing credential.
     const scope = this.options.broker;
-    const decision = scope
+    const decision = reservedServiceRefusal(service, key) ?? (scope
       ? scope.check(service, key, fromLoopback ? 'loopback' : 'uds')
       : {
           allowed: false as const,
           code: 'broker_disabled' as const,
           reason: 'The credential broker is disabled on this proxy',
           fix: 'OpenClaw-hosted proxies never hand out credential values. For coding agents or the Hermes secret source, run: aquaman daemon',
-        };
+        });
     if (!decision.allowed) {
       res.statusCode = 404;
       res.end(JSON.stringify({ error: decision.reason, fix: decision.fix, code: decision.code }));

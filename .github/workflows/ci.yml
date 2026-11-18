@@ -79,6 +79,15 @@ jobs:
         run: |
           npm ci --legacy-peer-deps --ignore-scripts
           npm rebuild keytar esbuild oxlint
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Python clients for the routed-app tests
+        # test/e2e/approute-clients.test.ts runs these under python3 and skips
+        # a client whose module is missing, so without them nothing is tested.
+        run: |
+          uv venv "$RUNNER_TEMP/app-clients"
+          uv pip install --python "$RUNNER_TEMP/app-clients/bin/python" anthropic slack_sdk requests httpx
+          echo "$RUNNER_TEMP/app-clients/bin" >> "$GITHUB_PATH"
       - run: npm test
 
   coverage:
@@ -102,6 +111,15 @@ jobs:
         run: |
           npm ci --legacy-peer-deps --ignore-scripts
           npm rebuild keytar esbuild oxlint
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Python clients for the routed-app tests
+        # test/e2e/approute-clients.test.ts runs these under python3 and skips
+        # a client whose module is missing, so without them nothing is tested.
+        run: |
+          uv venv "$RUNNER_TEMP/app-clients"
+          uv pip install --python "$RUNNER_TEMP/app-clients/bin/python" anthropic slack_sdk requests httpx
+          echo "$RUNNER_TEMP/app-clients/bin" >> "$GITHUB_PATH"
       - run: npm run test:coverage
       - name: Upload coverage to Codecov
         # Dependabot-triggered runs get no repo secrets, so the upload can only
