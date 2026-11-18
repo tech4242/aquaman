@@ -19,6 +19,30 @@ export {
 } from './caching-store.js';
 
 export {
+  type LinkScheme,
+  type ParsedLocator,
+  type LocatorResult,
+  type LinkProblem,
+  LOCATOR_MAX_LENGTH,
+  LINK_SCHEME_BY_BACKEND,
+  parseLocator,
+  parseLocatorFor,
+  parseLinkName,
+  loadCredentialLinks,
+  createLinkSource,
+  writeCredentialLink,
+  findLinkProblems
+} from './links.js';
+
+export {
+  LinkedStore,
+  createCredentialLinker,
+  type CredentialLinker,
+  type LinkPlan,
+  type LinkOutcome
+} from './linked-store.js';
+
+export {
   type OnePasswordStoreOptions,
   OnePasswordStore,
   createOnePasswordStore,

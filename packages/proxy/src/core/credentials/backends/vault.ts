@@ -4,6 +4,7 @@
  */
 
 import type { CredentialStore } from '../store.js';
+import type { ParsedLocator } from '../links.js';
 
 export interface VaultStoreOptions {
   address: string;      // https://vault.example.com:8200
@@ -195,6 +196,35 @@ export class VaultStore implements CredentialStore {
   async exists(service: string, key: string): Promise<boolean> {
     const value = await this.get(service, key);
     return value !== null;
+  }
+
+  /**
+   * A KV v2 secret aquaman did not write: one string field of the secret at
+   * `<mount>/<path>`. Each part is encoded as one URL segment.
+   */
+  async readLinked(locator: ParsedLocator): Promise<string | null> {
+    // What sits under aquaman's prefix on its own mount is what it wrote. Those
+    // are reached by their own reference, never under a second name.
+    const own = [...this.mountPath.split('/'), AQUAMAN_PATH_PREFIX];
+    if (own.every((part, i) => locator.path[i] === part) && locator.mountParts === own.length - 1) {
+      throw new Error(`${locator.text} names an item aquaman itself wrote; use that credential by its own reference`);
+    }
+    const segments = locator.path.map((p) => encodeURIComponent(p));
+    const mount = segments.slice(0, locator.mountParts).join('/');
+    const secret = segments.slice(locator.mountParts).join('/');
+    const result = await this.request('GET', `${mount}/data/${secret}`);
+    if (result.status === 404) {
+      return null;
+    }
+    const fields = (result.data as { data?: Record<string, unknown> } | undefined)?.data;
+    if (!fields || !Object.hasOwn(fields, locator.field)) {
+      return null;
+    }
+    const value = fields[locator.field];
+    if (typeof value !== 'string') {
+      throw new Error(`Field "${locator.field}" of ${locator.text} is not a string`);
+    }
+    return value.length > 0 ? value : null;
   }
 
   /**

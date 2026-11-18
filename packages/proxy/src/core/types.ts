@@ -85,6 +85,13 @@ export interface CredentialsConfig {
   // Keeper options (Keeper Commander, v0.16.0+)
   keeperFolderUid?: string;
   keeperConfigPath?: string;
+  /**
+   * References read from items that already exist in the vault:
+   * `<service>/<key>` to a locator of the configured backend's scheme
+   * (credentials/links.ts). Written by `aquaman credentials link` and by an
+   * approved `aquaman request --from`. aquaman only reads these items.
+   */
+  links?: Record<string, string>;
 }
 
 export interface AuditConfig {

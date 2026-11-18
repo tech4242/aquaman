@@ -8,10 +8,14 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { encryptWithPassword, decryptWithPassword } from '../utils/hash.js';
-import { getConfigDir } from '../utils/config.js';
+import { getConfigDir, getConfigPath } from '../utils/config.js';
 import type { CredentialBackend } from '../types.js';
 import { KeePassXCStore } from './backends/keepassxc.js';
+import { createLinkSource, type ParsedLocator } from './links.js';
+import { LinkedStore } from './linked-store.js';
 import { SystemdCredsStore } from './backends/systemd-creds.js';
+
+export type { ParsedLocator };
 
 export interface Credential {
   service: string;
@@ -27,8 +31,17 @@ export interface CredentialStore {
   get(service: string, key: string): Promise<string | null>;
   set(service: string, key: string, value: string, metadata?: Record<string, string>): Promise<void>;
   delete(service: string, key: string): Promise<boolean>;
-  list(service?: string): Promise<Array<{ service: string; key: string }>>;
+  /** `linked` is the locator of the vault item a reference is read from, when it is a link. */
+  list(service?: string): Promise<Array<{ service: string; key: string; linked?: string }>>;
   exists(service: string, key: string): Promise<boolean>;
+  /**
+   * Read an item aquaman did not write, named by a parsed locator of this
+   * backend's scheme. `null` when there is no such item or field. Backends
+   * that hold only what aquaman wrote do not have this.
+   */
+  readLinked?(locator: ParsedLocator): Promise<string | null>;
+  /** The locator a reference is linked to right now, or `''`. A cache uses it to notice a link that changed. */
+  linkStamp?(service: string, key: string): string;
 }
 
 export interface CredentialStoreOptions {
@@ -54,6 +67,14 @@ export interface CredentialStoreOptions {
   // Keeper options
   keeperFolderUid?: string;
   keeperConfigPath?: string;
+  /**
+   * Links (`credentials.links`): `'always'` for a process that outlives the
+   * config it started with, so a link made later is honoured; `false` for the
+   * bare backend. By default the store is link-aware when the config has links.
+   */
+  links?: 'always' | false;
+  /** The config.yaml that holds `credentials.links`. Default: the active config file. */
+  linksConfigPath?: string;
 }
 
 /**
@@ -143,6 +164,12 @@ export class KeychainStore implements CredentialStore {
   async exists(service: string, key: string): Promise<boolean> {
     const value = await this.get(service, key);
     return value !== null;
+  }
+
+  /** A generic password aquaman did not write: `keychain://<service>/<account>`. */
+  async readLinked(locator: ParsedLocator): Promise<string | null> {
+    const keytar = await this.getKeytar();
+    return keytar.getPassword(locator.path[0], locator.field);
   }
 }
 
@@ -353,7 +380,20 @@ export function validatePasswordStrength(password: string): { valid: boolean; er
   return { valid: errors.length === 0, errors };
 }
 
+/**
+ * The store for the configured backend, link-aware when it needs to be: a
+ * reference listed in `credentials.links` is read from the vault item it
+ * names, and is never written or deleted through aquaman.
+ */
 export async function createCredentialStore(options: CredentialStoreOptions): Promise<CredentialStore> {
+  const store = await createBackendStore(options);
+  if (options.links === false) return store;
+  const links = createLinkSource(options.linksConfigPath ?? getConfigPath());
+  if (options.links !== 'always' && links().size === 0) return store;
+  return new LinkedStore(store, options.backend, links);
+}
+
+async function createBackendStore(options: CredentialStoreOptions): Promise<CredentialStore> {
   switch (options.backend) {
     case 'keychain':
       return new KeychainStore();
