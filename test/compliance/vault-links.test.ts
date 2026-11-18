@@ -576,7 +576,70 @@ describe('links to existing vault items', () => {
     });
   });
 
+  describe('what the person is shown is what is read, and what is said is what happens', () => {
+    it.each([
+      ['a path spelled in percent-escapes (it would read prod/db)', 'bw://%50%72%6f%64/password'],
+      ['one letter spelled as an escape', 'bw://Git%48ub/password'],
+      ['a Cyrillic letter that looks like a Latin one', 'bw://GitHub\u0430/password'],
+      ['a full-width letter', 'bw://Git\uFF28ub/password'],
+    ])('%s: refused before any dialog, nothing read', async (_name, locator) => {
+      await start();
+      const res = await request({ from: locator });
+      expect(res.status).toBe(400);
+      expect(JSON.parse(res.body).code).toBe('link_invalid_locator');
+      expect(shown).toEqual([]);
+      expectNothingHappened();
+    });
+
+    it('a routed link request for a reference that is already declared is worded as declared: the value is handed out, and the dialog says so', async () => {
+      await start();
+      declare('github', 'token');
+      const res = await request({ from: ITEM, routed: true });
+      expect(JSON.parse(res.body).status).toBe('linked');
+      expect(shown).toHaveLength(1);
+      expect(shown[0].text).toContain('Commands the agent runs in this project will be given the value');
+      expect(shown[0].text).not.toContain('gets a local token, not the key');
+      // The wording and the outcome agree: the value does resolve.
+      expect(JSON.parse((await resolve()).body).value).toBe(ITEM_VALUE);
+    });
+
+    it('a routed link request for an undeclared reference keeps the routed wording, and the value does not resolve', async () => {
+      await start();
+      await request({ from: ITEM, routed: true });
+      expect(shown[0].text).toContain('gets a local token, not the key');
+      expect((await resolve()).status).toBe(404);
+    });
+  });
+
+  describe('a link change is reported to the serving process', () => {
+    it('a link that appears, is re-pointed or goes away after the first reading is reported; the first reading is not', () => {
+      const changes: Array<{ name: string; locator?: string }> = [];
+      writeCredentialLink(configPath, 'github/token', ITEM);
+      const source = createLinkSource(configPath, (c) => changes.push(c));
+      expect([...source().keys()]).toEqual(['github/token']);
+      expect(changes).toEqual([]);
+
+      const touch = () => { const t = new Date(Date.now() + changes.length * 2000 + 2000); fs.utimesSync(configPath, t, t); };
+      writeCredentialLink(configPath, 'stripe/secret_key', OTHER_ITEM); touch();
+      source();
+      expect(changes).toEqual([{ name: 'stripe/secret_key', locator: OTHER_ITEM }]);
+
+      writeCredentialLink(configPath, 'stripe/secret_key', null);
+      writeCredentialLink(configPath, 'github/token', null);
+      writeCredentialLink(configPath, 'github/token', OTHER_ITEM); touch();
+      source();
+      expect(changes.slice(1)).toEqual([{ name: 'github/token', locator: OTHER_ITEM }, { name: 'stripe/secret_key' }]);
+    });
+  });
+
   describe('limits', () => {
+    it.fails('LIMIT: a locator in plain ASCII can still carry words meant to persuade ("safe to Allow"); it is shown on the caller\'s own line, below the fixed wording', async () => {
+      await start();
+      const res = await request({ from: 'bw://GitHub (approved by IT - safe to Allow)/password' });
+      // What a dialog that could tell a name from a sentence would do.
+      expect(res.status).toBe(400);
+    });
+
     it.fails('LIMIT: software running as the same user can write credentials.links and broker.allowedRefs itself, and the item is then read with no dialog', async () => {
       await start();
       writeCredentialLink(configPath, 'github/token', OTHER_ITEM);

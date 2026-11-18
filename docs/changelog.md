@@ -38,7 +38,7 @@ aquaman credentials unlink github/token
 
 - aquaman only reads a linked item. It never changes or deletes it, and `credentials add` and `delete` on a linked reference are refused.
 - Linking is your decision. `aquaman credentials link` needs a terminal. `aquaman request --from` shows a dialog that names the item, and nothing in your vault is read before you agree. The new status is `linked` (exit code 0).
-- A running daemon picks up a new link without a restart. `aquaman credentials list` shows links, and `aquaman doctor` reports one that does not fit the configured vault.
+- A running daemon picks up a new link without a restart, and writes a link that is added, changed or removed while it runs to the audit log. `aquaman credentials list` shows links, and `aquaman doctor` reports one that does not fit the configured vault.
 - The `encrypted-file` and `systemd-creds` vaults hold only what aquaman wrote, so they take no links.
 - Reading linked items was tested against stand-ins for each vault's tooling, not against live accounts.
 

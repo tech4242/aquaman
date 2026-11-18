@@ -39,6 +39,19 @@ export function linkRequestPlan(
       fix: 'Run: aquaman daemon',
     };
   }
+  // The locator is shown to a person who decides by reading it. Letters from
+  // other scripts can look like the ones they expect, so a request made
+  // through the dialog names its item in printable ASCII; an item with another
+  // name is linked by its ID, or by the person with `aquaman credentials link`.
+  if (typeof from === 'string' && !/^[\x20-\x7e]*$/.test(from)) {
+    return {
+      ok: false,
+      status: 400,
+      code: 'link_invalid_locator',
+      error: 'Not a usable vault locator: it has characters outside printable ASCII, which a dialog cannot show unambiguously',
+      fix: `Use the item's ID where the vault has one, or ask the person to run: aquaman credentials link ${service}/${key} <locator>`,
+    };
+  }
   const plan = linker.plan(service, key, from);
   if (!plan.ok) return { ...plan, status: plan.code === 'link_exists' ? 409 : 400 };
   if (plan.linked) return { ok: true, pending: false };

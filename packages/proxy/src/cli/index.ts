@@ -117,6 +117,28 @@ function printOnePasswordModeHint(config: WrapperConfig, indent = '    '): void 
 }
 
 /**
+ * For a process that serves credentials: write an audit entry when a link to
+ * a vault item appears, goes away or is re-pointed while it runs, whoever
+ * changed `credentials.links`. A link decides which vault item a reference is
+ * read from, so the change belongs in the same log as the reads.
+ */
+function recordLinkChange(logger: () => ReturnType<typeof createAuditLogger>): (change: { name: string; locator?: string }) => void {
+  return (change) => {
+    const service = change.name.split('/')[0];
+    logger().logCredentialAccess('system', 'system', {
+      service,
+      operation: 'rotate',
+      success: true,
+      note: change.locator === undefined
+        ? `link removed: ${change.name}`
+        : `link set: ${change.name} is read from ${change.locator}`,
+    }).catch((err: unknown) => {
+      console.error(`AUDIT FAILURE: could not record a link change for ${change.name}: ${err instanceof Error ? err.message : err}`);
+    });
+  };
+}
+
+/**
  * Map config.credentials onto CredentialStoreOptions — the single source for
  * every createCredentialStore() call in this CLI. Env fallbacks mirror
  * applyEnvOverrides() (belt and braces for callers that build partial configs).
@@ -914,7 +936,7 @@ openclaw
     // Initialize credential store
     let credentialStore;
     try {
-      credentialStore = wrapWithCache(await createCredentialStore(storeOptionsFromConfig(config)), resolveCacheTtl(config));
+      credentialStore = wrapWithCache(await createCredentialStore({ ...storeOptionsFromConfig(config), onLinkChange: recordLinkChange(() => auditLogger) }), resolveCacheTtl(config));
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
       console.error('Fix the backend configuration and retry. Run: aquaman doctor');
@@ -1089,7 +1111,7 @@ program
     // Initialize credential store
     let credentialStore;
     try {
-      credentialStore = wrapWithCache(await createCredentialStore(storeOptionsFromConfig(config)), resolveCacheTtl(config));
+      credentialStore = wrapWithCache(await createCredentialStore({ ...storeOptionsFromConfig(config), onLinkChange: recordLinkChange(() => auditLogger) }), resolveCacheTtl(config));
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
       console.error('Fix the backend configuration and retry. Run: aquaman doctor');
@@ -1192,7 +1214,7 @@ openclaw
     // Initialize credential store
     let credentialStore;
     try {
-      credentialStore = wrapWithCache(await createCredentialStore(storeOptionsFromConfig(config)), resolveCacheTtl(config));
+      credentialStore = wrapWithCache(await createCredentialStore({ ...storeOptionsFromConfig(config), onLinkChange: recordLinkChange(() => auditLogger) }), resolveCacheTtl(config));
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
       console.error('Fix the backend configuration and retry. Run: aquaman doctor');

@@ -143,7 +143,7 @@ One locator form per vault backend. A locator only works with the backend that i
 | Keeper | `keeper://<record UID>/<field>`; the field defaults to `password` |
 | encrypted file, systemd-creds | None. These hold only what aquaman wrote |
 
-A locator is at most 200 characters, has no control characters and no backslash, and no part of it starts with `-` or is `.` or `..`. A `/` inside a name is written `%2F` (not in `op://` or `keeper://` locators, which take no escapes; address such a 1Password item by its ID).
+A locator is at most 200 characters, has no control characters and no backslash, and no part of it starts with `-` or is `.` or `..`. A `/` inside a name is written `%2F` (not in `op://` or `keeper://` locators, which take no escapes; address such a 1Password item by its ID). No other character may be percent-encoded, except `#`, `?` and `%` themselves: the person approves the locator as it is written, so it has to read as what it names. With `--from` the locator is printable ASCII only; an item whose name has other characters is linked by its ID, or by the person with `aquaman credentials link`.
 
 **aquaman only reads a linked item.** It never writes to it or deletes it. `aquaman credentials add` and `delete` on a linked reference are refused; `aquaman credentials unlink <ref>` removes the link and leaves the item as it was. A link never replaces a value aquaman stored, and a typed value is never stored over a link.
 

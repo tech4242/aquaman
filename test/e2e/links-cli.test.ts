@@ -386,6 +386,11 @@ describe('links: command line', () => {
       expect(after.stdout).not.toContain(ITEM_VALUE);
       expect(after.stderr).toContain('No credential found for github/token');
 
+      // Both changes are in the audit log, next to the reads they explain.
+      const tail = await run(['audit', 'tail']);
+      expect(tail.stdout).toContain(`link set: github/token is read from ${ITEM}`);
+      expect(tail.stdout).toContain('link removed: github/token');
+
       expect(writes()).toEqual([]);
     }, T * 4);
 

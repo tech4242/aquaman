@@ -27,7 +27,9 @@ export class VaultStore implements CredentialStore {
     this.address = options.address.replace(/\/$/, ''); // Remove trailing slash
     this.token = options.token || process.env['VAULT_TOKEN'] || '';
     this.namespace = options.namespace || process.env['VAULT_NAMESPACE'];
-    this.mountPath = options.mountPath || DEFAULT_MOUNT_PATH;
+    // One spelling of the mount: empty parts (a leading, trailing or doubled
+    // slash) would make the same mount compare unequal to itself.
+    this.mountPath = (options.mountPath || DEFAULT_MOUNT_PATH).split('/').filter((p) => p.length > 0).join('/') || DEFAULT_MOUNT_PATH;
 
     if (!this.token) {
       throw new Error('Vault token required. Provide via options.token or VAULT_TOKEN env var.');

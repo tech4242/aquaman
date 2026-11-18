@@ -105,6 +105,8 @@ const OP_PART = /^[A-Za-z0-9 ._-]+$/;
 const KEEPER_UID = /^[A-Za-z0-9_][A-Za-z0-9_-]{15,31}$/;
 const KEEPER_FIELD = /^[A-Za-z0-9_.](?:[A-Za-z0-9 _.]{0,62}[A-Za-z0-9_.])?$/;
 const ESCAPE = /%[0-9A-Fa-f]{2}/;
+/** `/`, `#`, `?` and `%`: the characters a locator would otherwise read as syntax. */
+const NEEDED_ESCAPES = ['%2F', '%23', '%3F', '%25'];
 
 function invalid(scheme: LinkScheme | undefined, why: string): LocatorResult {
   return {
@@ -123,6 +125,12 @@ function invalid(scheme: LinkScheme | undefined, why: string): LocatorResult {
  */
 function decodePart(raw: string, allowSlash: boolean): { value: string } | string {
   if (raw.length === 0) return 'it has an empty part';
+  // A person approves the locator as it is written. An escape is accepted
+  // only for the characters the locator syntax itself gives a meaning to, so
+  // a name cannot be spelled in a way that reads as something else.
+  for (const escape of raw.match(/%[0-9A-Fa-f]{2}/g) ?? []) {
+    if (!NEEDED_ESCAPES.includes(escape.toUpperCase())) return `it percent-encodes a character that needs no encoding (${escape})`;
+  }
   let value: string;
   try {
     value = decodeURIComponent(raw);
@@ -307,12 +315,22 @@ export function loadCredentialLinks(configPath: string): LinkMapResult {
   return { links };
 }
 
+export interface LinkChange {
+  /** `<service>/<key>` */
+  name: string;
+  /** The locator the reference is read from; absent when the link was removed. */
+  locator?: string;
+}
+
 /**
  * The link map of one config file, read again only when the file changes, so
  * a link made by `aquaman credentials link` or approved in a dialog reaches a
- * running daemon. A file that cannot be parsed links nothing.
+ * running daemon. A file that cannot be parsed links nothing. `onChange` is told about every
+ * link that appeared, went away or was re-pointed since the previous reading,
+ * so the process that serves credentials can record it; the first reading is
+ * the starting point and reports nothing.
  */
-export function createLinkSource(configPath: string): () => ReadonlyMap<string, string> {
+export function createLinkSource(configPath: string, onChange?: (change: LinkChange) => void): () => ReadonlyMap<string, string> {
   let stamp: string | undefined;
   let cached: Map<string, string> = new Map();
   return () => {
@@ -324,7 +342,12 @@ export function createLinkSource(configPath: string): () => ReadonlyMap<string, 
       now = '';
     }
     if (now !== stamp) {
-      cached = now === '' ? new Map() : loadCredentialLinks(configPath).links;
+      const next = now === '' ? new Map<string, string>() : loadCredentialLinks(configPath).links;
+      if (stamp !== undefined && onChange) {
+        for (const [name, locator] of next) if (cached.get(name) !== locator) onChange({ name, locator });
+        for (const name of cached.keys()) if (!next.has(name)) onChange({ name });
+      }
+      cached = next;
       stamp = now;
     }
     return cached;

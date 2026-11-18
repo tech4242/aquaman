@@ -1234,13 +1234,16 @@ export class CredentialProxy {
     this.requestPromptTimes.push(now);
     let result: PromptResult;
     try {
-      // `routed` picks the dialog's wording: what the person is told has to
-      // match what a caller can obtain once they agree.
+      // The dialog's wording has to match what a caller can obtain once the
+      // person agrees. A routed request leaves the value out of reach only
+      // while the reference is not declared some other way; one that is
+      // already declared is handed out, and the dialog must say so.
+      const keptFromCallers = routed && !scope.check(service, key, 'uds').allowed;
       result = linkFrom !== undefined
-        ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds, routed, from: linkFrom })
+        ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds, routed: keptFromCallers, from: linkFrom })
         : exists
-          ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds, routed })
-          : await requests.prompter.askValue({ service, key, project, timeoutSeconds, routed });
+          ? await requests.prompter.askApproval({ service, key, project, timeoutSeconds, routed: keptFromCallers })
+          : await requests.prompter.askValue({ service, key, project, timeoutSeconds, routed: keptFromCallers });
     } catch (err) {
       result = { outcome: 'unavailable', reason: err instanceof Error ? err.message : String(err) };
     } finally {

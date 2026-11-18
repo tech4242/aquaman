@@ -11,7 +11,7 @@ import { encryptWithPassword, decryptWithPassword } from '../utils/hash.js';
 import { getConfigDir, getConfigPath } from '../utils/config.js';
 import type { CredentialBackend } from '../types.js';
 import { KeePassXCStore } from './backends/keepassxc.js';
-import { createLinkSource, type ParsedLocator } from './links.js';
+import { createLinkSource, type LinkChange, type ParsedLocator } from './links.js';
 import { LinkedStore } from './linked-store.js';
 import { SystemdCredsStore } from './backends/systemd-creds.js';
 
@@ -75,6 +75,8 @@ export interface CredentialStoreOptions {
   links?: 'always' | false;
   /** The config.yaml that holds `credentials.links`. Default: the active config file. */
   linksConfigPath?: string;
+  /** Told when a link appears, goes away or is re-pointed while the process runs. */
+  onLinkChange?: (change: LinkChange) => void;
 }
 
 /**
@@ -388,7 +390,7 @@ export function validatePasswordStrength(password: string): { valid: boolean; er
 export async function createCredentialStore(options: CredentialStoreOptions): Promise<CredentialStore> {
   const store = await createBackendStore(options);
   if (options.links === false) return store;
-  const links = createLinkSource(options.linksConfigPath ?? getConfigPath());
+  const links = createLinkSource(options.linksConfigPath ?? getConfigPath(), options.onLinkChange);
   if (options.links !== 'always' && links().size === 0) return store;
   return new LinkedStore(store, options.backend, links);
 }
