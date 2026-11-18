@@ -104,9 +104,13 @@ const LINK_DIALOG_SECONDS = 90;
 function askYes(question: string): Promise<boolean> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   return new Promise((resolve) => {
-    rl.question(question, (answer) => {
+    let answer = '';
+    // Resolved when the input closes, so input that ends without an answer
+    // (Ctrl-D) is a no and not a silent exit.
+    rl.on('close', () => resolve(answer.trim().toLowerCase() === 'yes'));
+    rl.question(question, (text) => {
+      answer = text;
       rl.close();
-      resolve(answer.trim().toLowerCase() === 'yes');
     });
   });
 }
@@ -158,7 +162,10 @@ Example:
         (LINK_DIALOG_SECONDS + 30) * 1000,
       );
       if ('error' in response) {
-        fail('The daemon shows the dialog a link is approved in, and it is not running.', 'aquaman daemon &   (then run this command again)');
+        if (response.code === 'proxy_unreachable') {
+          fail('The daemon shows the dialog a link is approved in, and it is not running.', 'aquaman daemon &   (then run this command again)');
+        }
+        fail(`The daemon could not be asked: ${response.error}`, 'aquaman doctor');
       }
       const { status, json } = response;
       if (status !== 200) fail(json.error ?? `The daemon refused the request (${status})`, json.fix);

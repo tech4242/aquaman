@@ -42,15 +42,15 @@ export async function linkRequestPlan(
   }
   // The locator is shown to a person who decides by reading it. Letters from
   // other scripts can look like the ones they expect, so a request made
-  // through the dialog names its item in printable ASCII; an item with another
-  // name is linked by its ID, or by the person with `aquaman credentials link`.
+  // through the dialog names its item in printable ASCII. Every link is
+  // approved in the dialog, so an item with another name is linked by its ID.
   if (typeof from === 'string' && !/^[\x20-\x7e]*$/.test(from)) {
     return {
       ok: false,
       status: 400,
       code: 'link_invalid_locator',
       error: 'Not a usable vault locator: it has characters outside printable ASCII, which a dialog cannot show unambiguously',
-      fix: `Use the item's ID where the vault has one, or ask the person to run: aquaman credentials link ${service}/${key} <locator>`,
+      fix: "Use the item's ID where the vault has one, or give the item a name in plain ASCII",
     };
   }
   const plan = linker.plan(service, key, from);
@@ -67,11 +67,11 @@ export async function linkRequestPlan(
   };
 }
 
-/** The answer for a reference whose link is in place but whose item cannot be read. */
+/** The answer for a reference whose link is in config.yaml and reads nothing: the item is missing, or no person approved the link. */
 export function linkUnreadableReply(service: string, key: string): { error: string; fix: string; code: string } {
   return {
     error: `${service}/${key} is linked to a vault item, and nothing could be read there`,
-    fix: `Check the item in your vault. To stop using it, run: aquaman credentials unlink ${service}/${key}`,
+    fix: `Check the item in your vault. A link that no person approved is not read either; a person approves it with: aquaman credentials link ${service}/${key} <locator>. To stop using it, run: aquaman credentials unlink ${service}/${key}`,
     code: 'link_unreadable',
   };
 }

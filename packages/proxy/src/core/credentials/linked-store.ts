@@ -90,6 +90,11 @@ export class LinkApprovals {
     await this.save(map);
     return true;
   }
+
+  /** Drop the copy in memory, so the next question is answered from the vault. */
+  forget(): void {
+    this.cached = undefined;
+  }
 }
 
 export class LinkedStore implements CredentialStore {
@@ -101,8 +106,23 @@ export class LinkedStore implements CredentialStore {
     readonly approvals: LinkApprovals = new LinkApprovals(inner),
   ) {}
 
+  private seen: ReadonlyMap<string, string> | undefined;
+
+  /**
+   * The link map as it is in config.yaml. When the file changed, the
+   * approvals in memory are dropped: another process may have removed a link
+   * and its approval, and a link written back by hand must not be read on the
+   * strength of an approval that is no longer in the vault.
+   */
+  private current(): ReadonlyMap<string, string> {
+    const map = this.links();
+    if (this.seen !== undefined && this.seen !== map) this.approvals.forget();
+    this.seen = map;
+    return map;
+  }
+
   linkStamp(service: string, key: string): string {
-    return this.links().get(`${service}/${key}`) ?? '';
+    return this.current().get(`${service}/${key}`) ?? '';
   }
 
   async readLinked(locator: ParsedLocator): Promise<string | null> {
@@ -172,7 +192,7 @@ export class LinkedStore implements CredentialStore {
   }
 
   async list(service?: string): Promise<Array<{ service: string; key: string; linked?: string }>> {
-    const links = this.links();
+    const links = this.current();
     const out: Array<{ service: string; key: string; linked?: string }> = [];
     for (const cred of await this.inner.list(service)) {
       if (!links.has(`${cred.service}/${cred.key}`)) out.push(cred);
