@@ -18,42 +18,55 @@ import { AuditLogger } from 'aquaman-core';
 
 const CHILD = path.resolve(__dirname, '../helpers/audit-log-child.ts');
 
-function run(role: 'writer' | 'reader', logDir: string, startAt: number, stopAt: number): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('npx', ['tsx', CHILD, role, logDir, String(startAt), String(stopAt)], {
-      env: { ...process.env },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let stderr = '';
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
-    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+interface Child {
+  /** Settles once the process has loaded and waits for the go file. */
+  ready: Promise<void>;
+  /** The JSON line it prints when its time is up. */
+  result: Promise<any>;
+}
+
+function start(role: 'writer' | 'reader', logDir: string, goFile: string, milliseconds: number): Child {
+  const proc = spawn('npx', ['tsx', CHILD, role, logDir, goFile, String(milliseconds)], {
+    env: { ...process.env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  let isReady: () => void;
+  const ready = new Promise<void>((resolve) => { isReady = resolve; });
+  proc.stdout.on('data', (d) => {
+    stdout += d.toString();
+    if (stdout.includes('ready\n')) isReady();
+  });
+  proc.stderr.on('data', (d) => { stderr += d.toString(); });
+  const result = new Promise<any>((resolve, reject) => {
     proc.on('error', reject);
     proc.on('close', (code) => {
       if (code !== 0) return reject(new Error(`${role} exited ${code}: ${stderr}`));
       resolve(JSON.parse(stdout.trim().split('\n').pop()!));
     });
   });
+  return { ready: Promise.race([ready, result.then(() => undefined)]), result };
 }
 
 describe('two processes writing one audit log while a third reads it', () => {
   let dir: string;
+  let root: string;
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aq-procs-'));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'aq-procs-'));
+    dir = path.join(root, 'audit');
   });
   afterEach(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
   });
 
   it('ends with one valid chain, consecutive sequence numbers, every reported write on disk once, and no read that found it broken', async () => {
-    // Time for three tsx processes to start; each waits for the same moment.
-    const startAt = Date.now() + 6000;
-    const stopAt = startAt + 1500;
-    const [a, b, reader] = await Promise.all([
-      run('writer', dir, startAt, stopAt),
-      run('writer', dir, startAt, stopAt),
-      run('reader', dir, startAt, stopAt),
-    ]);
+    const goFile = path.join(root, 'go');
+    const children = [start('writer', dir, goFile, 1500), start('writer', dir, goFile, 1500), start('reader', dir, goFile, 1500)];
+    // All three have loaded; they start working at the same moment.
+    await Promise.all(children.map((c) => c.ready));
+    fs.writeFileSync(goFile, '');
+    const [a, b, reader] = await Promise.all(children.map((c) => c.result));
 
     expect(a.wrote).toBeGreaterThan(0);
     expect(b.wrote).toBeGreaterThan(0);
