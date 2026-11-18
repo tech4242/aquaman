@@ -714,3 +714,35 @@ describe('one audit log, several loggers', () => {
     });
   });
 });
+
+describe('listing entries beside a writer', () => {
+  let dir: string;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aq-tail-')); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  it('a line another process has only half written is not an entry yet: the whole ones are listed and nothing throws', async () => {
+    const writer = new AuditLogger({ logDir: dir });
+    await writer.initialize();
+    await writer.logCredentialAccess('s', 'a', { service: 'github', operation: 'read', success: true });
+    await writer.logCredentialAccess('s', 'a', { service: 'stripe', operation: 'use', success: true });
+    const file = path.join(dir, 'current.jsonl');
+    const before = fs.readFileSync(file, 'utf-8');
+    // The first 60 bytes of a third entry, as a reader can see them mid-append.
+    fs.appendFileSync(file, before.split('\n')[1].slice(0, 60));
+
+    const reader = new AuditLogger({ logDir: dir, readOnly: true });
+    const entries = await reader.getEntries();
+    expect(entries.map((e) => (e.data as { service: string }).service)).toEqual(['github', 'stripe']);
+    expect((await reader.tail(1)).map((e) => (e.data as { service: string }).service)).toEqual(['stripe']);
+  });
+
+  it('a whole line that is not JSON is left out of the listing and reported by verifyChain', async () => {
+    const writer = new AuditLogger({ logDir: dir });
+    await writer.initialize();
+    await writer.logCredentialAccess('s', 'a', { service: 'github', operation: 'read', success: true });
+    fs.appendFileSync(path.join(dir, 'current.jsonl'), 'not an entry\n');
+    const reader = new AuditLogger({ logDir: dir, readOnly: true });
+    expect(await reader.getEntries()).toHaveLength(1);
+    expect((await reader.verifyChain()).valid).toBe(false);
+  });
+});

@@ -913,9 +913,21 @@ export class AuditLogger {
     }
 
     const content = fs.readFileSync(this.currentLogPath, 'utf-8');
-    const lines = content.trim().split('\n').filter(line => line.length > 0);
+    // Only whole lines. A writer in another process may be in the middle of an
+    // append, and the part of a line it has written so far is not an entry yet.
+    const whole = content.slice(0, content.lastIndexOf('\n') + 1);
+    const lines = whole.split('\n').filter(line => line.trim().length > 0);
 
-    let entries: AuditEntry[] = lines.map(line => JSON.parse(line) as AuditEntry);
+    // Listing shows what can be read; a line that is not an entry is for
+    // `verifyChain()` to report, not a reason to show nothing.
+    let entries: AuditEntry[] = [];
+    for (const line of lines) {
+      try {
+        entries.push(JSON.parse(line) as AuditEntry);
+      } catch {
+        // skipped
+      }
+    }
 
     // Apply filters
     if (options?.type) {
