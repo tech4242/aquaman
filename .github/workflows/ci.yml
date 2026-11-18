@@ -143,8 +143,8 @@ jobs:
         # Host-compat lanes: OpenClaw's one supported extended-stable line
         # (npm dist-tag `extended-stable`) and `latest`. 2026.7.33 was retired
         # upstream. Bumps are manual compat events, see .github/dependabot.yml.
-        # 2026.9.37 needs Node >= 24.22.1; `node-version: 24` floats past it.
-        openclaw: ['2026.9.37', '2026.11.3']
+        # Both lines declare Node >= 24.16; `node-version: 24` floats past it.
+        openclaw: ['2026.10.33', '2026.11.5']
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

@@ -146,7 +146,7 @@ SecretRef is OpenClaw's canonical credential surface (#82326); auth-profiles.jso
 - Capability consent gates third-party install/enable: `--accept-capabilities`, plus `--force` for npm/local specs (`clawhub:` specs need only the consent flag). Setup uses the `clawhub:` source, lets OpenClaw prompt interactively, and passes the flag only with `--non-interactive`.
 - `plugins.installs` in openclaw.json is rejected on 9.x; install records moved to `state/openclaw.sqlite`.
 - `plugins.allow` governs OpenClaw's own plugins too, so a list containing only `aquaman-plugin` blocks the stock `anthropic`/`openai` providers ("Unknown model"). Setup only appends to an existing list and never creates one; doctor flags lists that exclude the configured providers.
-- CI lanes: 2026.9.37 (the `extended-stable` dist-tag) and 2026.11.3 (`latest`), since v0.17.1. OpenClaw supports one extended-stable line at a time, so 2026.7.33 is retired. CI still installs `@openclaw/ai` alongside when a shrinkwrap omits it (openclaw#151657, seen on 2026.7.33). Node ≥ 24.22.1 for 2026.9.37 (it warns "unsupported Node" below that); 2026.11.3 declares ≥ 24.16.
+- CI lanes: 2026.10.33 (the `extended-stable` dist-tag) and 2026.11.5 (`latest`). OpenClaw supports one extended-stable line at a time, so 2026.7.33 and 2026.9.37 are retired. CI still installs `@openclaw/ai` alongside when a shrinkwrap omits it (openclaw#151657, seen on 2026.7.33). Both lines declare Node ≥ 24.16.
 - 2026.6.10 is still 73% of OpenClaw's npm downloads (2026-11-14) and is not a CI lane; the plugin e2e suite passed against it (35/35) when run by hand for v0.17.1.
 
 ## Coding agents (aquaman-coder)
