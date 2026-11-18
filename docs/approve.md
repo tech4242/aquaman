@@ -34,7 +34,7 @@ When the agent asks for a key, a system dialog titled "aquaman" opens on your sc
 **If the key is already in your vault.** You can give the agent the item's address instead of typing the key again, for example `op://Private/GitHub/token` for 1Password ([the form for each vault](agent-setup.md#an-item-that-is-already-in-the-vault)). The dialog then asks for approval and nothing is typed. It names the credential, shows the item address the agent sent on its own line, and has "Allow" and "Deny". Read that line: it is the item aquaman will read. If you choose "Allow":
 
 - aquaman reads that one field of that one item, now and each time the credential is used. It did not read it, or check that it exists, before you agreed.
-- aquaman does not change or delete the item, and does not copy the value into a second vault entry. It records the address in `~/.aquaman/config.yaml`.
+- aquaman does not change or delete the item, and does not copy the value into a second vault entry. It records the address in `~/.aquaman/config.yaml`, and your approval of it in one hidden item of its own in the vault (`aquaman_internal/link_approvals`). An address that is in the file without that approval is not read.
 - What the agent's commands can do with the value is the same as for a key you typed, and the dialog says which case applies.
 
 If you choose "Deny", nothing is read and nothing is recorded.
@@ -60,7 +60,7 @@ aquaman keeps the key out of the conversation. It is not a sandbox and does not 
 aquaman coder project remove <name>            # forget the project and its bindings
 aquaman stop                                   # stop the daemon
 aquaman credentials delete <service> <key>     # remove a stored credential
-aquaman credentials unlink <service>/<key>     # stop reading an item of your own; the item is not touched
+aquaman credentials unlink <service>/<key>     # stop reading an item of your own and remove your approval; the item is not touched
 npm uninstall -g aquaman-proxy aquaman-coder
 ```
 

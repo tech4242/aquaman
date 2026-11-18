@@ -22,7 +22,7 @@ A reference can now point at an item you already keep in 1Password, Bitwarden, H
 # an agent asks, you approve the named item in a dialog
 aquaman request aquaman://github/token --env GITHUB_TOKEN --from op://Private/GitHub/token
 
-# or you do it yourself at a terminal
+# or you start it yourself; the same dialog asks you
 aquaman credentials link github/token op://Private/GitHub/token
 aquaman credentials unlink github/token
 ```
@@ -37,7 +37,8 @@ aquaman credentials unlink github/token
 | Keeper | `keeper://<UID>[/<field>]` |
 
 - aquaman only reads a linked item. It never changes or deletes it, and `credentials add` and `delete` on a linked reference are refused.
-- Linking is your decision. `aquaman credentials link` needs a terminal. `aquaman request --from` shows a dialog that names the item, and nothing in your vault is read before you agree. The new status is `linked` (exit code 0).
+- Linking is your decision, and you take it in a dialog the daemon shows. The dialog names the item, and nothing in your vault is read before you agree. `aquaman request --from` links the reference and declares it for commands (new status `linked`, exit code 0). `aquaman credentials link` links without declaring; it exits 0 when linked, 2 when you deny, 3 when nobody answers and 1 when the daemon refuses or is not running. A terminal is not taken as proof of a person. Only on a machine where no dialog can be shown does `aquaman credentials link` ask for a typed `yes` at the terminal instead.
+- Your approval is recorded in the vault, and a link is read only with it. A link written into `config.yaml` by hand is not read. `aquaman credentials unlink` removes the link and the approval. Software that can write to your vault with the vault's own tools can write the approval record; aquaman does not guard against that.
 - A running daemon picks up a new link without a restart, and writes a link that is added, changed or removed while it runs to the audit log. `aquaman credentials list` shows links, and `aquaman doctor` reports one that does not fit the configured vault.
 - The `encrypted-file` and `systemd-creds` vaults hold only what aquaman wrote, so they take no links.
 - Reading linked items was tested against stand-ins for each vault's tooling, not against live accounts.
@@ -86,7 +87,7 @@ Two fixes on the way: two log rotations within one millisecond no longer overwri
 ### Behaviour changes to expect
 
 - `aquaman audit verify` exits 1 when the vault cannot be read (locked, password not set). Use `--chain-only` where that is expected.
-- Your vault gains one item that aquaman keeps for itself, `aquaman_internal/audit_anchor`. It is hidden from `aquaman credentials list` and cannot be read, declared, linked or changed through aquaman.
+- Your vault gains up to two items that aquaman keeps for itself: `aquaman_internal/audit_anchor`, and `aquaman_internal/link_approvals` once you approve a link. Both are hidden from `aquaman credentials list` and cannot be read, declared, linked or changed through aquaman.
 - With 1Password in desktop mode, an active daemon writes the anchor every 15 minutes, which can show an unlock prompt. Set `audit.anchorIntervalSeconds: 0` to turn anchoring off.
 - `aquaman init --agent` adds a step to `human_steps` when the daemon does not start at login.
 

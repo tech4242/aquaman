@@ -129,7 +129,9 @@ aquaman request aquaman://github/token --from 'op://Private/GitHub/token' --env 
 
 Use `--from` only with a locator the user gave you. Do not guess item names: the dialog shows the user exactly what you wrote, and a wrong guess is a dialog they have to refuse.
 
-The dialog is an approval; nothing is typed. It names the reference and the item, and says what happens if the user agrees. aquaman does not read the item, or check whether it exists, until the user has agreed. Then it reads it once. If that works it records the link and answers `linked`; if not it records nothing and answers with a `code`.
+The dialog is an approval; nothing is typed. It names the reference and the item, and says what happens if the user agrees. aquaman does not read the item, or check whether it exists, until the user has agreed. Then it reads it once. If that works it records the approval and the link and answers `linked`; if not it records nothing and answers with a `code`.
+
+The approval is kept in the vault, as one item of aquaman's own (`aquaman_internal/link_approvals`) that names each approved reference and its locator. It is hidden from `aquaman credentials list` and cannot be read, declared, linked or changed through aquaman. A link is read only when that record holds exactly the same reference and locator. A link written into `config.yaml` by hand has no approval and reads nothing: a command that uses it fails with a message that names `aquaman credentials link`, and you do not get the value.
 
 One locator form per vault backend. A locator only works with the backend that is configured:
 
@@ -143,11 +145,22 @@ One locator form per vault backend. A locator only works with the backend that i
 | Keeper | `keeper://<record UID>/<field>`; the field defaults to `password` |
 | encrypted file, systemd-creds | None. These hold only what aquaman wrote |
 
-A locator is at most 200 characters, has no control characters and no backslash, and no part of it starts with `-` or is `.` or `..`. A `/` inside a name is written `%2F` (not in `op://` or `keeper://` locators, which take no escapes; address such a 1Password item by its ID). No other character may be percent-encoded, except `#`, `?` and `%` themselves: the person approves the locator as it is written, so it has to read as what it names. With `--from` the locator is printable ASCII only; an item whose name has other characters is linked by its ID, or by the person with `aquaman credentials link`.
+A locator is at most 200 characters, has no control characters and no backslash, and no part of it starts with `-` or is `.` or `..`. A `/` inside a name is written `%2F` (not in `op://` or `keeper://` locators, which take no escapes; address such a 1Password item by its ID). No other character may be percent-encoded, except `#`, `?` and `%` themselves: the person approves the locator as it is written, so it has to read as what it names. A locator that goes to the dialog is printable ASCII only, from `--from` and from `aquaman credentials link` alike; an item whose name has other characters is linked by its ID.
 
 **aquaman only reads a linked item.** It never writes to it or deletes it. `aquaman credentials add` and `delete` on a linked reference are refused; `aquaman credentials unlink <ref>` removes the link and leaves the item as it was. A link never replaces a value aquaman stored, and a typed value is never stored over a link.
 
 `--from` works with `--env`, `--via-proxy`, `--base-path`, `--timeout` and `--json` as in any other request. With `--via-proxy` the reference is linked and not declared, so the value is still not handed to commands.
+
+**`aquaman credentials link <ref> <locator>` links without declaring.** It sends the daemon the same request with `declare: false`, and the user approves it in the same kind of dialog, which says that the value is added to requests aquaman forwards for the service and is not given to commands unless the reference is also declared (`aquaman broker allow <ref>`). It does not need a terminal, and a terminal is not taken as proof of a person. `aquaman request --from` is the form for a credential your commands need: it links and declares in one approval.
+
+| `aquaman credentials link` | Exit |
+|---|---|
+| Linked, or already linked to this item and approved | 0 |
+| The user chose "Deny", or declined this reference in the last ten minutes | 2 |
+| Nobody answered the dialog, another dialog was open, or too many were shown | 3 |
+| The daemon refused (a `code` from the table below), the locator or reference is wrong, or the daemon is not running | 1 |
+
+Only where the daemon reports that it cannot show a dialog at all (a machine with no desktop session) does `aquaman credentials link` ask in the terminal instead: it says what the link does and waits for the word `yes`, then reads the item and records the approval and the link itself. Without a terminal in that case it exits 1. That path is for the user at their own terminal, not for you.
 
 | `code` | Exit | When | Meaning |
 |---|---|---|---|
@@ -155,7 +168,7 @@ A locator is at most 200 characters, has no control characters and no backslash,
 | `link_backend_mismatch` | 1 | Before any dialog | The locator's scheme belongs to another backend |
 | `link_unsupported_backend` | 1 | Before any dialog | The configured backend holds only what aquaman wrote |
 | `link_exists` | 4 | Before any dialog | The reference is already linked to a different item. The user removes that link first |
-| `link_unreadable` | 4 | After the user agreed | Nothing could be read at the locator, or the vault failed. Nothing was recorded. Ask the user for the correct locator |
+| `link_unreadable` | 4 | After the user agreed | Nothing could be read at the locator, or the vault failed, or the approval could not be written to the vault. Nothing was recorded. Ask the user for the correct locator. A request without `--from` gets the same code, with no dialog, for a reference whose link is in `config.yaml` and reads nothing (the item is gone, or nobody approved the link) |
 | `link_value_stored` | 4 | After the user agreed | aquaman already stores a value under this reference. Nothing was recorded. Request it without `--from`, or the user deletes the stored value first |
 
 ```json
@@ -166,9 +179,9 @@ A locator is at most 200 characters, has no control characters and no backslash,
 { "status": "error", "ref": "aquaman://github/token", "error": "Nothing could be read at op://Private/GitHub/token", "code": "link_unreadable", "fix": "Check the item and field names in your vault, then ask again with the corrected locator" }
 ```
 
-A `pending` answer carries the command for the user: `aquaman credentials link <service>/<key> '<locator>'`. That command needs a terminal on stdin and stdout and is for the user to run, not you; run without one it stops and names `aquaman request --from`. `aquaman credentials list` shows a linked reference with its locator, and `aquaman doctor` reports a link whose scheme does not fit the configured backend.
+A `pending` answer carries the command for the user: `aquaman credentials link <service>/<key> '<locator>'`, followed by `aquaman broker allow` when the request would have declared the reference. It is for the user to run, not you: it opens a dialog of its own, so running it yourself only asks the user a second time. When the daemon could not show a dialog at all, the answer also carries `"code": "prompt_unavailable"`. `aquaman credentials list` shows a linked reference with its locator, and `aquaman doctor` reports a link whose scheme does not fit the configured backend.
 
-Links are kept in `credentials.links` in `~/.aquaman/config.yaml`, as `<service>/<key>: <locator>`. A running daemon picks up a change to that file; nothing needs restarting.
+Links are kept in `credentials.links` in `~/.aquaman/config.yaml`, as `<service>/<key>: <locator>`, and each one counts only together with its approval in the vault. A running daemon picks up a new link and its approval; nothing needs restarting. `aquaman credentials unlink <ref>` removes the link and its approval, so putting the same line back into the file does not bring the reading back.
 
 ## 3. Use it
 
@@ -283,7 +296,10 @@ Then delete the skill directory and the marked block. Stored credentials stay in
 
 - The wrapped command receives the real value, so a command can misuse it. Redaction catches accidental exposure, not a command that deliberately transforms the value.
 - `aquaman request` is a convenience and a consent step, not a boundary against other software running as the same user.
-- The same holds for links. The dialog, and the terminal `aquaman credentials link` asks for, put the decision in front of a person. Software running as the user can write `credentials.links` into `~/.aquaman/config.yaml` itself.
+- A link is read only with an approval recorded in the vault, so software that can only edit `~/.aquaman/config.yaml` cannot make aquaman read an item. Software that can write to the vault itself, through the vault's own CLI or API, can write the approval record too.
+- On a machine where no dialog can be shown, the word `yes` typed at a terminal is the only check on `aquaman credentials link`, and a program can give itself a terminal.
+- A daemon that caches values (1Password, Bitwarden, HashiCorp Vault and Keeper, 15 minutes by default) can serve a value it already read for up to that long if a link is removed and written back by hand before the reference is next used. The item itself is not read again.
+- A locator in plain ASCII can still carry words meant to persuade. The dialog shows it on a line of its own, marked as the caller's text, below aquaman's wording.
 - A linked item is read with whatever access the configured vault session has. The link names one field of one item, and aquaman reads only that.
 - Link reads were tested against stand-ins for `op`, `bw`, Keeper Commander, HashiCorp Vault and the keychain library, and against a generated KeePassXC database, not against live accounts.
 - Commands started with Claude Code's Monitor tool are not wrapped.
