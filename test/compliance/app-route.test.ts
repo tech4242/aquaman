@@ -139,15 +139,20 @@ describe('routing a program through the proxy', () => {
     expect((await fetch(`${origin}/stripe/v1/charges`, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(200);
   });
 
-  it('a route to a service that takes no header, or to a key the proxy does not inject, opens nothing', async () => {
+  it('a route to a service that takes neither a header nor basic auth, or to a key the proxy does not inject, opens nothing', async () => {
     await start();
+    routed.add('telegram/bot_token');
     routed.add('twilio/anything');
     routed.add('stripe/restricted_key');
     routed.delete('stripe/secret_key');
     await store.set('twilio', 'account_sid', 'AC_real');
-    const { token } = JSON.parse((await route('twilio', 'anything')).body.replace(/^$/, '{}') || '{}');
-    expect(token).toBeUndefined();
+    await store.set('telegram', 'bot_token', '123:real');
+    for (const [service, key] of [['twilio', 'anything'], ['telegram', 'bot_token']]) {
+      const { token } = JSON.parse((await route(service, key)).body);
+      expect(token, service).toBeUndefined();
+    }
     const origin = `http://${proxy.getLoopbackAddress()}`;
+    expect((await fetch(`${origin}/telegram/bot${TOKEN}/getMe`)).status).toBe(401);
     expect((await fetch(`${origin}/twilio/2010-04-01/Accounts`, { headers: { Authorization: `Bearer ${TOKEN}` } })).status).toBe(404);
     expect((await fetch(`${origin}/stripe/v1/charges`, { headers: { Authorization: `Bearer ${TOKEN}` } })).status).toBe(404);
     expect(upstream.getRequestCount()).toBe(0);
@@ -231,12 +236,16 @@ describe('routing a program through the proxy', () => {
     expect(JSON.parse(res.body)).toMatchObject({ code: 'route_key_mismatch', fix: 'Use aquaman://stripe/secret_key' });
   });
 
-  it('refuses a service the proxy has no definition for, and one it does not inject a header for', async () => {
+  it('refuses a service the proxy has no definition for, and one it injects neither a header nor basic auth for', async () => {
     await start();
     routed.add('acme/api_key');
-    routed.add('twilio/account_sid');
+    routed.add('telegram/bot_token');
+    routed.add('ms-teams/client_id');
+    routed.add('nostr/private_key');
     expect(JSON.parse((await route('acme', 'api_key')).body).code).toBe('route_service_unknown');
-    expect(JSON.parse((await route('twilio', 'account_sid')).body).code).toBe('route_unsupported');
+    for (const [service, key] of [['telegram', 'bot_token'], ['ms-teams', 'client_id'], ['nostr', 'private_key']]) {
+      expect(JSON.parse((await route(service, key)).body).code, service).toBe('route_unsupported');
+    }
   });
 
   it('refuses when the credential is not stored, with the same code a resolve gives', async () => {

@@ -24,6 +24,7 @@ import {
   loadProjects,
   saveProjects,
   ROUTE_BASE_PATH,
+  defaultRouteBasePath,
   isLoaderEnvName,
   type ProjectRoute,
   findProjectForCwd,
@@ -466,7 +467,7 @@ program
   .description('Bind NAME=aquaman://service/key for the project covering the current directory')
   .option('--check', 'Only check that the binding could be made; change nothing')
   .option('--via-proxy <URL_ENV>', 'Send the program through the proxy: NAME gets the proxy token and URL_ENV the proxy URL, so the program never holds the credential')
-  .option('--base-path <path>', 'With --via-proxy: path appended to the proxy URL (default /v1 for openai, none otherwise)')
+  .option('--base-path <path>', 'With --via-proxy: path appended to the proxy URL (default /v1 for openai, /api for slack, none otherwise)')
   .option('--json', 'Print one JSON object and nothing else')
   .action((binding: string, opts: { json?: boolean; check?: boolean; viaProxy?: string; basePath?: string }) => {
     const fail = (error: string, fix?: string): never => {
@@ -485,7 +486,7 @@ program
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(opts.viaProxy) || opts.viaProxy === name || isLoaderEnvName(opts.viaProxy)) {
         fail(`Bad --via-proxy "${opts.viaProxy}". Expected the name of the variable the program reads its base URL from, e.g. OPENAI_BASE_URL`);
       }
-      const basePath = opts.basePath ?? (parseRef(ref)!.service === 'openai' ? '/v1' : '');
+      const basePath = opts.basePath ?? defaultRouteBasePath(parseRef(ref)!.service);
       if (!ROUTE_BASE_PATH.test(basePath)) fail(`Bad --base-path "${basePath}". Expected a path such as /v1`);
       route = basePath ? { url_env: opts.viaProxy, base_path: basePath } : { url_env: opts.viaProxy };
     } else if (opts.basePath !== undefined) {

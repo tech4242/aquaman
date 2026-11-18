@@ -10,6 +10,9 @@ import { parse as parseYaml } from 'yaml';
 
 export type AuthMode = 'header' | 'url-path' | 'basic' | 'oauth' | 'none';
 
+const AUTH_MODES: readonly string[] = ['header', 'url-path', 'basic', 'oauth', 'none'];
+const CREDENTIAL_KEY_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+
 export interface OAuthConfig {
   tokenUrl: string;
   clientIdKey: string;
@@ -448,6 +451,22 @@ export class ServiceRegistry {
     }
 
     const mode = service.authMode || 'header';
+    if (!AUTH_MODES.includes(mode)) {
+      return { valid: false, error: `authMode must be one of: ${AUTH_MODES.join(', ')}` };
+    }
+
+    // A second key is read from the vault under this name (the password of a
+    // basic service, for one), so it has to be a name the vault can hold and
+    // must not repeat the first.
+    if (service.additionalCredentialKeys !== undefined) {
+      const extra = service.additionalCredentialKeys;
+      if (!Array.isArray(extra) || extra.some((k) => typeof k !== 'string' || !CREDENTIAL_KEY_NAME.test(k))) {
+        return { valid: false, error: 'additionalCredentialKeys must be a list of key names (letters, digits, ".", "_", "-")' };
+      }
+      if (extra.includes(service.credentialKey as string) || new Set(extra).size !== extra.length) {
+        return { valid: false, error: 'additionalCredentialKeys must not repeat a key' };
+      }
+    }
 
     // 'none' mode services are at-rest storage only — no upstream or auth needed
     if (mode === 'none') {
