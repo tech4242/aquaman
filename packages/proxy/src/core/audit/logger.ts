@@ -908,11 +908,16 @@ export class AuditLogger {
     type?: AuditEntry['type'];
     sessionId?: string;
   }): Promise<AuditEntry[]> {
-    if (!fs.existsSync(this.currentLogPath)) {
-      return [];
+    // Read in one step. Between a check that the file exists and the read, a
+    // writer in another process can rotate it away; a log that is not there
+    // at this moment has no entries to list.
+    let content: string;
+    try {
+      content = fs.readFileSync(this.currentLogPath, 'utf-8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
     }
-
-    const content = fs.readFileSync(this.currentLogPath, 'utf-8');
     // Only whole lines. A writer in another process may be in the middle of an
     // append, and the part of a line it has written so far is not an entry yet.
     const whole = content.slice(0, content.lastIndexOf('\n') + 1);
