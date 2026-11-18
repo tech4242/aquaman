@@ -223,7 +223,9 @@ describe('agent-run setup commands', () => {
       [['aquaman://openai/api_key', '--via-proxy', 'OPENAI_BASE_URL'], /needs --env/],
       [['aquaman://acme/api_key', '--env', 'ACME_KEY', '--via-proxy', 'ACME_URL'], /no definition for "acme"/],
       [['aquaman://stripe/restricted_key', '--env', 'STRIPE_SECRET_KEY', '--via-proxy', 'STRIPE_API_BASE'], /injects stripe\/secret_key/],
-      [['aquaman://twilio/account_sid', '--env', 'TWILIO_SID', '--via-proxy', 'TWILIO_URL'], /request header/],
+      [['aquaman://telegram/bot_token', '--env', 'TELEGRAM_TOKEN', '--via-proxy', 'TELEGRAM_URL'], /request header or as HTTP basic auth/],
+      [['aquaman://twilio/phone_number', '--env', 'TWILIO_FROM', '--via-proxy', 'TWILIO_URL'], /injects twilio\/account_sid and twilio\/auth_token/],
+      [['aquaman://twilio/auth_token', '--env', 'TWILIO_AUTH_TOKEN', '--via-proxy', 'TWILIO_URL'], /loopback listener is off/],
       [['aquaman://stripe/secret_key', '--env', 'STRIPE_SECRET_KEY', '--via-proxy', 'STRIPE_API_BASE'], /loopback listener is off/],
     ];
     for (const [args, message] of cases) {
