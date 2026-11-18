@@ -29,7 +29,7 @@ Bind them in Hermes' `config.yaml` under `secrets.aquaman.env`, for example `GIT
 - **You may run `aquaman hermes doctor`** and report what it says. It checks and changes nothing.
 - **Where each credential ends up:** provider keys (Anthropic, OpenAI) are never in the Hermes process. A project secret bound through the secret source, such as a GitHub token, is in Hermes' environment: it is stored in the vault and each read is audited, but it is not isolated from Hermes or its tools.
 - **Keys that were already in `~/.hermes/.env` are not removed by setup.** The person deletes those lines, and rotates the keys if anything they do not trust could have read the file.
-- **The daemon does not come back by itself.** `aquaman daemon` is gone after a reboot or logout, and Hermes' provider calls fail until the person starts it again. Tell them.
+- **The daemon does not come back by itself.** `aquaman daemon` is gone after a reboot or logout, and Hermes' provider calls fail until the person starts it again. Tell them. `aquaman service install` makes it start at every login: [Start the aquaman daemon at login](autostart.md).
 
 ## Good to know
 

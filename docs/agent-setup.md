@@ -54,11 +54,12 @@ Output fields:
 | `daemon` | `running`, `started` (by this run), `socket`, and `log` when it was started |
 | `project` | `name`, `path`, `created` |
 | `loopback` | With `--loopback`: `enabled`, the listener's `url`, whether this run `changed` the config, and `daemon_restarted` when it had to |
+| `service` | With `--service`: the answer to the login-item request. `status` is `installed`, `already_installed`, `declined`, `pending` or `error`, with `unit` (the file), and `reason`, `error` and `fix` where they apply. `ok` does not depend on it |
 | `mode` | `exec` or `hook`: how commands in this project get their variables (see above) |
 | `run` | With `mode: exec`, the prefix to use: `aquaman-coder exec -- <command>` |
 | `hooks` | The host's settings file, whether aquaman's hook is `installed` in it, and whether this run `changed` it |
 | `skill`, `agents_file` | The file each was written to, and whether it changed |
-| `human_steps` | Things only a person can do as a result of this run, such as restarting the session or trusting the hooks in Codex. Pass them on. Empty when a repeat run changed nothing |
+| `human_steps` | Things only a person can do as a result of this run, such as restarting the session or trusting the hooks in Codex. Pass them on. Empty when a repeat run changed nothing. Without `--service`, while nothing starts the daemon at login, it holds one entry naming `aquaman service install` (not with the `encrypted-file` backend, which that command refuses) |
 | `next` | The command to ask for a credential |
 | `error`, `fix` | Present when `ok` is `false` |
 
@@ -171,7 +172,15 @@ aquaman coder doctor --json    # { ok, issues, checks: [{ name, ok, detail, fix 
 
 ## When the daemon is not running
 
-`init` starts the daemon in the background. It is not installed as a system service, so it is gone after a reboot or logout.
+`init` starts the daemon in the background. Unless a login item is installed, it is gone after a reboot or logout.
+
+To have it start at every login, add `--service`:
+
+```bash
+aquaman init --agent claude-code --no-hooks --service --json
+```
+
+After setup has succeeded, the daemon shows the user an approval dialog that says aquaman will start at every login and how to remove it. You get the answer as `service.status`: `installed` or `already_installed` when it is in place, `declined` when the user said no (stop and ask; there is no `fix`), `pending` when nobody could be asked (give the user the `fix`: run `aquaman service install` in a terminal), `error` when it was refused, with the reason. `aquaman service install --json` is the same request as a command of its own, with exit codes 0, 2, 3, 4 and 1. Propose this only when the user wants the daemon to survive a reboot; do not add `--service` unprompted. What is installed, and its limits: [Start the aquaman daemon at login](autostart.md).
 
 While it is down, `aquaman-coder exec` stops before running the command and names the fix. In hook mode, in a project that has bindings, the hook refuses shell commands instead of running them without their credentials. The refusal names the fix. aquaman's own commands (`aquaman ...`, `aquaman-coder ...`) are never refused, so:
 
@@ -187,6 +196,7 @@ Do not run `aquaman daemon` yourself: it stays in the foreground and your comman
 |---|---|---|
 | `~/.aquaman/` | `config.yaml` if missing, `projects.yaml`, the audit log, the daemon's socket and log | This user |
 | A background process | `aquaman daemon`, started if not already running | Until logout or reboot |
+| A launchd agent (`~/Library/LaunchAgents/sh.aquaman.daemon.plist`) or a systemd user unit (`~/.config/systemd/user/aquaman.service`) | **Only with `--service`, and only after the user allowed it in a dialog.** Starts the daemon at every login | This user. Removed with `aquaman service uninstall` |
 | `~/.aquaman/config.yaml` and a listener on `127.0.0.1` | **Only with `--loopback`.** Turns on the token-gated loopback listener and generates its token | This user. Any local process can connect to the port; only one with the token is answered |
 | `~/.claude/settings.json` or `~/.codex/hooks.json` | **Not with `--no-hooks`.** A `PreToolUse` and a `PostToolUse` hook. On macOS with Claude Code, also one sandbox allowlist entry for the aquaman socket | **User level: the hook runs in every project**, and does nothing outside directories registered with aquaman, apart from redacting secret-shaped strings in tool output |
 | `~/.claude/skills/aquaman-credentials/` or `~/.agents/skills/aquaman-credentials/` | The skill that tells an agent to use `aquaman request` | User level |

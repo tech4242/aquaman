@@ -90,8 +90,9 @@ export const NAV: { heading: string; slugs: string[]; labels?: Record<string, st
   },
   {
     heading: 'Reference',
-    slugs: ['changelog', 'compare', 'security', 'compliance/atlas-mapping', 'compliance/nist-800-53', 'compliance/bsi-tr-02102', 'compliance/agentic-ai-guidance'],
+    slugs: ['autostart', 'changelog', 'compare', 'security', 'compliance/atlas-mapping', 'compliance/nist-800-53', 'compliance/bsi-tr-02102', 'compliance/agentic-ai-guidance'],
     labels: {
+      autostart: 'Start the daemon at login',
       changelog: 'Changelog',
       compare: 'Compared with alternatives',
       security: 'Security policy',
@@ -118,6 +119,7 @@ const META: Record<string, { title?: string; description: string }> = {
   'hermes': { description: "Point Hermes at aquaman's local proxy so provider API keys stay in your vault and are never in the Hermes agent process." },
   'docker-sandboxes': { title: 'Docker Sandboxes secrets from your own vault', description: 'Source Docker Sandboxes (sbx) secrets from 1Password, Bitwarden or any vault aquaman supports, with an allow-list and an audit entry per read.' },
   'openshell': { title: 'NVIDIA OpenShell credential driver for your vault', description: 'Make aquaman the credential driver for NVIDIA OpenShell, so sandboxes take keys from your own vault by reference, with an audit trail.' },
+  'autostart': { description: 'Keep the aquaman daemon running across logins and reboots with a launchd agent or systemd user unit that a person approves, and how to remove it.' },
   'changelog': { description: 'What changed in each release of aquaman, newest first: fixes, new commands, breaking changes and what to check when you update.' },
   'compare': { title: 'aquaman vs other agent credential tools', description: 'Where aquaman fits among agent credential tools such as op run, Infisical, Doppler and fnox, and when something else is the better choice.' },
   'security': { description: "aquaman's security policy: how to report a vulnerability privately, what is in scope, and which versions receive fixes." },
