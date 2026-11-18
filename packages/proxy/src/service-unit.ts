@@ -154,7 +154,25 @@ export function buildLaunchdPlist(spec: UnitSpec): string {
   ].join('\n');
 }
 
-/** One double-quoted systemd word. `%` starts a specifier everywhere; `$` starts a variable in a command line. */
+/**
+ * A path that becomes a word of `ExecStart`. systemd expands `$NAME` in the
+ * arguments of a command line and documents `$$` as the way to write a
+ * dollar sign there, but the first word, the executable, is not an argument.
+ * A path with a dollar sign in it is refused, so the unit never depends on
+ * which of the two readings applies to which word.
+ */
+function systemdCommandPath(label: string, value: string): string {
+  const checked = unitPathValue(label, value);
+  if (checked.includes('$')) {
+    throw new ServiceError(
+      `${label} contains a dollar sign, which a systemd command line cannot hold in a way every version reads the same: ${checked}`,
+      'Install Node and aquaman under a path without a dollar sign, then run this command again',
+    );
+  }
+  return checked;
+}
+
+/** One double-quoted systemd word. `%` starts a specifier everywhere; `$` starts a variable in the arguments of a command line. */
 function systemdQuote(text: string, commandLine: boolean): string {
   let out = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%');
   if (commandLine) out = out.replace(/\$/g, '$$$$');
@@ -163,8 +181,8 @@ function systemdQuote(text: string, commandLine: boolean): string {
 
 /** The systemd user unit: started with the user manager, restarted when it fails. */
 export function buildSystemdUnit(spec: UnitSpec): string {
-  const node = unitPathValue('The path of the Node binary', spec.nodePath);
-  const cli = unitPathValue('The path of the aquaman CLI', spec.cliPath);
+  const node = systemdCommandPath('The path of the Node binary', spec.nodePath);
+  const cli = systemdCommandPath('The path of the aquaman CLI', spec.cliPath);
   const env = unitEnvironment(spec);
   return [
     '[Unit]',
@@ -243,7 +261,7 @@ export interface DaemonControl {
   /** The pid in the daemon's pid file. */
   pidFile(): number | null;
   isRunning(pid: number): boolean;
-  /** Ask the process to stop (SIGTERM). */
+  /** Ask the process to stop (SIGTERM). Throws what `process.kill` throws; `ESRCH` means it is already gone. */
   stop(pid: number): void;
   /** Remove what a stopped daemon may have left: the pid file and the socket. */
   cleanup(): void;
@@ -557,7 +575,19 @@ export async function installService(deps: ServiceDeps, opts: { dryRun?: boolean
   }
   let stopped = false;
   if (target.pid !== null) {
-    deps.daemon.stop(target.pid);
+    try {
+      deps.daemon.stop(target.pid);
+    } catch (err) {
+      // ESRCH: the process exited between the check and the signal. It is
+      // stopped, which is what the signal was for.
+      if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+        await undo();
+        return fail(
+          `The running daemon could not be stopped: ${err instanceof Error ? err.message : String(err)}`,
+          'Run: aquaman stop, then this command again',
+        );
+      }
+    }
     for (let i = 0; i < 50 && deps.daemon.isRunning(target.pid); i++) await deps.sleep(100);
     if (deps.daemon.isRunning(target.pid)) {
       await undo();

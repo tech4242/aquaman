@@ -35,7 +35,7 @@ describe('audit anchor: CLI and serving processes', () => {
 
   const logFile = () => path.join(sb.config, 'audit', 'current.jsonl');
   const vault = () => new EncryptedFileStore(PASSWORD, path.join(sb.config, 'credentials.enc'));
-  const anchor = async (): Promise<{ v: number; seq: number; hash: string; at: string } | null> => {
+  const anchor = async (): Promise<{ v: number; seq: number; hash: string; at: string; from?: number } | null> => {
     const raw = await vault().get('aquaman_internal', 'audit_anchor');
     return raw === null ? null : JSON.parse(raw);
   };
@@ -284,20 +284,90 @@ describe('audit anchor: CLI and serving processes', () => {
       expect(JSON.parse(chainOnly.stdout)).toMatchObject({ valid: false, chain: { valid: false }, anchor: { status: 'not_checked' } });
     }, T * 2);
 
-    it('reports "verified from sequence N" when earlier archives are gone', async () => {
+    it.skipIf(!python)('an old archive deleted by hand fails with the range that is missing; after audit accept the log verifies from where it begins', async () => {
       await loggedAndAnchored(3);
       const rotated = await sb.run(['audit', 'rotate']);
       const first = rotated.stdout.match(/Log rotated to: (.+)/)![1].trim();
       await loggedAndAnchored(5, 8);
       expect((await sb.run(['audit', 'rotate'])).code).toBe(0);
+      expect(await anchor()).toMatchObject({ seq: 8, from: 1 });
+      expect((await sb.run(['audit', 'verify'])).code).toBe(0);
       fs.rmSync(first);
 
       const r = await sb.run(['audit', 'verify']);
-      expect(r.code).toBe(0);
-      expect(r.stdout).toContain('  Entries: 0');
-      expect(r.stdout).toContain('  Sequence: 4 to 8 (verified from sequence 4; earlier archives are not retained)');
-      expect(r.stdout).toContain('Anchor: the anchor matches the entry at sequence 8');
-    }, T * 3);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toContain('Audit log integrity FAILED');
+      expect(r.stdout).toMatch(/ {2}- Anchor: entries 1 to 3 are missing: they were on disk when the anchor was written \([^)]+\), and the log now begins at sequence 4/);
+      expect(r.stdout).toContain('stop the proxy and run: aquaman audit accept');
+      const parsed = JSON.parse((await sb.run(['audit', 'verify', '--json'])).stdout);
+      expect(parsed).toMatchObject({ valid: false, chain: { valid: true, verified_from: 4 }, anchor: { status: 'head_missing', seq: 8, from: 1 } });
+
+      const accepted = await onTerminal(['audit', 'accept'], [['Type yes to accept: ', 'yes\r']]);
+      expect(accepted.output).toContain('Anchor: entries 1 to 3 are missing');
+      expect(accepted.code).toBe(0);
+      expect(await anchor()).toMatchObject({ seq: 9, from: 4 });
+
+      const ok = await sb.run(['audit', 'verify']);
+      expect(ok.code).toBe(0);
+      expect(ok.stdout).toContain('  Sequence: 4 to 9 (verified from sequence 4, where the anchor says the log begins)');
+      expect(ok.stdout).toContain('Anchor: the anchor matches the entry at sequence 9');
+    }, T * 4);
+
+    it('verify and tail change nothing on disk: no audit directory is made for them, and an entry in the write-ahead file is left for the writer', async () => {
+      const auditDir = path.join(sb.config, 'audit');
+      fs.rmSync(auditDir, { recursive: true, force: true });
+      expect((await sb.run(['audit', 'verify'])).code).toBe(0);
+      expect((await sb.run(['audit', 'tail'])).stdout).toContain('No audit entries found.');
+      expect(fs.existsSync(auditDir)).toBe(false);
+
+      await loggedAndAnchored(3);
+      // A writer in the middle of an append: the entry is in the write-ahead file and not yet in the log.
+      const lines = fs.readFileSync(logFile(), 'utf-8').trim().split('\n');
+      fs.writeFileSync(logFile(), lines.slice(0, 2).join('\n') + '\n');
+      fs.writeFileSync(path.join(auditDir, 'current.wal'), lines[2] + '\n');
+      const listing = () => fs.readdirSync(auditDir, { recursive: true }).map(String).sort()
+        .map((name) => [name, fs.statSync(path.join(auditDir, name)).isFile() ? fs.readFileSync(path.join(auditDir, name), 'utf-8') : null]);
+      const before = listing();
+
+      const verified = await sb.run(['audit', 'verify', '--json']);
+      expect(JSON.parse(verified.stdout)).toMatchObject({ chain: { valid: true, entries: 2, last_seq: 2 }, anchor: { status: 'truncated' } });
+      const tail = await sb.run(['audit', 'tail']);
+      expect(tail.stdout.trim().split('\n')).toHaveLength(2);
+      expect(listing()).toEqual(before);
+
+      // The writer finishes its append: one entry 3, and the log verifies against its anchor again.
+      fs.appendFileSync(logFile(), lines[2] + '\n');
+      fs.writeFileSync(path.join(auditDir, 'current.wal'), '');
+      expect(entries().map((e) => e.seq)).toEqual([1, 2, 3]);
+      expect((await sb.run(['audit', 'verify'])).code).toBe(0);
+    }, T * 4);
+
+    it('a daemon goes on in the same chain while verify, tail and rotate run beside it', async () => {
+      const { child, output } = await startDaemon(sb);
+      for (let i = 0; i < 3; i++) await refusedRead();
+      expect((await sb.run(['audit', 'verify', '--chain-only'])).code).toBe(0);
+      expect((await sb.run(['audit', 'tail'])).stdout.trim().split('\n')).toHaveLength(3);
+
+      // Another process rotates the log the daemon is writing.
+      const rotated = await sb.run(['audit', 'rotate']);
+      expect(rotated.code).toBe(0);
+      for (let i = 0; i < 2; i++) await refusedRead();
+      expect((await sb.run(['audit', 'verify', '--chain-only'])).code).toBe(0);
+      // Stopped once the interval's anchor is in the vault, so the signal does not land in the middle of that write.
+      await waitForAnchor(5);
+      await stop(child);
+      expect(await exited(child)).toBe(0);
+
+      expect(entries().map((e) => e.seq)).toEqual([4, 5]);
+      expect(output()).not.toContain('AUDIT FAILURE');
+      const ok = await sb.run(['audit', 'verify', '--json']);
+      expect(JSON.parse(ok.stdout)).toMatchObject({
+        valid: true,
+        chain: { valid: true, errors: [], entries: 2, last_seq: 5, verified_from: 1 },
+        anchor: { status: 'matches', seq: 5, from: 1 },
+      });
+      expect(fs.existsSync(path.join(sb.config, 'audit', 'write.lock'))).toBe(false);
+    }, T * 4);
 
     it('a vault that cannot be read fails with exit 1, the reason and the fix; --chain-only checks the chain alone', async () => {
       await loggedAndAnchored(2);

@@ -179,6 +179,49 @@ describe('audit failure: in process', () => {
     expect(res.status).toBe(200);
     expect(order).toEqual(['audit written', 'response received']);
   });
+
+  it('a log whose lock another process holds past the wait: no value is handed out, nothing is written to the log, and the call succeeds once the lock is free', async () => {
+    const sb = createSandbox();
+    try {
+      const logDir = path.join(sb.root, 'audit');
+      const audit = new AuditLogger({ logDir, lockWaitMs: 80 });
+      await audit.initialize();
+      const store = new MemoryStore();
+      await store.set('github', 'token', SECRET);
+      const scope = createBrokerScope({ configPath: '/nonexistent/config.yaml', projectsPath: '/nonexistent/projects.yaml' });
+      socketPath = tmpSocketPath();
+      proxy = createCredentialProxy({
+        socketPath,
+        store,
+        allowedServices: [],
+        broker: { ...scope, check: () => ({ allowed: true } as const) },
+        onRequest: (info) => audit.logCredentialAccess('system', 'system', { service: info.service, operation: 'read', success: !info.error }),
+      });
+      await proxy.start();
+      expect((await resolveRef()).status).toBe(200);
+      const logFile = path.join(logDir, 'current.jsonl');
+      const before = fs.readFileSync(logFile, 'utf-8');
+
+      // Another writer, alive, holds the lock and does not let go.
+      const lock = path.join(logDir, 'write.lock');
+      fs.writeFileSync(lock, JSON.stringify({ pid: process.ppid, at: new Date().toISOString(), id: 'another-process' }));
+      const refused = await resolveRef();
+      expect(refused.status).toBe(500);
+      expect(refused.body).not.toContain(SECRET);
+      expect(JSON.parse(refused.body)).toMatchObject({ code: 'audit_unavailable', fix: expect.stringContaining('aquaman doctor') });
+      expect(console.error).toHaveBeenCalledWith(expect.stringMatching(/^AUDIT FAILURE: could not record BROKER github \(\/broker\/resolve\): The audit log is locked by another process/));
+      expect(fs.readFileSync(logFile, 'utf-8')).toBe(before);
+      expect((await udsFetch(socketPath, '/_health')).status).toBe(200);
+
+      fs.rmSync(lock);
+      const res = await resolveRef();
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body).value).toBe(SECRET);
+      expect((await new AuditLogger({ logDir, readOnly: true }).verifyChain())).toMatchObject({ valid: true, entries: 2, lastSeq: 2 });
+    } finally {
+      await sb.cleanup();
+    }
+  });
 });
 
 describe('audit failure: the OpenShell driver', () => {

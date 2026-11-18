@@ -102,13 +102,31 @@ WantedBy=default.target
     expect(plist.match(/<string>/g)!.length).toBe(plist.match(/<\/string>/g)!.length);
   });
 
-  it('systemd unit: quotes and backslashes are escaped, % is doubled, and $ is doubled on the command line only', () => {
-    const unit = buildSystemdUnit({ nodePath: `${awkward}/node`, cliPath: `${awkward}/cli.js`, configDir: awkward, configDirEnv: awkward });
-    const exec = '/Users/a b/R&D <x>/it\'s \\"node\\"/50%%/$$HOME/back\\\\slash';
+  it('systemd unit: quotes and backslashes are escaped and % is doubled; a $ in an environment value is written as it is', () => {
+    const plain = awkward.replace('$HOME', 'HOME');
+    const unit = buildSystemdUnit({ nodePath: `${plain}/node`, cliPath: `${plain}/cli.js`, configDir: awkward, configDirEnv: awkward });
+    const exec = '/Users/a b/R&D <x>/it\'s \\"node\\"/50%%/HOME/back\\\\slash';
     const envValue = '/Users/a b/R&D <x>/it\'s \\"node\\"/50%%/$HOME/back\\\\slash';
     expect(unit).toContain(`ExecStart="${exec}/node" "${exec}/cli.js" daemon\n`);
+    // `Environment=` does not expand variables, so nothing is doubled there.
     expect(unit).toContain(`Environment="AQUAMAN_CONFIG_DIR=${envValue}"\n`);
-    expect(unit).toContain(`Environment="PATH=${envValue}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"\n`);
+    expect(unit).toContain(`Environment="PATH=${exec}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"\n`);
+    expect(unit).not.toContain('$$');
+  });
+
+  it.each([
+    ['the Node path', { nodePath: '/opt/no$de/bin/node', cliPath: CLI, configDir: '/c' }, 'The path of the Node binary contains a dollar sign'],
+    ['the Node path, as a whole variable', { nodePath: '/opt/$HOME/node', cliPath: CLI, configDir: '/c' }, 'The path of the Node binary contains a dollar sign'],
+    ['the CLI path', { nodePath: NODE, cliPath: '/opt/aq$uaman/dist/cli/index.js', configDir: '/c' }, 'The path of the aquaman CLI contains a dollar sign'],
+  ])('systemd unit: refuses a $ in %s, and says what to do; the launchd agent takes the same path', (_name, spec$, message) => {
+    let thrown: unknown;
+    try { buildSystemdUnit(spec$); } catch (err) { thrown = err; }
+    expect(thrown).toBeInstanceOf(ServiceError);
+    expect((thrown as ServiceError).message).toContain(message);
+    expect((thrown as ServiceError).message).toContain(spec$.nodePath === NODE ? spec$.cliPath : spec$.nodePath);
+    expect((thrown as ServiceError).fix).toBe('Install Node and aquaman under a path without a dollar sign, then run this command again');
+    // A plist has no variables: the path is written as it is.
+    expect(buildLaunchdPlist(spec$)).toContain(`<string>${spec$.nodePath}</string>`);
   });
 
   it.each([
@@ -541,6 +559,63 @@ describe.each(PLATFORMS)('installer on $platform', (p) => {
     expect(w.signalled).toEqual([]);
     expect(fs.existsSync(w.unitPath)).toBe(false);
     expect(mutating(w.calls)).toEqual(cmds(p.afterRemove));
+  });
+
+  /** An installed unit, loaded, whose process is not the one on the socket: a daemon started by hand answers there. */
+  function staleUnitBesideHandStartedDaemon(): string {
+    const old = 'the unit that was installed before\n';
+    fs.mkdirSync(path.dirname(w.unitPath), { recursive: true });
+    fs.writeFileSync(w.unitPath, old);
+    w.svc = { loaded: true, enabled: true, pid: null };
+    handStarted(w, 777);
+    return old;
+  }
+  const killFails = (code: string) => (pid: number) => {
+    w.signalled.push(pid);
+    if (code === 'ESRCH') { w.alive.delete(pid); w.socket = { reachable: false, pid: null }; }
+    throw Object.assign(new Error(`kill ${code}`), { code });
+  };
+
+  it('a daemon that exits between the check and the signal counts as stopped: the install goes on', async () => {
+    staleUnitBesideHandStartedDaemon();
+    w.deps.daemon.stop = killFails('ESRCH');
+    const r = await installService(w.deps);
+    expect(r).toMatchObject({ exitCode: 0, result: { status: 'installed', daemon: { running: true, replaced: true } } });
+    expect(w.signalled).toEqual([777]);
+    expect(w.cleaned).toBe(1);
+    expect(fs.readFileSync(w.unitPath, 'utf-8')).toBe(p.expected(w));
+    expect(w.svc.loaded).toBe(true);
+    expect(mutating(w.calls)).toEqual(cmds([...p.unload, ...p.load]));
+  });
+
+  it('a daemon that cannot be signalled: the previous unit is put back and loaded again, and the error says what to run', async () => {
+    const old = staleUnitBesideHandStartedDaemon();
+    w.deps.daemon.stop = killFails('EPERM');
+    const r = await installService(w.deps);
+    expect(r).toEqual({
+      exitCode: 1,
+      result: {
+        status: 'error',
+        platform: p.platform,
+        unit: w.unitPath,
+        error: 'The running daemon could not be stopped: kill EPERM',
+        fix: 'Run: aquaman stop, then this command again',
+      },
+    });
+    expect(w.cleaned).toBe(0);
+    expect(w.alive.has(777)).toBe(true);
+    // The machine as it was: the old unit on disk and loaded.
+    expect(fs.readFileSync(w.unitPath, 'utf-8')).toBe(old);
+    expect(w.svc.loaded).toBe(true);
+    expect(mutating(w.calls)).toEqual(cmds([...p.unload, ...p.load]));
+  });
+
+  it('a stop that fails with something that is not an Error is reported the same way', async () => {
+    handStarted(w, 777);
+    w.deps.daemon.stop = () => { throw 'no such signal'; };
+    const r = await installService(w.deps);
+    expect(r.result).toMatchObject({ status: 'error', error: 'The running daemon could not be stopped: no such signal' });
+    expect(fs.existsSync(w.unitPath)).toBe(false);
   });
 
   it('a daemon that does not stop: the unit file is taken back and the error says what to run', async () => {

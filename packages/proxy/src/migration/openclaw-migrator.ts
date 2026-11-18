@@ -11,6 +11,8 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import type { CredentialStore } from '../core/index.js';
 import { isAquamanPlaceholder } from '../core/index.js';
+import { isReservedService } from '../core/credentials/reserved.js';
+import { RESERVED_SERVICE_REASON } from '../broker-scope.js';
 
 export interface CredentialMapping {
   /** JSON path segments within openclaw.json to find the credential */
@@ -237,7 +239,7 @@ const CREDENTIAL_FIELD_EXCLUDES = new Set([
  * Scans `plugins.entries.<pluginId>.config.*` for fields matching credential
  * patterns (token, key, secret, password). Skips aquaman-plugin's own config.
  */
-export function extractPluginCredentials(config: any): CredentialMapping[] {
+export function extractPluginCredentials(config: any, skipped?: SkippedPlugin[]): CredentialMapping[] {
   const results: CredentialMapping[] = [];
 
   const entries = config?.plugins?.entries;
@@ -251,10 +253,42 @@ export function extractPluginCredentials(config: any): CredentialMapping[] {
     const pluginConfig = entry?.config;
     if (!pluginConfig || typeof pluginConfig !== 'object') continue;
 
-    scanObjectForCredentials(pluginConfig, ['plugins', 'entries', pluginId, 'config'], pluginId, results);
+    const found: CredentialMapping[] = [];
+    scanObjectForCredentials(pluginConfig, ['plugins', 'entries', pluginId, 'config'], pluginId, found);
+    if (found.length === 0) continue;
+
+    // The plugin id becomes the service name its credentials are stored
+    // under, and it comes from a file anything can write.
+    const reason = unstorableServiceReason(pluginId);
+    if (reason !== null) {
+      skipped?.push({ service: pluginId, reason });
+      continue;
+    }
+    results.push(...found);
   }
 
   return results;
+}
+
+/** A plugin whose credentials are left where they are, and why. */
+export interface SkippedPlugin {
+  service: string;
+  reason: string;
+}
+
+/** What every other entry point accepts as a service name (`credentials add`, the proxy, the backends). */
+const STORABLE_SERVICE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
+
+/**
+ * Why nothing is stored under this service name, or `null` when something
+ * can be. The reserved service is where aquaman keeps the audit anchor.
+ */
+export function unstorableServiceReason(service: string): string | null {
+  if (isReservedService(service)) return `the name ${RESERVED_SERVICE_REASON}`;
+  if (!STORABLE_SERVICE_NAME.test(service)) {
+    return 'the plugin id is not a service name aquaman can store under (lowercase letters, digits, dots, hyphens and underscores, starting with a letter or digit)';
+  }
+  return null;
 }
 
 /**
@@ -725,6 +759,8 @@ export interface AutoMigrateResult {
   found: number;
   migrated: number;
   skipped: boolean;
+  /** Plugins whose credentials were left in openclaw.json because of their id. Absent when there are none. */
+  unstorable?: SkippedPlugin[];
 }
 
 /**
@@ -741,6 +777,8 @@ export async function autoMigrateOpenClaw(options: AutoMigrateOptions): Promise<
 
   const allCredentials: Array<{ service: string; key: string; value: string; source: string }> = [];
   const seen = new Set<string>();
+  const unstorablePlugins: SkippedPlugin[] = [];
+  const unstorable = (): { unstorable?: SkippedPlugin[] } => (unstorablePlugins.length > 0 ? { unstorable: unstorablePlugins } : {});
 
   // 1. Scan openclaw.json
   if (fs.existsSync(openclawConfigPath)) {
@@ -765,7 +803,7 @@ export async function autoMigrateOpenClaw(options: AutoMigrateOptions): Promise<
         }
       }
 
-      const pluginMappings = extractPluginCredentials(config);
+      const pluginMappings = extractPluginCredentials(config, unstorablePlugins);
       for (const m of pluginMappings) {
         let current: any = config;
         for (const key of m.jsonPath) {
@@ -802,7 +840,7 @@ export async function autoMigrateOpenClaw(options: AutoMigrateOptions): Promise<
   }
 
   if (allCredentials.length === 0) {
-    return { found: 0, migrated: 0, skipped: false };
+    return { found: 0, migrated: 0, skipped: false, ...unstorable() };
   }
 
   // Migrate silently (setup already has user consent)
@@ -819,5 +857,5 @@ export async function autoMigrateOpenClaw(options: AutoMigrateOptions): Promise<
     }
   }
 
-  return { found: allCredentials.length, migrated, skipped: false };
+  return { found: allCredentials.length, migrated, skipped: false, ...unstorable() };
 }

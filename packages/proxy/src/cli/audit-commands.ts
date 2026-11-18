@@ -2,6 +2,11 @@
  * `aquaman audit verify` and `aquaman audit accept`.
  *
  * Both return the exit code and leave exiting to the caller.
+ *
+ * A proxy may be writing the log while these run. Everything that only looks
+ * at the log goes through a logger opened for reading, which creates and
+ * changes nothing. `accept` writes one entry, through a second logger that
+ * takes the log's lock like any other writer.
  */
 
 import * as readline from 'node:readline';
@@ -17,16 +22,15 @@ export interface AuditCommandDeps {
   proxyRunning: () => Promise<boolean>;
 }
 
-async function verification(deps: AuditCommandDeps, chainOnly: boolean): Promise<{ report: AuditVerification; logger: ReturnType<typeof createAuditLogger> }> {
-  const logger = createAuditLogger({ logDir: deps.config.audit.logDir, enabled: true });
+async function verification(deps: AuditCommandDeps, chainOnly: boolean): Promise<AuditVerification> {
+  const logger = createAuditLogger({ logDir: deps.config.audit.logDir, enabled: true, readOnly: true });
   await logger.initialize();
-  const report = await verifyAuditLog({
+  return verifyAuditLog({
     logger,
     openStore: deps.openStore,
     anchoring: deps.config.audit.enabled && resolveAnchorInterval(deps.config) > 0,
     chainOnly,
   });
-  return { report, logger };
 }
 
 function printReport(report: AuditVerification): void {
@@ -39,7 +43,7 @@ function printReport(report: AuditVerification): void {
     if (chain.verifiedFrom !== null) {
       console.log(
         chain.verifiedFrom > 1
-          ? `  Sequence: ${chain.verifiedFrom} to ${chain.lastSeq} (verified from sequence ${chain.verifiedFrom}; earlier archives are not retained)`
+          ? `  Sequence: ${chain.verifiedFrom} to ${chain.lastSeq} (verified from sequence ${chain.verifiedFrom}${anchor.from === undefined ? '; earlier entries are not on disk, and no anchor says whether they should be' : ', where the anchor says the log begins'})`
           : `  Sequence: 1 to ${chain.lastSeq}`,
       );
     }
@@ -58,7 +62,7 @@ function printReport(report: AuditVerification): void {
 }
 
 export async function auditVerifyCommand(options: { chainOnly?: boolean; json?: boolean }, deps: AuditCommandDeps): Promise<number> {
-  const { report } = await verification(deps, options.chainOnly === true);
+  const report = await verification(deps, options.chainOnly === true);
   if (options.json) {
     const { chain, anchor } = report;
     console.log(JSON.stringify({
@@ -121,7 +125,7 @@ export async function auditAcceptCommand(deps: AuditCommandDeps): Promise<number
     return 1;
   }
 
-  const { report, logger } = await verification({ ...deps, openStore: async () => store }, false);
+  const report = await verification({ ...deps, openStore: async () => store }, false);
   const { anchor, chain } = report;
   if (anchor.status === 'unreadable') {
     console.error(`Anchor: ${anchor.message}`);
@@ -148,6 +152,7 @@ export async function auditAcceptCommand(deps: AuditCommandDeps): Promise<number
     return 1;
   }
 
+  const logger = createAuditLogger({ logDir: deps.config.audit.logDir, enabled: true });
   const result = await acceptAuditLog({ logger, store });
   if (!result.accepted) {
     console.error(`Not accepted: ${result.reason}.`);
