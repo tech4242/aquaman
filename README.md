@@ -17,7 +17,7 @@ npm install -g aquaman-proxy aquaman-coder
 cd ~/code/my-app && aquaman init --agent claude-code      # or: --agent codex
 ```
 
-That is the whole setup for a coding agent. When a task needs a key, the agent runs `aquaman request aquaman://github/token --env GITHUB_TOKEN`, you type the value into a dialog, and from then on commands in that project get it injected while the transcript shows `[REDACTED:injected-value]`.
+That is the whole setup for a coding agent. When a task needs a key, the agent runs `aquaman request aquaman://github/token --env GITHUB_TOKEN`, you type the value into a dialog, and from then on commands in that project get it injected while the transcript shows `[REDACTED:injected-value]`. If the key is already an item in your vault, `--from 'op://Private/GitHub/token'` points the reference at it and you approve the item instead of typing.
 
 Three things aquaman does:
 
@@ -101,7 +101,7 @@ aquaman init --agent claude-code                   # or: --agent codex
 aquaman request aquaman://github/token --env GITHUB_TOKEN
 ```
 
-`init` creates the config, starts the daemon, installs the agent's hooks and a skill, registers the directory as a project and adds a short block to `CLAUDE.md` (or `AGENTS.md`). It never prompts, so the agent can run it for you. `request` opens a dialog where you type the value; it goes straight into your vault and the agent only ever sees the reference. Both print JSON with `--json`. Restart the agent session afterwards, and run `aquaman coder doctor` if anything looks off. What `init` changes on your machine, and how to undo it, is listed in [Using aquaman from an AI agent](https://aquaman.sh/docs/agent-setup/#what-init-changes).
+`init` creates the config, starts the daemon, installs the agent's hooks and a skill, registers the directory as a project and adds a short block to `CLAUDE.md` (or `AGENTS.md`). It never prompts, so the agent can run it for you. `request` opens a dialog where you type the value; it goes straight into your vault and the agent only ever sees the reference. With `--from '<locator>'` the reference points at an item that is already in your vault, and the dialog is an approval with nothing to type ([locator forms](https://aquaman.sh/docs/agent-setup/#an-item-that-is-already-in-the-vault)). Both print JSON with `--json`. Restart the agent session afterwards, and run `aquaman coder doctor` if anything looks off. What `init` changes on your machine, and how to undo it, is listed in [Using aquaman from an AI agent](https://aquaman.sh/docs/agent-setup/#what-init-changes).
 
 Your app does not change: it reads its keys from the environment as it would anyway, and aquaman is how those variables get set on your machine while the agent works. The app holds the key while one of its commands runs, the same as with `op run` or a `.env` file; what changes is that the agent, the transcript and your repository never do. In CI and production the same variable names are filled from that platform's own secrets. To keep the key out of the app as well, route it through the proxy: `aquaman request aquaman://stripe/secret_key --env STRIPE_SECRET_KEY --via-proxy STRIPE_API_BASE` gives the app a local token and the proxy's URL instead of the key, and request policies then apply to it ([guide](https://aquaman.sh/docs/app-through-proxy/)).
 
