@@ -12,6 +12,23 @@
  * log was removed or that the whole log was rebuilt. That is what the anchor
  * kept in the credential store is for (`audit-anchor.ts`).
  *
+ * Several processes may have one log open: a daemon and an OpenClaw-hosted
+ * proxy on one config directory both write it, and `aquaman audit verify`
+ * reads it while they do. Two rules keep the chain whole:
+ *
+ * - A reader never changes anything. `verifyChain()`, `hashAt()`, `tail()`
+ *   and a logger opened with `readOnly` create no file or directory and
+ *   leave the write-ahead file alone.
+ * - Every write happens under a lock file in the audit directory, held for
+ *   the length of one append. Under the lock the writer looks at whether the
+ *   log changed since its own last write and, if it did, reads what was
+ *   added and goes on from there. Recovery from the write-ahead file,
+ *   rotation and pruning happen under the same lock.
+ *
+ * A writer follows only entries that link to the last one it knows. A log
+ * that was cut short or replaced is not followed: the writer goes on from
+ * its own last entry, so the change shows as a break in the chain.
+ *
  * Note: Credential redaction is handled by OpenClaw's built-in redaction.
  */
 
@@ -71,10 +88,26 @@ export interface AuditLoggerOptions {
    * under their normal local-data retention policy.
    */
   maxArchives?: number;
+  /**
+   * Open the log for reading only: `initialize()` creates nothing and does
+   * not touch the write-ahead file, and every write is refused. For commands
+   * that inspect a log another process may be writing.
+   */
+  readOnly?: boolean;
+  /** How long a write waits for the lock before it fails. Default: 2000 ms. */
+  lockWaitMs?: number;
+  /**
+   * Age after which a lock is taken over whoever holds it. A writer holds
+   * the lock for one append, so a lock this old belongs to a process that
+   * stopped or hangs. Default: 5000 ms.
+   */
+  lockStaleMs?: number;
 }
 
 const DEFAULT_MAX_LOG_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
 const DEFAULT_MAX_ARCHIVES = 10;
+const DEFAULT_LOCK_WAIT_MS = 2000;
+const DEFAULT_LOCK_STALE_MS = 5000;
 
 /** Result of walking the chain through the current file and the archives it links to. */
 export interface ChainVerification {
@@ -105,6 +138,8 @@ interface ChainFile {
   errors: string[];
 }
 
+const splitLines = (content: string): string[] => content.trim().split('\n').filter(line => line.length > 0);
+
 function readLines(file: string): string[] {
   let content: string;
   try {
@@ -112,8 +147,45 @@ function readLines(file: string): string[] {
   } catch {
     return [];
   }
-  return content.trim().split('\n').filter(line => line.length > 0);
+  return splitLines(content);
 }
+
+interface FilePart {
+  text: string;
+  ino: number;
+  /** The size of the file when it was read. */
+  size: number;
+}
+
+/**
+ * What `file` holds from `offset` to its end, with the inode and size of the
+ * file that was read. `null` when there is no such file to read.
+ */
+function readFrom(file: string, offset: number): FilePart | null {
+  let fd: number;
+  try {
+    fd = fs.openSync(file, 'r');
+  } catch {
+    return null;
+  }
+  try {
+    const { ino, size } = fs.fstatSync(fd);
+    const buffer = Buffer.alloc(Math.max(0, size - offset));
+    const got = fs.readSync(fd, buffer, 0, buffer.length, offset);
+    return { text: buffer.toString('utf-8', 0, got), ino, size };
+  } catch {
+    return null; // a directory under that name, or a file that cannot be read
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Whether an entry's hash is the hash of its own content and the previous hash it names. */
+function hashMatches(entry: AuditEntry): boolean {
+  return entry.hash === computeChainedHash(JSON.stringify({ ...entry, hash: undefined }), entry.previousHash);
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Read one log file and check it on its own terms: every entry's hash, every
@@ -176,24 +248,44 @@ export class AuditLogger {
   private logDir: string;
   private currentLogPath: string;
   private walPath: string;
+  private lockPath: string;
   private enabled: boolean;
   private walEnabled: boolean;
+  private readOnly: boolean;
   private maxLogSizeBytes: number;
   private maxArchives: number;
+  private lockWaitMs: number;
+  private lockStaleMs: number;
   private lastHash: string = GENESIS_HASH;
   private lastSeq: number = 0;
   private entryCount: number = 0;
   private initialized: boolean = false;
   private entryListener: (() => void) | null = null;
+  private pruneListener: (() => void) | null = null;
+  /**
+   * The lowest sequence that is supposed to be on disk: where the log began
+   * when this logger first read it, raised only by this logger's own pruning.
+   */
+  private retainedFrom: number = 1;
+  private retainedFromKnown: boolean = false;
+  /** The file that holds the newest entry this logger knows, and where that entry ends in it. */
+  private endOfKnown: { ino: number; size: number } | null = null;
+  /** What the current file looked like when this logger last read or wrote it. */
+  private seen: string = '';
+  private divergenceReported: boolean = false;
 
   constructor(options: AuditLoggerOptions) {
     this.logDir = expandPath(options.logDir);
     this.currentLogPath = path.join(this.logDir, 'current.jsonl');
     this.walPath = path.join(this.logDir, 'current.wal');
+    this.lockPath = path.join(this.logDir, 'write.lock');
     this.enabled = options.enabled ?? true;
     this.walEnabled = options.walEnabled ?? true;
+    this.readOnly = options.readOnly ?? false;
     this.maxLogSizeBytes = options.maxLogSizeBytes ?? DEFAULT_MAX_LOG_SIZE_BYTES;
     this.maxArchives = options.maxArchives ?? DEFAULT_MAX_ARCHIVES;
+    this.lockWaitMs = options.lockWaitMs ?? DEFAULT_LOCK_WAIT_MS;
+    this.lockStaleMs = options.lockStaleMs ?? DEFAULT_LOCK_STALE_MS;
   }
 
   async initialize(): Promise<void> {
@@ -204,20 +296,27 @@ export class AuditLogger {
       return;
     }
 
-    // Ensure directories exist
-    const archiveDir = path.join(this.logDir, 'archive');
-    const integrityDir = path.join(this.logDir, 'integrity');
+    if (!this.readOnly) {
+      const archiveDir = path.join(this.logDir, 'archive');
+      const integrityDir = path.join(this.logDir, 'integrity');
 
-    fs.mkdirSync(this.logDir, { recursive: true, mode: 0o700 });
-    fs.mkdirSync(archiveDir, { recursive: true, mode: 0o700 });
-    fs.mkdirSync(integrityDir, { recursive: true, mode: 0o700 });
+      fs.mkdirSync(this.logDir, { recursive: true, mode: 0o700 });
+      fs.mkdirSync(archiveDir, { recursive: true, mode: 0o700 });
+      fs.mkdirSync(integrityDir, { recursive: true, mode: 0o700 });
+    }
 
-    // Recover state from existing log
-    await this.recoverState();
+    this.recoverState();
 
-    // Recover from WAL if present
-    if (this.walEnabled) {
-      await this.recoverFromWal();
+    // An entry in the write-ahead file belongs either to a writer that is in
+    // the middle of an append or to one that stopped there. Only the lock
+    // tells the two apart, so only a writer that holds it puts the entry
+    // into the log. With the lock busy, the first write does it.
+    if (!this.readOnly && this.walPending()) {
+      try {
+        await this.locked(() => this.catchUp());
+      } catch {
+        // the first write tries again, and fails if it cannot
+      }
     }
 
     this.initialized = true;
@@ -243,14 +342,26 @@ export class AuditLogger {
    * last line. With none, it is the last line of the newest archive, so a
    * rotated log goes on with the next sequence number and the same chain.
    */
-  private async recoverState(): Promise<void> {
-    const lines = readLines(this.currentLogPath);
+  private recoverState(): void {
+    const archives = this.archiveFiles();
+    const current = readFrom(this.currentLogPath, 0);
+    const lines = splitLines(current?.text ?? '');
     this.entryCount = lines.length;
+    // Taken from the bytes that were read, not from a later look at the file:
+    // an entry another process appends in between must count as not seen.
+    this.seen = current ? `${current.ino}:${current.size}` : this.absentMark(archives);
+    this.endOfKnown = current ? { ino: current.ino, size: current.size } : null;
 
     let source = lines;
-    if (source.length === 0) {
-      const archives = this.archiveFiles();
-      for (let i = archives.length - 1; i >= 0 && source.length === 0; i--) source = readLines(archives[i]);
+    for (let i = archives.length - 1; i >= 0 && source.length === 0; i--) {
+      const archive = readFrom(archives[i], 0);
+      source = splitLines(archive?.text ?? '');
+      if (archive && source.length > 0) this.endOfKnown = { ino: archive.ino, size: archive.size };
+    }
+
+    if (!this.retainedFromKnown) {
+      this.retainedFromKnown = true;
+      this.retainedFrom = this.firstSeqOnDisk() ?? 1;
     }
     if (source.length === 0) return;
 
@@ -266,18 +377,225 @@ export class AuditLogger {
     }
   }
 
-  private async recoverFromWal(): Promise<void> {
-    if (!fs.existsSync(this.walPath)) {
+  /** The sequence of the oldest entry in the retained files, or `null` when there is none to read. */
+  private firstSeqOnDisk(): number | null {
+    for (const file of [...this.archiveFiles(), this.currentLogPath]) {
+      const first = readLines(file)[0];
+      if (first === undefined) continue;
+      try {
+        const { seq } = JSON.parse(first) as AuditEntry;
+        // An entry written without a sequence number is the first of its log.
+        return Number.isSafeInteger(seq) ? (seq as number) : 1;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  /** What stands for the current file while there is none: the newest archive, which a rotation by anyone replaces. */
+  private absentMark(archives: string[]): string {
+    return `-:${path.basename(archives[archives.length - 1] ?? '')}`;
+  }
+
+  private currentMark(): string {
+    const stat = fs.statSync(this.currentLogPath, { throwIfNoEntry: false });
+    return stat ? `${stat.ino}:${stat.size}` : this.absentMark(this.archiveFiles());
+  }
+
+  /** Remember the current file as it is after this logger's own append to it. */
+  private noteOwnWrite(): fs.Stats {
+    const stat = fs.statSync(this.currentLogPath);
+    this.endOfKnown = { ino: stat.ino, size: stat.size };
+    this.seen = `${stat.ino}:${stat.size}`;
+    return stat;
+  }
+
+  // ── Writing under the lock ──────────────────────────────────────────────
+
+  /**
+   * Run `work` while holding the lock file. `work` is synchronous, so the
+   * lock is held for one append and never across a wait.
+   *
+   * The lock is a file created with `O_EXCL` that names its holder. A lock
+   * whose holder is not running, or that is older than `lockStaleMs`, is
+   * removed and taken. A lock that stays held past `lockWaitMs` fails the
+   * write; nothing has been written at that point.
+   *
+   * Taking over is not atomic: two processes that find the same abandoned
+   * lock in the same instant can both take it. That needs a writer that
+   * stopped inside an append and two others waiting on it.
+   */
+  private async locked<T>(work: () => T): Promise<T> {
+    const deadline = Date.now() + this.lockWaitMs;
+    for (let wait = 1; ; wait = Math.min(wait * 2, 25)) {
+      const token = this.tryLock();
+      if (token !== null) {
+        try {
+          return work();
+        } finally {
+          // Removed only while it is still this writer's: a process that was
+          // stopped for longer than the stale age has had its lock taken.
+          if (this.lockText() === token) fs.rmSync(this.lockPath, { force: true });
+        }
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `The audit log is locked by another process (${this.lockText() ?? 'its lock file could not be read'}) and did not become free within ${this.lockWaitMs} ms. ` +
+          `If that process is not running aquaman, remove ${this.lockPath}`,
+        );
+      }
+      await sleep(wait);
+    }
+  }
+
+  private lockText(): string | null {
+    try {
+      return fs.readFileSync(this.lockPath, 'utf-8');
+    } catch {
+      return null;
+    }
+  }
+
+  /** Create the lock file, removing an abandoned one first. `null` while another writer holds it. */
+  private tryLock(): string | null {
+    const token = JSON.stringify({ pid: process.pid, at: new Date().toISOString(), id: generateId() });
+    for (let attempt = 1; ; attempt++) {
+      try {
+        fs.writeFileSync(this.lockPath, token, { flag: 'wx', mode: 0o600 });
+        return token;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      }
+      const abandoned = this.abandonedLock();
+      // Read again before removing, so a lock another writer took in the
+      // meantime is left alone. One removal per try: a lock that is back at
+      // once belongs to someone, and the caller waits for it.
+      if (attempt > 1 || abandoned === null || this.lockText() !== abandoned) return null;
+      fs.rmSync(this.lockPath, { force: true });
+    }
+  }
+
+  /** The text of the lock file when nobody holds it any more, else `null`. */
+  private abandonedLock(): string | null {
+    let text: string;
+    let age: number;
+    try {
+      text = fs.readFileSync(this.lockPath, 'utf-8');
+      age = Date.now() - fs.statSync(this.lockPath).mtimeMs;
+    } catch {
+      return null; // released between the attempt and this look, or not a file
+    }
+    if (Math.abs(age) > this.lockStaleMs) return text;
+    let pid: unknown;
+    try {
+      pid = (JSON.parse(text) as { pid?: unknown }).pid;
+    } catch {
+      return null; // being written right now, or not a lock of ours: its age decides
+    }
+    // This process never waits while it holds the lock, so its own pid on a
+    // lock it is not holding is left from an earlier process with that pid.
+    if (pid === process.pid) return text;
+    if (!Number.isSafeInteger(pid) || (pid as number) < 1) return null;
+    try {
+      process.kill(pid as number, 0);
+      return null;
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code === 'ESRCH' ? text : null;
+    }
+  }
+
+  private walPending(): boolean {
+    return this.walEnabled && (fs.statSync(this.walPath, { throwIfNoEntry: false })?.size ?? 0) > 0;
+  }
+
+  /**
+   * Under the lock, before anything is written: follow what other writers
+   * added, then finish an append that a stopped writer left in the
+   * write-ahead file.
+   */
+  private catchUp(): void {
+    if (this.currentMark() !== this.seen) this.followDisk();
+    if (this.walPending()) this.recoverFromWal();
+  }
+
+  /**
+   * The log changed since this logger last read or wrote it. Read what was
+   * added after the entry this logger knows as the newest and, when every
+   * added entry links back to it, go on from the last of them.
+   *
+   * Only the added part is read: the rest of the file this logger's newest
+   * entry is in, and the files after it when the log was rotated meanwhile.
+   */
+  private followDisk(): void {
+    if (this.lastSeq === 0 || this.endOfKnown === null) {
+      // Nothing of this logger's to continue from, so whatever is there is the log.
+      this.recoverState();
       return;
     }
+    const tail = this.endOfKnown;
+    const files = [...this.archiveFiles(), this.currentLogPath];
+    let start = files.length - 1;
+    while (start >= 0 && fs.statSync(files[start], { throwIfNoEntry: false })?.ino !== tail.ino) start--;
 
-    const walContent = fs.readFileSync(this.walPath, 'utf-8');
-    const lines = walContent.trim().split('\n').filter(line => line.length > 0);
+    let seq = this.lastSeq;
+    let hash = this.lastHash;
+    let end = tail;
+    let inCurrent = 0;
+    let linked = start >= 0;
+    for (let i = start; linked && i < files.length; i++) {
+      const offset = i === start ? tail.size : 0;
+      const part = readFrom(files[i], offset);
+      if (part === null) continue; // no current file after a rotation
+      const added = part.size < offset ? null : splitLines(part.text);
+      for (const text of added ?? []) {
+        let entry: AuditEntry | null;
+        try {
+          entry = JSON.parse(text) as AuditEntry | null;
+        } catch {
+          entry = null;
+        }
+        if (!entry || entry.seq !== seq + 1 || entry.previousHash !== hash || !hashMatches(entry)) {
+          linked = false;
+          break;
+        }
+        seq = entry.seq;
+        hash = entry.hash;
+      }
+      // A file shorter than the place this logger's entry ended at was cut.
+      if (added === null) linked = false;
+      else if (files[i] === this.currentLogPath) inCurrent = (i === start ? this.entryCount : 0) + added.length;
+      end = { ino: part.ino, size: part.size };
+    }
 
-    for (const line of lines) {
+    this.seen = this.currentMark();
+    if (!linked) {
+      if (!this.divergenceReported) {
+        this.divergenceReported = true;
+        console.error(
+          `AUDIT FAILURE: the audit log on disk does not continue from the last entry this process wrote (sequence ${this.lastSeq}): ` +
+          'something other than an aquaman writer changed it. This process goes on from its own last entry, so the change shows as a break in the chain. ' +
+          'Run: aquaman audit verify',
+        );
+      }
+      return;
+    }
+    this.lastSeq = seq;
+    this.lastHash = hash;
+    this.endOfKnown = end;
+    this.entryCount = inCurrent;
+  }
+
+  /**
+   * Put the entries of the write-ahead file into the log. Called only under
+   * the lock, where a non-empty file means a writer stopped between its two
+   * appends, or after the second and before it emptied the file.
+   */
+  private recoverFromWal(): void {
+    for (const line of readLines(this.walPath)) {
       try {
         const entry = JSON.parse(line) as AuditEntry;
-        // A crash after the main log was written and before the WAL was
+        // A stop after the main log was written and before the WAL was
         // cleared leaves the entry in both. Writing it twice would break the chain.
         if (entry.hash === this.lastHash) continue;
         // Write to main log
@@ -285,6 +603,7 @@ export class AuditLogger {
         this.lastHash = entry.hash;
         this.lastSeq = Number.isSafeInteger(entry.seq) ? (entry.seq as number) : this.lastSeq + 1;
         this.entryCount++;
+        this.noteOwnWrite();
       } catch {
         console.error('Warning: Could not recover WAL entry');
       }
@@ -353,81 +672,94 @@ export class AuditLogger {
     agentId: string,
     data: AuditEntry['data']
   ): Promise<AuditEntry> {
+    if (this.readOnly) {
+      throw new Error('This audit log was opened for reading only; nothing is written through this logger');
+    }
     if (!this.initialized) {
       await this.initialize();
     }
 
-    const seq = this.lastSeq + 1;
-    const entry: AuditEntry = {
-      id: generateId(),
-      seq,
-      timestamp: new Date(),
-      type,
-      sessionId,
-      agentId,
-      data,
-      previousHash: this.lastHash,
-      hash: '' // Will be computed below
-    };
+    let pruned = false;
+    const written = await this.locked(() => {
+      this.catchUp();
 
-    // The hash covers every field of the entry, the sequence number
-    // included, and the previous hash for chain integrity.
-    const entryData = JSON.stringify({
-      ...entry,
-      hash: undefined
+      const seq = this.lastSeq + 1;
+      const entry: AuditEntry = {
+        id: generateId(),
+        seq,
+        timestamp: new Date(),
+        type,
+        sessionId,
+        agentId,
+        data,
+        previousHash: this.lastHash,
+        hash: '' // Will be computed below
+      };
+
+      // The hash covers every field of the entry, the sequence number
+      // included, and the previous hash for chain integrity.
+      const entryData = JSON.stringify({
+        ...entry,
+        hash: undefined
+      });
+      entry.hash = computeChainedHash(entryData, this.lastHash);
+
+      const line = JSON.stringify(entry) + '\n';
+
+      // Write to WAL first (for crash recovery)
+      if (this.walEnabled) {
+        fs.appendFileSync(this.walPath, line, { mode: 0o600 });
+      }
+
+      // Write to main log
+      fs.appendFileSync(this.currentLogPath, line, { mode: 0o600 });
+
+      // Clear WAL entry after successful write
+      if (this.walEnabled) {
+        fs.writeFileSync(this.walPath, '', { mode: 0o600 });
+      }
+
+      this.lastHash = entry.hash;
+      this.lastSeq = seq;
+      this.entryCount++;
+
+      try {
+        const { size } = this.noteOwnWrite();
+        // Auto-rotate if the current log has crossed the size threshold.
+        if (this.maxLogSizeBytes > 0 && size >= this.maxLogSizeBytes) {
+          this.rotateUnlocked();
+          pruned = this.pruneArchives();
+        }
+      } catch {
+        // the file was removed between the write and the look at it: nothing to rotate
+      }
+
+      return entry;
     });
-    entry.hash = computeChainedHash(entryData, this.lastHash);
 
-    const line = JSON.stringify(entry) + '\n';
-
-    // Write to WAL first (for crash recovery)
-    if (this.walEnabled) {
-      fs.appendFileSync(this.walPath, line, { mode: 0o600 });
-    }
-
-    // Write to main log
-    fs.appendFileSync(this.currentLogPath, line, { mode: 0o600 });
-
-    // Clear WAL entry after successful write
-    if (this.walEnabled) {
-      fs.writeFileSync(this.walPath, '', { mode: 0o600 });
-    }
-
-    this.lastHash = entry.hash;
-    this.lastSeq = seq;
-    this.entryCount++;
-
-    // Whoever anchors the log learns that it grew. The entry is on disk
-    // already, so nothing the listener does can undo or fail the write.
+    // Whoever anchors the log learns that it grew, and that it now begins
+    // later. The entry is on disk already, so nothing a listener does can
+    // undo or fail the write.
     try {
       this.entryListener?.();
+      if (pruned) this.pruneListener?.();
     } catch {
       // the listener's own problem
     }
 
-    // Auto-rotate if the current log has crossed the size threshold.
-    if (this.maxLogSizeBytes > 0) {
-      try {
-        const { size } = fs.statSync(this.currentLogPath);
-        if (size >= this.maxLogSizeBytes) {
-          await this.rotateLog();
-          this.pruneArchives();
-        }
-      } catch {
-        // statSync failed (e.g. file removed between write and stat) — skip rotation
-      }
-    }
-
-    return entry;
+    return written;
   }
 
   /**
    * Delete archive files beyond `maxArchives`, oldest first. The newest
    * archive is never deleted, whatever the setting: the current file's first
    * entry links to it, and verification needs it to follow that link.
+   *
+   * Returns whether the log now begins at a later entry than before. This is
+   * the only place `retainedFrom` goes up.
    */
-  private pruneArchives(): void {
-    if (!Number.isFinite(this.maxArchives) || this.maxArchives <= 0) return;
+  private pruneArchives(): boolean {
+    if (!Number.isFinite(this.maxArchives) || this.maxArchives <= 0) return false;
     const keep = Math.max(1, Math.floor(this.maxArchives));
     const archives = this.archiveFiles();
     for (const file of archives.slice(0, Math.max(0, archives.length - keep))) {
@@ -437,6 +769,11 @@ export class AuditLogger {
         // best effort
       }
     }
+    if (archives.length <= keep) return false;
+    const from = this.firstSeqOnDisk();
+    if (from === null || from <= this.retainedFrom) return false;
+    this.retainedFrom = from;
+    return true;
   }
 
   async verifyIntegrity(): Promise<{ valid: boolean; errors: string[] }> {
@@ -453,9 +790,28 @@ export class AuditLogger {
    * be preceded by an archive that ends with the sequence before it and the
    * hash it names. Only an archive may have nothing before it, because
    * pruning removes archives from the old end; `verifiedFrom` then says
-   * where the retained log begins.
+   * where the retained log begins. Whether the log is supposed to begin
+   * there is the anchor's question (`from` in `audit-anchor.ts`), not the
+   * chain's.
+   *
+   * Nothing is written. A writer may append or rotate while the files are
+   * read, and files read at different moments do not fit together, so a
+   * result with errors counts only when nothing changed during the read, or
+   * on the third try.
    */
   async verifyChain(): Promise<ChainVerification> {
+    for (let attempt = 1; ; attempt++) {
+      const before = this.filesMark();
+      const result = this.walkChain();
+      if (result.valid || attempt === 3 || this.filesMark() === before) return result;
+    }
+  }
+
+  private filesMark(): string {
+    return `${this.currentMark()}|${this.archiveFiles().join('|')}`;
+  }
+
+  private walkChain(): ChainVerification {
     const errors: string[] = [];
     const current = readChainFile(this.currentLogPath, 'Entry ');
     errors.push(...current.errors);
@@ -593,16 +949,41 @@ export class AuditLogger {
     return { lastSeq: this.lastSeq, lastHash: this.lastHash };
   }
 
+  /**
+   * The lowest sequence that is supposed to be on disk: 1 for a log this
+   * logger found whole, the first sequence present for one that already began
+   * later, and the first sequence of the oldest archive kept after this
+   * logger pruned. It never goes down.
+   */
+  getRetainedFrom(): number {
+    return this.retainedFrom;
+  }
+
   /** Call `listener` after each entry is written. One listener; `null` removes it. */
   onEntryWritten(listener: (() => void) | null): void {
     this.entryListener = listener;
   }
 
+  /** Call `listener` after pruning moved the beginning of the log. One listener; `null` removes it. */
+  onPruned(listener: (() => void) | null): void {
+    this.pruneListener = listener;
+  }
+
+  /** Move the current file into `archive/`, under the lock every write takes. */
   async rotateLog(): Promise<string> {
+    if (this.readOnly) {
+      throw new Error('This audit log was opened for reading only; it is not rotated through this logger');
+    }
     if (!fs.existsSync(this.currentLogPath)) {
       throw new Error('No log file to rotate');
     }
+    return this.locked(() => {
+      this.catchUp();
+      return this.rotateUnlocked();
+    });
+  }
 
+  private rotateUnlocked(): string {
     const archiveDir = path.join(this.logDir, 'archive');
     fs.mkdirSync(archiveDir, { recursive: true, mode: 0o700 });
     // Archive names sort in rotation order, and that order is what links the
@@ -625,8 +1006,10 @@ export class AuditLogger {
     fs.renameSync(this.currentLogPath, archivePath);
 
     // The new file starts empty. The sequence and the last hash carry over,
-    // so its first entry links to the last entry of the archive.
+    // so its first entry links to the last entry of the archive. The archive
+    // is the same file under a new name, so `endOfKnown` still points into it.
     this.entryCount = 0;
+    this.seen = this.currentMark();
 
     return archivePath;
   }
