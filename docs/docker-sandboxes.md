@@ -20,7 +20,7 @@ sbx secret set github \
 
 - **Hand the setup to the person.** `aquaman setup` asks questions, `aquaman credentials add` asks for the value (hidden) and `aquaman daemon` stays running. Give them the commands above; never ask for a secret in the conversation.
 - **Where the secret ends up:** `sbx` receives the value and its proxy injects it; the agent in the sandbox sees a placeholder. aquaman decides which references may be read and records each read. It does not hide the value from `sbx`.
-- **The daemon does not come back by itself.** `aquaman daemon` is gone after a reboot or logout, and `sbx` cannot read the secret until the person starts it again. Tell them.
+- **The daemon does not come back by itself.** `aquaman daemon` is gone after a reboot or logout, and `sbx` cannot read the secret until the person starts it again. Tell them. `aquaman service install` makes it start at every login: [Start the aquaman daemon at login](autostart.md).
 
 ## Good to know
 

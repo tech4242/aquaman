@@ -16,6 +16,7 @@ import { OAuthTokenCache, createOAuthTokenCache } from './oauth-token-cache.js';
 import { matchPolicy, type PolicyConfig } from './request-policy.js';
 import { parseRequestTarget, policyPathInterpretations, policyMethods, policyPathOverrides } from './request-target.js';
 import { clampPromptTimeout, type CredentialPrompter, type PromptResult } from './credential-prompt.js';
+import { handleServiceConsent, SERVICE_CONSENT_PATH, type PromptLimiter } from './service-consent.js';
 import type { BrokerScope } from './broker-scope.js';
 import { routableKeys, routeKeyMismatch, basicTokenCandidates, basicValueCarries } from './route-auth.js';
 
@@ -450,6 +451,20 @@ export class CredentialProxy {
       return;
     }
 
+    if ((url === SERVICE_CONSENT_PATH || url === `${SERVICE_CONSENT_PATH}/`) && req.method === 'POST') {
+      await handleServiceConsent(req, res, {
+        fromLoopback,
+        // Off wherever credential requests are off: the same dialog machinery.
+        prompter: this.options.broker ? this.options.credentialRequests?.prompter : undefined,
+        limiter: this.promptLimiter,
+        audit: (error) => this.emitRequest({
+          id: requestId, service: 'aquaman-service', method: 'SERVICE_CONSENT', path: SERVICE_CONSENT_PATH,
+          timestamp: new Date(), authenticated: false, statusCode: 200, error,
+        }),
+      });
+      return;
+    }
+
     // One strict reading of the request target, used for the service name,
     // the policy check AND the upstream path. Anything a server could read
     // two ways (backslashes, dot segments, encoded separators) is refused
@@ -830,6 +845,17 @@ export class CredentialProxy {
   private requestPromptOpen = false;
   private requestPromptTimes: number[] = [];
   private requestDeclinedAt = new Map<string, number>();
+  /** The dialog limits above, for the other endpoint that shows a dialog: one budget for both. */
+  private readonly promptLimiter: PromptLimiter = {
+    cooldownMs: REQUEST_DECLINE_COOLDOWN_MS,
+    windowMs: REQUEST_WINDOW_MS,
+    maxPerWindow: REQUEST_MAX_PROMPTS_PER_WINDOW,
+    isOpen: () => this.requestPromptOpen,
+    setOpen: (open) => { this.requestPromptOpen = open; },
+    times: () => this.requestPromptTimes,
+    setTimes: (times) => { this.requestPromptTimes = times; },
+    declinedAt: this.requestDeclinedAt,
+  };
 
   /**
    * POST /broker/request  { service, key, project? }

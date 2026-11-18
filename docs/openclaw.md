@@ -30,5 +30,6 @@ Using npm directly: `npm install -g aquaman-proxy && aquaman openclaw setup`.
 - **Do not leave provider keys exported** where OpenClaw runs. An exported `OPENAI_API_KEY` wins over the configured reference, so the key is back in the gateway and the proxy answers 401.
 - **OpenClaw 2026.11 and later** prints "can't verify where this plugin came from" for the plugin and `openclaw plugins doctor` exits 1. The plugin still loads and routes traffic.
 - Request policies can deny specific endpoints (for example admin APIs) before a key is ever injected: `aquaman policy list`.
+- **The proxy starts with the gateway**, so OpenClaw on its own needs no login item. If you run `aquaman daemon` beside it for coding agents, Hermes or Docker Sandboxes, `aquaman service install` starts that daemon at every login: [Start the aquaman daemon at login](autostart.md).
 
 More: [aquaman-plugin README](../packages/plugin/README.md)
