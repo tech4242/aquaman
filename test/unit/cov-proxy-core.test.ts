@@ -370,8 +370,10 @@ describe('AuditLogger: recovery and integrity', () => {
     fs.writeFileSync(logPath(), `${lines[0]}\n${lines[2]}\n`);
     let result = await logger.verifyIntegrity();
     expect(result.valid).toBe(false);
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toMatch(/^Entry 1: previousHash mismatch \(expected [0-9a-f]{64}, got [0-9a-f]{64}\)$/);
+    // Two things show it: the sequence skips a number, and the link is to an entry that is gone.
+    expect(result.errors).toHaveLength(2);
+    expect(result.errors[0]).toBe('Entry 1: sequence gap (expected 2, got 3)');
+    expect(result.errors[1]).toMatch(/^Entry 1: previousHash mismatch \(expected [0-9a-f]{64}, got [0-9a-f]{64}\)$/);
 
     // Edit an entry's content: its hash no longer matches.
     const edited = JSON.parse(lines[1]!);
