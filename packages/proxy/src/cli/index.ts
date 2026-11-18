@@ -52,6 +52,7 @@ import { createHermesIntegration, detectHermes } from '../hermes/integration.js'
 import { managedScopeShadowedKeys, hermesManagedEnvPath, HERMES_SUPPORTED_SERVICES, hermesSecretSourceRefs } from '../hermes/config-writer.js';
 import { createBrokerScope, parseAquamanRef, formatAquamanRef, defaultProjectsPath, type BrokerScope } from '../broker-scope.js';
 import { createNativePrompter, clampPromptTimeout, PROMPT_TIMEOUT_SECONDS, PROMPT_TIMEOUT_MIN_SECONDS, PROMPT_TIMEOUT_MAX_SECONDS } from '../credential-prompt.js';
+import { registerServiceCommands, loginItemForInit, loginItemPresent, type ServiceCliHelpers } from './service.js';
 import { loadPolicyFromConfig, validatePolicyConfig, lintPolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
 
@@ -610,6 +611,10 @@ program
         console.log('      \u2192 Run: aquaman daemon &');
         issues++;
       }
+      // Informational: never counted as an issue.
+      console.log(loginItemPresent()
+        ? '    \u2022 Daemon starts at login (details: aquaman service status)'
+        : '    \u2022 Daemon does not start at login (to change that: aquaman service install)');
     }
 
     // OpenClaw integration
@@ -1028,14 +1033,18 @@ program
   .description('Run the credential proxy daemon (for advanced users)')
   .action(async () => {
     // Check if daemon is already running
+    // A pid file can outlive its daemon (a crash, a power loss), and after a
+    // reboot its number may belong to some other process. Only a proxy that
+    // answers on the socket with that pid counts as the daemon still running;
+    // otherwise a daemon started at login would refuse to start for good.
     const existingPid = readPidFile();
-    if (existingPid && isProcessRunning(existingPid)) {
+    const socketPath = path.join(getConfigDir(), 'proxy.sock');
+    if (existingPid && isProcessRunning(existingPid) && (await proxyPid(socketPath)) === existingPid) {
       console.error(`Daemon is already running (PID ${existingPid}). Use 'aquaman stop' first.`);
       process.exit(1);
     }
 
     const config = loadConfig();
-    const socketPath = path.join(getConfigDir(), 'proxy.sock');
 
     console.log('Starting aquaman credential proxy daemon...\n');
 
@@ -1087,7 +1096,7 @@ program
           service: info.service,
           // A broker resolve hands the value out, a broker request stores or
           // declares one, everything else injects it.
-          operation: info.method === 'BROKER' ? 'read' : info.method === 'BROKER_REQUEST' ? 'rotate' : 'use',
+          operation: info.method === 'BROKER' ? 'read' : info.method === 'BROKER_REQUEST' || info.method === 'SERVICE_CONSENT' ? 'rotate' : 'use',
           success: !info.error,
           error: info.error
         });
@@ -1625,7 +1634,7 @@ function proxyPid(socketPath: string): Promise<number | null> {
  * `aquaman init --agent <agent>`: everything an agent can do on its own to get
  * a project using aquaman. No prompts, no secrets, safe to run twice.
  */
-async function initForAgent(agent: string, json: boolean, hooks: boolean, loopback: boolean): Promise<void> {
+async function initForAgent(agent: string, json: boolean, hooks: boolean, loopback: boolean, service: boolean): Promise<void> {
   const say = (line: string) => { if (!json) console.log(line); };
   const result: Record<string, any> = { ok: false, agent, version: VERSION, human_steps: [] as string[] };
   const finish = (code: number): never => {
@@ -1797,6 +1806,16 @@ async function initForAgent(agent: string, json: boolean, hooks: boolean, loopba
   say(coderResult.mode === 'exec' ? '  ✓ Hooks: none installed. Run commands that need credentials as: aquaman-coder exec -- <command>' : `  ✓ Hooks: ${coderResult.hooks?.path}`);
   if (coderResult.skill?.path) say(`  ✓ Skill: ${coderResult.skill.path}`);
   if (coderResult.agents_file?.path) say(`  ✓ Instructions: ${coderResult.agents_file.path}`);
+  if (result.ok) {
+    // Last, after setup has succeeded: a login item is only ever added with a person's yes.
+    const loginItem = await loginItemForInit(serviceCliHelpers, service);
+    if (loginItem.service) {
+      result.service = loginItem.service;
+      say(`  ${loginItem.service.status === 'installed' || loginItem.service.status === 'already_installed' ? '✓' : '•'} Start at login: ${loginItem.service.status}${loginItem.service.error ? ` (${loginItem.service.error})` : ''}`);
+      if (loginItem.service.fix) say(`    → ${loginItem.service.fix}`);
+    }
+    if (loginItem.humanStep) result.human_steps.push(loginItem.humanStep);
+  }
   for (const step of result.human_steps) say(`  → A person needs to: ${step}`);
   say(`\n  ${result.next}`);
   finish(result.ok ? 0 : 1);
@@ -1811,6 +1830,7 @@ program
   .option('--json', 'With --agent: print one JSON object and nothing else')
   .option('--no-hooks', 'With --agent: install no hooks; commands that need credentials are run as `aquaman-coder exec -- <command>`')
   .option('--loopback', 'With --agent: also turn on the token-gated loopback listener, so a program can be routed through the proxy (aquaman request ... --via-proxy)')
+  .option('--service', 'With --agent: also ask the person, in a dialog, to let the daemon start at every login (aquaman service install)')
   .addHelpText('after', `
 With --agent the command never prompts and can be re-run safely. It creates the
 config if missing, starts the daemon, installs the agent's hooks and skill,
@@ -1820,7 +1840,7 @@ settings and no permission prompt changes. Credentials are added later, by a per
   aquaman request aquaman://github/token --env GITHUB_TOKEN`)
   .action(async (options) => {
     if (options.agent) {
-      await initForAgent(String(options.agent), Boolean(options.json), options.hooks !== false, options.loopback === true);
+      await initForAgent(String(options.agent), Boolean(options.json), options.hooks !== false, options.loopback === true, options.service === true);
       return;
     }
     ensureConfigDir();
@@ -4318,6 +4338,12 @@ if (process.argv[2] === 'coder') {
   }
   process.exit(result.status ?? 0);
 }
+
+// `aquaman service`: the login item that keeps the daemon running across reboots.
+const serviceCliHelpers: ServiceCliHelpers = {
+  cliPath: __cliFilename, proxyPost, proxyHealthy, proxyPid, readPidFile, removePidFile, isProcessRunning,
+};
+registerServiceCommands(program, serviceCliHelpers);
 
 // Register the `coder` namespace so it shows up in `aquaman --help`.
 // Its action is unreachable (the intercept above bypasses Commander entirely),

@@ -154,5 +154,6 @@ export {
   PROMPT_TIMEOUT_MAX_SECONDS,
   clampPromptTimeout,
   promptMessage,
+  LOGIN_ITEM_MESSAGE,
   createNativePrompter,
 } from './credential-prompt.js';

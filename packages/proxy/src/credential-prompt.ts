@@ -50,7 +50,32 @@ export interface CredentialPrompter {
   askValue(request: PromptRequest): Promise<PromptResult>;
   /** Ask the human whether a credential that is already in the vault may be used. */
   askApproval(request: PromptRequest): Promise<PromptResult>;
+  /**
+   * Ask the human whether aquaman may start at every login. An approval:
+   * nothing is typed, and the wording is fixed, with no text from the caller.
+   */
+  askLoginItem(request: LoginItemRequest): Promise<PromptResult>;
 }
+
+export interface LoginItemRequest {
+  /** How long the dialog stays up. Defaults to PROMPT_TIMEOUT_SECONDS. */
+  timeoutSeconds?: number;
+}
+
+/**
+ * The whole text of the login-item dialog. It says what agreeing does (the
+ * daemon starts at every login and keeps running) and how to undo it, and it
+ * carries nothing the requesting command chose.
+ */
+export const LOGIN_ITEM_MESSAGE = [
+  'A command is asking aquaman to start at every login and keep running in the background.',
+  '',
+  'Allow adds a login item for the aquaman daemon to your account. Deny if you did not expect this.',
+  '',
+  'To remove it later, run: aquaman service uninstall',
+  '',
+  'aquaman never asks for your login, Apple ID or password-manager password.',
+].join('\n');
 
 /**
  * How long a dialog stays up before it counts as unanswered. Shorter than the
@@ -192,6 +217,12 @@ function macPrompter(defaultSeconds: number): CredentialPrompter {
       if (r.code !== 0) return failed(r);
       return r.stdout.trim() === 'Allow' ? { outcome: 'approved' } : { outcome: 'declined' };
     },
+    async askLoginItem(request) {
+      const seconds = request.timeoutSeconds ?? defaultSeconds;
+      const r = await run(OSASCRIPT, osaArgs(osaApproval(seconds), LOGIN_ITEM_MESSAGE), seconds);
+      if (r.code !== 0) return failed(r);
+      return r.stdout.trim() === 'Allow' ? { outcome: 'approved' } : { outcome: 'declined' };
+    },
   };
 }
 
@@ -225,12 +256,22 @@ function zenityPrompter(zenity: string, defaultSeconds: number): CredentialPromp
       );
       return r.code === 0 ? { outcome: 'approved' } : failed(r);
     },
+    async askLoginItem(request) {
+      const seconds = request.timeoutSeconds ?? defaultSeconds;
+      const r = await run(
+        zenity,
+        ['--question', '--no-markup', ...common(seconds), '--ok-label=Allow', '--cancel-label=Deny', '--default-cancel', `--text=${LOGIN_ITEM_MESSAGE}`],
+        seconds,
+        display,
+      );
+      return r.code === 0 ? { outcome: 'approved' } : failed(r);
+    },
   };
 }
 
 function unavailablePrompter(reason: string): CredentialPrompter {
   const result: PromptResult = { outcome: 'unavailable', reason };
-  return { askValue: async () => result, askApproval: async () => result };
+  return { askValue: async () => result, askApproval: async () => result, askLoginItem: async () => result };
 }
 
 /** The dialog mechanism for this machine, or one that always answers `unavailable`. */
