@@ -196,8 +196,14 @@ export function policyPathOverrides(
         let text = raw.trim();
         if (text === '') continue;
         // Some senders give a full URL; only its path matters to a rule.
-        const absolute = /^https?:\/\/[^/?#]*(.*)$/i.exec(text);
-        if (absolute) text = absolute[1] || '/';
+        // Cut by position, not by one pattern over the whole value: the value is
+        // attacker-supplied, and the cut has to stay linear in its length.
+        const scheme = /^https?:\/\//i.exec(text);
+        if (scheme) {
+          const rest = text.slice(scheme[0].length);
+          const start = rest.search(/[/?#]/);
+          text = start === -1 ? '/' : rest.slice(start);
+        }
         const target = parseRequestTarget(text);
         if (!target.ok) return { ok: false, reason: `${name} header: ${target.reason}` };
         for (const p of policyPathInterpretations(target.segments)) {
