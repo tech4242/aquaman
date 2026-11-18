@@ -1,6 +1,6 @@
 # aquaman compared with other ways to keep credentials from AI agents
 
-Most agent hosts now ship some form of credential protection, and several dedicated tools exist. This page says where aquaman fits and where something else is the better choice. Facts about other projects are from their own documentation and source, read on 2026-11-16; if something here is wrong or out of date, please open an issue.
+Most agent hosts now ship some form of credential protection, and several dedicated tools exist. This page says where aquaman fits and where something else is the better choice. Facts about other projects are from their own documentation and source, read on 2026-11-16 (fnox and nono on 2026-11-18); if something here is wrong or out of date, please open an issue.
 
 ## Two mechanisms, and which one you get
 
@@ -24,9 +24,10 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 
 | | Mechanism for a coding agent's commands | Where the secret is kept | Account needed | Record of each use |
 |---|---|---|---|---|
-| **aquaman** | Environment, per command, output redacted. At egress, with request policies, for an app given the proxy's URL (`--via-proxy`) | The vault you already use: Keychain, 1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, systemd-creds, or an encrypted file | No | Hash-chained log on your machine |
+| **aquaman** | Environment, per command, output redacted. At egress, with request policies, for an app given the proxy's URL (`--via-proxy`) | The vault you already use: Keychain, 1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, systemd-creds, or an encrypted file. A reference can point at an item you already have | No | Hash-chained log on your machine, with its last position anchored in your vault |
 | 1Password `op run` and Environments | Environment, output masked | 1Password | 1Password | On the 1Password account side (usage reports, Events API); not examined in detail |
-| fnox `proxy run` | At egress, for hosts you write a rule for, through a local HTTPS proxy with its own certificate authority | Providers you configure, such as 1Password, the system keychain or age | No | Optional log of method, host, path and secret name |
+| fnox `proxy run` | At egress, for hosts you write a rule for, through a local HTTPS proxy with its own certificate authority; can also run the command in an OS sandbox so the proxy is its only way out | Providers you configure: its documentation lists about thirty, among them the system keychain, 1Password, Bitwarden, HashiCorp Vault and KeePass | No | Log of method, host, path and secret name per request; no integrity protection described |
+| nono | At egress, through a local proxy the agent reaches by base URL with a session token, or by TLS interception; runs the agent in an OS sandbox. Signs AWS requests. An environment mode exists too | OS keychain or Secret Service, 1Password, Bitwarden, Apple Passwords, a file, or a command | No | Per-session log with a hash chain and Merkle root, checked by `nono audit verify`, optionally signed; its documentation does not say whether each credential use is an event |
 | dotenvx | Environment; the agent process itself is started with the real values, output redacted | Encrypted `.env` files in the repository, key kept separately | No | None in the open-source CLI; audit logs are listed for its paid hosted plans |
 | Doppler | Environment, into the agent process at launch | Doppler | Doppler | "Every secret access is logged" |
 | Claude Code sandbox credentials (built in) | At egress in `mask` mode, which needs the sandbox and the experimental `network.tlsTerminate` setting | Environment variables and files on the machine | No | None documented |
@@ -40,7 +41,7 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 
 ## Choose aquaman when
 
-- Your secrets already live in a password manager or vault and you do not want a second copy or a new account.
+- Your secrets already live in a password manager or vault and you do not want a second copy or a new account. A reference can point at the item you already have, and you approve that in a dialog.
 - You want the agent to set things up and ask for credentials itself, without ever handling one: `aquaman init --agent` and `aquaman request` are built for that, with no prompts, JSON output, and a native dialog where a person supplies each value. (fnox has a comparable request flow through its MCP server, off by default, where the person enters the value on a local web page.)
 - You use more than one agent host (say Claude Code, OpenClaw and an OpenShell sandbox) and want one place that holds the keys and one record of their use.
 - You want evidence: every use is written to a log whose entries are numbered and chained by SHA-256, and the log's last position is kept in your vault, so an altered or inserted entry and a truncated or replaced log are detectable (`aquaman audit verify`). The limits are under "What aquaman does not do".
@@ -49,7 +50,8 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 ## Choose something else when
 
 - **You already pay for 1Password and only need environment variables for local commands.** `op run` does that with a mature product behind it. aquaman can use 1Password as its vault if you later want the log or the agent-run setup.
-- **The program must never hold the key, for any API.** fnox `proxy run` injects at egress for any HTTPS host you write a rule for, by terminating TLS locally. It also needs no account and reads from vaults you already have. aquaman does it without a certificate authority, for services it has a definition for (26 built in, others in `services.yaml`) and apps that accept a base URL.
+- **The program must never hold the key, for any API.** fnox `proxy run` injects at egress for any HTTPS host you write a rule for, by terminating TLS locally. It also needs no account and reads from vaults you already have. It can also confine the command in an OS sandbox so the proxy is the only way out, and mint short-lived credentials at the proxy. aquaman does it without a certificate authority, for services it has a definition for (26 built in, others in `services.yaml`) and apps that accept a base URL.
+- **You want the agent itself boxed in, not only its keys.** nono runs the agent in a kernel sandbox and injects credentials at a local proxy from your keychain, 1Password or Bitwarden. It also signs AWS requests and injects into query strings, which aquaman does not do. aquaman has no sandbox: it works with the one your agent host provides.
 - **You only use Claude Code, with its sandbox on.** Its credential masking is built in and needs no separate tool.
 - **You only use Docker Sandboxes and the OS keychain is enough.** It does the injection itself; aquaman only adds other vaults and a log entry per read.
 - **Your team already runs Doppler or Infisical.** Secrets shared across a team, CI and production belong there. aquaman is a local tool for one person's machine and has no team sync.
