@@ -56,3 +56,4 @@ packages/hermes/dist/
 
 # Per-area coverage runs (scripts/coverage.mjs --out)
 coverage-part/
+benchmark/
