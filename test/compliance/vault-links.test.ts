@@ -705,7 +705,7 @@ describe('links to existing vault items', () => {
       expect(res.status).toBe(400);
     });
 
-    it.fails('LIMIT: a value the serving process already holds in its cache is served until the cache TTL when the link is removed by another process and written back by hand before the reference is next used', async () => {
+    it('a value the serving process holds in its cache is not served once the link was removed by another process and written back by hand, even before the reference is next used', async () => {
       await start();
       const cached = new CachingStore(store, 900);
       await approvedLink('github', 'token', OTHER_ITEM);
@@ -715,8 +715,8 @@ describe('links to existing vault items', () => {
       writeCredentialLink(configPath, 'github/token', OTHER_ITEM);
       const later = new Date(Date.now() + 5000);
       fs.utimesSync(configPath, later, later);
-      // The item is not read again (the store below refuses), but the cache
-      // sees the same link as before and answers from memory.
+      // The cache keys a linked value on the state of config.yaml it was read
+      // under, so the changed file sends the question back to the vault.
       await expect(store.get('github', 'token')).rejects.toThrow(/no approval/);
       await expect(cached.get('github', 'token')).rejects.toThrow(/no approval/);
     });

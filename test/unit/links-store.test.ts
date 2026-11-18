@@ -118,7 +118,7 @@ describe('links: store layer', () => {
       expect(store.linkStamp('github', 'token')).toBe('');
       await approved('github/token', GH);
       expect(await store.get('github', 'token')).toBe('ghp_linked');
-      expect(store.linkStamp('github', 'token')).toBe(GH);
+      expect(store.linkStamp('github', 'token').split('\u0000')[0]).toBe(GH);
       link('github/token', null);
       await approved('github/token', GH2);
       expect(await store.get('github', 'token')).toBe('ghp_linked_new');
@@ -350,7 +350,7 @@ describe('links: store layer', () => {
       backend.items.set(GH, 'rotated');
       expect(await cached.readLinked!(parsed)).toBe('rotated');
       link('github/token', GH);
-      expect(cached.linkStamp!('github', 'token')).toBe(GH);
+      expect(cached.linkStamp!('github', 'token').split('\u0000')[0]).toBe(GH);
 
       // Above a store with no links at all, both answer "nothing".
       const bare = new CachingStore(new MemoryStore(), 900);
@@ -480,7 +480,7 @@ describe('links: store layer', () => {
 
     it('establish works through a cache, which passes the read on', async () => {
       expect(await linker(wrapWithCache(store, 900)).establish('github', 'token', GH)).toEqual({ ok: true });
-      expect(store.linkStamp('github', 'token')).toBe(GH);
+      expect(store.linkStamp('github', 'token').split('\u0000')[0]).toBe(GH);
     });
 
     it('establish never replaces a value aquaman stored, and does not read the item to find that out', async () => {

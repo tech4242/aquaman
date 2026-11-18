@@ -116,13 +116,31 @@ export class LinkedStore implements CredentialStore {
    */
   private current(): ReadonlyMap<string, string> {
     const map = this.links();
-    if (this.seen !== undefined && this.seen !== map) this.approvals.forget();
+    if (this.seen !== undefined && this.seen !== map) {
+      this.approvals.forget();
+      this.generation++;
+    }
     this.seen = map;
     return map;
   }
 
-  linkStamp(service: string, key: string): string {
+  /** Counts the times config.yaml changed under this store. */
+  private generation = 0;
+
+  /** The locator a reference is linked to, or '' when it is not linked. */
+  private locatorOf(service: string, key: string): string {
     return this.current().get(`${service}/${key}`) ?? '';
+  }
+
+  /**
+   * What a cache keys a linked value on: the locator and the state of
+   * config.yaml it was read under. A value read through a link is good only
+   * until the file changes, because the change may be a link that was removed
+   * and written back, whose approval has to be checked in the vault again.
+   */
+  linkStamp(service: string, key: string): string {
+    const locator = this.locatorOf(service, key);
+    return locator ? `${locator}\u0000${this.generation}` : '';
   }
 
   async readLinked(locator: ParsedLocator): Promise<string | null> {
@@ -149,12 +167,12 @@ export class LinkedStore implements CredentialStore {
   }
 
   async get(service: string, key: string): Promise<string | null> {
-    const link = this.linkStamp(service, key);
+    const link = this.locatorOf(service, key);
     return link ? this.readLink(service, key, link) : this.inner.get(service, key);
   }
 
   async exists(service: string, key: string): Promise<boolean> {
-    const link = this.linkStamp(service, key);
+    const link = this.locatorOf(service, key);
     if (!link) return this.inner.exists(service, key);
     // A link nobody approved is not a credential that exists.
     if (!(await this.approvals.has(`${service}/${key}`, link))) return false;
@@ -176,7 +194,7 @@ export class LinkedStore implements CredentialStore {
   }
 
   async set(service: string, key: string, value: string, metadata?: Record<string, string>): Promise<void> {
-    const link = this.linkStamp(service, key);
+    const link = this.locatorOf(service, key);
     if (link) {
       throw new Error(`${service}/${key} is linked to ${link}, an item aquaman did not create and does not write to. To store a value here instead, first run: aquaman credentials unlink ${service}/${key}`);
     }
@@ -184,7 +202,7 @@ export class LinkedStore implements CredentialStore {
   }
 
   async delete(service: string, key: string): Promise<boolean> {
-    const link = this.linkStamp(service, key);
+    const link = this.locatorOf(service, key);
     if (link) {
       throw new Error(`${service}/${key} is linked to ${link}, an item aquaman did not create and does not delete. To remove the link, run: aquaman credentials unlink ${service}/${key}`);
     }
