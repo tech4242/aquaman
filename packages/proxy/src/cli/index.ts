@@ -2298,9 +2298,28 @@ openclaw
           const openclawJsonPath = path.join(openclawStateDir, 'openclaw.json');
           let openclawConfig: any = {};
           if (fs.existsSync(openclawJsonPath)) {
-            try {
-              openclawConfig = JSON.parse(fs.readFileSync(openclawJsonPath, 'utf-8'));
-            } catch { /* start fresh */ }
+            const existing = fs.readFileSync(openclawJsonPath, 'utf-8');
+            // An empty file is a fresh one. Anything else that does not parse
+            // is the person's config in a form this command cannot read
+            // (comments, a trailing comma): writing a new file over it would
+            // drop everything in it, so it is left alone.
+            if (existing.trim() !== '') {
+              let parsed: unknown;
+              try {
+                parsed = JSON.parse(existing);
+              } catch (err) {
+                console.error(`\n  \u2717 ${openclawJsonPath} is not strict JSON (${err instanceof Error ? err.message : String(err)}).`);
+                console.error('    aquaman left it unchanged, so the plugin entry and the provider wiring were not written.');
+                console.error('    Remove comments and trailing commas from the file (keep a copy), then run: aquaman openclaw setup');
+                process.exit(1);
+              }
+              if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                console.error(`\n  \u2717 ${openclawJsonPath} does not hold a JSON object.`);
+                console.error('    aquaman left it unchanged. Fix the file, then run: aquaman openclaw setup');
+                process.exit(1);
+              }
+              openclawConfig = parsed;
+            }
           }
 
           if (!openclawConfig.plugins) openclawConfig.plugins = {};
@@ -3455,13 +3474,12 @@ policy
       return;
     }
 
-    if (result.allowed) {
-      const svcPolicy = policyConfig[service];
-      console.log(`  \u2713 ALLOWED (no matching rule, default: ${svcPolicy.defaultAction})`);
-    } else {
-      const rule = result.matchedRule!;
-      console.log(`  \u2717 DENIED by rule: ${rule.method} ${rule.path} \u2192 ${rule.action}`);
-    }
+    // Either outcome can come from a rule or from the service's default.
+    const rule = result.matchedRule;
+    const why = rule
+      ? `by rule: ${rule.method} ${rule.path} \u2192 ${rule.action}`
+      : `(no matching rule, default: ${policyConfig[service].defaultAction})`;
+    console.log(result.allowed ? `  \u2713 ALLOWED ${why}` : `  \u2717 DENIED ${why}`);
   });
 
 // ── aquaman openshell …: NVIDIA OpenShell external credential driver (v0.17.0+) ──

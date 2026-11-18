@@ -14,7 +14,7 @@ pip install -U aquaman-hermes                     # Hermes users
 
 The guides now show the cases people asked about: an item that is already in your vault on every host page, Bitwarden with Docker Sandboxes, OpenAI and Linux for Hermes, the model provider step for OpenClaw, and a new page for MCP servers.
 
-No change to the packages' behaviour. Everything described here works with 0.19.0.
+Three fixes come with it, listed at the end. Everything the guides describe works with 0.19.0.
 
 ### A new page: credentials for MCP servers
 
@@ -33,12 +33,18 @@ Pointing a reference at an existing vault item (`aquaman request --from`, `aquam
 ### Host guides
 
 - [Hermes](https://aquaman.sh/docs/hermes/): the OpenAI variables next to the Anthropic ones, exactly as `aquaman hermes setup` writes them; which vault `aquaman setup` picks on Linux and what each needs; a full `secrets.aquaman.env` example.
-- [OpenClaw](https://aquaman.sh/docs/openclaw/): which model providers are routed (Anthropic and OpenAI), what setup writes into `openclaw.json` for each, how to replace a key after rotating it, and two things setup does that were not written down: a key that is already in `openclaw.json` as plain text is left there and that provider is not routed until you remove it, and an `openclaw.json` that is not strict JSON is replaced.
-- [Keep an API key out of the app](https://aquaman.sh/docs/app-through-proxy/): the `services.yaml` entry for a basic-auth service on your own host with every field explained, what the app sends as its basic-auth pair, and the request policy syntax with a complete example. It also notes that `aquaman policy test` gives wrong output for `defaultAction: deny` policies in 0.19.0; the proxy's own decision is not affected.
+- [OpenClaw](https://aquaman.sh/docs/openclaw/): which model providers are routed (Anthropic and OpenAI), what setup writes into `openclaw.json` for each, how to replace a key after rotating it, and something setup does that was not written down: a key that is already in `openclaw.json` as plain text is left there, and that provider is not routed until you remove it.
+- [Keep an API key out of the app](https://aquaman.sh/docs/app-through-proxy/): the `services.yaml` entry for a basic-auth service on your own host with every field explained, what the app sends as its basic-auth pair, and the request policy syntax with a complete example.
 
 ### What to know before trusting it
 
 The [section of that name](https://aquaman.sh/docs/compare/#what-to-know-before-trusting-it) on the comparison page states the same facts in a different order: first what you can check yourself (provenance, no install scripts, local and without an account, the test count and coverage floors, the attack tests and their pinned limits, the 0.18.2 assessment), then what counts against the project (one maintainer, no third-party audit, started in February 2026 and still 0.x, the advisory GHSA-9qh6-wffq-9m9v). Nothing was removed.
+
+### Fixes
+
+- **`aquaman openclaw setup` could replace your `openclaw.json`.** If the file was not strict JSON, for example because it had comments or a trailing comma, setup started from an empty configuration and wrote that back, so everything else in the file was lost. Setup now stops, says why and leaves the file as it is. If you ran `aquaman openclaw setup` on such a file, restore it from your own copy.
+- **`aquaman policy test` was wrong for `defaultAction: deny` policies.** A request that an `allow` rule matched was reported as "no matching rule", and a request that no rule matched ended in an error. It now names the rule or the default that decided. The proxy's own decisions were always right; only this command's output was not.
+- **`aquaman audit tail` could fail when the daemon rotated the log at that moment.** It reported "no such file". It now lists what is there. Nothing in the log was affected.
 
 ## 0.19.0
 

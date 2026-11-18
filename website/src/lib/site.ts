@@ -23,7 +23,7 @@ export const MODES = [
   '',
   '- **OpenClaw gateway:** the plugin routes model calls and Telegram through the proxy, so those keys are never in the gateway process. Tokens for other channels are stored in the vault and used by the gateway directly.',
   "- **Hermes:** provider keys go through the proxy and are never in the Hermes process. Project secrets bound through the secret source do enter Hermes' environment.",
-  "- **An app or agent you build that calls HTTP APIs:** with `--via-proxy` it holds a local token and aquaman's address, never the key, and request policies apply. This needs an API that takes the credential in a header and a client that accepts a base URL.",
+  "- **An app or agent you build that calls HTTP APIs:** with `--via-proxy` it holds a local token and aquaman's address, never the key, and request policies apply. This needs an API that takes the credential in a header or as HTTP basic auth, and a client that accepts a base URL.",
   "- **Any other command run by Claude Code or Codex:** the key is set in that one command's environment and its output is redacted. That is the same kind of protection as `op run`.",
   '- **Docker Sandboxes and NVIDIA OpenShell:** they do the isolating. aquaman supplies the value from the vault by reference, with an allow-list and an audit entry.',
   '',

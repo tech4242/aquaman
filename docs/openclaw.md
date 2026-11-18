@@ -42,7 +42,7 @@ Two model providers are routed: **Anthropic and OpenAI**. Setup asks for each ke
 }
 ```
 
-The rest of the file is kept. The port is 8585 unless `loopback.port` in `~/.aquaman/config.yaml` says otherwise. Setup reads `openclaw.json` as strict JSON, writes it back with these changes and makes no backup copy. A file that does not parse as strict JSON (comments, trailing commas) is replaced by a new one that holds only what setup writes, so copy the file first.
+The rest of the file is kept. The port is 8585 unless `loopback.port` in `~/.aquaman/config.yaml` says otherwise. Setup reads `openclaw.json` as strict JSON, writes it back with these changes and makes no backup copy. If the file does not parse as strict JSON (comments, trailing commas), setup stops, says so and leaves the file as it is: remove the comments and trailing commas, then run it again.
 
 **A key that is already written in `openclaw.json` stays there, and that provider is not routed.** If `models.providers.anthropic.apiKey` holds a key as plain text, setup leaves the entry as it is and prints `Left existing user-set apiKey untouched for: anthropic`. It does not copy that key into the vault and does not remove it. To route the provider:
 

@@ -119,6 +119,31 @@ describe('aquaman policy E2E', () => {
       expect(stdout).toContain('/v1/organizations/**');
     }, TEST_TIMEOUT);
 
+    it('a default-deny policy: an allow rule is named as the reason, and a request no rule matches is denied by the default', () => {
+      tempEnv = createTempEnv({ withConfig: true });
+      const configPath = path.join(tempEnv.aquamanDir, 'config.yaml');
+      writeFileSync(configPath, readFileSync(configPath, 'utf-8') + [
+        'policy:',
+        '  stripe:',
+        '    defaultAction: deny',
+        '    rules:',
+        '      - method: GET',
+        '        path: "/v1/**"',
+        '        action: allow',
+        '',
+      ].join('\n'));
+
+      const read = runCli('policy test stripe GET /v1/customers/cus_123', tempEnv);
+      expect(read.exitCode).toBe(0);
+      expect(read.stdout).toContain('ALLOWED by rule: GET /v1/**');
+      expect(read.stdout).not.toContain('no matching rule');
+
+      const write = runCli('policy test stripe POST /v1/refunds', tempEnv);
+      expect(write.exitCode).toBe(0);
+      expect(write.stdout).toContain('DENIED (no matching rule, default: deny)');
+      expect(write.stderr).not.toContain('TypeError');
+    }, TEST_TIMEOUT);
+
     it('shows ALLOWED when no rule matches', () => {
       tempEnv = createTempEnv({ withConfig: true });
       writeConfigWithPolicy(tempEnv);

@@ -322,7 +322,7 @@ A service with no entry under `policy` has no restriction. A request is refused 
 
 `aquaman setup` writes a starting policy for Anthropic and OpenAI when it stores their keys and they have none: it denies their organisation admin endpoints, and `DELETE` for OpenAI. `aquaman policy list` prints what is in force, and `aquaman doctor` reports a rule whose path does not start with `/`. Restart the daemon after editing the file.
 
-`aquaman policy test <service> <METHOD> <path>` answers for one request. In 0.19.0 its output is only right for `defaultAction: allow` policies. Against a `defaultAction: deny` policy it prints `ALLOWED (no matching rule, default: deny)` for a request that an `allow` rule matched, and stops with an error for a request that no rule matches. The proxy itself forwards the first and answers the second with 403, as the worked example's refund shows.
+`aquaman policy test <service> <METHOD> <path>` answers for one request and says whether a rule or the service's default decided it, for example `ALLOWED by rule: GET /v1/**` or `DENIED (no matching rule, default: deny)`.
 
 ## What this does and does not give you
 
