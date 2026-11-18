@@ -30,6 +30,7 @@
 
 import { spawnSync } from 'node:child_process';
 import type { CredentialStore } from '../store.js';
+import type { ParsedLocator } from '../links.js';
 
 export interface KeeperStoreOptions {
   /** UID of the Keeper folder (or shared folder) holding aquaman's records. */
@@ -206,5 +207,30 @@ export class KeeperStore implements CredentialStore {
 
   async exists(service: string, key: string): Promise<boolean> {
     return this.findUid(service, key) !== null;
+  }
+
+  /**
+   * A record aquaman did not write, by UID. The password comes from
+   * `--format password`; any other field is looked up in the record's JSON by
+   * label or by field type. Only the UID and flags go on argv. A record that
+   * does not exist makes Commander fail, which is passed on as an error.
+   */
+  async readLinked(locator: ParsedLocator): Promise<string | null> {
+    const [uid] = locator.path;
+    if (locator.field === 'password') {
+      const value = this.run(['get', uid, '--format', 'password']).replace(/\r?\n$/, '');
+      return value.length > 0 ? value : null;
+    }
+    const out = this.run(['get', uid, '--format', 'json']);
+    let record: any;
+    try {
+      record = JSON.parse(out);
+    } catch {
+      throw new Error(`keeper get ${uid}: expected record JSON`);
+    }
+    const fields = [record?.fields, record?.custom].flatMap((list) => (Array.isArray(list) ? list : []));
+    const match = fields.find((f) => f?.label === locator.field) ?? fields.find((f) => f?.type === locator.field);
+    const value = Array.isArray(match?.value) ? match.value[0] : match?.value;
+    return typeof value === 'string' && value.length > 0 ? value : null;
   }
 }

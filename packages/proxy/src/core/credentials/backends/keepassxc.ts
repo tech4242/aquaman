@@ -8,6 +8,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { CredentialStore } from '../store.js';
+import type { ParsedLocator } from '../links.js';
 
 export interface KeePassXCStoreOptions {
   dbPath: string;
@@ -15,6 +16,8 @@ export interface KeePassXCStoreOptions {
   keyFilePath?: string;
   group?: string;
 }
+
+const OWN_ENTRY_TITLE = /^[a-z0-9][a-z0-9._-]*\/[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
 export class KeePassXCStore implements CredentialStore {
   private db: any = null;
@@ -258,6 +261,34 @@ export class KeePassXCStore implements CredentialStore {
   async exists(service: string, key: string): Promise<boolean> {
     const value = await this.get(service, key);
     return value !== null;
+  }
+
+  /**
+   * An entry aquaman did not write: groups are followed by name from the
+   * database's root group, and the last part is the entry title.
+   */
+  async readLinked(locator: ParsedLocator): Promise<string | null> {
+    const db = await this.openDb();
+    let group = db.getDefaultGroup();
+    for (const name of locator.path.slice(0, -1)) {
+      group = group.groups.find((g: any) => g.name === name);
+      if (!group) return null;
+    }
+    const title = locator.path[locator.path.length - 1];
+    // Entries titled `<service>/<key>` in aquaman's group are the ones it
+    // wrote. They are reached by their own reference, never under a second name.
+    if (group === this.findGroup(db) && OWN_ENTRY_TITLE.test(title)) {
+      throw new Error(`${locator.text} names an item aquaman itself wrote; use that credential by its own reference`);
+    }
+    const entries = group.entries.filter((e: any) => e.fields.get('Title') === title);
+    if (entries.length === 0) return null;
+    if (entries.length > 1) {
+      throw new Error(`${entries.length} entries are titled "${title}" in that group; rename one so the link names a single entry`);
+    }
+    const field = entries[0].fields.get(locator.field);
+    if (!field) return null;
+    const value = typeof field === 'string' ? field : field.getText();
+    return value.length > 0 ? value : null;
   }
 
   /**

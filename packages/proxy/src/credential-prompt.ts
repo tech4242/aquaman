@@ -36,6 +36,12 @@ export interface PromptRequest {
    * something different in that case, because something different happens.
    */
   routed?: boolean;
+  /**
+   * The locator of an item that already exists in the vault, which the caller
+   * asks to have read as this credential (a link). Chosen by the caller, so
+   * shown as such. Only an approval is asked for: nothing is typed.
+   */
+  from?: string;
 }
 
 export type PromptResult =
@@ -129,22 +135,40 @@ const CONSEQUENCE = {
     declared: 'Allow lets any aquaman project on this machine be given the value. Deny if you did not expect this.',
     routed: 'Allow lets an app in this project send its requests through aquaman, which adds the key on the way out. The app gets a local token, not the key. Deny if you did not expect this.',
   },
+  link: {
+    declared: 'Allow makes aquaman read that item whenever this credential is used. aquaman does not change or delete the item. Commands the agent runs in this project will be given the value, and other software running as you can ask aquaman for it. Deny if you did not expect this, or if the item named below is not one you want used this way.',
+    routed: 'Allow makes aquaman read that item whenever this credential is used. aquaman does not change or delete the item. The app in this project gets a local token, not the key: aquaman adds the key to its requests on the way out. Deny if you did not expect this, or if the item named below is not one you want used this way.',
+  },
 } as const;
 
+/**
+ * Room for a whole locator (links.ts caps one at 200 characters), so the
+ * person sees all of what they are agreeing to and never a shortened form.
+ */
+const LOCATOR_DISPLAY_MAX = 220;
+
 export function promptMessage(request: PromptRequest, kind: 'value' | 'approval'): string {
+  // An approval that names a vault item is a different decision from one
+  // about a stored credential, and is worded as such.
+  const what = kind === 'approval' && request.from !== undefined ? 'link' : kind;
   const lines = [
-    kind === 'value'
+    what === 'value'
       ? 'An agent is asking aquaman for a credential that is not in your vault.'
-      : 'An agent is asking to use a credential that is already in your vault.',
+      : what === 'approval'
+        ? 'An agent is asking to use a credential that is already in your vault.'
+        : 'An agent is asking aquaman to use an item that already exists in your vault as the credential below.',
     '',
     `Credential: ${displayText(`${request.service}/${request.key}`, 140)}`,
     '',
-    CONSEQUENCE[kind][request.routed === true ? 'routed' : 'declared'],
+    CONSEQUENCE[what][request.routed === true ? 'routed' : 'declared'],
     '',
     'aquaman never asks for your login, Apple ID or password-manager password.',
   ];
-  // Last, and one line: everything above it is aquaman's own wording.
-  if (request.project) lines.push('', `Requested from (as the caller reports it): ${displayText(request.project)}`);
+  // Last, and one line each: everything above is aquaman's own wording.
+  const reported: string[] = [];
+  if (what === 'link') reported.push(`Vault item (as the caller wrote it): ${displayText(request.from!, LOCATOR_DISPLAY_MAX)}`);
+  if (request.project) reported.push(`Requested from (as the caller reports it): ${displayText(request.project)}`);
+  if (reported.length > 0) lines.push('', ...reported);
   return lines.join('\n');
 }
 

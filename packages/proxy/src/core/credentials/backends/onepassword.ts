@@ -8,6 +8,7 @@ import { mkdtempSync, writeFileSync, unlinkSync, rmdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CredentialStore } from '../store.js';
+import type { ParsedLocator } from '../links.js';
 
 export interface OnePasswordStoreOptions {
   vault?: string;
@@ -258,6 +259,29 @@ export class OnePasswordStore implements CredentialStore {
   async exists(service: string, key: string): Promise<boolean> {
     const value = await this.get(service, key);
     return value !== null;
+  }
+
+  /**
+   * An item aquaman did not write, by secret reference. The reference is
+   * rebuilt from the parsed parts and passed to `op read` as one argument.
+   */
+  async readLinked(locator: ParsedLocator): Promise<string | null> {
+    // Items named `aquaman-...` in aquaman's vault are the ones it wrote. They
+    // are reached by their own reference, never under a second name. An item
+    // addressed by its ID is not recognised here.
+    if (locator.path[0] === this.vault && locator.path[1].startsWith(`${ITEM_PREFIX}-`)) {
+      throw new Error(`${locator.text} names an item aquaman itself wrote; use that credential by its own reference`);
+    }
+    const reference = `op://${[...locator.path, locator.field].join('/')}`;
+    try {
+      const value = this.runOp(['read', '--no-newline', reference]);
+      return value.length > 0 ? value : null;
+    } catch (error) {
+      if (error instanceof Error && isItemNotFoundError(error.message)) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   /**

@@ -8,6 +8,7 @@
 
 import { spawnSync } from 'node:child_process';
 import type { CredentialStore } from '../store.js';
+import type { ParsedLocator } from '../links.js';
 
 export interface BitwardenStoreOptions {
   /** Folder name to store aquaman credentials (created if missing) */
@@ -23,6 +24,7 @@ const ITEM_PREFIX = 'aquaman';
 
 // Metadata key validation: must start with letter, only alphanum/underscore/hyphen
 const SAFE_METADATA_KEY = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+const BW_ITEM_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class BitwardenStore implements CredentialStore {
   private folder: string;
@@ -385,6 +387,41 @@ export class BitwardenStore implements CredentialStore {
   async exists(service: string, key: string): Promise<boolean> {
     const itemName = this.getItemName(service, key);
     return this.findItem(itemName) !== null;
+  }
+
+  /**
+   * An item aquaman did not write: by id, or by a name that exactly one item
+   * has. The name is one argument after `--search`, never part of a command.
+   */
+  async readLinked(locator: ParsedLocator): Promise<string | null> {
+    const [item] = locator.path;
+    let id = item;
+    if (!BW_ITEM_ID.test(item)) {
+      const found = JSON.parse(this.runBw(['list', 'items', '--search', item])) as Array<{ id: string; name: string }>;
+      const exact = found.filter((i) => i.name === item);
+      if (exact.length === 0) return null;
+      if (exact.length > 1) {
+        throw new Error(`${exact.length} Bitwarden items are named "${item}". Link by item id instead: bw://<item id>/${locator.field}`);
+      }
+      id = exact[0].id;
+    }
+    let full: { name?: unknown; login?: Record<string, unknown>; notes?: unknown; fields?: Array<{ name?: unknown; value?: unknown }> };
+    try {
+      full = JSON.parse(this.runBw(['get', 'item', id]));
+    } catch (error) {
+      if (error instanceof Error && /not found/i.test(error.message)) return null;
+      throw error;
+    }
+    // Items named `aquaman::...` are the ones aquaman wrote. They are reached
+    // by their own reference, never under a second name.
+    if (typeof full.name === 'string' && full.name.startsWith(`${ITEM_PREFIX}::`)) {
+      throw new Error(`${locator.text} names an item aquaman itself wrote; use that credential by its own reference`);
+    }
+    let value: unknown;
+    if (locator.field === 'password' || locator.field === 'username') value = full.login?.[locator.field];
+    else if (locator.field === 'notes') value = full.notes;
+    else value = (Array.isArray(full.fields) ? full.fields : []).find((f) => f?.name === locator.field)?.value;
+    return typeof value === 'string' && value.length > 0 ? value : null;
   }
 
   /**
