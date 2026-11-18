@@ -17,6 +17,7 @@ import { matchPolicy, type PolicyConfig } from './request-policy.js';
 import { parseRequestTarget, policyPathInterpretations, policyMethods, policyPathOverrides } from './request-target.js';
 import { clampPromptTimeout, type CredentialPrompter, type PromptResult } from './credential-prompt.js';
 import type { BrokerScope } from './broker-scope.js';
+import { routableKeys, routeKeyMismatch, basicTokenCandidates, basicValueCarries } from './route-auth.js';
 
 // Service name validation: lowercase alphanum, dots, hyphens, underscores
 const SAFE_SERVICE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
@@ -297,6 +298,8 @@ export class CredentialProxy {
     if (ownValue) {
       candidates.push(def.authPrefix && ownValue.startsWith(def.authPrefix) ? ownValue.slice(def.authPrefix.length) : ownValue);
     }
+    // A basic client builds the header itself, so the token is one half of the pair.
+    if (def.authMode === 'basic') candidates.push(...basicTokenCandidates(req.headers.authorization));
     return candidates.some(c => timingSafeStrEqual(c, this.routeToken));
   }
 
@@ -329,7 +332,8 @@ export class CredentialProxy {
   /** True for a header value that is, or wraps, one of this proxy's own tokens. Those never go upstream. */
   private carriesLocalToken(value: string): boolean {
     const lb = this.options.loopback?.token;
-    return value.includes(this.routeToken) || (!!lb && value.includes(lb));
+    const tokens = lb ? [this.routeToken, lb] : [this.routeToken];
+    return tokens.some((t) => value.includes(t)) || basicValueCarries(value, tokens);
   }
 
   /**
@@ -853,13 +857,15 @@ export class CredentialProxy {
 
   /**
    * Whether a project has routed a program to this service in a way the
-   * proxy can serve: the service takes its credential in a header, and the
-   * routed reference is the key the proxy injects for it.
+   * proxy can serve: the service takes its credential in a header or as
+   * HTTP basic auth, and the routed reference is a key the proxy injects for
+   * it (route-auth.ts).
    */
   private isServiceRouted(service: string): boolean {
     const def = this.serviceRegistry.get(service);
-    if (!def || (def.authMode ?? 'header') !== 'header') return false;
-    return this.options.broker?.routedRefs?.().has(`aquaman://${service}/${def.credentialKey}`) === true;
+    if (!def) return false;
+    const routed = this.options.broker?.routedRefs?.();
+    return routableKeys(def).some((key) => routed?.has(`aquaman://${service}/${key}`) === true);
   }
 
   /**
@@ -872,8 +878,9 @@ export class CredentialProxy {
    * applies to everything sent with it. So this endpoint never touches a
    * credential value, and the token it returns is refused by every broker
    * endpoint. It answers only over the Unix socket, only for a reference a
-   * project has routed, only for a service the proxy injects a header for,
-   * and only when the reference names the key the proxy would inject.
+   * project has routed, only for a service the proxy injects a header or
+   * basic auth for, only when the reference names a key the proxy would
+   * inject, and only when every key of that injection is stored.
    */
   private async handleBrokerRoute(req: IncomingMessage, res: ServerResponse, fromLoopback: boolean): Promise<void> {
     res.setHeader('Content-Type', 'application/json');
@@ -942,23 +949,29 @@ export class CredentialProxy {
       refuse('route_service_unknown', `The proxy has no definition for "${service}", so it cannot forward requests for it`, `Add "${service}" to services.yaml (see docs/app-through-proxy.md), or bind the reference without --via-proxy`);
       return;
     }
-    if ((serviceDef.authMode ?? 'header') !== 'header') {
-      refuse('route_unsupported', `"${service}" does not take its credential in a request header, so a program cannot be routed to it this way`, 'Bind the reference without --via-proxy');
+    const keys = routableKeys(serviceDef);
+    if (keys.length === 0) {
+      refuse('route_unsupported', `"${service}" does not take its credential in a request header or as HTTP basic auth, so a program cannot be routed to it this way`, 'Bind the reference without --via-proxy');
       return;
     }
-    if (key !== serviceDef.credentialKey) {
-      refuse('route_key_mismatch', `The proxy injects ${service}/${serviceDef.credentialKey} for this service, not ${service}/${key}`, `Use aquaman://${service}/${serviceDef.credentialKey}`);
+    if (!keys.includes(key)) {
+      const mismatch = routeKeyMismatch(service, keys, key);
+      refuse('route_key_mismatch', mismatch.error, mismatch.fix);
       return;
     }
-    let stored = false;
-    try {
-      stored = (await this.options.store.get(service, key)) !== null;
-    } catch {
-      stored = false;
-    }
-    if (!stored) {
-      refuse('credential_not_found', `Credential not found: ${service}/${key}`, `Run: aquaman credentials add ${service} ${key}`);
-      return;
+    // Every key the proxy injects for the service, the routed one first: a
+    // basic request sent with half a pair would only fail at the upstream.
+    for (const needed of [key, ...keys.filter((k) => k !== key)]) {
+      let stored = false;
+      try {
+        stored = (await this.options.store.get(service, needed)) !== null;
+      } catch {
+        stored = false;
+      }
+      if (!stored) {
+        refuse('credential_not_found', `Credential not found: ${service}/${needed}`, `Run: aquaman credentials add ${service} ${needed}`);
+        return;
+      }
     }
     reply(200, { url: `http://${address}/${service}`, token: this.routeToken });
     this.emitRequest({

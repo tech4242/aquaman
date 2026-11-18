@@ -51,6 +51,7 @@ import {
 import { createHermesIntegration, detectHermes } from '../hermes/integration.js';
 import { managedScopeShadowedKeys, hermesManagedEnvPath, HERMES_SUPPORTED_SERVICES, hermesSecretSourceRefs } from '../hermes/config-writer.js';
 import { createBrokerScope, parseAquamanRef, formatAquamanRef, defaultProjectsPath, type BrokerScope } from '../broker-scope.js';
+import { routableKeys, routeKeyMismatch } from '../route-auth.js';
 import { createNativePrompter, clampPromptTimeout, PROMPT_TIMEOUT_SECONDS, PROMPT_TIMEOUT_MIN_SECONDS, PROMPT_TIMEOUT_MAX_SECONDS } from '../credential-prompt.js';
 import { loadPolicyFromConfig, validatePolicyConfig, lintPolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
@@ -3618,7 +3619,7 @@ program
   .argument('<ref>', 'aquaman://service/key')
   .option('--env <NAME>', 'Also bind the ref to this env var for the project covering the current directory')
   .option('--via-proxy <URL_ENV>', 'With --env: route the program through the proxy. NAME gets the proxy token, URL_ENV the proxy URL; the program never holds the credential')
-  .option('--base-path <path>', 'With --via-proxy: path appended to the proxy URL (default /v1 for openai)')
+  .option('--base-path <path>', 'With --via-proxy: path appended to the proxy URL (default /v1 for openai, /api for slack)')
   .option('--timeout <seconds>', `How long the dialog waits for an answer (${PROMPT_TIMEOUT_MIN_SECONDS}-${PROMPT_TIMEOUT_MAX_SECONDS})`, String(PROMPT_TIMEOUT_SECONDS))
   .option('--json', 'Print one JSON object and nothing else')
   .addHelpText('after', `
@@ -3674,18 +3675,20 @@ Example:
         out({ status: 'error', ref, error: '--via-proxy needs --env, and --base-path needs --via-proxy', fix: 'aquaman request aquaman://openai/api_key --env OPENAI_API_KEY --via-proxy OPENAI_BASE_URL' }, 1);
       }
       // A route only works for a service the proxy can forward and inject a
-      // header for, with the listener on. Say so before anyone is asked.
+      // header or basic auth for, with the listener on. Say so before anyone
+      // is asked.
       const parsedRef = parseAquamanRef(ref)!;
       const routeConfig = loadConfig();
       const def = createServiceRegistry({ configPath: routeConfig.services.configPath }).get(parsedRef.service);
       if (!def) {
         out({ status: 'error', ref, error: `The proxy has no definition for "${parsedRef.service}", so it cannot forward requests for it`, fix: `Add "${parsedRef.service}" to services.yaml (docs/app-through-proxy.md), or drop --via-proxy to have the variable set to the value instead` }, 1);
       }
-      if ((def!.authMode ?? 'header') !== 'header') {
-        out({ status: 'error', ref, error: `"${parsedRef.service}" does not take its credential in a request header, so a program cannot be routed to it`, fix: 'Drop --via-proxy' }, 1);
+      const routeKeys = routableKeys(def!);
+      if (routeKeys.length === 0) {
+        out({ status: 'error', ref, error: `"${parsedRef.service}" does not take its credential in a request header or as HTTP basic auth, so a program cannot be routed to it`, fix: 'Drop --via-proxy' }, 1);
       }
-      if (def!.credentialKey !== parsedRef.key) {
-        out({ status: 'error', ref, error: `The proxy injects ${parsedRef.service}/${def!.credentialKey} for this service, not ${parsedRef.service}/${parsedRef.key}`, fix: `Use aquaman://${parsedRef.service}/${def!.credentialKey}` }, 1);
+      if (!routeKeys.includes(parsedRef.key)) {
+        out({ status: 'error', ref, ...routeKeyMismatch(parsedRef.service, routeKeys, parsedRef.key) }, 1);
       }
       if (routeConfig.loopback?.enabled !== true || !routeConfig.loopback.token) {
         out({ status: 'error', ref, error: 'The loopback listener is off, so there is nowhere for the program to send its requests', fix: 'aquaman init --agent <agent> --loopback' }, 1);

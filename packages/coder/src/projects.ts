@@ -36,6 +36,20 @@ export interface ProjectRoute {
   base_path?: string;
 }
 
+/**
+ * The path a routed client expects in its base URL when `--base-path` is not
+ * given. The proxy forwards the path it receives onto the upstream's origin,
+ * so the base URL has to carry whatever prefix the vendor's client leaves
+ * out: the OpenAI clients append `/chat/completions` to a base that ends in
+ * `/v1`, and the Slack clients append the method name to one that ends in
+ * `/api`.
+ */
+export function defaultRouteBasePath(service: string): string {
+  if (service === 'openai') return '/v1';
+  if (service === 'slack') return '/api';
+  return '';
+}
+
 /** Plain path segments only: the proxy refuses dot segments, and a route must not be able to spell one. */
 /**
  * Variables that change how the next program is loaded or run. A binding sets
