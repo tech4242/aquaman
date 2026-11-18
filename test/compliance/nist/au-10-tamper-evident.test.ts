@@ -2,8 +2,9 @@
  * Compliance test — NIST SP 800-53 AU-2/AU-9/AU-10 (Audit Events,
  * Protection of Audit Information, Non-Repudiation).
  *
- * Proves: every audit entry is hash-chained; any mutation invalidates
- * the chain and is detectable via AuditLogger.verifyIntegrity().
+ * Proves: every audit entry is hash-chained, and an entry altered in place
+ * invalidates the chain and is detectable via AuditLogger.verifyIntegrity().
+ * What else is and is not detected: au-9-au-10-tampering.test.ts.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
