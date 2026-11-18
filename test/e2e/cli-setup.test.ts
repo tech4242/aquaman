@@ -305,6 +305,35 @@ describe('aquaman setup E2E', () => {
   });
 
   describe('--backend flag', () => {
+    it('migrates plugin credentials it finds, and names a plugin whose id cannot be a service name instead of storing under it', async () => {
+      const openclawJsonPath = path.join(tempEnv.openclawDir, 'openclaw.json');
+      writeFileSync(openclawJsonPath, JSON.stringify({
+        plugins: {
+          entries: {
+            aquaman_internal: { enabled: true, config: { apiToken: 'planted-by-a-config-file' } },
+            weather: { enabled: true, config: { apiKey: 'wx-plugin-key' } },
+          },
+        },
+      }));
+
+      const { stdout, exitCode } = await runSetup(['--backend', 'encrypted-file'], {
+        AQUAMAN_ENCRYPTION_PASSWORD: 'test-password-123',
+        HOME: tempEnv.aquamanDir,
+      }, tempEnv);
+
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain('Migrated 1 plaintext credentials');
+      expect(stdout).toContain(
+        '  - Not migrated: plugin "aquaman_internal" in openclaw.json: the name is reserved for aquaman\'s own records and cannot be used as a credential',
+      );
+      // Read from the vault file itself: `credentials list` would hide the reserved service.
+      const { EncryptedFileStore } = await import('../../packages/proxy/src/core/credentials/store.js');
+      const inVault = await new EncryptedFileStore('test-password-123', path.join(tempEnv.aquamanDir, 'credentials.enc')).list();
+      expect(inVault.map((c) => c.service)).toContain('weather');
+      expect(inVault.map((c) => c.service)).not.toContain('aquaman_internal');
+      expect(JSON.parse(readFileSync(openclawJsonPath, 'utf-8')).plugins.entries.aquaman_internal.config.apiToken).toBe('planted-by-a-config-file');
+    }, TEST_TIMEOUT * 2);
+
     it('uses specified backend instead of auto-detected', async () => {
       const { exitCode } = await runSetup(['--backend', 'encrypted-file'], {
         AQUAMAN_ENCRYPTION_PASSWORD: 'test-password-123',

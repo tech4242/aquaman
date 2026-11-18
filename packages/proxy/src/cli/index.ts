@@ -2482,6 +2482,9 @@ openclaw
           if (result.migrated > 0) {
             console.log(`  \u2713 Migrated ${result.migrated} plaintext credentials`);
           }
+          for (const s of result.unstorable ?? []) {
+            console.log(`  - Not migrated: plugin ${JSON.stringify(s.service)} in openclaw.json: ${s.reason}`);
+          }
         } catch {
           // Migration is best-effort during setup
         }
@@ -3911,7 +3914,11 @@ openclaw
           }
 
           // Plugin credentials
-          const pluginMappings = extractPluginCredentials(config);
+          const unstorablePlugins: Array<{ service: string; reason: string }> = [];
+          const pluginMappings = extractPluginCredentials(config, unstorablePlugins);
+          for (const s of unstorablePlugins) {
+            console.log(`  Skipped plugin ${JSON.stringify(s.service)}: ${s.reason}. Its credentials stay in openclaw.json.\n`);
+          }
           for (const m of pluginMappings) {
             let current: any = config;
             for (const key of m.jsonPath) {

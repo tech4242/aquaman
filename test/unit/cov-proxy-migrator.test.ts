@@ -259,6 +259,18 @@ describe('OpenClaw migrator: failure and edge paths', () => {
       expect(await store.get('anthropic', 'api_key')).toBe('sk-ant-from-config');
     });
 
+    it('reports plugins it left alone because of their id, also when nothing else was found', async () => {
+      writeConfig({ plugins: { entries: { 'Bad Name': { config: { apiKey: 'left-where-it-is' } } } } });
+      const store = new MemoryStore();
+      expect(await autoMigrateOpenClaw({ store, isInteractive: false })).toEqual({
+        found: 0,
+        migrated: 0,
+        skipped: false,
+        unstorable: [{ service: 'Bad Name', reason: expect.stringContaining('not a service name aquaman can store under') }],
+      });
+      expect(await store.list()).toEqual([]);
+    });
+
     it('finds nothing with an unparseable config and no credentials directory', async () => {
       fs.writeFileSync(configPath, '{ nope');
       const store = new MemoryStore();

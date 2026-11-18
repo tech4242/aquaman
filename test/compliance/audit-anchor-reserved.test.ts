@@ -12,6 +12,11 @@
  * spelling. After each, the stored anchor is what it was and no response
  * carried it.
  *
+ * The migration from an OpenClaw config is an entry point too: a plugin id
+ * in `openclaw.json` becomes a service name, and anything can write that
+ * file. Both ways into it are tried: the migration `aquaman setup` runs and
+ * `aquaman openclaw migrate --auto`.
+ *
  * What this does not show: software that writes to the credential store
  * directly (the vault's own CLI, the encrypted file) is outside aquaman and
  * can move the anchor. That limit is a row in
@@ -21,6 +26,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as os from 'node:os';
@@ -42,6 +48,9 @@ import {
 import { MemoryStore } from 'aquaman-core';
 import { createOpenShellDriverCore } from '../../packages/proxy/src/openshell/credential-driver.js';
 import { loadConfigAllowedRefs } from '../../packages/proxy/src/broker-scope.js';
+import { autoMigrateOpenClaw, extractPluginCredentials } from '../../packages/proxy/src/migration/openclaw-migrator.js';
+import { EncryptedFileStore } from '../../packages/proxy/src/core/credentials/store.js';
+import { createTempEnv, type TempEnv } from '../helpers/temp-env.js';
 import { MockUpstream, createMockUpstream } from '../helpers/mock-upstream.js';
 import { tmpSocketPath, cleanupSocket, udsFetch } from '../helpers/uds-proxy.js';
 
@@ -405,6 +414,102 @@ describe('the reserved service cannot be reached through the OpenShell driver', 
       });
     }
   }
+});
+
+describe('the reserved service cannot be written by migrating an OpenClaw config', () => {
+  const REASON = "the name is reserved for aquaman's own records and cannot be used as a credential";
+  /** A plugin entry whose id is the reserved name, with fields the migration takes for credentials. */
+  const planted = (id: string) => ({
+    [id]: { enabled: true, config: { apiToken: 'planted-by-a-config-file', nested: { anchorKey: 'planted-deeper' }, auditAnchorSecret: 'planted-third' } },
+    weather: { enabled: true, config: { apiKey: 'wx-plugin-key' } },
+  });
+  let dir: string;
+  let previous: string | undefined;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aq-rm-'));
+    previous = process.env['OPENCLAW_STATE_DIR'];
+    process.env['OPENCLAW_STATE_DIR'] = dir;
+  });
+  afterEach(() => {
+    if (previous === undefined) delete process.env['OPENCLAW_STATE_DIR'];
+    else process.env['OPENCLAW_STATE_DIR'] = previous;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  describe.each([...SPELLINGS, 'AQUAMAN_INTERNAL', 'Aquaman-Internal'])('a plugin named %s', (id) => {
+    it('refused: the migration `aquaman setup` runs stores nothing under it, says why, and still migrates the plugin beside it', async () => {
+      fs.writeFileSync(path.join(dir, 'openclaw.json'), JSON.stringify({ plugins: { entries: planted(id) } }));
+      const store = new MemoryStore();
+      await store.set(RESERVED_SERVICE, AUDIT_ANCHOR_KEY, ANCHOR);
+
+      const result = await autoMigrateOpenClaw({ store, isInteractive: false, isNonInteractive: true, skipCleanup: true, noColor: true });
+
+      expect(result).toEqual({ found: 1, migrated: 1, skipped: false, unstorable: [{ service: id, reason: REASON }] });
+      expect(await store.list()).toEqual(expect.arrayContaining([{ service: 'weather', key: 'api_key' }]));
+      expect((await store.list()).filter((c) => isReservedService(c.service))).toEqual([{ service: RESERVED_SERVICE, key: AUDIT_ANCHOR_KEY }]);
+      expect(await store.get(RESERVED_SERVICE, AUDIT_ANCHOR_KEY)).toBe(ANCHOR);
+    });
+
+    it('refused: no mapping for it is handed to anything that stores', () => {
+      const skipped: Array<{ service: string; reason: string }> = [];
+      const mappings = extractPluginCredentials({ plugins: { entries: planted(id) } }, skipped);
+      expect(mappings.map((m) => m.service)).toEqual(['weather']);
+      expect(skipped).toEqual([{ service: id, reason: REASON }]);
+      // Asked without a list to report into, it is left out all the same.
+      expect(extractPluginCredentials({ plugins: { entries: planted(id) } }).map((m) => m.service)).toEqual(['weather']);
+    });
+  });
+
+  describe('through the real CLI', () => {
+    const CLI_PATH = path.resolve('packages/proxy/src/cli/index.ts');
+    let tempEnv: TempEnv;
+    afterEach(() => { tempEnv?.cleanup(); });
+
+    function migrate(args: string[]): Promise<{ stdout: string; stderr: string; code: number | null }> {
+      return new Promise((resolve, reject) => {
+        const proc = spawn('npx', ['tsx', CLI_PATH, 'openclaw', 'migrate', '--auto', ...args], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: { ...process.env, ...tempEnv.env, HOME: tempEnv.aquamanDir, NO_COLOR: '1' },
+        });
+        let stdout = '';
+        let stderr = '';
+        proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+        proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+        proc.on('error', reject);
+        proc.on('close', (code) => resolve({ stdout, stderr, code }));
+      });
+    }
+
+    it('refused: `aquaman openclaw migrate --auto` skips the plugin, says so, leaves its values in openclaw.json and registers no service for it', async () => {
+      tempEnv = createTempEnv({ withConfig: true, withOpenClaw: true, withCredentials: { plugins: planted('aquaman_internal') } });
+      const vault = () => new EncryptedFileStore('test-password', path.join(tempEnv.aquamanDir, 'credentials.enc'));
+      await vault().set(RESERVED_SERVICE, AUDIT_ANCHOR_KEY, ANCHOR);
+
+      const preview = await migrate(['--dry-run']);
+      expect(preview.code).toBe(0);
+      expect(preview.stdout).toContain(`Skipped plugin "aquaman_internal": ${REASON}. Its credentials stay in openclaw.json.`);
+      expect(preview.stdout).toContain('Found 1 credential');
+      expect(preview.stdout).not.toContain('aquaman_internal/');
+
+      const run = await migrate(['--cleanup']);
+      expect(run.code).toBe(0);
+      expect(run.stdout).toContain(`Skipped plugin "aquaman_internal": ${REASON}.`);
+      expect(run.stdout).toContain('Migrated 1 credential');
+
+      expect((await vault().list()).sort((a, b) => a.service.localeCompare(b.service))).toEqual([
+        { service: RESERVED_SERVICE, key: AUDIT_ANCHOR_KEY },
+        { service: 'weather', key: 'api_key' },
+      ]);
+      expect(await vault().get(RESERVED_SERVICE, AUDIT_ANCHOR_KEY)).toBe(ANCHOR);
+      const after = JSON.parse(fs.readFileSync(path.join(tempEnv.openclawDir, 'openclaw.json'), 'utf-8'));
+      expect(after.plugins.entries.aquaman_internal.config).toEqual(planted('aquaman_internal').aquaman_internal.config);
+      expect(after.plugins.entries.weather.config.apiKey).toBe('aquaman-proxy-managed');
+      const services = path.join(tempEnv.aquamanDir, 'services.yaml');
+      expect(fs.existsSync(services) ? fs.readFileSync(services, 'utf-8') : '').not.toContain('aquaman_internal');
+      expect(fs.readFileSync(path.join(tempEnv.aquamanDir, 'config.yaml'), 'utf-8')).not.toContain('aquaman_internal');
+    }, 90_000);
+  });
 });
 
 describe('the reserved service cannot be linked to another vault item', () => {
