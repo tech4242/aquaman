@@ -16,7 +16,7 @@ import { OAuthTokenCache, createOAuthTokenCache } from './oauth-token-cache.js';
 import { matchPolicy, type PolicyConfig } from './request-policy.js';
 import { parseRequestTarget, policyPathInterpretations, policyMethods, policyPathOverrides } from './request-target.js';
 import { clampPromptTimeout, type CredentialPrompter, type PromptResult } from './credential-prompt.js';
-import type { BrokerScope } from './broker-scope.js';
+import { isReservedService, reservedServiceRefusal, type BrokerScope } from './broker-scope.js';
 
 // Service name validation: lowercase alphanum, dots, hyphens, underscores
 const SAFE_SERVICE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
@@ -466,7 +466,8 @@ export class CredentialProxy {
     const service = pathParts[0];
 
     // Validate service name to prevent path traversal / injection
-    if (service && !SAFE_SERVICE_NAME.test(service)) {
+    // A reserved name is never forwarded for, whatever the config lists.
+    if (service && (!SAFE_SERVICE_NAME.test(service) || isReservedService(service))) {
       res.statusCode = 404;
       res.end('Not found');
       return;
@@ -917,6 +918,11 @@ export class CredentialProxy {
         error: `${code}: ${service}/${key}`,
       });
     };
+    const reserved = reservedServiceRefusal(service, key);
+    if (reserved) {
+      refuse(reserved.code, reserved.reason, reserved.fix);
+      return;
+    }
     if (fromLoopback) {
       refuse('route_socket_only', 'Routes are handed out over the Unix socket only', 'Ask over the proxy socket');
       return;
@@ -1013,6 +1019,7 @@ export class CredentialProxy {
       if (
         typeof service === 'string' && SAFE_SERVICE_NAME.test(service) &&
         typeof key === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(key) &&
+        !isReservedService(service) &&
         (scope.check(service, key, fromLoopback ? 'loopback' : 'uds').allowed ||
           // A routed reference is usable by its project without being resolvable.
           (!fromLoopback && scope.routedRefs?.().has(`aquaman://${service}/${key}`) === true))
@@ -1072,6 +1079,13 @@ export class CredentialProxy {
     }
     if (typeof key !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(key)) {
       reply(400, { error: `Invalid key name: ${JSON.stringify(key)}`, fix: 'Key names must match /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/' });
+      return;
+    }
+    // Before the vault is asked anything and before any dialog: a reserved
+    // name is never stored, approved or declared for a caller.
+    const reserved = reservedServiceRefusal(service, key);
+    if (reserved) {
+      reply(404, { error: reserved.reason, fix: reserved.fix, code: reserved.code });
       return;
     }
     const project = typeof body.project === 'string' ? body.project : undefined;
@@ -1278,14 +1292,14 @@ export class CredentialProxy {
     // treat 401/403 as "bad token" (the Hermes source aborts all refs on
     // those) handle a refusal per ref, like a missing credential.
     const scope = this.options.broker;
-    const decision = scope
+    const decision = reservedServiceRefusal(service, key) ?? (scope
       ? scope.check(service, key, fromLoopback ? 'loopback' : 'uds')
       : {
           allowed: false as const,
           code: 'broker_disabled' as const,
           reason: 'The credential broker is disabled on this proxy',
           fix: 'OpenClaw-hosted proxies never hand out credential values. For coding agents or the Hermes secret source, run: aquaman daemon',
-        };
+        });
     if (!decision.allowed) {
       res.statusCode = 404;
       res.end(JSON.stringify({ error: decision.reason, fix: decision.fix, code: decision.code }));

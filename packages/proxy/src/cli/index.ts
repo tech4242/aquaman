@@ -50,7 +50,9 @@ import {
 } from '../openclaw/channel-routing.js';
 import { createHermesIntegration, detectHermes } from '../hermes/integration.js';
 import { managedScopeShadowedKeys, hermesManagedEnvPath, HERMES_SUPPORTED_SERVICES, hermesSecretSourceRefs } from '../hermes/config-writer.js';
-import { createBrokerScope, parseAquamanRef, formatAquamanRef, defaultProjectsPath, type BrokerScope } from '../broker-scope.js';
+import { createBrokerScope, parseAquamanRef, formatAquamanRef, defaultProjectsPath, isReservedService, RESERVED_SERVICE_REASON, type BrokerScope } from '../broker-scope.js';
+import { startAuditAnchor } from '../audit-anchor.js';
+import { auditVerifyCommand, auditAcceptCommand } from './audit-commands.js';
 import { createNativePrompter, clampPromptTimeout, PROMPT_TIMEOUT_SECONDS, PROMPT_TIMEOUT_MIN_SECONDS, PROMPT_TIMEOUT_MAX_SECONDS } from '../credential-prompt.js';
 import { loadPolicyFromConfig, validatePolicyConfig, lintPolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
@@ -74,6 +76,20 @@ function validateCredName(label: string, value: string): void {
     console.error(`Invalid ${label}: "${value}". Allowed: lowercase alphanumeric, dots, hyphens, underscores.`);
     process.exit(1);
   }
+  if (label === 'service' && isReservedService(value)) {
+    console.error(`"${value}" ${RESERVED_SERVICE_REASON}.`);
+    console.error('Use a different service name. To check the audit log against its anchor, run: aquaman audit verify');
+    process.exit(1);
+  }
+}
+
+/**
+ * What the vault holds for the user. aquaman's own records (the audit
+ * anchor) are stored there too, and are not credentials: they are not
+ * listed, counted, or taken as a sign that a credential has been stored.
+ */
+async function listCredentials(store: { list(): Promise<Array<{ service: string; key: string }>> }): Promise<Array<{ service: string; key: string }>> {
+  return (await store.list()).filter((cred) => !isReservedService(cred.service));
 }
 
 /**
@@ -189,6 +205,12 @@ function updateBrokerAllowedRefs(refs: string[], mode: 'allow' | 'revoke'): void
   if (invalid.length > 0) {
     console.error(`Invalid ref${invalid.length > 1 ? 's' : ''}: ${invalid.join(', ')}`);
     console.error('Refs look like aquaman://<service>/<key>, e.g. aquaman://github/token');
+    process.exit(1);
+  }
+  const reserved = refs.filter(r => isReservedService(parseAquamanRef(r)!.service));
+  if (reserved.length > 0) {
+    console.error(`Not declared: ${reserved.join(', ')}. "${parseAquamanRef(reserved[0])!.service}" ${RESERVED_SERVICE_REASON}.`);
+    console.error('Use a different service name. To check the audit log against its anchor, run: aquaman audit verify');
     process.exit(1);
   }
 
@@ -584,7 +606,7 @@ program
       try {
         const config = loadConfig();
         const store = await createCredentialStore(storeOptionsFromConfig(config));
-        const creds = await store.list();
+        const creds = await listCredentials(store);
         console.log(`    \u2713 ${config.credentials.backend} backend (${creds.length} credential${creds.length !== 1 ? 's' : ''})`);
         printOnePasswordModeHint(config);
       } catch (err) {
@@ -915,6 +937,7 @@ openclaw
       }
     });
     await credentialProxy.start();
+    const auditAnchor = startAuditAnchor(config, auditLogger, credentialStore);
 
     console.log(`Credential proxy started on ${socketPath}`);
 
@@ -950,6 +973,7 @@ openclaw
         proc.on('close', async (code) => {
           console.log(`\nOpenClaw exited with code ${code}`);
           await credentialProxy.stop();
+          await auditAnchor.stop();
           process.exit(code ?? 0);
         });
       }
@@ -972,6 +996,7 @@ openclaw
     const shutdown = async () => {
       console.log('\nShutting down...');
       await credentialProxy.stop();
+      await auditAnchor.stop();
       process.exit(0);
     };
 
@@ -1094,6 +1119,7 @@ program
       }
     });
     await credentialProxy.start();
+    const auditAnchor = startAuditAnchor(config, auditLogger, credentialStore);
 
     // OpenShell external credential driver (v0.17.0+). Opt-in; a failure here
     // is reported but never takes the proxy down.
@@ -1129,6 +1155,7 @@ program
       console.log('\nShutting down daemon...');
       await openshellDriver?.stop();
       await credentialProxy.stop();
+      await auditAnchor.stop();
       removePidFile();
       try { fs.unlinkSync(socketPath); } catch { /* already removed */ }
       process.exit(0);
@@ -1190,6 +1217,7 @@ openclaw
       }
     });
     await credentialProxy.start();
+    const auditAnchor = startAuditAnchor(config, auditLogger, credentialStore);
 
     // Build host map from service registry for the plugin's interceptor
     const hostMap = serviceRegistry.buildHostMap();
@@ -1212,6 +1240,7 @@ openclaw
     // Handle shutdown
     const shutdown = async () => {
       await credentialProxy.stop();
+      await auditAnchor.stop();
       try { fs.unlinkSync(socketPath); } catch { /* already removed */ }
       process.exit(0);
     };
@@ -2506,7 +2535,7 @@ openclaw
       });
 
       // 3. Count credentials
-      const creds = await store.list();
+      const creds = await listCredentials(store);
       for (const c of creds) vaultServices.add(c.service);
       if (creds.length > 0) {
         const names = creds.map(c => `${c.service}/${c.key}`).join(', ');
@@ -2996,31 +3025,30 @@ audit
     }
   });
 
+/** What the audit commands need from this file: the config, the store it names, and whether a proxy is serving. */
+function auditCommandDeps() {
+  const config = loadConfig();
+  return {
+    config,
+    openStore: () => createCredentialStore(storeOptionsFromConfig(config)),
+    proxyRunning: () => proxyHealthy(path.join(getConfigDir(), 'proxy.sock')),
+  };
+}
+
 audit
   .command('verify')
-  .description('Verify audit log integrity')
+  .description('Verify the audit log: its hash chain, and the log against its anchor in the credential store')
+  .option('--chain-only', 'Check the hash chain alone, without reading the anchor from the credential store')
+  .option('--json', 'Print the result as JSON')
+  .action(async (options: { chainOnly?: boolean; json?: boolean }) => {
+    process.exitCode = await auditVerifyCommand(options, auditCommandDeps());
+  });
+
+audit
+  .command('accept')
+  .description('Accept the audit log as it is and move its anchor (after a restored backup or a deliberate deletion). Needs a terminal')
   .action(async () => {
-    const config = loadConfig();
-    const auditLogger = createAuditLogger({
-      logDir: config.audit.logDir,
-      enabled: true
-    });
-    await auditLogger.initialize();
-
-    const result = await auditLogger.verifyIntegrity();
-
-    if (result.valid) {
-      console.log('Audit log integrity verified');
-      const stats = auditLogger.getStats();
-      console.log(`  Entries: ${stats.entryCount}`);
-      console.log(`  Last hash: ${stats.lastHash.slice(0, 16)}...`);
-    } else {
-      console.log('Audit log integrity FAILED');
-      for (const error of result.errors) {
-        console.log(`  - ${error}`);
-      }
-      process.exit(1);
-    }
+    process.exitCode = await auditAcceptCommand(auditCommandDeps());
   });
 
 audit
@@ -3143,7 +3171,7 @@ credentials
       process.exit(1);
     }
 
-    const creds = await store.list();
+    const creds = await listCredentials(store);
 
     if (creds.length === 0) {
       console.log('No credentials stored.');
@@ -4244,7 +4272,7 @@ openclaw
         keeperFolderUid: config.credentials.keeperFolderUid,
         keeperConfigPath: config.credentials.keeperConfigPath
       });
-      const creds = await store.list();
+      const creds = await listCredentials(store);
       console.log(`\nStored credentials: ${creds.length}`);
     } catch {
       console.log('\nStored credentials: (backend unavailable)');
@@ -4279,7 +4307,7 @@ function formatEntry(entry: any): string {
     case 'tool_result':
       return `Result for ${entry.data.toolCallId}`;
     case 'credential_access':
-      return `${entry.data.service} ${entry.data.operation} ${entry.data.success ? 'OK' : `FAIL: ${entry.data.error || 'unknown'}`}`;
+      return `${entry.data.service} ${entry.data.operation} ${entry.data.success ? 'OK' : `FAIL: ${entry.data.error || 'unknown'}`}${entry.data.note ? ` (${entry.data.note})` : ''}`;
     default:
       return JSON.stringify(entry.data).slice(0, 80);
   }
