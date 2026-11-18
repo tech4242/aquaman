@@ -80,9 +80,12 @@ Until now `aquaman audit verify` could not tell that the end of the log had been
 - `aquaman audit verify` now reads the vault, and fails if it cannot. `--chain-only` checks the chain alone; `--json` prints the result as JSON.
 - `aquaman audit accept` sets the anchor to the log as it is, for a log you restored or deleted on purpose. It needs a terminal, a typed yes and no proxy running, and records the reset.
 - Entries carry a sequence number, and the chain continues across log rotation. Existing logs keep working and are not rewritten; a log from before this release reads "not anchored yet" until the daemon writes its first anchor.
-- What it does not detect: the removal of entries written since the last anchor, a change made by software that can also write to your vault, and the deletion of an old archived log file, which looks the same as normal pruning.
+- It also notices entries removed from the beginning of the log: the anchor records where the log is supposed to begin, and that only moves when aquaman itself prunes old archives.
+- `audit verify` and `audit tail` only read. They can be run while the daemon is writing, and they change nothing on disk.
+- Several processes can write one log, for example the daemon and a proxy that OpenClaw starts: each entry is appended under a short lock and continues the chain from what is on disk. A process that cannot get the lock within two seconds refuses the request with `audit_unavailable`.
+- What it does not detect: the removal of entries written since the last anchor, and a change made by software that can also write to your vault.
 
-Two fixes on the way: two log rotations within one millisecond no longer overwrite each other's archive, and an entry recovered after a crash is no longer written twice.
+Fixes on the way: two log rotations within one millisecond no longer overwrite each other's archive; an entry recovered after a crash is no longer written twice; and running `audit verify` or `audit tail` beside a busy daemon could write an entry twice and break the chain, which reading no longer can.
 
 ### Behaviour changes to expect
 
@@ -90,6 +93,8 @@ Two fixes on the way: two log rotations within one millisecond no longer overwri
 - Your vault gains up to two items that aquaman keeps for itself: `aquaman_internal/audit_anchor`, and `aquaman_internal/link_approvals` once you approve a link. Both are hidden from `aquaman credentials list` and cannot be read, declared, linked or changed through aquaman.
 - With 1Password in desktop mode, an active daemon writes the anchor every 15 minutes, which can show an unlock prompt. Set `audit.anchorIntervalSeconds: 0` to turn anchoring off.
 - `aquaman init --agent` adds a step to `human_steps` when the daemon does not start at login.
+- `aquaman openclaw setup` and `aquaman openclaw migrate --auto` skip, and name, a plugin whose id is not a valid service name (uppercase letters, spaces, slashes). Its credentials stay in `openclaw.json`.
+- Every audit write, and `aquaman audit rotate`, waits for a lock that the aquaman processes on one config directory share.
 
 ## 0.18.2
 
