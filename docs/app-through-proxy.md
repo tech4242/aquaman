@@ -118,6 +118,51 @@ try {
 
 What the app's environment holds while it runs: `ANTHROPIC_API_KEY`, `STRIPE_SECRET_KEY`, `SLACK_BOT_TOKEN` and `ZENDESK_API_TOKEN` are all the same `aqm_rt_...` token, and the four URL variables point at `http://127.0.0.1:8585/<service>`. `ZENDESK_EMAIL` is an ordinary setting of yours. For basic auth the proxy discards the whole `Authorization` header the app sent and builds a new one from the two stored values, so the user name the app sends does not matter.
 
+## A basic-auth service on your own host, field by field
+
+The Zendesk entry from the example, with every field. The file is `~/.aquaman/services.yaml`, next to `config.yaml`; create it if it does not exist.
+
+```yaml
+services:
+  - name: zendesk                           # your name for the service
+    description: Zendesk Support, yourcompany   # optional, shown by `aquaman services list`
+    upstream: https://yourcompany.zendesk.com   # your tenant's host
+    authMode: basic                         # build an HTTP basic Authorization header
+    authHeader: Authorization               # required for basic and header modes
+    credentialKey: email                    # vault key that holds the user name
+    additionalCredentialKeys: [api_token]   # vault key that holds the password
+```
+
+| Field | Meaning |
+|---|---|
+| `name` | Lowercase letters, digits, `.`, `_` and `-`. It is the service part of references (`aquaman://zendesk/...`) and the first segment of the proxy URL (`http://127.0.0.1:8585/zendesk`). It cannot be the name of a built-in service |
+| `description` | Optional text |
+| `upstream` | Where the proxy sends the request. `http` or `https`; only the scheme, host and port are used. The path the app sends after `/zendesk` is the path the API receives |
+| `authMode` | `basic` here. Left out, it is `header`, which puts one credential into `authHeader` after `authPrefix`. The other modes (`url-path`, `oauth`, `none`) cannot be routed with `--via-proxy` |
+| `authHeader` | Has to be present. For `basic` the proxy always writes `Authorization` |
+| `credentialKey` | The first half of the pair: the proxy reads `zendesk/email` from the vault and uses it as the user name |
+| `additionalCredentialKeys` | A list of key names. The first one is the password: the proxy reads `zendesk/api_token`. An empty list means an empty password |
+
+`aquaman services validate` checks the file and `aquaman services list` shows the entry marked `(custom)`.
+
+What goes in the vault, for Zendesk's API-token sign-in:
+
+| Reference | Value | How it gets there |
+|---|---|---|
+| `aquaman://zendesk/email` | `you@yourcompany.com/token` (Zendesk's user name form for token sign-in: your address followed by `/token`) | `aquaman credentials add zendesk email` |
+| `aquaman://zendesk/api_token` | The API token | `aquaman request aquaman://zendesk/api_token --env ZENDESK_API_TOKEN --via-proxy ZENDESK_API_URL` |
+
+One `--via-proxy` binding is enough for the pair. It names the key the app must not hold; the other half is only stored, and needs no binding and no variable.
+
+What the app sends, and what the API receives:
+
+| | User name | Password |
+|---|---|---|
+| The app sends `Authorization: Basic base64(user:password)` with | anything, for example `you@yourcompany.com/token` | the value of `ZENDESK_API_TOKEN`, which is the route token `aqm_rt_...` |
+| The proxy sends on | the stored `zendesk/email` | the stored `zendesk/api_token` |
+
+The proxy accepts the route token in either position, so a client that can only set the user name works too. It discards the header the app sent and builds a new one from the two stored values, so the user name the app sends is never forwarded. A request that carries none of the proxy's own tokens is refused with 401.
+
 ## Clients
 
 Which variable or option carries the base URL, which carries the key, and the base path to bind with. `aquaman-coder bind` and `aquaman request` add `/v1` for `openai` and `/api` for `slack` on their own; `--base-path` sets it for anything else.
@@ -176,7 +221,7 @@ aquaman request aquaman://github/token --env GITHUB_TOKEN --via-proxy GITHUB_API
 
 Every client in the table is run in aquaman's test suite as its own process against a real proxy and a local server in place of the vendor. Each test checks that the vendor received the real credential and never the token, and that the process's environment held no real credential. Versions run: `@anthropic-ai/sdk` 1.10.0, `openai` 7.59.0, `@octokit/rest` 22.0.1, `stripe` 23.1.0, `@slack/web-api` 8.4.0; Python `anthropic` 2.10.0, `slack_sdk` 3.47.0, `requests` 2.34.2, `httpx` 0.28.1.
 
-**Claude Agent SDK. Not run in aquaman's tests.** The SDK starts the Claude Code program, which aquaman's tests do not run. The type declarations shipped in `@anthropic-ai/claude-agent-sdk` 0.3.327 say that the program it starts inherits `process.env` (or gets exactly the `env` option, which replaces the environment and is not merged with it), name `ANTHROPIC_API_KEY` as a source of its key, and name `ANTHROPIC_BASE_URL` as what sends Anthropic API traffic to another host. So the same binding as for the Anthropic SDK should apply (`--env ANTHROPIC_API_KEY --via-proxy ANTHROPIC_BASE_URL`, no base path), and if you pass `env`, include both variables in it. Treat this as unverified until you have seen a request arrive: `aquaman audit tail` shows each one.
+**Claude Agent SDK.** Bind it like the Anthropic SDK: `--env ANTHROPIC_API_KEY --via-proxy ANTHROPIC_BASE_URL`, no base path. The SDK starts the Claude Code program, which inherits the app's environment and takes both variables from it; if you pass the `env` option, which replaces the environment, include both. Run with `@anthropic-ai/claude-agent-sdk` 0.3.327 and aquaman 0.19.0: an app started with `aquaman-coder exec` had the route token in `ANTHROPIC_API_KEY`, the SDK reported `ANTHROPIC_API_KEY` as its key source, and its requests arrived at the proxy and were forwarded to Anthropic with the vault's key, each one an entry in `aquaman audit tail`. This is checked by hand at release time and is not part of the automated tests, which do not start Claude Code.
 
 ## Which services can be routed
 
@@ -239,6 +284,45 @@ policy:
 ```
 
 A denied request gets a 403 from the proxy and no key. `aquaman policy test stripe DELETE /v1/customers/cus_1` shows what a rule set decides. Each forwarded request is written to the audit log. The read-only form in the worked example (`defaultAction: deny` with one `allow` rule for `GET`) is the stricter shape: anything you did not allow is refused. The rules apply to basic-auth services in the same way.
+
+### The policy syntax
+
+Policies live under `policy` in `~/.aquaman/config.yaml`, one entry per service name. A complete example: Stripe read-only, and Zendesk read-only except that a ticket can be updated and nothing under `users` can be touched.
+
+```yaml
+policy:
+  stripe:
+    defaultAction: deny                  # what happens when no rule matches
+    rules:
+      - { method: GET, path: "/v1/**", action: allow }
+  zendesk:
+    defaultAction: deny
+    rules:
+      - { method: "*", path: "/api/v2/users/**", action: deny }
+      - { method: GET, path: "/api/v2/**", action: allow }
+      - { method: PUT, path: "/api/v2/tickets/*", action: allow }
+```
+
+| Key | Values | Meaning |
+|---|---|---|
+| `defaultAction` | `allow` or `deny` | Applies when no rule matches. Left out, it is `allow` |
+| `rules` | A list | Read from the top; the first rule whose method and path both match decides. Put the narrow rules first |
+| `method` | An HTTP method, or `"*"` for any (quote it: a bare `*` is not valid YAML here) | Upper or lower case. Left out, it is any method |
+| `path` | Starts with `/` | Matched against the path after the service name, without the query string: for `http://127.0.0.1:8585/stripe/v1/customers?limit=3` that is `/v1/customers` |
+| `action` | `allow` or `deny` | A rule with anything else is a deny rule |
+
+Path patterns are matched segment by segment:
+
+- `**` stands for any number of whole segments, including none: `/v1/**` matches `/v1`, `/v1/customers` and `/v1/customers/cus_1/sources`.
+- `*` inside a segment stands for any characters in that one segment: `/api/v2/tickets/*` matches `/api/v2/tickets/12` and `/api/v2/tickets/12.json`, and not `/api/v2/tickets/12/comments`. `/api/admin.*` matches `/api/admin.users.list`.
+- A trailing slash makes no difference.
+- A `deny` rule matches without regard to upper and lower case (`/api/v2/Users/me` is refused by the rule above). An `allow` rule matches exactly.
+
+A service with no entry under `policy` has no restriction. A request is refused if any way of reading it is denied: the proxy also evaluates the method named by an `X-HTTP-Method-Override` header or a `_method` query parameter, and the path named by `X-Original-URL`. A refused request never reaches the vault.
+
+`aquaman setup` writes a starting policy for Anthropic and OpenAI when it stores their keys and they have none: it denies their organisation admin endpoints, and `DELETE` for OpenAI. `aquaman policy list` prints what is in force, and `aquaman doctor` reports a rule whose path does not start with `/`. Restart the daemon after editing the file.
+
+`aquaman policy test <service> <METHOD> <path>` answers for one request and says whether a rule or the service's default decided it, for example `ALLOWED by rule: GET /v1/**` or `DENIED (no matching rule, default: deny)`.
 
 ## What this does and does not give you
 

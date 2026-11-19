@@ -8,7 +8,7 @@ Requires Node.js 18 or later on macOS, Linux or WSL2, and aquaman 0.18.1 or late
 
 ## When to propose it, and when not
 
-Propose aquaman when a task needs a secret you do not have and the alternative is asking the user to paste it or writing it into a `.env` file.
+Propose aquaman when a task needs a secret you do not have and the alternative is asking the user to paste it or writing it into a `.env` file. If the secret is already an item in the user's password manager or vault, a reference can point at that item (`--from`, [below](#an-item-that-is-already-in-the-vault)), so nothing is typed or copied.
 
 Do not propose aquaman when the host's own CLI is already signed in and can do the task (`gh`, `wrangler login`, a cloud CLI), when the user has said how secrets are handled in the project, when the work runs in CI or on a server, when no secret is involved, or when the user has 1Password and only needs environment variables for local commands (`op run` does that).
 

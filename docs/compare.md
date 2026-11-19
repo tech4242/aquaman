@@ -49,7 +49,7 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 
 ## Choose something else when
 
-- **You already pay for 1Password and only need environment variables for local commands.** `op run` does that with a mature product behind it. aquaman can use 1Password as its vault if you later want the log or the agent-run setup.
+- **You already pay for 1Password and only need environment variables for local commands.** `op run` does that with a mature product behind it. If you later want the log or the agent-run setup, aquaman can use 1Password as its vault, and a reference can point at the 1Password item you already have (`aquaman request <ref> --from 'op://<vault>/<item>/<field>'`), so nothing is copied out of it. For the commands themselves the protection is the same as `op run`: the command holds the value while it runs.
 - **The program must never hold the key, for any API.** fnox `proxy run` injects at egress for any HTTPS host you write a rule for, by terminating TLS locally. It also needs no account and reads from vaults you already have. It can also confine the command in an OS sandbox so the proxy is the only way out, and mint short-lived credentials at the proxy. aquaman does it without a certificate authority, for services it has a definition for (26 built in, others in `services.yaml`) and apps that accept a base URL.
 - **You want the agent itself boxed in, not only its keys.** nono runs the agent in a kernel sandbox and injects credentials at a local proxy from your keychain, 1Password or Bitwarden. It also signs AWS requests and injects into query strings, which aquaman does not do. aquaman has no sandbox: it works with the one your agent host provides.
 - **You only use Claude Code, with its sandbox on.** Its credential masking is built in and needs no separate tool.
@@ -61,10 +61,20 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 
 ## What to know before trusting it
 
-- **One maintainer, no third-party audit.** Started in February 2026, still 0.x.
-- **It has had a serious bug.** [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v) (high): until 0.17.2 a crafted request path could make the proxy send a stored credential to another host. It was found by the project's own adversarial testing, fixed, and disclosed with an advisory. The request path now has a conformance suite that sends raw bytes at a real proxy (`test/compliance/request-target-integrity.test.ts`). Use 0.17.2 or later.
+What you can check yourself:
+
 - **Releases are verifiable.** npm packages are published from GitHub Actions with provenance, shown on each version's npm page; `npm audit signatures` checks it in a project that installs them. No install scripts.
 - **It is local and inspectable.** No account, no telemetry, no network service of its own. Config and logs are plain files under `~/.aquaman`.
+- **The tests are in the repository, and CI holds a coverage floor.** More than 3,200 tests (`npx vitest list` counts them). Line coverage is measured over everything that ships, including both command-line tools and the processes the tests start, and CI fails below 95% overall and for each package. Five files have higher floors: the request-target parser 100%, the broker scope, the request policy and the credential dialog 98%, the daemon 97% (`scripts/coverage-floors.json`).
+- **The security tests attack each control, and the limits are pinned.** The tests under `test/compliance/` are written one table row per attack: respelling a request to get past a deny rule, sending raw bytes at the request parser, tampering with the audit log, comparing each dialog's wording with what a caller can then obtain. An attack the code does not stop stays in the table as a row that is expected to fail and says so in its name (`grep -rn "it.fails" test/compliance` lists them), and the [mapping pages](compliance/nist-800-53.md) state the same limits. The day one is fixed, its row fails and has to be updated.
+- **What a review found is in the changelog.** Before 0.18.2 the code was assessed against OWASP ASVS 5.0, the OWASP Top 10 lists for agentic and LLM applications, the OWASP API Security Top 10, NIST SP 800-53, NIST SSDF and BSI TR-02102-1. The findings were fixed in that release, each with a test that fails without the fix, and are listed with what to check on your own machine: [0.18.2](changelog.md#0182). That was the project's own work, not an outside audit.
+
+What counts against it:
+
+- **One maintainer.**
+- **No third-party audit.**
+- **Young.** Started in February 2026, still 0.x.
+- **It has had a serious bug.** [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v) (high): until 0.17.2 a crafted request path could make the proxy send a stored credential to another host. It was found by the project's own adversarial testing, fixed, and disclosed with an advisory. The request path now has a conformance suite that sends raw bytes at a real proxy (`test/compliance/request-target-integrity.test.ts`). Use 0.17.2 or later.
 
 ## What aquaman does not do
 

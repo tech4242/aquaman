@@ -336,6 +336,31 @@ describe('aquaman openclaw setup (cli-hosts coverage)', () => {
   });
 
   describe('openclaw.json wiring', () => {
+    it.each([
+      ['comments', '{\n  // my gateway\n  "gateway": { "port": 18789 },\n  "channels": { "telegram": { "botToken": "123:abc" } }\n}\n'],
+      ['a trailing comma', '{ "gateway": { "port": 18789 }, }\n'],
+      ['an array', '[1, 2, 3]\n'],
+    ])('an openclaw.json with %s is left exactly as it was, and setup stops with the reason and what to do', async (_name, text) => {
+      fs.mkdirSync(sb.openclawDir, { recursive: true });
+      const file = path.join(sb.openclawDir, 'openclaw.json');
+      fs.writeFileSync(file, text);
+      const r = await setup(['--backend', 'encrypted-file'], { env: { AQUAMAN_OPENCLAW_VERSION: '2026.9.37' } });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('openclaw.json');
+      expect(r.stderr).toContain('aquaman left it unchanged');
+      expect(r.stderr).toContain('aquaman openclaw setup');
+      expect(fs.readFileSync(file, 'utf-8')).toBe(text);
+    }, T);
+
+    it('an empty openclaw.json is a fresh one: setup writes the plugin entry', async () => {
+      fs.mkdirSync(sb.openclawDir, { recursive: true });
+      const file = path.join(sb.openclawDir, 'openclaw.json');
+      fs.writeFileSync(file, '\n');
+      const r = await setup(['--backend', 'encrypted-file'], { env: { AQUAMAN_OPENCLAW_VERSION: '2026.9.37' } });
+      expect(r.code).toBe(0);
+      expect(sb.readOpenClawJson().plugins.entries['aquaman-plugin']).toBeTruthy();
+    }, T);
+
     it('never replaces a user-set baseUrl or apiKey, and says the proxy is not in that path', async () => {
       sb.writeOpenClawJson({
         models: {
