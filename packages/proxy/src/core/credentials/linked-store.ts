@@ -193,6 +193,23 @@ export class LinkedStore implements CredentialStore {
     return this.approvals.revoke(`${service}/${key}`);
   }
 
+  /** The backend's session, passed through; absent when the backend takes none (vault-lock.ts). */
+  get vaultState(): CredentialStore['vaultState'] {
+    return this.inner.vaultState ? () => this.inner.vaultState!() : undefined;
+  }
+
+  get adoptSession(): CredentialStore['adoptSession'] {
+    return this.inner.adoptSession ? (session) => this.inner.adoptSession!(session) : undefined;
+  }
+
+  get checkSession(): CredentialStore['checkSession'] {
+    return this.inner.checkSession ? () => this.inner.checkSession!() : undefined;
+  }
+
+  get forgetSession(): CredentialStore['forgetSession'] {
+    return this.inner.forgetSession ? () => this.inner.forgetSession!() : undefined;
+  }
+
   async set(service: string, key: string, value: string, metadata?: Record<string, string>): Promise<void> {
     const link = this.locatorOf(service, key);
     if (link) {

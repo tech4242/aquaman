@@ -14,6 +14,15 @@ export {
 } from './store.js';
 
 export {
+  VAULT_LOCKED_CODE,
+  VAULT_UNLOCK_FIX,
+  VaultLockedError,
+  isVaultLocked,
+  type VaultState,
+  type SessionAdoption
+} from './vault-lock.js';
+
+export {
   CachingStore,
   wrapWithCache
 } from './caching-store.js';

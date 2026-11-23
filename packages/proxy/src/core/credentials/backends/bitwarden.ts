@@ -2,13 +2,23 @@
  * Bitwarden credential backend using the `bw` CLI
  * Requires: Bitwarden CLI installed and logged in
  *
- * Session management: Bitwarden requires an active session (BW_SESSION env var)
- * obtained via `bw unlock`. The session token is cached for the process lifetime.
+ * Session management: `bw` opens the vault with a session key that
+ * `bw unlock` prints after a person typed the master password. This store
+ * takes one from `BW_SESSION` in the environment it starts in, and a serving
+ * process (`serving: true`) can also be handed one later (`adoptSession`,
+ * reached through `aquaman unlock`). The session is kept in memory only and
+ * goes to `bw` in its environment, never in its arguments.
+ *
+ * A serving process treats a locked vault as a state: it starts without a
+ * session, and a session `bw` stops accepting (`bw lock`, `bw logout`, a
+ * later `bw unlock`) puts it back there. Every read then throws
+ * `VaultLockedError`. A one-shot command still refuses to start locked.
  */
 
 import { spawnSync } from 'node:child_process';
 import type { CredentialStore } from '../store.js';
 import type { ParsedLocator } from '../links.js';
+import { VaultLockedError, isVaultLocked, type SessionAdoption, type VaultState } from '../vault-lock.js';
 
 export interface BitwardenStoreOptions {
   /** Folder name to store aquaman credentials (created if missing) */
@@ -17,6 +27,11 @@ export interface BitwardenStoreOptions {
   organizationId?: string;
   /** Collection ID (optional, for org collections) */
   collectionId?: string;
+  /**
+   * For a process that serves requests: start even when the vault is locked
+   * or `bw` is logged out, and accept a session later.
+   */
+  serving?: boolean;
 }
 
 const DEFAULT_FOLDER = 'aquaman';
@@ -26,6 +41,23 @@ const ITEM_PREFIX = 'aquaman';
 const SAFE_METADATA_KEY = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
 const BW_ITEM_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * A session key is base64 text. Anything else is refused before `bw` is run,
+ * so a caller cannot make this process start `bw` once per junk request or
+ * put a line break into its environment.
+ */
+const SESSION_SHAPE = /^[A-Za-z0-9+/]{16,512}={0,2}$/;
+
+/** What `bw` prints when a command needs the vault and it is not open, or nobody is logged in. */
+const BW_LOCKED_OUTPUT = /Vault is locked\.|You are not logged in\./;
+
+const SHELL_UNLOCK_FIX = 'Run: export BW_SESSION=$(bw unlock --raw)';
+
+interface BwStatus {
+  status: 'unauthenticated' | 'locked' | 'unlocked';
+  userId: string | null;
+}
+
 export class BitwardenStore implements CredentialStore {
   private folder: string;
   private folderId: string | null = null;
@@ -33,11 +65,20 @@ export class BitwardenStore implements CredentialStore {
   private collectionId?: string;
   private session: string | null = null;
   private bwPath: string | null = null;
+  private serving: boolean;
+  private locked = false;
+  /**
+   * The account `bw` was logged in to when this process first saw one. A
+   * session is only adopted for that account: handing one over must not be a
+   * way to point a running daemon at a different vault.
+   */
+  private userId: string | null = null;
 
   constructor(options?: BitwardenStoreOptions) {
     this.folder = options?.folder || DEFAULT_FOLDER;
     this.organizationId = options?.organizationId;
     this.collectionId = options?.collectionId;
+    this.serving = options?.serving === true;
     this.validateBwCli();
   }
 
@@ -53,98 +94,190 @@ export class BitwardenStore implements CredentialStore {
       throw new Error('Bitwarden CLI (bw) not found. Install from: https://bitwarden.com/help/cli/');
     }
 
-    // Check login status
-    const statusResult = this.runBwRaw(['status']);
+    const envSession = process.env['BW_SESSION'] || null;
+    // A `bw` that fails or cannot be started says so in its own words.
+    const printed = this.runStatus(envSession);
+    let status: BwStatus;
     try {
-      const status = JSON.parse(statusResult);
-      if (status.status === 'unauthenticated') {
-        throw new Error('Not logged in to Bitwarden. Run: bw login');
-      }
-      if (status.status === 'locked') {
-        // Try to get session from env
-        const envSession = process.env['BW_SESSION'];
-        if (envSession) {
-          this.session = envSession;
-          // Verify session is valid
-          try {
-            this.runBw(['sync']);
-          } catch {
-            throw new Error('Bitwarden vault is locked and BW_SESSION is invalid. Run: bw unlock');
-          }
-        } else {
-          throw new Error('Bitwarden vault is locked. Run: bw unlock --raw and set BW_SESSION');
-        }
-      }
-      // status === 'unlocked' means we're good
-      if (status.status === 'unlocked') {
-        // Session might still be needed for some operations
-        this.session = process.env['BW_SESSION'] || null;
-      }
-    } catch (error) {
-      if (error instanceof Error && (
-        error.message.includes('Not logged in') ||
-        error.message.includes('locked') ||
-        error.message.includes('BW_SESSION')
-      )) {
-        throw error;
-      }
+      status = this.parseStatus(printed);
+    } catch {
       throw new Error('Failed to check Bitwarden status. Is the CLI installed correctly?');
     }
+    this.userId = status.userId;
+
+    if (status.status === 'unlocked') {
+      this.session = envSession;
+      return;
+    }
+    if (status.status === 'locked' && envSession) {
+      // `bw status` did not open the vault with this session; a sync is the second opinion.
+      this.session = envSession;
+      try {
+        this.runBw(['sync']);
+        return;
+      } catch {
+        this.session = null;
+        if (!this.serving) throw new VaultLockedError('Bitwarden vault is locked and BW_SESSION is invalid. Run: bw unlock', SHELL_UNLOCK_FIX);
+      }
+    }
+    if (!this.serving) {
+      if (status.status === 'unauthenticated') throw new Error('Not logged in to Bitwarden. Run: bw login');
+      throw new VaultLockedError('Bitwarden vault is locked. Run: bw unlock --raw and set BW_SESSION', SHELL_UNLOCK_FIX);
+    }
+    this.locked = true;
   }
 
   /**
-   * Run bw command without session (for status checks)
+   * The environment `bw` runs in. The session is the one this store holds and
+   * nothing else: a `BW_SESSION` left in the process environment is not
+   * passed on once the store has let go of it. `BW_NOINTERACTION` is what
+   * bw's `--nointeraction` option sets: with it a locked vault is an error
+   * ("Vault is locked.") instead of a master password prompt nobody can see.
    */
-  private runBwRaw(args: string[]): string {
+  private bwEnv(session: string | null): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...process.env, BW_NOINTERACTION: 'true' };
+    delete env['BW_SESSION'];
+    if (session) env['BW_SESSION'] = session;
+    return env;
+  }
+
+  /** `bw status` under the given session. Throws when `bw` cannot be run or does not answer with a status. */
+  private readStatus(session: string | null): BwStatus {
+    return this.parseStatus(this.runStatus(session));
+  }
+
+  /** What `bw status` printed under the given session. */
+  private runStatus(session: string | null): string {
+    let result: ReturnType<typeof spawnSync>;
     try {
-      const result = spawnSync('bw', args, {
+      result = spawnSync('bw', ['status'], {
         encoding: 'utf-8',
-        maxBuffer: 10 * 1024 * 1024
+        env: this.bwEnv(session),
+        maxBuffer: 1024 * 1024
       });
-
-      if (result.status !== 0) {
-        const error = result.stderr || result.stdout || 'Unknown error';
-        throw new Error(`bw command failed: ${error}`);
-      }
-
-      return result.stdout;
     } catch (error) {
-      if (error instanceof Error && error.message.includes('bw command failed')) {
-        throw error;
-      }
       throw new Error(`Failed to run bw command: ${error}`);
     }
+    if (result.status !== 0) {
+      throw new Error(`bw command failed: ${String(result.stderr || result.stdout || 'Unknown error')}`);
+    }
+    return String(result.stdout);
+  }
+
+  private parseStatus(printed: string): BwStatus {
+    const parsed = JSON.parse(printed) as { status?: unknown; userId?: unknown };
+    if (parsed.status !== 'unauthenticated' && parsed.status !== 'locked' && parsed.status !== 'unlocked') {
+      throw new Error('bw status returned no status');
+    }
+    return { status: parsed.status, userId: typeof parsed.userId === 'string' && parsed.userId ? parsed.userId : null };
+  }
+
+  private lockedError(): VaultLockedError {
+    return this.serving
+      ? new VaultLockedError('The Bitwarden vault is locked, so the proxy cannot read credentials. Run: aquaman unlock')
+      : new VaultLockedError('Bitwarden vault is locked. Run: bw unlock --raw and set BW_SESSION', SHELL_UNLOCK_FIX);
+  }
+
+  /** Let go of the session and everything read under it. */
+  private markLocked(): void {
+    this.session = null;
+    this.folderId = null;
+    this.locked = true;
+  }
+
+  /** Whether reads would be refused right now. It does not ask `bw`: see `checkSession()`. */
+  vaultState(): VaultState {
+    return this.locked ? 'locked' : 'unlocked';
+  }
+
+  /**
+   * Take a session. It is checked with `bw status` first: only a session
+   * under which `bw` reports the vault unlocked, for the account this
+   * process started with, replaces what the store holds. A refused session
+   * changes nothing, so a caller cannot lock a working daemon with junk.
+   */
+  async adoptSession(session: string): Promise<SessionAdoption> {
+    const again = 'Run: aquaman unlock';
+    if (typeof session !== 'string' || !SESSION_SHAPE.test(session)) {
+      return { ok: false, code: 'session_malformed', error: 'That is not a Bitwarden session key', fix: again };
+    }
+    let status: BwStatus;
+    try {
+      status = this.readStatus(session);
+    } catch {
+      return { ok: false, code: 'vault_cli_failed', error: 'The Bitwarden CLI could not be asked about the session', fix: 'Check that `bw status` works in a terminal, then run: aquaman unlock' };
+    }
+    if (status.status === 'unauthenticated') {
+      return { ok: false, code: 'not_logged_in', error: 'The Bitwarden CLI is not logged in', fix: 'Run: bw login  and then: aquaman unlock' };
+    }
+    if (status.status !== 'unlocked') {
+      return { ok: false, code: 'session_refused', error: 'The Bitwarden CLI does not open the vault with that session', fix: again };
+    }
+    if (this.userId !== null && status.userId !== null && status.userId !== this.userId) {
+      return {
+        ok: false,
+        code: 'account_changed',
+        error: 'The Bitwarden CLI is logged in to a different account than the one this proxy started with',
+        fix: 'Restart the proxy (aquaman stop, then start it again) and run: aquaman unlock',
+      };
+    }
+    if (this.userId === null) this.userId = status.userId;
+    this.session = session;
+    this.folderId = null;
+    this.locked = false;
+    return { ok: true };
+  }
+
+  /**
+   * Ask `bw` whether the session this store holds still opens the vault, and
+   * become locked if it does not. Throws when `bw` cannot be asked.
+   */
+  async checkSession(): Promise<VaultState> {
+    if (this.locked) return 'locked';
+    if (this.readStatus(this.session).status !== 'unlocked') this.markLocked();
+    return this.vaultState();
+  }
+
+  /**
+   * Drop the session from this process, including the copy it was started
+   * with. `bw` is not told: the session key stays valid for anything else
+   * that holds it until `bw lock` or `bw logout`.
+   */
+  forgetSession(): void {
+    this.markLocked();
+    delete process.env['BW_SESSION'];
   }
 
   /**
    * Run bw command with session token
    */
   private runBw(args: string[], input?: string): string {
-    const env = { ...process.env };
-    if (this.session) {
-      env['BW_SESSION'] = this.session;
-    }
+    if (this.locked) throw this.lockedError();
 
+    let result: ReturnType<typeof spawnSync>;
     try {
-      const result = spawnSync('bw', args, {
+      result = spawnSync('bw', args, {
         encoding: 'utf-8',
         input,
-        env,
+        env: this.bwEnv(this.session),
         maxBuffer: 10 * 1024 * 1024
       });
-
-      if (result.status !== 0) {
-        const error = result.stderr || result.stdout || 'Unknown error';
-        throw new Error(`bw command failed: ${error}`);
-      }
-
-      return result.stdout;
     } catch (error) {
-      if (error instanceof Error && error.message.includes('bw command failed')) {
-        throw error;
-      }
       throw new Error(`Failed to run bw command: ${error}`);
     }
+
+    if (result.status !== 0) {
+      const error = String(result.stderr || result.stdout || 'Unknown error');
+      // The session this store holds no longer opens the vault. From here on
+      // that is the locked state, with its own fix, not a failed command.
+      if (BW_LOCKED_OUTPUT.test(error)) {
+        this.markLocked();
+        throw this.lockedError();
+      }
+      throw new Error(`bw command failed: ${error}`);
+    }
+
+    return String(result.stdout);
   }
 
   private getItemName(service: string, key: string): string {
@@ -180,7 +313,8 @@ export class BitwardenStore implements CredentialStore {
         this.folderId = existing.id;
         return this.folderId;
       }
-    } catch {
+    } catch (error) {
+      if (isVaultLocked(error)) throw error;
       // Folder list failed, try to create anyway
     }
 
@@ -195,6 +329,7 @@ export class BitwardenStore implements CredentialStore {
       console.log(`Created Bitwarden folder: ${this.folder}`);
       return this.folderId;
     } catch (createError) {
+      if (isVaultLocked(createError)) throw createError;
       throw new Error(`Failed to create folder "${this.folder}": ${createError}`);
     }
   }
@@ -220,7 +355,9 @@ export class BitwardenStore implements CredentialStore {
       );
 
       return match || null;
-    } catch {
+    } catch (error) {
+      // A locked vault is not a missing item.
+      if (isVaultLocked(error)) throw error;
       return null;
     }
   }
@@ -243,7 +380,8 @@ export class BitwardenStore implements CredentialStore {
 
       // Prefer login.password, fall back to notes
       return fullItem.login?.password || fullItem.notes || null;
-    } catch {
+    } catch (error) {
+      if (isVaultLocked(error)) throw error;
       return null;
     }
   }
@@ -286,6 +424,7 @@ export class BitwardenStore implements CredentialStore {
         const encoded = Buffer.from(JSON.stringify(fullItem)).toString('base64');
         this.runBw(['edit', 'item', existing.id], encoded);
       } catch (error) {
+        if (isVaultLocked(error)) throw error;
         throw new Error(`Failed to update credential: ${error}`);
       }
     } else {
@@ -313,6 +452,7 @@ export class BitwardenStore implements CredentialStore {
         // Use stdin to avoid exposing credential in process arguments
         this.runBw(['create', 'item'], encoded);
       } catch (error) {
+        if (isVaultLocked(error)) throw error;
         throw new Error(`Failed to create credential: ${error}`);
       }
     }
