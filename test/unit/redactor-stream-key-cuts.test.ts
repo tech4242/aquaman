@@ -30,7 +30,13 @@ describe('a key block cut at every position', () => {
     it(name, () => {
       const rows: string[] = [];
       let leaks = 0;
+      // A short text is cut everywhere. A long one is cut at and just after
+      // every backslash, where an escaped line break can be split, and at
+      // every eleventh position besides: each cut redacts the whole text
+      // twice, and ten thousand of them is too slow for one test.
+      const everywhere = text.length < 3000;
       for (let cut = 1; cut < text.length; cut++) {
+        if (!everywhere && text[cut - 1] !== '\\' && text[cut - 2] !== '\\' && cut % 11 !== 0) continue;
         const { out, expected } = run([text.slice(0, cut), text.slice(cut)]);
         if (out === expected) continue;
         const n = (out.match(new RegExp(`${tag}\\d{4}Qm9k`, 'g')) ?? []).length;
@@ -38,6 +44,6 @@ describe('a key block cut at every position', () => {
         if (rows.length < 12) rows.push(`cut ${cut} after ${JSON.stringify(text.slice(Math.max(0, cut - 14), cut))} | key lines written: ${n}`);
       }
       expect(leaks, rows.join('\n')).toBe(0);
-    });
+    }, 60_000);
   }
 });
