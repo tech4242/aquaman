@@ -35,7 +35,13 @@ process.stdin.on('data', (d) => {
   while ((i = buf.indexOf('\\n')) >= 0) {
     const msg = JSON.parse(buf.slice(0, i));
     buf = buf.slice(i + 1);
-    const result = msg.method === 'leak' ? { token: process.env.GITHUB_TOKEN } : { echo: msg.method, has: Boolean(process.env.GITHUB_TOKEN) };
+    const key = ['-----BEGIN PRIVATE KEY-----', 'TUlJRXZRSUJBREFOQmdrcWhraUc5dzBCQVFFRkFBU0NCS2N3Z2dTakFnRUFBb0lCQVFD', 'bm90IGEgcmVhbCBrZXksIG9ubHkgdGhlIHNoYXBlIG9mIG9uZQ==', '-----END PRIVATE KEY-----'].join('\\n');
+    const result = msg.method === 'leak' ? { token: process.env.GITHUB_TOKEN }
+      : msg.method === 'mention' ? { text: 'the file starts with -----BEGIN PRIVATE KEY----- but is cut off' }
+      : msg.method === 'header' ? { text: '-----BEGIN PRIVATE KEY-----' }
+      : msg.method === 'names' ? { text: 'set the header Authorization and the variable aws_secret_access_key' }
+      : msg.method === 'key' ? { text: key }
+      : { echo: msg.method, has: Boolean(process.env.GITHUB_TOKEN) };
     process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }) + '\\n');
   }
 });
@@ -124,6 +130,32 @@ describe('aquaman-coder exec around a stdio server', () => {
     const line = await s.next();
     expect(line).not.toContain(VALUE);
     expect(JSON.parse(line)).toEqual({ jsonrpc: '2.0', id: 1, result: { token: '[REDACTED:injected-value]' } });
+    child!.stdin.end();
+    await s.exited;
+  }, T);
+
+  it('a reply that mentions a BEGIN line, or the name of a header or variable a secret follows, arrives when it is written, and so do the replies after it', async () => {
+    const s = start();
+    // Each reply is read before the next request is written, as a host does:
+    // one that was held for more output would never come.
+    s.send({ jsonrpc: '2.0', id: 1, method: 'mention' });
+    expect(JSON.parse(await s.next())).toEqual({ jsonrpc: '2.0', id: 1, result: { text: 'the file starts with -----BEGIN PRIVATE KEY----- but is cut off' } });
+    s.send({ jsonrpc: '2.0', id: 2, method: 'header' });
+    expect(JSON.parse(await s.next())).toEqual({ jsonrpc: '2.0', id: 2, result: { text: '-----BEGIN PRIVATE KEY-----' } });
+    s.send({ jsonrpc: '2.0', id: 3, method: 'names' });
+    expect(JSON.parse(await s.next())).toEqual({ jsonrpc: '2.0', id: 3, result: { text: 'set the header Authorization and the variable aws_secret_access_key' } });
+    s.send({ jsonrpc: '2.0', id: 4, method: 'tools/list' });
+    expect(JSON.parse(await s.next())).toEqual({ jsonrpc: '2.0', id: 4, result: { echo: 'tools/list', has: true } });
+    child!.stdin.end();
+    expect(await s.exited).toBe(0);
+  }, T);
+
+  it('a reply that carries a whole private key arrives when it is written, with the key redacted', async () => {
+    const s = start();
+    s.send({ jsonrpc: '2.0', id: 1, method: 'key' });
+    const line = await s.next();
+    expect(line).not.toContain('TUlJRXZRSUJBREFOQmdr');
+    expect(JSON.parse(line)).toEqual({ jsonrpc: '2.0', id: 1, result: { text: '[REDACTED:private-key]' } });
     child!.stdin.end();
     await s.exited;
   }, T);
