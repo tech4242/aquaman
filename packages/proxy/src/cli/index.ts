@@ -517,7 +517,7 @@ program
 
       // --- Vault & core (agent-agnostic) ---
       lines.push(aqua('Vault & core (agent-agnostic)'));
-      const vaultCore = ['setup', 'doctor', 'status', 'daemon', 'stop', 'init', 'request'];
+      const vaultCore = ['setup', 'doctor', 'status', 'daemon', 'stop', 'service', 'unlock', 'lock', 'init', 'request'];
       for (const name of vaultCore) {
         const c = byName.get(name);
         if (c) lines.push(renderCmd(c));
