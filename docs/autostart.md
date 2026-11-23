@@ -80,7 +80,7 @@ aquaman unlock
 | 3 | The daemon is not running. Nobody was asked for a password |
 | 4 | The daemon refused the session |
 
-`aquaman lock` makes the daemon drop the session and the credential values it had cached. It does not run `bw`: the session key itself stays valid for anything else that holds a copy, so to end it everywhere run `bw lock`.
+`aquaman lock` makes the daemon drop the session, the credential values it had cached and every yes given in an [ask-first](agent-setup.md#ask-first-a-dialog-before-a-value-is-handed-out) dialog. It does not run `bw`: the session key itself stays valid for anything else that holds a copy, so to end it everywhere run `bw lock`.
 
 `aquaman status` and `aquaman doctor` show whether the daemon's vault is locked. `aquaman service install` and `aquaman service status` list this step when the backend is `bitwarden`.
 
