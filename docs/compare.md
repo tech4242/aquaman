@@ -57,7 +57,7 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 - **Your team already runs Doppler or Infisical.** Secrets shared across a team, CI and production belong there. aquaman is a local tool for one person's machine and has no team sync.
 - **You need per-user OAuth consent to SaaS APIs across an organisation.** That is an identity-provider problem.
 - **You need a process-level boundary between the agent and everything else running as you.** aquaman does not provide one: see the limits below.
-- **You want the most widely used option.** aquaman is a young, small project; the facts are in the next section.
+- **You want the most widely used option.** aquaman started in February 2026 and has one maintainer; the facts are in the next section.
 
 ## What to know before trusting it
 
@@ -68,13 +68,9 @@ What you can check yourself:
 - **The tests are in the repository, and CI holds a coverage floor.** More than 3,200 tests (`npx vitest list` counts them). Line coverage is measured over everything that ships, including both command-line tools and the processes the tests start, and CI fails below 95% overall and for each package. Five files have higher floors: the request-target parser 100%, the broker scope, the request policy and the credential dialog 98%, the daemon 97% (`scripts/coverage-floors.json`).
 - **The security tests attack each control, and the limits are pinned.** The tests under `test/compliance/` are written one table row per attack: respelling a request to get past a deny rule, sending raw bytes at the request parser, tampering with the audit log, comparing each dialog's wording with what a caller can then obtain. An attack the code does not stop stays in the table as a row that is expected to fail and says so in its name (`grep -rn "it.fails" test/compliance` lists them), and the [mapping pages](compliance/nist-800-53.md) state the same limits. The day one is fixed, its row fails and has to be updated.
 - **What a review found is in the changelog.** Before 0.18.2 the code was assessed against OWASP ASVS 5.0, the OWASP Top 10 lists for agentic and LLM applications, the OWASP API Security Top 10, NIST SP 800-53, NIST SSDF and BSI TR-02102-1. The findings were fixed in that release, each with a test that fails without the fix, and are listed with what to check on your own machine: [0.18.2](changelog.md#0182). That was the project's own work, not an outside audit.
+- **Security issues are published by the project.** Its own adversarial testing of the request path found one high-severity issue, [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v): until 0.17.2 a crafted request path could make the proxy send a stored credential to another host. It was fixed in 0.17.2 and published as an advisory; no use of it has been reported. The request path now has a conformance suite that sends raw bytes at a real proxy (`test/compliance/request-target-integrity.test.ts`). Use 0.17.2 or later.
 
-What counts against it:
-
-- **One maintainer.**
-- **No third-party audit.**
-- **Young.** Started in February 2026, still 0.x.
-- **It has had a serious bug.** [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v) (high): until 0.17.2 a crafted request path could make the proxy send a stored credential to another host. It was found by the project's own adversarial testing, fixed, and disclosed with an advisory. The request path now has a conformance suite that sends raw bytes at a real proxy (`test/compliance/request-target-integrity.test.ts`). Use 0.17.2 or later.
+Who is behind it: one maintainer, since February 2026. The code has not had a third-party audit; the reviews described above are the project's own.
 
 ## What aquaman does not do
 

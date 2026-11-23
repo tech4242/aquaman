@@ -310,4 +310,4 @@ Then delete the skill directory and the marked block. Stored credentials stay in
 - Link reads were tested against stand-ins for `op`, `bw`, Keeper Commander, HashiCorp Vault and the keychain library, and against a generated KeePassXC database, not against live accounts.
 - Commands started with Claude Code's Monitor tool are not wrapped.
 - This is a tool for one person's machine. It has no team sharing and does not run in CI or production: see [CI and production](#ci-and-production).
-- The project is young and has one maintainer: [what to know before trusting it](compare.md#what-to-know-before-trusting-it).
+- The project has one maintainer and no third-party audit: [what to know before trusting it](compare.md#what-to-know-before-trusting-it).
