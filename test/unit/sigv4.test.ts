@@ -240,6 +240,17 @@ describe('parseSigV4Authorization', () => {
     ['a newline in the value', auth('AKID/20150830/us-east-1/s3/aws4_request\n')],
   ])('refuses %s', (_name, value) => {
     expect(parseSigV4Authorization(value)).toBeNull();
+    // A SigV4A header names an access key id, and nothing else is read from it.
+    expect(sigV4TokenCandidates(value)).toEqual(typeof value === 'string' && value.startsWith('AWS4-ECDSA') ? ['AKID'] : []);
+  });
+
+  it.each([
+    ['a region in the scope', `AWS4-ECDSA-P256-SHA256 Credential=AKID/20150830/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=${SIG}`],
+    ['text after the signature', `AWS4-ECDSA-P256-SHA256 Credential=AKID/20150830/s3/aws4_request, SignedHeaders=host, Signature=${SIG} x`],
+    ['a second credential', `AWS4-ECDSA-P256-SHA256 Credential=AKID/20150830/s3/aws4_request, Credential=OTHER/20150830/s3/aws4_request, SignedHeaders=host, Signature=${SIG}`],
+    ['a signature that is not hex', `AWS4-ECDSA-P256-SHA256 Credential=AKID/20150830/s3/aws4_request, SignedHeaders=host, Signature=${'z'.repeat(64)}`],
+    ['a lower-case algorithm', `aws4-ecdsa-p256-sha256 Credential=AKID/20150830/s3/aws4_request, SignedHeaders=host, Signature=${SIG}`],
+  ])('a SigV4A header with %s names no access key id', (_name, value) => {
     expect(sigV4TokenCandidates(value)).toEqual([]);
   });
 

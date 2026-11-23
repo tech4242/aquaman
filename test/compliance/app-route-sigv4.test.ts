@@ -317,7 +317,8 @@ describe('routing a program through the proxy to AWS (sigv4)', () => {
       ['a lower-case algorithm', (t: string) => sigv4(t).replace('AWS4-HMAC-SHA256', 'aws4-hmac-sha256')],
       ['two spaces after the algorithm', (t: string) => sigv4(t).replace('SHA256 ', 'SHA256  ')],
       ['a scope with a fifth field', (t: string) => sigv4(t).replace('/s3/', '/s3/x/')],
-      ['SigV4A', (t: string) => `AWS4-ECDSA-P256-SHA256 Credential=${t}/${today()}/s3/aws4_request, SignedHeaders=host;x-amz-region-set, Signature=${'0'.repeat(64)}`],
+      ['SigV4A with a region in its scope', (t: string) => `AWS4-ECDSA-P256-SHA256 Credential=${t}/${today()}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-region-set, Signature=${'0'.repeat(64)}`],
+      ['SigV4A with text after the signature', (t: string) => `AWS4-ECDSA-P256-SHA256 Credential=${t}/${today()}/s3/aws4_request, SignedHeaders=host;x-amz-region-set, Signature=${'0'.repeat(64)} x`],
       ['the token as a Basic user name', (t: string) => `Basic ${Buffer.from(`${t}:x`).toString('base64')}`],
     ])('%s is refused before the vault is read', async (_name, header) => {
       const token = await routeToken();
@@ -354,14 +355,32 @@ describe('routing a program through the proxy to AWS (sigv4)', () => {
       expect(upstreamText()).not.toContain(LOOPBACK_TOKEN);
     });
 
-    it('SigV4A is refused with its own reason where the caller is already let in', async () => {
+    it('SigV4A is refused with its own reason, for a routed program and over the socket, before the vault is read', async () => {
+      const token = await routeToken();
+      const sigv4a = (id: string) => `AWS4-ECDSA-P256-SHA256 Credential=${id}/${today()}/s3/aws4_request, SignedHeaders=host;x-amz-region-set, Signature=${'0'.repeat(140)}`;
+      const before = store.gets;
+      const routedProgram = await send(address(), { path: '/aws/my-bucket/key', headers: { Authorization: sigv4a(token) } });
+      expect(routedProgram.status).toBe(400);
+      expect(JSON.parse(routedProgram.body)).toMatchObject({ code: 'sigv4a_unsupported', fix: expect.any(String) });
+      // The agent hosts' token is not accepted in that position either.
+      expect((await send(address(), { path: '/aws/my-bucket/key', headers: { Authorization: sigv4a(LOOPBACK_TOKEN) } })).status).toBe(401);
+      expect(store.gets).toBe(before);
+
       await start({ allowed: ['aws'] });
-      const res = await udsFetch(socketPath, '/aws/my-bucket/key', {
-        headers: { Authorization: `AWS4-ECDSA-P256-SHA256 Credential=AKIDEXAMPLE/${today()}/s3/aws4_request, SignedHeaders=host;x-amz-region-set, Signature=${'0'.repeat(64)}` },
-      });
+      const res = await udsFetch(socketPath, '/aws/my-bucket/key', { headers: { Authorization: sigv4a('AKIDEXAMPLE') } });
       expect(res.status).toBe(400);
       expect(JSON.parse(res.body)).toMatchObject({ code: 'sigv4a_unsupported', fix: expect.any(String) });
       expect(aws.requests.length).toBe(0);
+    });
+
+    it('a presigned URL fetched on its own carries the token in no header, and is refused like any request without one', async () => {
+      const token = await routeToken();
+      const before = store.gets;
+      const query = `X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=${token}%2F${today()}%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=${today()}T000000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Signature=${'0'.repeat(64)}`;
+      const res = await send(address(), { path: `/aws/my-bucket/key?${query}` });
+      expect(res.status).toBe(401);
+      expect(aws.requests.length).toBe(0);
+      expect(store.gets).toBe(before);
     });
   });
 

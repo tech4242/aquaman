@@ -109,10 +109,18 @@ export function parseSigV4Authorization(value: string | undefined): SigV4Authori
   };
 }
 
-/** The access key id of a strictly valid SigV4 header: the one place a routed AWS client can carry the route token. */
+/**
+ * The access key id of a strictly valid SigV4 header: the one place a routed
+ * AWS client can carry the route token. A SigV4A header is read the same
+ * strict way, for its access key id only, so that a routed client that sends
+ * one is told SigV4A is not signed instead of being told it has no token.
+ */
 export function sigV4TokenCandidates(value: string | undefined): string[] {
   const parsed = parseSigV4Authorization(value);
-  return parsed ? [parsed.accessKeyId] : [];
+  if (parsed) return [parsed.accessKeyId];
+  if (typeof value !== 'string' || value.length > MAX_AUTHORIZATION_LENGTH) return [];
+  const sigv4a = /^AWS4-ECDSA-P256-SHA256 Credential=([A-Za-z0-9_]{1,128})\/[0-9]{8}\/[a-z0-9-]{1,63}\/aws4_request, ?SignedHeaders=[a-z0-9-]+(?:;[a-z0-9-]+)*, ?Signature=[0-9a-f]{64,160}$/.exec(value);
+  return sigv4a ? [sigv4a[1]] : [];
 }
 
 /** Why an `Authorization` value the strict parser refused cannot be used, for the reply. */
