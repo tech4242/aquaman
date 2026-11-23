@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/tech4242/aquaman/actions/workflows/ci.yml/badge.svg)](https://github.com/tech4242/aquaman/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/tech4242/aquaman/badge)](https://scorecard.dev/viewer/?uri=github.com/tech4242/aquaman)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/17039/badge)](https://www.bestpractices.dev/projects/17039)
 [![codecov](https://codecov.io/gh/tech4242/aquaman/branch/main/graph/badge.svg)](https://codecov.io/gh/tech4242/aquaman)
 [![npm version](https://img.shields.io/npm/v/aquaman-proxy?label=aquaman-proxy)](https://www.npmjs.com/package/aquaman-proxy)
 [![npm downloads](https://img.shields.io/npm/dt/aquaman-proxy)](https://www.npmjs.com/package/aquaman-proxy)
