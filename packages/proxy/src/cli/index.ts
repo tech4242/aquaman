@@ -1008,7 +1008,6 @@ openclaw
       onRequest: (info) => {
         return auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
-          // A broker resolve hands the value out; everything else injects it.
           operation: auditOperation(info.method),
           success: !info.error,
           error: info.error
@@ -1199,8 +1198,6 @@ program
       onRequest: (info) => {
         return auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
-          // A broker resolve hands the value out, a broker request stores or
-          // declares one, everything else injects it.
           operation: auditOperation(info.method),
           success: !info.error,
           error: info.error
@@ -1303,7 +1300,6 @@ openclaw
       onRequest: (info) => {
         return auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
-          // A broker resolve hands the value out; everything else injects it.
           operation: auditOperation(info.method),
           success: !info.error,
           error: info.error
