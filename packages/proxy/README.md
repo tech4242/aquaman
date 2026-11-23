@@ -72,7 +72,7 @@ aquaman daemon &        # start the proxy on ~/.aquaman/proxy.sock
 
 `aquaman help`, `aquaman doctor` are your friends.
 
-## 26 Builtin Services
+## 27 Builtin Services
 
 | Category | Services |
 |----------|----------|
@@ -80,6 +80,7 @@ aquaman daemon &        # start the proxy on ~/.aquaman/proxy.sock
 | **Channels (header)** | Slack, Discord, Matrix, Mattermost, LINE, Twitch, Telnyx, Zalo |
 | **Channels (URL-path)** | Telegram |
 | **Channels (basic)** | Twilio, BlueBubbles, Nextcloud Talk |
+| **Signed by the proxy (SigV4)** | AWS |
 | **Channels (OAuth)** | MS Teams, Feishu, Google Chat |
 | **At-rest only** | Nostr, Tlon |
 

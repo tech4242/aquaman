@@ -77,12 +77,13 @@ export const NAV: { heading: string; slugs: string[]; labels?: Record<string, st
   { heading: 'For agents', slugs: ['agent-setup', 'approve'], labels: { 'agent-setup': 'The agent contract', approve: 'If your agent asked to install it' } },
   {
     heading: 'Hosts',
-    slugs: ['claude-code', 'codex', 'mcp', 'app-through-proxy', 'openclaw', 'hermes', 'docker-sandboxes', 'openshell'],
+    slugs: ['claude-code', 'codex', 'mcp', 'app-through-proxy', 'aws', 'openclaw', 'hermes', 'docker-sandboxes', 'openshell'],
     labels: {
       'claude-code': 'Claude Code',
       codex: 'Codex',
       mcp: 'MCP servers',
       'app-through-proxy': 'Keep the key out of your app',
+      aws: 'AWS without the keys in your app',
       openclaw: 'OpenClaw',
       hermes: 'Hermes',
       'docker-sandboxes': 'Docker Sandboxes',
@@ -117,6 +118,7 @@ const META: Record<string, { title?: string; description: string }> = {
   'codex': { description: 'Use aquaman to give Codex a token without a .env file: the key stays in your vault, is set per command, and is redacted from output.' },
   'mcp': { description: 'Keep an MCP server token out of .mcp.json with aquaman: a headersHelper for remote servers and a start command for stdio servers, each reading from your vault.' },
   'app-through-proxy': { title: 'Keep an API key out of the app your agent builds', description: 'Route the app your coding agent builds through aquaman, so it holds a local token and never the API key, with request policies applied.' },
+  'aws': { description: 'Point an AWS SDK at aquaman so the app holds a local token and a placeholder secret, and the proxy signs each request with the keys in your vault.' },
   'openclaw': { description: 'Run OpenClaw with aquaman so model keys and the Telegram token stay in your vault and never enter the gateway process, where plugins run.' },
   'hermes': { description: "Point Hermes at aquaman's local proxy so provider API keys stay in your vault and are never in the Hermes agent process." },
   'docker-sandboxes': { title: 'Docker Sandboxes secrets from your own vault', description: 'Source Docker Sandboxes (sbx) secrets from 1Password, Bitwarden or any vault aquaman supports, with an allow-list and an audit entry per read.' },

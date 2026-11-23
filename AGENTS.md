@@ -6,7 +6,7 @@ Credential isolation for AI agents. API keys, channel tokens and `.env`-grade se
 
 Four integration paths:
 
-1. **OpenClaw Gateway** (`aquaman-plugin`, npm + ClawHub). LLM providers and channel credentials, 26 builtin services across 5 auth modes.
+1. **OpenClaw Gateway** (`aquaman-plugin`, npm + ClawHub). LLM providers and channel credentials, 27 builtin services across 6 auth modes.
 2. **Coding agents** (`aquaman-coder`, v0.12.0+, npm). Claude Code, and Codex since v0.16.0. Per-tool-call materialization through `/broker/resolve`.
 3. **Hermes** (`aquaman-hermes`, v0.13.0+, PyPI). A Python host with no transport hook, so isolation is proxy-side: a token-gated loopback listener plus (v0.14.0+) an `aquaman` secret source for project secrets.
 4. **NVIDIA OpenShell** (v0.17.0+, no extra package). `aquaman daemon` serves OpenShell's external credential driver protocol; OpenShell isolates, aquaman sources, scopes and audits.
@@ -50,6 +50,7 @@ Hermes and OpenClaw each build their own HTTP client and cannot dial a socket. T
    - `url-path`: `/bot<TOKEN>/method` (Telegram)
    - `basic`: Twilio, BlueBubbles, Nextcloud Talk
    - `oauth`: client-credentials exchange (MS Teams, Feishu, Google Chat)
+   - `sigv4`: the proxy signs the request with AWS Signature Version 4 (the `aws` builtin; see "AWS requests")
    - `none`: at-rest storage only, traffic rejected (Nostr, Tlon)
 5. Forward upstream, append a hash-chained audit entry, pipe the response back.
 
@@ -208,8 +209,8 @@ Two commands exist so an agent can set aquaman up and obtain credentials without
 - **Routing the agent's app through the proxy (`--via-proxy`).** `aquaman-coder bind NAME=ref --via-proxy URL_ENV [--base-path /v1]` (and `aquaman request ... --via-proxy`) records `routes.NAME = { url_env, base_path }` beside the env map in `projects.yaml`. For a routed binding `exec` calls `POST /broker/route` instead of `/broker/resolve`: `NAME` gets the route token, `URL_ENV` gets `http://127.0.0.1:<port>/<service><base_path>`, and the credential value is never fetched into `exec` or the command. Rules, each of which closes something a review reproduced:
   - **The route token is not the loopback token.** It is made per daemon start (`aqm_rt_`, memory only) and accepted on the loopback listener only for forwarding to a routed service. Every `/broker/*` and `/_*` path answers it 401 or 404. Handing a program the Hermes/OpenClaw loopback token would let it call `/broker/resolve` and read the key it was being kept from, plus every other declared ref.
   - **A ref bound only through the proxy is not declared for materialization.** `loadProjectRefs` puts it in `routedRefs`, not `refs`, so `/broker/resolve` refuses it on both listeners (`aquaman get` too). `/broker/available` still counts it, over the socket, so the hook wraps. `POST /broker/request` with `routed: true` stores the value and never adds the ref to `broker.allowedRefs`.
-  - **A route opens forwarding for the route token only.** `isServiceRouted()` requires `authMode: header` or `basic` and the routed ref to be a key the proxy injects for the service (`routableKeys()` in `route-auth.ts`: `credentialKey`, and for basic also `additionalCredentialKeys[0]`). url-path, oauth and none stay unroutable. The loopback token and the Unix socket still forward only for `credentials.proxiedServices`; a `routes` line must never widen what agent hosts can reach.
-  - `/broker/route`: Unix socket only, off without a broker scope, routed-ref check first (so a refusal says nothing about the vault or registry), then listener, definition, auth mode, key, vault (every key the proxy injects must be stored, so both halves of a basic pair). Returns `{ url, token }`, never a value; a success is audited.
+  - **A route opens forwarding for the route token only.** `isServiceRouted()` requires `authMode: header`, `basic` or `sigv4` and the routed ref to be a key a program presents the route token in place of (`routableKeys()` in `route-auth.ts`: `credentialKey`, and for basic also `additionalCredentialKeys[0]`; for sigv4 the access key id only). url-path, oauth and none stay unroutable. The loopback token and the Unix socket still forward only for `credentials.proxiedServices`; a `routes` line must never widen what agent hosts can reach.
+  - `/broker/route`: Unix socket only, off without a broker scope, routed-ref check first (so a refusal says nothing about the vault or registry), then listener, definition, auth mode, key, vault (every key the proxy injects must be stored, so both halves of a basic pair, and for sigv4 the secret access key: `routeRequiredKeys()`). Returns `{ url, token }`, plus `env` for sigv4 (variables the program also needs, none of them a stored value), never a value; a success is audited. `exec` sets what `env` names except loader variables, names the project binds and the `url_env` of any route.
   - The route token is accepted in `Authorization` (`Bearer` or `token`, which Octokit sends), `x-api-key`, `x-aquaman-token` and the service's own auth header, and for a routed basic service as either half of an inbound `Authorization: Basic` (read strictly by `parseBasicAuthorization()`; the loopback token is never accepted there). No header carrying either local token, plain or inside a Basic value, is forwarded upstream. A token base64-encoded into a header without the `Basic` scheme is not recognised (an `it.fails` row in `test/compliance/app-route-basic.test.ts`).
   - The loopback listener refuses a `Host` that is not `127.0.0.1`, `localhost` or `[::1]` (DNS rebinding), and `loadLoopbackOptions` refuses to bind a non-loopback host. Tokenless `/_health` still reports version and services because the Hermes plugin reads them.
   - `init --agent --loopback` edits the raw config by temp file and rename at 0600, and only after every reason to refuse has been checked (a proxy it cannot restart, an encrypted-file password that is missing or too short), so a run that stops with an error leaves the listener and the file as it found them. It checks the password before stopping anything, and signals a pid only when the proxy on the socket reports that pid in `/_health` (socket only). It is never on by default.
@@ -230,6 +231,24 @@ Two commands exist so an agent can set aquaman up and obtain credentials without
 - Skill locations, verified 2026-11-16: Claude Code reads `~/.claude/skills/<name>/SKILL.md`; Codex 0.169 reads `~/.agents/skills/<name>/SKILL.md` and requires `name` (64 characters at most) and `description` in the frontmatter.
 - Do not add an environment variable or flag that replaces the prompter: the daemon may have been started by the agent, and such a switch would let the agent answer its own request.
 - Conformance: `test/compliance/credential-request.test.ts` (scripted prompter), `test/e2e/cli-agent-init.test.ts`. The real dialogs were exercised by hand with a one-second timeout.
+
+## AWS requests (`authMode: sigv4`, v0.21.0+)
+
+A program routed to the builtin `aws` service signs with the route token as its access key id and a fixed placeholder as its secret. The proxy reads the region and the signing name from that `Authorization` header, drops the signature, and signs the request it sends with `aws/access_key_id`, `aws/secret_access_key` and, when stored, `aws/session_token`. Files: `sigv4.ts` (pure, Node `crypto` only: strict header reader, host, canonical forms, signer), `forwardSigV4()` in `daemon.ts`, `routableKeys()` and `routeRequiredKeys()` in `route-auth.ts`. Guide: `docs/aws.md`.
+
+- **The host is built, never taken.** `resolveSigV4Target()` assembles `<service>.<region>.amazonaws.com` from labels that each matched `[a-z0-9-]`; the region must also have the shape of a region code, and regions of other partitions (`cn-`, `us-iso`) are refused. `/aws/_host/<prefix>` puts one label in place of the service (an endpoint whose name is not its signing name), `/aws/_global` drops the region and signs for `us-east-1`. The suffix is a constant. Never build the host from a client string, and never with `new URL(clientPath, upstream)`.
+- **The `_host` prefix is one label.** `<bucket>.s3` would address a bucket by its virtual-hosted name with the bucket gone from the path, and a policy rule on `/<bucket>/**` would no longer see it. Do not allow more labels without an answer for policy.
+- The builtin's `upstream` is the suffix only. `override()` in tests moves the connection to a stand-in; the Host header and the signature still name the AWS host. `sigv4` is refused in `services.yaml` and `register()`.
+- **Nothing of the client's signature is kept.** `Authorization`, `X-Amz-Date`, `X-Amz-Security-Token`, `X-Amz-Content-Sha256`, `Host` and hop-by-hop headers are dropped (`isSigV4StrippedHeader()`), as is any header carrying a local token or the placeholder. The date is the proxy's clock and the body hash is computed from the bytes that are sent. The URL is forwarded as sent, so one that carries a local token or the placeholder is refused. Signed: `host`, every `x-amz-*` header, `content-type`, `content-md5`. The Host header is always signed, which is what makes a signature useless at another host.
+- **The route token is read from the access key id of a strictly parsed header** (`parseSigV4Authorization()`: exact algorithm, one credential, four scope fields, nothing before or after), and only for a sigv4 service. The loopback token is never accepted there. A SigV4A header is read for its access key id alone, so a routed client is told `sigv4a_unsupported` and not that it has no token.
+- **Refuse, never forward half-signed.** Chunk-signed bodies (`STREAMING-AWS4-*`), query-string authentication, SigV4A, a `+` in the query, a doubled slash. Each refusal has `error`, `code` and `fix`, is audited, and happens before any vault read. The body is read (up to `SIGV4_MAX_BUFFERED_BODY`, 16 MiB) before the vault as well. `UNSIGNED-PAYLOAD` and `STREAMING-UNSIGNED-PAYLOAD-TRAILER` are kept for signing name `s3` only, and the body is then streamed.
+- Do not answer a refusal with `Connection: close` while the request body is still arriving: Node closes the socket with unread input, the kernel resets it, and the client never sees the answer. The 413 path reads and drops what is left for two seconds.
+- Path: `parseRequestTarget()` drops empty segments, so `forwardSigV4()` puts the trailing slash back (it is part of what AWS routes on and of what is signed) and refuses `//`. For S3 the path is sent in the one encoding S3 signs (`sigV4WireSegments()`); other services get the segments as sent and the canonical URI encodes them again. The query is forwarded verbatim.
+- **Policy matches the path AWS receives**: `sigV4RoutingSegmentCount()` removes the host selectors before `matchPolicy()`, so a rule holds whichever way the host was chosen. Policy does not see `X-Amz-Target`, the body or the AWS service; both are `it.fails` rows. Never write that it does.
+- Routing: only `aws/access_key_id` is routable (a token in the secret would never reach the proxy). `/broker/route` answers `env` from `sigV4RouteEnv()`: the placeholder secret, `AWS_ENDPOINT_URL_IAM` and `AWS_ENDPOINT_URL_BEDROCK_RUNTIME`. The listener is HTTP/1.1; the SDK for JavaScript's Bedrock Runtime client defaults to HTTP/2 and needs `NodeHttpHandler`.
+- Limits, each an `it.fails` row: a token base64-encoded into a header without the `Basic` scheme, a token in the request body, an action named in `X-Amz-Target`, and a path rule not telling services apart.
+- Nothing has been run against AWS. The stand-in (`test/helpers/aws-stand-in.ts`) signs each received request again with `@smithy/signature-v4` and the stored secret and applies AWS's documented rules; public text says what the tests do and makes no claim about AWS itself. A child-process daemon cannot be pointed at a stand-in (builtins cannot be overridden), so a test never sends it a request it would forward.
+- Conformance: `test/compliance/app-route-sigv4.test.ts` (one row per attack), `test/unit/sigv4.test.ts` (AWS's published test-suite vectors under `test/fixtures/aws-sig-v4-test-suite`, copied unchanged from awslabs/aws-c-auth; never edit one to fit the code), `test/e2e/approute-aws-sdk.test.ts` (AWS SDK for JavaScript v3 clients through `bind` and `exec`).
 
 ## Links to existing vault items
 
@@ -402,7 +421,7 @@ Manual smoke recipes (install paths, all auth modes, policy denials, real-gatewa
 | `packages/proxy/src/daemon.ts` | Both listeners, auth modes, broker endpoint |
 | `packages/proxy/src/broker-scope.ts` | Declared-ref scope for the broker |
 | `packages/proxy/src/request-policy.ts` | Method + path policy, presets, `lintPolicyConfig` |
-| `packages/proxy/src/service-registry.ts` | 26 builtin services, host map |
+| `packages/proxy/src/service-registry.ts` | 27 builtin services, host map |
 | `packages/proxy/src/cli/index.ts` | The whole CLI |
 | `packages/proxy/src/core/credentials/` | Backends, `store.ts`, `caching-store.ts` |
 | `packages/proxy/src/core/audit/logger.ts` | Hash-chained audit log, sequence numbers, `verifyChain()` |
@@ -410,6 +429,7 @@ Manual smoke recipes (install paths, all auth modes, policy denials, real-gatewa
 | `packages/proxy/src/core/credentials/links.ts`, `linked-store.ts` | Links to existing vault items |
 | `packages/proxy/src/ask-first.ts` | Ask-first marks in the vault, the gate before every value, `/broker/ask-first` |
 | `packages/proxy/src/route-auth.ts` | Which keys are routable, reading the route token out of Basic auth |
+| `packages/proxy/src/sigv4.ts` | AWS SigV4: strict reader of the inbound header, the AWS host, canonical forms, the signer |
 | `packages/proxy/src/service-unit.ts`, `service-consent.ts` | Login item for the daemon and the dialog that approves it |
 | `packages/proxy/src/openclaw/secretref.ts` | SecretRef + loopback baseUrl wiring |
 | `packages/proxy/src/openclaw/integration.ts` | Version gates, detection, launch |

@@ -6,6 +6,8 @@
  * header service that is the whole header value. For a basic service the
  * client library builds `Basic base64(user:password)` itself, so the token
  * arrives as one half of that pair and has to be decoded to be recognised.
+ * For a sigv4 service it is the access key id in the credential scope
+ * (sigv4.ts reads that header).
  */
 
 import type { ServiceDefinition } from './service-registry.js';
@@ -14,13 +16,16 @@ import type { ServiceDefinition } from './service-registry.js';
 const MAX_BASIC_BASE64_LENGTH = 1024;
 
 /**
- * The vault keys a route may name for a service: the ones the proxy injects.
- * A header service has one. A basic service has the user name and, when it
- * declares one, the password. Other auth modes are not routable.
+ * The vault keys a route may name for a service: the ones a program presents
+ * the route token in place of. A header service has one. A basic service has
+ * the user name and, when it declares one, the password. A sigv4 service has
+ * the access key id only: the secret access key never leaves the client, so
+ * a token put there would never reach the proxy. Other auth modes are not
+ * routable.
  */
 export function routableKeys(def: Pick<ServiceDefinition, 'authMode' | 'credentialKey' | 'additionalCredentialKeys'>): string[] {
   const mode = def.authMode ?? 'header';
-  if (mode === 'header') return [def.credentialKey];
+  if (mode === 'header' || mode === 'sigv4') return [def.credentialKey];
   if (mode === 'basic') {
     const password = def.additionalCredentialKeys?.[0];
     return password ? [def.credentialKey, password] : [def.credentialKey];
@@ -28,9 +33,28 @@ export function routableKeys(def: Pick<ServiceDefinition, 'authMode' | 'credenti
   return [];
 }
 
+/**
+ * The vault keys that must be stored before a route is handed out: every key
+ * the proxy needs to authenticate a request. For sigv4 that adds the secret
+ * access key, which is not routable itself. A session token is optional.
+ */
+export function routeRequiredKeys(def: Pick<ServiceDefinition, 'authMode' | 'credentialKey' | 'additionalCredentialKeys'>): string[] {
+  if (def.authMode === 'sigv4') {
+    const secret = def.additionalCredentialKeys?.[0];
+    return secret ? [def.credentialKey, secret] : [def.credentialKey];
+  }
+  return routableKeys(def);
+}
+
 /** What to tell someone who routed a key the proxy does not inject for the service. */
-export function routeKeyMismatch(service: string, keys: readonly string[], key: string): { error: string; fix: string } {
+export function routeKeyMismatch(service: string, keys: readonly string[], key: string, mode?: ServiceDefinition['authMode']): { error: string; fix: string } {
   const refs = keys.map((k) => `aquaman://${service}/${k}`);
+  if (mode === 'sigv4') {
+    return {
+      error: `A program is routed to ${service} by ${service}/${keys[0]}, the one field of an AWS signature it sends; ${service}/${key} stays in the vault and the proxy signs with it`,
+      fix: `Use ${refs[0]}`,
+    };
+  }
   return {
     error: `The proxy injects ${keys.map((k) => `${service}/${k}`).join(' and ')} for this service, not ${service}/${key}`,
     fix: `Use ${refs.join(' or ')}`,
