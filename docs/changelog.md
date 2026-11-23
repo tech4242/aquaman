@@ -10,6 +10,24 @@ openclaw plugins install clawhub:aquaman-plugin   # OpenClaw users
 pip install -U aquaman-hermes                     # Hermes users
 ```
 
+## 0.21.0
+
+### Ask first: a dialog before a credential is handed out
+
+A declared reference is handed to any program running as you that asks the daemon for it. A reference can now be marked "ask first": the daemon shows its dialog the first time the value is requested and remembers a yes for a while. Nothing changes for references that are not marked.
+
+- **Marking:** `aquaman broker ask <ref>`, `aquaman broker allow <ref> --ask`, or `aquaman request <ref> --ask`. Marking asks nobody.
+- **The first read waits for you.** `aquaman get`, `aquaman-coder exec`, `POST /broker/resolve` on both listeners and the OpenShell driver's Resolve all go through the same check, before the vault is read. The dialog says that aquaman cannot tell which program is asking, and that a yes lets any program running as you read that value until the window ends.
+- **The window** is 8 hours, or `broker.askFirstWindowSeconds` in `config.yaml` (60 to 86400). A yes covers one reference and is gone when the daemon stops.
+- **The mark is in your vault**, not in `config.yaml` or `projects.yaml`, so editing those files does not remove it. A record that cannot be read marks every reference.
+- **Removing a mark** (`aquaman broker ask <ref> --off`) is decided in the daemon's dialog. No flag or environment variable answers it.
+- **Refusals** are `404` with a `code`: `ask_first_declined`, `ask_first_unanswered`, `prompt_unavailable`. `aquaman get` exits 2 when you declined and 3 when nobody answered or no dialog could be shown. `aquaman-coder exec` leaves that one variable unset, says why on stderr, and does not run a command for which nothing was handed out.
+- **Hermes:** the secret source never raises the dialog. A marked reference nobody has allowed is a warning that names the command to run (`aquaman get <ref> > /dev/null`).
+- **Not gated:** requests the proxy forwards, and references bound with `--via-proxy`.
+- Every dialog outcome is an entry in the audit log.
+- Limits: a yes is for the reference, not for a program; software that can write to the vault itself can delete the mark; where no dialog can be shown, a typed `yes` at a terminal is the only check on removing a mark. The agent contract has the details: [ask first](https://aquaman.sh/docs/agent-setup/#ask-first-a-dialog-before-a-value-is-handed-out).
+- The dialog was exercised with a scripted stand-in for the person; the tests check its exact wording and what the daemon does after each answer.
+
 ## 0.20.0
 
 The guides now show the cases people asked about: an item that is already in your vault on every host page, Bitwarden with Docker Sandboxes, OpenAI and Linux for Hermes, the model provider step for OpenClaw, and a new page for MCP servers.
