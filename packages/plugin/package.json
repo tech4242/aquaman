@@ -1,6 +1,6 @@
 {
   "name": "aquaman-plugin",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "aquaman: credential proxy for AI agents (OpenClaw). Keeps provider API keys out of the gateway process; injects them from your own vault through a local proxy.",
   "type": "module",
   "scripts": {
@@ -50,7 +50,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@sinclair/typebox": "0.34.52",
-    "aquaman-proxy": "0.20.0",
+    "aquaman-proxy": "0.21.0",
     "undici": "7.30.2"
   },
   "peerDependencies": {
