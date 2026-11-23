@@ -218,14 +218,38 @@ const STREAM_LINE_HOLDBACK = 4096;
 const STREAM_KEY_BLOCK_HOLDBACK = 64 * 1024;
 
 /**
- * The longest match a stream redactor keeps whole across pushes. A match that
- * is still growing at the end of the text is held until it ends; one that has
- * grown past this is no credential, and is written as a marker for the part
- * seen so far instead of being held without bound.
+ * The most a stream redactor keeps back for one unfinished run of token
+ * characters, one match or one pattern that has begun. Anything longer is no
+ * credential. Past it the run is cut through where the line holdback falls:
+ * a match is then written as a marker for the part seen so far, never as its
+ * text, and text that had not matched yet is written as it is.
  */
 const STREAM_MATCH_HOLDBACK = 1024 * 1024;
 
 const PRIVATE_KEY_BEGIN = /-----BEGIN (?:RSA |OPENSSH |EC |DSA |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----/g;
+const PRIVATE_KEY_END = /-----END (?:RSA |OPENSSH |EC |DSA |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----/g;
+
+/**
+ * The characters the builtin token shapes are made of. A run of them is one
+ * candidate token: no builtin pattern for a single token matches across a
+ * character outside this set, and `\b` reads every such character alike.
+ */
+const TOKEN_CHAR = /[A-Za-z0-9_\-.+/=]/;
+const isTokenChar = (ch: string | undefined): boolean => ch !== undefined && TOKEN_CHAR.test(ch);
+
+/**
+ * The beginning of each builtin pattern that is made of several parts with
+ * white space or punctuation between them, matched at the end of a text: the
+ * name of a header or a variable whose value is still to come, possibly on
+ * the next line, and a BEGIN line of a key block that is not complete.
+ */
+const PATTERN_LEADS: readonly RegExp[] = [
+  /\b(?:Authorization|authorization)\s*(?::\s*(?:Bearer\s*)?)?$/,
+  /\b(?:aws_secret_access_key|AWS_SECRET_ACCESS_KEY)["\s]*(?:[:=]["\s]*)?$/,
+  /-----BEGIN (?:(?:RSA|OPENSSH|EC|DSA|PGP|ENCRYPTED) )?(?:PRIVATE (?:KEY )?)?$/,
+];
+/** How much text before a cut is looked at for a lead. Longer runs of white space inside one are not followed. */
+const PATTERN_LEAD_WINDOW = 256;
 
 export interface StreamRedactor {
   /** Feed the next chunk; returns the text that is now safe to write. */
@@ -281,37 +305,75 @@ function redactTracked(
 }
 
 /**
+ * Where a private key block begins that has no END after it, or -1. Read the
+ * way the pattern reads: a BEGIN line, then the first END line that starts
+ * after it, then on from there. Looked for in the text as it arrived: in the
+ * redacted text another pattern may have taken the dashes of a BEGIN line
+ * into a match of its own.
+ */
+function openKeyBlock(raw: string): number {
+  let at = 0;
+  for (;;) {
+    PRIVATE_KEY_BEGIN.lastIndex = at;
+    const begin = PRIVATE_KEY_BEGIN.exec(raw);
+    PRIVATE_KEY_BEGIN.lastIndex = 0;
+    if (!begin) return -1;
+    PRIVATE_KEY_END.lastIndex = begin.index + begin[0].length;
+    const end = PRIVATE_KEY_END.exec(raw);
+    PRIVATE_KEY_END.lastIndex = 0;
+    if (!end) return begin.index;
+    at = end.index + end[0].length;
+  }
+}
+
+/**
  * Redact a stream that arrives in chunks.
  *
  * A secret can straddle two chunks (a pipe delivers whatever the writer
  * flushed, and a 64 KB buffer boundary can fall anywhere), and redacting each
  * chunk on its own would let both halves through. This keeps back the end of
- * what it has seen until more arrives: the part that could be the beginning of
- * a literal value, so a value split anywhere is whole again before it is
- * written, the unfinished last line (up to STREAM_LINE_HOLDBACK), so
- * shape-based patterns see whole lines, and a private key block that has
- * begun and not ended.
+ * what it has seen until more arrives, and what it keeps back is kept as it
+ * arrived, not redacted: the beginning of a literal value can have the shape
+ * of a builtin pattern on its own (the first half of an API key is still
+ * key-shaped), and a marker in its place would no longer end like the
+ * beginning of the value. Each push redacts everything held plus the new
+ * chunk with the whole of it in view, writes the redacted form of the part
+ * before the cut, and keeps the part after the cut untouched.
  *
- * What is kept back is kept as it arrived, not redacted. The beginning of a
- * literal value can have the shape of a builtin pattern on its own (the first
- * half of an API key is still key-shaped); redacting it early would replace
- * it with a marker, the text would no longer end like the beginning of the
- * value, and the rest of the value would be written when it arrived. So each
- * push redacts everything held plus the new chunk with the whole of it in
- * view, writes the redacted form of the part before the cut, and keeps the
- * part after the cut untouched for the next push.
+ * The cut is placed so that nothing after it can change how the text before
+ * it is redacted, and nothing before it is needed to redact what follows.
+ * Kept back, each up to its bound:
  *
- * The cut is never inside a match: one that begins before it and reaches past
- * it (a token still growing at the end of a long line) moves the cut back to
- * where the match begins, so the match stays whole in the held part, up to
- * STREAM_MATCH_HOLDBACK.
+ *   - the end of the text that is the beginning of a literal value;
+ *   - the unfinished last line, up to STREAM_LINE_HOLDBACK;
+ *   - the run of token characters the text ends in, and any such run the cut
+ *     would fall inside: a token is not judged until the character after it
+ *     has arrived, because what follows decides whether and how far it
+ *     matches (STREAM_MATCH_HOLDBACK);
+ *   - a match in the current view that reaches past the cut
+ *     (STREAM_MATCH_HOLDBACK);
+ *   - the lead of a pattern made of several parts, when the text before the
+ *     cut ends in one (`PATTERN_LEADS`): a header or variable name whose
+ *     value follows, also on the next line (STREAM_MATCH_HOLDBACK);
+ *   - a private key block that has begun and has no END yet: from the first
+ *     BEGIN after the last END, as the pattern would pair them
+ *     (STREAM_KEY_BLOCK_HOLDBACK).
+ *
+ * Within those bounds, and for the builtin patterns and literal values, the
+ * pieces written add up to what `redact()` gives for the whole text. Past a
+ * bound they need not: a run or match longer than STREAM_MATCH_HOLDBACK is
+ * cut through, and a key block longer than STREAM_KEY_BLOCK_HOLDBACK has its
+ * first lines written before its END arrives. Patterns a caller adds that
+ * match across white space or punctuation are covered by the line holdback
+ * only.
  *
  * With the literal `values` given, the part kept back for them is exactly the
  * end of the text that is also the beginning of one of them, which for a
  * finished line is normally nothing. A program that answers one line at a
  * time and then waits (a stdio MCP server, a REPL) therefore has each reply
- * written when it is produced. Without `values` the length alone is known, and
- * one character less than `longestValue` is kept back whatever the text is.
+ * written when it is produced, unless the line ends in a pattern lead.
+ * Without `values` the length alone is known, and one character less than
+ * `longestValue` is kept back whatever the text is.
  */
 export function createStreamRedactor(
   patterns: readonly SecretPattern[] = BUILTIN_PATTERNS,
@@ -323,35 +385,78 @@ export function createStreamRedactor(
   return {
     push(chunk: string): string {
       const raw = pending + chunk;
-      const unfinishedLine = raw.length - (raw.lastIndexOf('\n') + 1);
+      const end = raw.length;
+      const unfinishedLine = end - (raw.lastIndexOf('\n') + 1);
       const forValues = literals ? valuePrefixAtEnd(raw, literals) : Math.max(0, longestValue - 1);
-      const hold = Math.min(
-        raw.length,
-        Math.max(forValues, Math.min(unfinishedLine, STREAM_LINE_HOLDBACK)),
-      );
-      let cut = raw.length - hold;
+      let cut = end - Math.min(end, Math.max(forValues, Math.min(unfinishedLine, STREAM_LINE_HOLDBACK)));
+
+      // The run of token characters the text ends in is not finished.
+      let run = end;
+      while (run > 0 && isTokenChar(raw[run - 1])) run--;
+      if (run < cut && end - run <= STREAM_MATCH_HOLDBACK) cut = run;
+
+      const open = openKeyBlock(raw);
+      if (open >= 0 && open < cut && end - open <= STREAM_KEY_BLOCK_HOLDBACK) cut = open;
+
       const { output, from, to } = redactTracked(raw, patterns);
 
-      // A key block that has begun and whose END line is still to come: a
-      // BEGIN line that survived redaction is one that no END followed.
-      PRIVATE_KEY_BEGIN.lastIndex = 0;
-      let open = -1;
-      for (const match of output.matchAll(PRIVATE_KEY_BEGIN)) open = from[match.index];
-      PRIVATE_KEY_BEGIN.lastIndex = 0;
-      if (open >= 0 && open < cut && raw.length - open <= STREAM_KEY_BLOCK_HOLDBACK) cut = open;
+      // Each rule can only move the cut back, and moving it can bring
+      // another rule into play, so they are applied until none moves it.
+      for (;;) {
+        const before = cut;
 
-      // Never inside a match. Markers are in input order, so one pass from
-      // the end settles it: moving the cut back can only meet earlier ones.
-      for (let i = output.length - 1; i >= 0; i--) {
-        if (from[i] < cut && cut < to[i] && raw.length - from[i] <= STREAM_MATCH_HOLDBACK) cut = from[i];
+        // Not inside a match of the current view.
+        for (let i = output.length - 1; i >= 0; i--) {
+          if (from[i] < cut && cut < to[i] && end - from[i] <= STREAM_MATCH_HOLDBACK) cut = from[i];
+        }
+
+        // Not inside a run of token characters.
+        let start = cut;
+        while (start > 0 && start < end && isTokenChar(raw[start - 1]) && isTokenChar(raw[start])) start--;
+        if (end - start <= STREAM_MATCH_HOLDBACK) cut = start;
+
+        // Not after the lead of a pattern whose next part is still to come.
+        // Looked for in the redacted text, which is what the pattern will be
+        // applied to (a value redacted in front of a lead is what gives it
+        // its word boundary), and in the text as it arrived (a pattern
+        // applied later may have taken the lead into a match of its own,
+        // which the earlier pattern will undo once its value is there).
+        const head = redactedBefore(cut);
+        const redacted = output.slice(Math.max(0, head - PATTERN_LEAD_WINDOW), head);
+        const arrivedEnd = cut;
+        const arrived = raw.slice(Math.max(0, arrivedEnd - PATTERN_LEAD_WINDOW), arrivedEnd);
+        for (const lead of PATTERN_LEADS) {
+          const inRedacted = lead.exec(redacted);
+          if (inRedacted && inRedacted[0].length > 0) {
+            const at = from[head - (redacted.length - inRedacted.index)];
+            if (at < cut && end - at <= STREAM_MATCH_HOLDBACK) cut = at;
+          }
+          const inArrived = lead.exec(arrived);
+          if (inArrived && inArrived[0].length > 0) {
+            const at = arrivedEnd - (arrived.length - inArrived.index);
+            if (at < cut && end - at <= STREAM_MATCH_HOLDBACK) cut = at;
+          }
+        }
+
+        if (cut === before) break;
       }
 
       // The redacted form of everything before the cut. A match too long to
       // hold is still cut through: its marker is written, never its text.
-      let written = 0;
-      while (written < output.length && from[written] < cut) written++;
       pending = raw.slice(cut);
-      return output.slice(0, written);
+      return output.slice(0, redactedBefore(cut));
+
+      /** How many characters of the redacted text stand for input before `at`. */
+      function redactedBefore(at: number): number {
+        let low = 0;
+        let high = output.length;
+        while (low < high) {
+          const mid = (low + high) >> 1;
+          if (from[mid] < at) low = mid + 1;
+          else high = mid;
+        }
+        return low;
+      }
     },
     end(): string {
       const out = redact(pending, patterns).output;

@@ -522,7 +522,7 @@ describe('createStreamRedactor: an injected value whose beginning has a builtin 
   });
 });
 
-describe('createStreamRedactor: the cut never falls inside a match', () => {
+describe('createStreamRedactor: a match that is still arriving is kept whole, inside the holdback bounds', () => {
   const stream = (chunks: string[], patterns = BUILTIN_PATTERNS) => {
     const r = createStreamRedactor(patterns, 0, []);
     const written = chunks.map((c) => r.push(c));
