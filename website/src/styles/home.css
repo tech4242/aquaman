@@ -313,5 +313,6 @@
 .d1 .hosts, .d1 .all-hosts { max-width: 78%; }
 @media (max-width: 62rem) { .d1 .hosts, .d1 .all-hosts { max-width: none; } }
 
-/* A ranking someone else publishes, stated plainly: a footnote to the buttons, not a third one. */
-.surface .rank { display: inline-flex; align-items: center; gap: 0.5rem; margin: 1.75rem 0 0; padding-top: 0.6rem; border-top: var(--px) solid var(--ink); font-size: 0.9rem; opacity: 0.85; }
+/* A ranking and a score that someone else publishes, stated plainly: a footnote to the buttons, not a third one. */
+.surface .rank { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1.5rem; margin: 1.75rem 0 0; padding-top: 0.6rem; border-top: var(--px) solid var(--ink); font-size: 0.9rem; opacity: 0.85; }
+.surface .rank .item { display: inline-flex; align-items: center; gap: 0.5rem; color: inherit; }

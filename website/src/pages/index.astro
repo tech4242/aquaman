@@ -41,6 +41,9 @@ const jsonLd = [software, { '@context': 'https://schema.org', '@type': 'WebSite'
 const description =
   'Give Claude Code, Codex and other AI agents an API key without handing it over. Open source, runs on your machine, keeps keys in the vault you already use.';
 import { routeDiagramHtml } from '../lib/diagram.mjs';
+import { scorecardScore, SCORECARD_URL } from '../lib/scorecard';
+
+const scorecard = await scorecardScore();
 ---
 <Base description={description} markdown="/index.md" jsonLd={jsonLd} wide look="gb">
   <div class="home">
@@ -57,8 +60,20 @@ import { routeDiagramHtml } from '../lib/diagram.mjs';
           <a class="btn b" href="/docs/approve/">My agent asked to install it</a>
         </div>
         <p class="rank">
-          <Sprite name="LOBSTER" px={1} />
-          <span>Top 10 Security plugin on ClawHub</span>
+          <span class="item">
+            <Sprite name="LOBSTER" px={1} />
+            <span>Top 10 Security plugin on ClawHub</span>
+          </span>
+          {scorecard !== null && (
+            <a class="item" href={SCORECARD_URL}>
+              <Sprite name="SHELL" px={1} />
+              <span>OpenSSF Scorecard {scorecard.toFixed(1)} of 10</span>
+            </a>
+          )}
+          <a class="item" href="https://www.bestpractices.dev/projects/17039">
+            <Sprite name="STAR" px={1} />
+            <span>OpenSSF Best Practices: passing</span>
+          </a>
         </p>
         <div class="raft">
           <Sprite name="ROBOT" px={3} label="A small robot on a raft: your agent, on the surface" />
