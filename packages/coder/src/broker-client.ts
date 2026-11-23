@@ -125,6 +125,15 @@ export class BrokerClient {
    * No values travel. Throws when the proxy cannot answer the question.
    */
   async available(refs: Array<{ service: string; key: string }>): Promise<boolean[]> {
+    return (await this.availability(refs)).available;
+  }
+
+  /**
+   * `available()` plus whether the vault is locked: then nothing resolves
+   * because a person has to unlock it (`aquaman unlock`), not because
+   * nothing is stored, and the two have different fixes.
+   */
+  async availability(refs: Array<{ service: string; key: string }>): Promise<{ available: boolean[]; locked: boolean; fix?: string }> {
     const { statusCode, payload } = await this.request('POST', '/broker/available', JSON.stringify({ refs }));
     let json: any;
     try {
@@ -135,7 +144,11 @@ export class BrokerClient {
     if (statusCode !== 200 || !Array.isArray(json.available) || json.available.length !== refs.length) {
       throw new BrokerError(json.error || `Proxy cannot report availability (HTTP ${statusCode})`, { code: json.code, status: statusCode });
     }
-    return json.available.map((v: unknown) => v === true);
+    return {
+      available: json.available.map((v: unknown) => v === true),
+      locked: json.locked === true,
+      ...(typeof json.fix === 'string' ? { fix: json.fix } : {}),
+    };
   }
 
   /**

@@ -316,6 +316,12 @@ program
           console.error(`aquaman: ${envName} is not set for this command: ${err.message}${route && err.fix ? `. ${err.fix}` : ''}`);
           continue;
         }
+        if (err instanceof BrokerError && err.code === 'vault_locked') {
+          // Not one missing credential: nothing in the vault can be read
+          // until a person unlocks it, so the command is not run half-equipped.
+          console.error('aquaman: the vault is locked, so the command was not run. A person unlocks it in a terminal of their own with: aquaman unlock');
+          process.exit(1);
+        }
         console.error(`aquaman: failed to resolve ${envName}: ${(err as Error).message}`);
         process.exit(1);
       }
@@ -615,6 +621,8 @@ program
             const fix =
               code === 'broker_disabled'
                 ? 'The proxy on this socket was started by the OpenClaw plugin, which never hands out credentials. Run `aquaman daemon` for coding agents.'
+                : code === 'vault_locked'
+                  ? 'aquaman unlock   (a person, in a terminal: the vault is locked)'
                 : code === 'broker_ref_not_declared'
                   ? `aquaman broker list  (the daemon does not see this ref as declared — is it reading ${defaultProjectsPath()}?)`
                   : `aquaman credentials add ${parsed.service} ${parsed.key}`;

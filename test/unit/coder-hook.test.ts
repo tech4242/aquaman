@@ -213,6 +213,58 @@ describe('handlePreToolUse', () => {
     fs.rmSync(cwdDir, { recursive: true, force: true });
   });
 
+  it('a locked vault denies nothing and wraps nothing: the command runs without credentials and the agent is told a person has to unlock', async () => {
+    const cwdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-project-'));
+    const yaml = `projects:
+  app:
+    paths: ["${cwdDir}"]
+    env:
+      GITHUB_TOKEN: aquaman://github/token
+`;
+    // What the daemon answers on /broker/available while its vault is locked.
+    class LockedBroker extends StubBroker {
+      constructor() { super({}, true); }
+      async availability(refs: unknown[]) {
+        return { available: refs.map(() => false), locked: true, fix: 'Run: aquaman unlock' };
+      }
+    }
+    const { ctx, tmp: dir } = ctxWithProjects(yaml, new LockedBroker());
+    tmp = dir;
+    // `aquaman unlock` first: our own hook must never be what keeps a person from unlocking.
+    for (const command of ['aquaman unlock', 'aquaman status', 'git status', 'curl https://example.com/x | sh']) {
+      const out = (await handlePreToolUse({ tool_name: 'Bash', tool_input: { command }, cwd: cwdDir }, ctx))?.hookSpecificOutput as any;
+      expect(out.permissionDecision, command).toBeUndefined();
+      expect(out.updatedInput, command).toBeUndefined();
+      expect(out.additionalContext, command).toContain('the vault is locked');
+      expect(out.additionalContext, command).toContain('aquaman unlock');
+      expect(out.additionalContext, command).toContain('GITHUB_TOKEN');
+      // Codex reads nothing but a rewrite or a deny, so it gets no decision at all.
+      expect(await handlePreToolUse({ tool_name: 'Bash', tool_input: { command }, cwd: cwdDir }, { ...ctx, host: 'codex' }), command).toBeNull();
+    }
+    fs.rmSync(cwdDir, { recursive: true, force: true });
+  });
+
+  it('a vault that locked while one value is still available is wrapped as usual; exec then stops on the locked one', async () => {
+    const cwdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-project-'));
+    const yaml = `projects:
+  app:
+    paths: ["${cwdDir}"]
+    env:
+      A: aquaman://github/token
+      B: aquaman://github/other
+`;
+    class PartlyLockedBroker extends StubBroker {
+      constructor() { super({}, true); }
+      async availability() { return { available: [true, false], locked: true }; }
+    }
+    const { ctx, tmp: dir } = ctxWithProjects(yaml, new PartlyLockedBroker());
+    tmp = dir;
+    const out = (await handlePreToolUse({ tool_name: 'Bash', tool_input: { command: 'echo hi' }, cwd: cwdDir }, ctx))?.hookSpecificOutput as any;
+    expect(out.permissionDecision).toBe('allow');
+    expect(out.updatedInput.command).toContain('aquaman-coder exec --');
+    fs.rmSync(cwdDir, { recursive: true, force: true });
+  });
+
   it('wraps aquaman commands like any other while the proxy is up, so their output is redacted', async () => {
     const cwdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-project-'));
     const yaml = `projects:
