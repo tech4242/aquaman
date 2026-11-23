@@ -386,7 +386,7 @@ The honest trade-off: a per-access biometric prompt is a user-presence check, an
 
 ## How aquaman compares
 
-Most agent hosts now protect credentials in some way, and tools such as 1Password `op run`, fnox, dotenvx, Doppler and Infisical cover similar ground. The difference that matters is whether a key is injected at egress, so the program never holds it, or into the program's environment. aquaman injects at egress for traffic through its proxy and into the environment for a coding agent's commands. Its place is the vault you already have, across several hosts, with setup and credential requests an agent can run itself and a tamper-evident record of each use. It is not a sandbox, it is not a boundary against other software running as you, and it is a young project with one maintainer.
+Most agent hosts now protect credentials in some way, and tools such as 1Password `op run`, fnox, dotenvx, Doppler and Infisical cover similar ground. The difference that matters is whether a key is injected at egress, so the program never holds it, or into the program's environment. aquaman injects at egress for traffic through its proxy and into the environment for a coding agent's commands. Its place is the vault you already have, across several hosts, with setup and credential requests an agent can run itself and a tamper-evident record of each use. It is not a sandbox and it is not a boundary against other software running as you. It has one maintainer; its release record, tests and OpenSSF Scorecard are public.
 
 The full table, when to pick something else, and the limits: [aquaman compared with other approaches](https://aquaman.sh/docs/compare/).
 
