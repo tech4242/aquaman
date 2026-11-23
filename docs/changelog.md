@@ -10,6 +10,24 @@ openclaw plugins install clawhub:aquaman-plugin   # OpenClaw users
 pip install -U aquaman-hermes                     # Hermes users
 ```
 
+## 0.21.0
+
+### Bitwarden works with the login item: `aquaman unlock`
+
+With the `bitwarden` backend the daemon needed a Bitwarden session in the environment it was started from, so a daemon started at login by `aquaman service install` could not read the vault. Now:
+
+- **The daemon starts and stays up while the vault is locked.** Requests that need a credential are answered with the code `vault_locked` and the fix `Run: aquaman unlock`. Health checks, status, request policy and everything else that needs no credential keep working.
+- **`aquaman unlock`**, run by a person in a terminal, opens it. Bitwarden's own CLI asks for the master password (`bw unlock --raw`, attached to your terminal), so aquaman never sees it. aquaman takes the session that comes out and hands it to the running daemon over its Unix socket; the daemon checks it with `bw status` and keeps it in memory. It is not printed, not passed as a command argument, and not written to disk, the keychain or the login item.
+- **`aquaman lock`** makes the daemon drop the session and the values it had cached. It does not run `bw`; to end the session everywhere, run `bw lock`.
+- **A session that Bitwarden ends** (`bw lock`, `bw logout`, another `bw unlock`) puts the daemon back into `vault_locked` with the same fix. It does not have to be restarted.
+- `aquaman status`, `aquaman doctor` and `aquaman init --agent` report a locked vault, and `aquaman service install` and `aquaman service status` list `aquaman unlock` as the step after each login.
+- A coding agent's commands are not blocked while the vault is locked: they run without the project's credentials and the agent is told that a person has to unlock. `aquaman request` answers `vault_locked` without showing a dialog.
+- The endpoint that takes the session answers on the Unix socket only, never on the loopback listener. Other software running as you can call it; with a session it already holds it makes the daemon read the vault `bw` is logged in to, and anything else is refused. It can also lock the daemon.
+- The audit anchor is not read or written while the vault is locked, so entries written in that time are anchored after the next unlock.
+- Starting the daemon from a shell with `export BW_SESSION=$(bw unlock --raw)` works as before.
+
+How to use it: [Bitwarden: unlock after you log in](https://aquaman.sh/docs/autostart/#bitwarden-unlock-after-you-log-in).
+
 ## 0.20.0
 
 The guides now show the cases people asked about: an item that is already in your vault on every host page, Bitwarden with Docker Sandboxes, OpenAI and Linux for Hermes, the model provider step for OpenClaw, and a new page for MCP servers.

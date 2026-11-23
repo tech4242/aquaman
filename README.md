@@ -367,10 +367,12 @@ Bring your own vault - aquaman has no house store. Pick the backend you already 
 | `1password` | Team credential sharing | `brew install 1password-cli && op signin`. For unattended agents use a [service account](https://developer.1password.com/docs/service-accounts/) (`OP_SERVICE_ACCOUNT_TOKEN`) |
 | `vault` | Enterprise secrets management | Set `VAULT_ADDR` + `VAULT_TOKEN` |
 | `systemd-creds` | Linux with systemd ≥ 256 | TPM2-backed, no root required |
-| `bitwarden` | Bitwarden users | `bw login && export BW_SESSION=$(bw unlock --raw)` |
+| `bitwarden` | Bitwarden users | `bw login`, then `aquaman unlock` in a terminal once the daemon runs (Bitwarden asks for the master password; the daemon keeps the session in memory). `export BW_SESSION=$(bw unlock --raw)` before starting the daemon works too |
 | `keeper` | Keeper password manager users (v0.16.0+) | `pip install keepercommander`, log in once with `keeper shell` and turn on `this-device persistent-login on`, create a folder for aquaman, then `export AQUAMAN_KEEPER_FOLDER_UID=<folder UID>`. Records are titled `aquaman::<service>::<key>` |
 
 `aquaman setup` auto-detects a sensible default (macOS → `keychain`; Linux → `keychain` if libsecret, else `systemd-creds` if systemd ≥ 256, else `encrypted-file`).
+
+With `bitwarden` the daemon starts and stays up while the vault is locked, for example after `aquaman service install` started it at login. Requests that need a credential answer `vault_locked` with the fix `Run: aquaman unlock` until a person has run it in a terminal; `aquaman lock` makes the daemon drop the session again. The session is never written to disk, the keychain or the login item. Details: [Bitwarden: unlock after you log in](https://aquaman.sh/docs/autostart/#bitwarden-unlock-after-you-log-in).
 
 `encrypted-file` is a last-resort for headless Linux/CI environments without a native keyring. For better security on Linux, install `libsecret-1-dev` (GNOME Keyring), use `systemd-creds` (TPM2 binding), or use 1Password/Vault.
 
