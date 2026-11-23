@@ -23,7 +23,8 @@ import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { createCredentialProxy, createBrokerScope, createServiceRegistry, type CredentialProxy, type RequestInfo } from 'aquaman-proxy';
 import { MemoryStore } from 'aquaman-core';
-import { createSandbox, fakeProxy, json, CODER_CLI, TSX, type Sandbox, type RunResult, type FakeProxy } from './cov-cli-core-helpers.js';
+import { EncryptedFileStore } from '../../packages/proxy/src/core/credentials/store.js';
+import { createSandbox, fakeProxy, json, startDaemon, freePort, CODER_CLI, TSX, PASSWORD, type Sandbox, type RunResult, type FakeProxy } from './cov-cli-core-helpers.js';
 import { startAwsStandIn, type AwsStandIn } from '../helpers/aws-stand-in.js';
 import { SIGV4_PLACEHOLDER_SECRET } from '../../packages/proxy/src/sigv4.js';
 
@@ -313,5 +314,135 @@ describe('which variables exec takes from a route', () => {
     // exec redacts the value it injected for this name; what matters is that the route did not replace it.
     expect(env.BOUND_BY_PROJECT).not.toBe('value-from-the-route');
     expect(result.stdout).not.toContain('somewhere');
+  }, T);
+});
+
+/**
+ * The shipped commands with a real `aquaman daemon` and the encrypted-file
+ * vault. The daemon's aws definition is the builtin one and cannot be pointed
+ * at a stand-in, so this part stops where a request would leave for AWS: it
+ * covers what `init`, `bind`, `exec` and `get` do, and requests the daemon
+ * refuses on its own.
+ */
+describe('aws with a real daemon, up to the point a request would leave the machine', () => {
+  let sb: Sandbox;
+  let port: number;
+  const DAEMON_TOKEN = 'aqm_lb_approute_aws_daemon_0123456789abcd';
+
+  const coder = (args: string[], extraEnv: Record<string, string> = {}): Promise<RunResult> =>
+    new Promise((resolve, reject) => {
+      const child = spawn(TSX, [CODER_CLI, ...args], { cwd: sb.project, stdio: ['ignore', 'pipe', 'pipe'], env: sb.env(extraEnv) });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+      child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+      child.on('error', reject);
+      child.on('close', (code) => resolve({ code, stdout, stderr }));
+    });
+  const vault = () => new EncryptedFileStore(PASSWORD, path.join(sb.config, 'credentials.enc'));
+
+  beforeAll(async () => {
+    sb = createSandbox();
+    port = await freePort();
+    sb.writeConfig([
+      'credentials:',
+      '  backend: encrypted-file',
+      '  proxiedServices: []',
+      'loopback:',
+      '  enabled: true',
+      `  port: ${port}`,
+      '  host: 127.0.0.1',
+      `  token: ${DAEMON_TOKEN}`,
+      'policy:',
+      '  aws:',
+      '    defaultAction: allow',
+      '    rules:',
+      '      - { method: DELETE, path: "/protected-bucket/**", action: deny }',
+      '',
+    ].join('\n'));
+    await vault().set('aws', 'access_key_id', REAL_KEY_ID);
+    await vault().set('aws', 'secret_access_key', REAL_SECRET);
+    sb.installRealCoder();
+    expect((await coder(['init', '--agent', 'claude-code', '--no-hooks', '--json'])).code).toBe(0);
+    const bound = await coder(['bind', 'AWS_ACCESS_KEY_ID=aquaman://aws/access_key_id', '--via-proxy', 'AWS_ENDPOINT_URL', '--json']);
+    expect(bound.code, bound.stderr || bound.stdout).toBe(0);
+    await startDaemon(sb);
+  }, T * 2);
+
+  afterAll(async () => {
+    await sb?.cleanup();
+  });
+
+  /** The variables exec starts a command with, as that command sees them. `--raw` is refused without a terminal, so the token is read by its shape. */
+  const execEnv = async (): Promise<Record<string, string>> => {
+    const ran = await coder(['exec', '--', 'node', '-e', 'console.log(JSON.stringify(Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith("AWS_")).map(([k, v]) => [k, k === "AWS_ACCESS_KEY_ID" ? v.replace(/[0-9a-f]/g, "h") : v]))))'], { AWS_SECRET_ACCESS_KEY: SHELL_SECRET });
+    expect(ran.code, ran.stderr).toBe(0);
+    expect(ran.stdout + ran.stderr).not.toContain(REAL_SECRET);
+    expect(ran.stdout + ran.stderr).not.toContain(REAL_KEY_ID);
+    return JSON.parse(ran.stdout.trim().split('\n').pop()!);
+  };
+
+  it('exec gives a command the route token, the placeholder secret and the proxy URLs, and no stored value', async () => {
+    const env = await execEnv();
+    expect(env).toEqual({
+      AWS_ACCESS_KEY_ID: `aqm_rt_${'h'.repeat(48)}`.replace(/a/g, 'h'),
+      AWS_SECRET_ACCESS_KEY: SIGV4_PLACEHOLDER_SECRET,
+      AWS_ENDPOINT_URL: `http://127.0.0.1:${port}/aws`,
+      AWS_ENDPOINT_URL_IAM: `http://127.0.0.1:${port}/aws/_global`,
+      AWS_ENDPOINT_URL_BEDROCK_RUNTIME: `http://127.0.0.1:${port}/aws/_host/bedrock-runtime`,
+    });
+  }, T);
+
+  it('aquaman get refuses both keys', async () => {
+    for (const key of ['access_key_id', 'secret_access_key']) {
+      const got = await sb.run(['get', `aquaman://aws/${key}`]);
+      expect(got.code, key).not.toBe(0);
+      expect(got.stdout + got.stderr).not.toContain(REAL_SECRET);
+      expect(got.stdout + got.stderr).not.toContain(REAL_KEY_ID);
+    }
+  }, T);
+
+  it('the daemon refuses, without sending anything, what the in-process rows refuse', async () => {
+    const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const sigv4 = (id: string, region = 'us-east-1', service = 's3') =>
+      `AWS4-HMAC-SHA256 Credential=${id}/${day}/${region}/${service}/aws4_request, SignedHeaders=host;x-amz-date, Signature=${'0'.repeat(64)}`;
+    const send = (urlPath: string, headers: Record<string, string>, method = 'GET') =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const req = http.request({ host: '127.0.0.1', port, path: urlPath, method, headers }, (r) => {
+          let body = '';
+          r.on('data', (c) => { body += c; });
+          r.on('end', () => resolve({ status: r.statusCode ?? 0, body }));
+        });
+        req.on('error', reject);
+        req.end();
+      });
+    // The route token, as a command started by exec would hold it.
+    const ran = await coder(['exec', '--', 'node', '-e', 'console.log(Buffer.from(process.env.AWS_ACCESS_KEY_ID).toString("hex"))']);
+    const token = Buffer.from(ran.stdout.trim().split('\n').pop()!, 'hex').toString();
+    expect(token).toMatch(/^aqm_rt_[0-9a-f]{48}$/);
+
+    const rows: Array<[string, string, Record<string, string>, string, number, string | undefined]> = [
+      ['the agent hosts\' token in the credential scope', '/aws/my-bucket/key', { Authorization: sigv4(DAEMON_TOKEN) }, 'GET', 401, undefined],
+      ['a wrong token', '/aws/my-bucket/key', { Authorization: sigv4(`aqm_rt_${'0'.repeat(48)}`) }, 'GET', 401, undefined],
+      ['a host of several labels', '/aws/_host/evil.example/x', { Authorization: sigv4(token) }, 'GET', 400, 'sigv4_host_invalid'],
+      ['a region that is not a region', '/aws/my-bucket/key', { Authorization: sigv4(token, 'evil') }, 'GET', 400, 'sigv4_region_invalid'],
+      ['a presigned URL', '/aws/my-bucket/key?X-Amz-Signature=abc', { Authorization: sigv4(token) }, 'GET', 400, 'sigv4_presigned_unsupported'],
+      ['signed chunks', '/aws/my-bucket/key', { Authorization: sigv4(token), 'X-Amz-Content-Sha256': 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD' }, 'PUT', 400, 'sigv4_streaming_unsupported'],
+      ['a request the policy denies', '/aws/protected-bucket/key', { Authorization: sigv4(token) }, 'DELETE', 403, undefined],
+      ['the same through a host selector', '/aws/_host/s3/protected-bucket/key', { Authorization: sigv4(token) }, 'DELETE', 403, undefined],
+      ['a broker endpoint', '/broker/resolve', { Authorization: sigv4(token) }, 'POST', 401, undefined],
+    ];
+    for (const [name, urlPath, headers, method, status, code] of rows) {
+      const res = await send(urlPath, headers, method);
+      expect(res.status, name).toBe(status);
+      if (code) expect(JSON.parse(res.body).code, name).toBe(code);
+      expect(res.body, name).not.toContain(REAL_SECRET);
+    }
+
+    const audit = fs.readFileSync(path.join(sb.config, 'audit', 'current.jsonl'), 'utf-8');
+    expect(audit).toContain('"aws"');
+    expect(audit).not.toMatch(/aqm_rt_/);
+    expect(audit).not.toContain(REAL_SECRET);
+    expect(audit).not.toContain(REAL_KEY_ID);
   }, T);
 });
