@@ -130,26 +130,6 @@ Scoped since v0.15.0, because it hands out values rather than injecting them:
 
 `aquaman get <aquaman://service/key>` (v0.16.0+) is the command-line form, for tools that take a command printing a secret: Docker Sandboxes (`sbx secret set <svc> --command`), Codex (`model_providers.<id>.auth.command`), Claude Code (`apiKeyHelper`), OpenClaw exec secret providers and Hermes command secret sources. It only talks to the running daemon, so the same scope applies and every read is audited. It refuses to print to an interactive terminal without `--show`, and prints no trailing newline when another program reads it. The value goes to the program that runs the command.
 
-### Ask first
-
-A declared ref is handed to any program running as you that asks. To be asked before that happens, mark the ref:
-
-```bash
-aquaman broker ask aquaman://github/token            # or: aquaman broker allow <ref> --ask, aquaman request <ref> --ask
-aquaman broker ask aquaman://github/token --off      # remove the mark; you approve this in the daemon's dialog
-```
-
-- The first time a marked ref's value is requested on the Unix socket (`aquaman get`, `aquaman-coder exec`, `POST /broker/resolve`) or through the OpenShell driver's Resolve, the daemon shows a dialog and the request waits, 90 seconds by default. `aquaman get --ask-timeout <seconds>` changes the wait.
-- The dialog says what a yes means: aquaman cannot tell which program is asking, the value is handed to it, and for the next 8 hours (or until the daemon is restarted or its vault is locked) any program running as you can read that value without another dialog. The window is `broker.askFirstWindowSeconds` in `config.yaml`, between 60 and 86400 seconds, read when the daemon starts. One yes covers one ref. `aquaman lock` takes back every yes.
-- A request on the loopback listener never raises a dialog. Until you have allowed the ref it is answered `ask_first_required`, with the command to run on the machine to be asked: `aquaman get <ref> > /dev/null`. After your yes the loopback listener is served like any other caller until the window ends.
-- `aquaman get` exits 0 with the value, 2 when you declined, 3 when nobody answered or no dialog could be shown, 1 for anything else. A refusal is `404` with `code` `ask_first_declined`, `ask_first_unanswered` or `prompt_unavailable`; a request that carries `"ask": false` raises no dialog and gets `ask_first_required`. While the vault is locked the answer is `503` `vault_locked` and nobody is asked.
-- The mark is one item in your vault (`aquaman_internal/ask_first`), not a line in `config.yaml` or `projects.yaml`, so editing those files does not remove it. A record there that cannot be read marks every ref, so a damaged record means more dialogs, never fewer. `aquaman broker list` shows the marks while the daemon runs. The record holds 256 refs; marking one more is refused with `ask_first_full`.
-- On the `1password` and `systemd-creds` backends two refs can name one item (`cloudflare-ai/api_key` and `cloudflare/ai-api_key` are both the 1Password item `aquaman-cloudflare-ai-api_key`). A mark, a yes and a no hold for the item under either name, and the dialog says which marked ref it is the same item as.
-- Setting a mark asks nobody. Removing one is decided in the dialog; no flag or environment variable answers it. Where the daemon cannot show a dialog, `aquaman broker ask <ref> --off` asks for a typed `yes` at a terminal. If the record cannot be read, the dialog lists the refs that stay marked after a yes (every declared ref but the one you are asked about), and that list is what is written.
-- Forwarding: a request the proxy forwards for a builtin service is not gated. The credential is added on the way out to an upstream that is part of aquaman and cannot be changed by a file. A request forwarded for a service defined in `services.yaml` is gated, because that file decides where the credential is sent: on the Unix socket the dialog shows the address, and on the loopback listener the request is refused with `ask_first_required`. The refusal is `403` with the same `code` as above. Refs bound with `--via-proxy` are never handed out, so there is nothing to mark.
-- Every dialog outcome is an audit entry; the read after a yes is one as before.
-- Limits: a yes is for the ref, not for a program, so inside the window every program running as you reads it; software that can write to the vault itself can delete the mark; and where no dialog can be shown, the typed `yes` is the only check on removing a mark, and a program can give itself a terminal.
-
 ## Credential requests: the agent asks, a person supplies
 
 ```bash
