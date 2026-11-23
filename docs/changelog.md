@@ -12,6 +12,16 @@ pip install -U aquaman-hermes                     # Hermes users
 
 ## 0.21.0
 
+Four things that kept aquaman from being the answer in cases people asked about: a stdio MCP server can now run under `aquaman-coder exec`, a credential can be marked so that a person is asked before its value is handed out, the Bitwarden backend works with the login item, and the proxy signs AWS requests.
+
+### A stdio MCP server under `aquaman-coder exec`
+
+- `aquaman-coder exec -- node ./mcp/server.js` works as the `command` of a stdio server in `.mcp.json`. Each reply reaches the host when the server writes it; before, the end of a reply was held back until the next one.
+- A reply that contains an injected value reaches the host with `[REDACTED:injected-value]` in its place.
+- A token bound with `--via-proxy` gives the server a local token and the proxy's address in place of the key, so the key is never in the server's process.
+- `exec` passes SIGTERM, SIGINT and SIGHUP on to the command, so a server stops when its host stops the wrapper.
+- What was run, in Claude Code 2.1.330 with a stand-in server and a stand-in API: the server connected, the tool that calls the API was answered with the real key added by the proxy, the tool that returns its own token came back redacted, and no server was left running after the session. Guide: [Credentials for MCP servers](https://aquaman.sh/docs/mcp/).
+
 ### Ask first: a dialog before a credential is handed out
 
 A declared reference is handed to any program running as you that asks the daemon for it. A reference can now be marked "ask first": the daemon shows its dialog the first time the value is requested and remembers a yes for a while. Nothing changes for references that are not marked.
@@ -30,13 +40,29 @@ A declared reference is handed to any program running as you that asks the daemo
 
 ### AWS through the proxy
 
-- **AWS through the proxy.** A new built-in service, `aws`, and a new auth mode in which the proxy signs each request with AWS Signature Version 4. `aquaman-coder bind AWS_ACCESS_KEY_ID=aquaman://aws/access_key_id --via-proxy AWS_ENDPOINT_URL` gives a command a local token as its access key id, a fixed placeholder as its secret access key and the proxy as its AWS endpoint. The access key id, secret access key and optional session token stay in the vault. Guide: [Call AWS without giving the app your AWS keys](https://aquaman.sh/docs/aws/).
+- A new built-in service, `aws`, and a new auth mode in which the proxy signs each request with AWS Signature Version 4. `aquaman-coder bind AWS_ACCESS_KEY_ID=aquaman://aws/access_key_id --via-proxy AWS_ENDPOINT_URL` gives a command a local token as its access key id, a fixed placeholder as its secret access key and the proxy as its AWS endpoint. The access key id, secret access key and optional session token stay in the vault. Guide: [Call AWS without giving the app your AWS keys](https://aquaman.sh/docs/aws/).
 - The proxy builds the AWS host itself, always under `amazonaws.com`, from the region and service the client signed for. `/aws/_host/<prefix>` reaches an endpoint whose name is not its signing name and `/aws/_global` a service with one endpoint for all regions; `exec` sets `AWS_ENDPOINT_URL_IAM` and `AWS_ENDPOINT_URL_BEDROCK_RUNTIME` to those forms.
 - Refused with an error, a code and a fix, and never forwarded half-signed: bodies sent as signed chunks, presigned URLs, SigV4A, and bodies over 16 MiB other than S3 uploads with an unsigned payload.
 - Request policy applies to the method and the path AWS receives. It does not see an action named in `X-Amz-Target` or in the body, or which AWS service a request is for.
 - What was run: the signer against ten cases of AWS's published Signature Version 4 test suite, and an app using the AWS SDK for JavaScript v3 (S3, DynamoDB, IAM, Bedrock Runtime) started by `aquaman-coder exec`, against a local server that checks every signature with the stored secret using the SDK's own signer.
 - `POST /broker/route` can name further variables for the program in `env` (for `aws`, the placeholder secret and the two endpoint variables). `exec` sets them, except names that change how programs are loaded and names the project binds itself.
 - Built-in services: 27.
+
+### Bitwarden works with the login item: `aquaman unlock`
+
+With the `bitwarden` backend the daemon needed a Bitwarden session in the environment it was started from, so a daemon started at login by `aquaman service install` could not read the vault. Now:
+
+- **The daemon starts and stays up while the vault is locked.** Requests that need a credential are answered with the code `vault_locked` and the fix `Run: aquaman unlock`. Health checks, status, request policy and everything else that needs no credential keep working.
+- **`aquaman unlock`**, run by a person in a terminal, opens it. Bitwarden's own CLI asks for the master password (`bw unlock --raw`, attached to your terminal), so aquaman never sees it. aquaman takes the session that comes out and hands it to the running daemon over its Unix socket; the daemon checks it with `bw status` and keeps it in memory. It is not printed, not passed as a command argument, and not written to disk, the keychain or the login item.
+- **`aquaman lock`** makes the daemon drop the session and the values it had cached. It does not run `bw`; to end the session everywhere, run `bw lock`.
+- **A session that Bitwarden ends** (`bw lock`, `bw logout`, another `bw unlock`) puts the daemon back into `vault_locked` with the same fix. It does not have to be restarted.
+- `aquaman status`, `aquaman doctor` and `aquaman init --agent` report a locked vault, and `aquaman service install` and `aquaman service status` list `aquaman unlock` as the step after each login.
+- A coding agent's commands are not blocked while the vault is locked: they run without the project's credentials and the agent is told that a person has to unlock. `aquaman request` answers `vault_locked` without showing a dialog.
+- The endpoint that takes the session answers on the Unix socket only, never on the loopback listener. Other software running as you can call it; with a session it already holds it makes the daemon read the vault `bw` is logged in to, and anything else is refused. It can also lock the daemon.
+- The audit anchor is not read or written while the vault is locked, so entries written in that time are anchored after the next unlock.
+- Starting the daemon from a shell with `export BW_SESSION=$(bw unlock --raw)` works as before.
+
+How to use it: [Bitwarden: unlock after you log in](https://aquaman.sh/docs/autostart/#bitwarden-unlock-after-you-log-in).
 
 ## 0.20.0
 

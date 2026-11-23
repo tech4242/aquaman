@@ -53,10 +53,49 @@ No flag and no environment variable skips the question.
 
 This is not a boundary against software running as you: such software can write a launch agent or a user unit itself. What it does is keep aquaman's own commands from adding a login item nobody saw.
 
+## Bitwarden: unlock after you log in
+
+The Bitwarden backend reads your vault through the `bw` CLI, and `bw` needs a session key that only your master password produces. The login item holds no secret, so a daemon started at login has no session. It starts anyway and stays up with the vault locked: requests that need a credential are answered with the code `vault_locked` and the fix `Run: aquaman unlock`, and everything else (health checks, policy, status) works.
+
+After logging in, run this once in a terminal:
+
+```bash
+aquaman unlock
+```
+
+- **Bitwarden asks for your master password, not aquaman.** The command starts `bw unlock --raw` with your terminal attached, so the prompt you see is Bitwarden's own. aquaman never sees the master password.
+- **aquaman takes only the session that comes out** and hands it to the running daemon over its Unix socket. The daemon checks it with `bw status` before using it and keeps it in memory.
+- **The session is not written anywhere:** not to `config.yaml`, not to the keychain, not into the login item. It is not printed and is not put into any command's arguments. `bw` gets it in its environment, which is how `bw` takes a session.
+- **It lasts until the daemon stops,** until you run `aquaman lock`, or until Bitwarden ends the session. Bitwarden's documentation says a session key is valid until `bw lock` or `bw logout`, and the CLI's help for `bw unlock` says that unlocking ends earlier session keys. When that happens the daemon goes back to `vault_locked` and you run `aquaman unlock` again.
+- **If your shell already has a `BW_SESSION` that `bw` accepts,** `aquaman unlock` hands that one over and does not ask for the password again.
+- **Commands that read the vault from your shell** (`aquaman setup`, `aquaman credentials add`, `list`, `delete`, `unlink` and `aquaman audit verify`) do not go through the daemon and need a session of their own. To use one session for both, unlock in the shell first (`export BW_SESSION="$(bw unlock --raw)"`) and then run `aquaman unlock` there. Unlocking a second time would end the first session, the daemon's with it.
+
+`aquaman unlock` needs a terminal. Run by an agent or a script it stops with that as the fix. It does nothing without a running daemon: there would be nowhere to put the session.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | The daemon's vault is unlocked, now or already |
+| 1 | Cannot run here: another backend is configured, no terminal, `bw` is not installed, or `bw` is not logged in (`bw login` is your step) |
+| 2 | Bitwarden did not unlock the vault: a wrong master password, or you cancelled |
+| 3 | The daemon is not running. Nobody was asked for a password |
+| 4 | The daemon refused the session |
+
+`aquaman lock` makes the daemon drop the session and the credential values it had cached. It does not run `bw`: the session key itself stays valid for anything else that holds a copy, so to end it everywhere run `bw lock`.
+
+`aquaman status` and `aquaman doctor` show whether the daemon's vault is locked. `aquaman service install` and `aquaman service status` list this step when the backend is `bitwarden`.
+
+While the vault is locked:
+
+- A coding agent's commands run without the project's credentials, under the host's own permission prompts, and the agent is told that a person has to run `aquaman unlock`. No command is blocked. A command you start yourself with `aquaman-coder exec` stops and says the same.
+- `aquaman request` answers `vault_locked` without showing a dialog.
+- The audit log is still written. The anchor that ties the log to your vault is read and written again once the vault is unlocked, so entries written while it was locked are not anchored until then.
+
+What this is not: a boundary against other software running as you. Such software can call the same socket. With a session it already holds it can make the daemon read the vault that `bw` is logged in to, which it could read itself; with anything else it is refused. It can also lock the daemon, which costs you another `aquaman unlock`.
+
 ## Limits
 
 - **The `encrypted-file` backend is refused.** Its daemon needs `AQUAMAN_ENCRYPTION_PASSWORD` in the environment, and a login item can only have that by storing the password on disk, which aquaman does not do. Use a backend that needs no password in the environment (the macOS Keychain, the Linux keyring, or `systemd-creds`), or keep starting the daemon by hand with `aquaman daemon`.
-- **Settings that exist only in your shell do not reach the service.** The daemon started at login does not inherit your shell's environment. A `VAULT_TOKEN`, `BW_SESSION`, `OP_SERVICE_ACCOUNT_TOKEN` or `AQUAMAN_BACKEND` that you export before `aquaman daemon` is not there. `install` and `status` list the names of such variables that are set (`env_not_passed`), never their values. Put what can go in `~/.aquaman/config.yaml` there; a backend that needs a secret in the environment has to be started by hand.
+- **Settings that exist only in your shell do not reach the service.** The daemon started at login does not inherit your shell's environment. A `VAULT_TOKEN`, `BW_SESSION`, `OP_SERVICE_ACCOUNT_TOKEN` or `AQUAMAN_BACKEND` that you export before `aquaman daemon` is not there. `install` and `status` list the names of such variables that are set (`env_not_passed`), never their values. Put what can go in `~/.aquaman/config.yaml` there. For Bitwarden, `aquaman unlock` takes the place of `BW_SESSION` (see above). Any other backend that needs a secret in the environment has to be started by hand.
 - **Headless Linux needs lingering.** systemd starts your user units at boot only if your user lingers; otherwise they start when you log in and stop when you log out. aquaman does not change that itself. It reports the command as a step for a person: `loginctl enable-linger <user>`.
 - **Linux without a login session.** `systemctl --user` needs your user manager. Over SSH without one, `install` fails and says so; enable lingering first.
 - **No dialog on a headless machine.** Without a desktop session the daemon cannot show the approval dialog, so the command answers `pending`. Run it in a terminal.
@@ -77,3 +116,4 @@ To check by hand that nothing is left: the file in the table above is gone, and 
 - Do not install the service unprompted. Propose it when the user runs an always-on host or asks why the daemon was gone after a reboot.
 - Run `aquaman service install --json` (or pass `--service` to `aquaman init --agent`). You have no terminal, so the user sees a dialog. `declined` means stop and ask; `pending` means give the user the `fix`.
 - Do not write the unit file yourself, and do not look for a way around a `declined`.
+- With the Bitwarden backend, a reply with the code `vault_locked` means the user has to run `aquaman unlock` in a terminal of their own. You cannot run it: it needs a terminal and their master password. Tell them, and carry on with what needs no credential.

@@ -114,7 +114,13 @@ Output fields:
 { "status": "error", "ref": "aquaman://github/token", "error": "Cannot reach the aquaman proxy at /Users/you/.aquaman/proxy.sock", "code": "proxy_unreachable", "fix": "Start the daemon in the background: aquaman init --agent <agent> --no-hooks   (in a terminal of your own: aquaman daemon)" }
 ```
 
+```json
+{ "status": "error", "ref": "aquaman://github/token", "error": "The vault is locked, so nothing can be stored or approved yet", "code": "vault_locked", "fix": "Run: aquaman unlock" }
+```
+
 The wording of `reason`, `error` and `fix` can change between versions; branch on `status` and the exit code.
+
+`vault_locked` (exit code 4, and no dialog is shown) comes from a daemon on the Bitwarden backend that has no session yet, or whose session Bitwarden has ended. The fix is the user's: `aquaman unlock` needs a terminal and their master password, so do not run it yourself. Tell the user to run it in a terminal of their own, then repeat your command. `aquaman get`, `aquaman-coder exec` and the proxy itself answer with the same code and fix while the vault is locked, and `aquaman init --agent` lists the step under `human_steps` and reports `"vault": "locked"`.
 
 One reference per call. For several keys, run the command once for each; the dialogs appear one after another.
 

@@ -14,8 +14,9 @@ import { KeePassXCStore } from './backends/keepassxc.js';
 import { createLinkSource, type LinkChange, type ParsedLocator } from './links.js';
 import { LinkedStore } from './linked-store.js';
 import { SystemdCredsStore } from './backends/systemd-creds.js';
+import type { SessionAdoption, VaultState } from './vault-lock.js';
 
-export type { ParsedLocator };
+export type { ParsedLocator, SessionAdoption, VaultState };
 
 export interface Credential {
   service: string;
@@ -46,6 +47,15 @@ export interface CredentialStore {
   approveLink?(service: string, key: string, locator: string): Promise<void>;
   revokeLink?(service: string, key: string): Promise<boolean>;
   linkApproved?(name: string, locator: string): Promise<boolean>;
+  /**
+   * On a backend that a person's session opens (`bitwarden`), and on
+   * wrappers around one; see vault-lock.ts. Absent everywhere else.
+   * `vaultState` answers from memory, `checkSession` asks the vault's CLI.
+   */
+  vaultState?(): VaultState;
+  adoptSession?(session: string): Promise<SessionAdoption>;
+  checkSession?(): Promise<VaultState>;
+  forgetSession?(): void;
 }
 
 export interface CredentialStoreOptions {
@@ -77,6 +87,11 @@ export interface CredentialStoreOptions {
    * bare backend. By default the store is link-aware when the config has links.
    */
   links?: 'always' | false;
+  /**
+   * For a process that serves requests. A backend that a person's session
+   * opens then starts locked instead of refusing to start (vault-lock.ts).
+   */
+  serving?: boolean;
   /** The config.yaml that holds `credentials.links`. Default: the active config file. */
   linksConfigPath?: string;
   /** Told when a link appears, goes away or is re-pointed while the process runs. */
@@ -464,7 +479,8 @@ async function createBackendStore(options: CredentialStoreOptions): Promise<Cred
       return new BitwardenStore({
         folder: options.bitwardenFolder,
         organizationId: options.bitwardenOrganizationId,
-        collectionId: options.bitwardenCollectionId
+        collectionId: options.bitwardenCollectionId,
+        serving: options.serving
       });
     }
 

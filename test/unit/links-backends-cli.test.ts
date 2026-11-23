@@ -172,7 +172,7 @@ describe('BitwardenStore.readLinked', () => {
     mockSpawnSync.mockReturnValueOnce(fail('Not found.'));
     expect(await store.readLinked(locator('bitwarden', `bw://${ID}/password`))).toBeNull();
     mockSpawnSync.mockReturnValueOnce(fail('Vault is locked.'));
-    await expect(store.readLinked(locator('bitwarden', `bw://${ID}/password`))).rejects.toThrow(/Vault is locked/);
+    await expect(store.readLinked(locator('bitwarden', `bw://${ID}/password`))).rejects.toThrow(/vault is locked/i);
   });
 
   it('an item aquaman wrote is not read under a second name, by name or by id', async () => {

@@ -31,6 +31,7 @@
 import type { AuditLogger, ChainVerification } from './core/audit/logger.js';
 import type { CredentialStore } from './core/credentials/store.js';
 import { RESERVED_SERVICE } from './broker-scope.js';
+import { isVaultLocked } from './core/credentials/vault-lock.js';
 
 /** The anchor's key under `RESERVED_SERVICE`. */
 export const AUDIT_ANCHOR_KEY = 'audit_anchor';
@@ -212,6 +213,12 @@ export interface AuditAnchorWriter {
   /** Write the anchor now if the log has grown since the last one. Never rejects. */
   flush(): Promise<void>;
   /**
+   * For the moment a locked vault was opened: compare the log with the
+   * stored anchor if that could not be done at start, then write the anchor
+   * if the log has grown. Never rejects.
+   */
+  recheck(): Promise<void>;
+  /**
    * Stop listening to the logger and write a last anchor. Never rejects, and
    * settles after `stopTimeoutMs` at the latest: a store that does not answer
    * must not keep a stopping process alive.
@@ -240,7 +247,7 @@ export function createAuditAnchorWriter(opts: AuditAnchorWriterOptions): AuditAn
 
   if (!(intervalMs > 0)) {
     const nothing = Promise.resolve();
-    return { ready: nothing, flush: () => nothing, stop: () => nothing, isPaused: () => false };
+    return { ready: nothing, flush: () => nothing, recheck: () => nothing, stop: () => nothing, isPaused: () => false };
   }
 
   /** The anchor this writer last read or wrote. `undefined` until the store has been read; `null` when it holds none. */
@@ -257,12 +264,35 @@ export function createAuditAnchorWriter(opts: AuditAnchorWriterOptions): AuditAn
   const reason = (err: unknown): string => (err instanceof Error ? err.message : String(err));
   const retryNote = `It is tried again in ${opts.intervalSeconds} seconds. Run: aquaman doctor`;
 
+  /**
+   * A locked vault is a state a person ends with `aquaman unlock`, not a
+   * failure of the audit log and not a sign of tampering: entries are still
+   * written and chained, and the comparison with the anchor and the next
+   * anchor write happen once the vault is open. It is said once per locked
+   * spell, in plain words, and tried again every interval without a line.
+   * What it costs is stated where the anchor's limits are: entries written
+   * while the vault is locked are not anchored until it is unlocked.
+   */
+  let lockedNoted = false;
+  const noteLocked = (): void => {
+    if (lockedNoted) return;
+    lockedNoted = true;
+    report(
+      'Audit anchor: the vault is locked, so the audit log is not compared with its anchor and no anchor is written yet. ' +
+      'Requests are still logged. Both happen after: aquaman unlock',
+    );
+  };
+
   /** The anchor the store holds now. `false` when it could not be read or is not an anchor; both are reported. */
   const readStored = async (): Promise<AuditAnchor | null | false> => {
     try {
-      return await readAuditAnchor(store);
+      const found = await readAuditAnchor(store);
+      lockedNoted = false;
+      return found;
     } catch (err) {
-      if (err instanceof AuditAnchorFormatError) {
+      if (isVaultLocked(err)) {
+        noteLocked();
+      } else if (err instanceof AuditAnchorFormatError) {
         paused = true;
         anchored = null;
         report(`AUDIT FAILURE: ${reason(err)}, so the audit log cannot be checked against it. No new anchor is written. Run: aquaman audit verify`);
@@ -333,6 +363,10 @@ export function createAuditAnchorWriter(opts: AuditAnchorWriterOptions): AuditAn
       anchored = await writeAuditAnchor(store, { seq: target.seq, hash: target.hash, from });
     } catch (err) {
       stale = true;
+      if (isVaultLocked(err)) {
+        noteLocked();
+        return;
+      }
       report(
         `AUDIT FAILURE: could not write the audit anchor to the credential store: ${reason(err)}. ` +
         `Requests are still served and logged; entries after sequence ${stored?.seq ?? 0} are not anchored yet. ${retryNote}`,
@@ -388,6 +422,15 @@ export function createAuditAnchorWriter(opts: AuditAnchorWriterOptions): AuditAn
   return {
     ready,
     flush,
+    async recheck() {
+      chain = chain.then(async () => {
+        if (anchored === undefined) await load();
+      }).catch((err) => {
+        report(`AUDIT FAILURE: the audit log could not be compared with its anchor: ${reason(err)}. ${retryNote}`);
+      });
+      await chain;
+      await flush();
+    },
     async stop() {
       stopped = true;
       logger.onEntryWritten(null);

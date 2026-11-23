@@ -32,6 +32,7 @@ import type { CredentialStore } from './core/credentials/store.js';
 import { RESERVED_SERVICE, ASK_FIRST_KEY, isReservedService } from './core/credentials/reserved.js';
 import { clampPromptTimeout, type CredentialPrompter, type PromptResult, type ReadVia } from './credential-prompt.js';
 import type { PromptLimiter } from './service-consent.js';
+import { isVaultLocked, VAULT_LOCKED_CODE, VAULT_UNLOCK_FIX } from './core/credentials/vault-lock.js';
 
 export const ASK_FIRST_PATH = '/broker/ask-first';
 
@@ -245,7 +246,9 @@ export class AskFirstGate {
     const name = `${service}/${key}`;
     try {
       if (!(await this.marks.has(name))) return true;
-    } catch {
+    } catch (err) {
+      // A locked vault is reported as that, with its own fix, by the caller.
+      if (isVaultLocked(err)) throw err;
       return false;
     }
     return this.approved(name) || !this.declinedRecently(readKey(name));
@@ -480,10 +483,12 @@ export async function handleAskFirst(req: IncomingMessage, res: ServerResponse, 
     return;
   }
 
-  const vaultError = (err: unknown) => reply(500, {
-    error: `Vault backend error reading or writing the ask-first record: ${err instanceof Error ? err.message : String(err)}`,
-    fix: 'Check that the configured backend is accessible. Run: aquaman doctor',
-  });
+  const vaultError = (err: unknown) => isVaultLocked(err)
+    ? reply(503, { error: err.message, fix: err.fix ?? VAULT_UNLOCK_FIX, code: VAULT_LOCKED_CODE })
+    : reply(500, {
+        error: `Vault backend error reading or writing the ask-first record: ${err instanceof Error ? err.message : String(err)}`,
+        fix: 'Check that the configured backend is accessible. Run: aquaman doctor',
+      });
 
   if (body.reload === true) {
     gate.reload();
