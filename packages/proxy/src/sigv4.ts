@@ -60,7 +60,6 @@ const REGION = /^[a-z]{2}(?:-[a-z]{2,12}){1,2}-[0-9]{1,2}$/;
 const OTHER_PARTITION = /^(?:cn|eu-isoe|us-iso[a-z]?)-/;
 
 const MAX_AUTHORIZATION_LENGTH = 2048;
-const MAX_HOST_PREFIX_LABELS = 4;
 
 export const SIGV4_HOST_SEGMENT = '_host';
 export const SIGV4_GLOBAL_SEGMENT = '_global';
@@ -158,6 +157,10 @@ export interface SigV4Target {
  * services with one endpoint for every region (`iam.amazonaws.com`). A
  * per-service endpoint variable (`AWS_ENDPOINT_URL_<SERVICE>`) can point at
  * either. Every label is matched before it is used; the suffix is constant.
+ *
+ * The prefix is one label, never several. `<bucket>.s3` would address a
+ * bucket by its virtual-hosted name with the bucket gone from the path, and
+ * a policy rule written for `/<bucket>/**` would no longer see it.
  */
 export function resolveSigV4Target(segments: readonly string[], scope: Pick<SigV4Authorization, 'region' | 'service'>): SigV4Target | SigV4Refusal {
   const hostFix = 'Use /aws/<path>, /aws/_host/<endpoint-prefix>/<path> or /aws/_global/<path>; see docs/aws.md';
@@ -180,11 +183,10 @@ export function resolveSigV4Target(segments: readonly string[], scope: Pick<SigV
     rest = segments.slice(1);
   } else if (segments[0] === SIGV4_HOST_SEGMENT) {
     const prefix = segments[1];
-    const parts = typeof prefix === 'string' ? prefix.split('.') : [];
-    if (parts.length === 0 || parts.length > MAX_HOST_PREFIX_LABELS || parts.some((p) => !DNS_LABEL.test(p))) {
-      return refusal(400, 'sigv4_host_invalid', `/${SIGV4_HOST_SEGMENT}/ must be followed by an endpoint prefix made of lower-case DNS labels, such as bedrock-runtime`, hostFix);
+    if (typeof prefix !== 'string' || !DNS_LABEL.test(prefix)) {
+      return refusal(400, 'sigv4_host_invalid', `/${SIGV4_HOST_SEGMENT}/ must be followed by an endpoint prefix that is one lower-case DNS label, such as bedrock-runtime`, hostFix);
     }
-    labels = [...parts, scope.region];
+    labels = [prefix, scope.region];
     rest = segments.slice(2);
   } else {
     labels = [scope.service, scope.region];
@@ -195,9 +197,31 @@ export function resolveSigV4Target(segments: readonly string[], scope: Pick<SigV
   return { ok: true, host, region, service: scope.service, segments: rest };
 }
 
+/**
+ * How many leading segments of the path after `/aws` are the proxy's own
+ * host selectors. Request policy is matched on the path without them, which
+ * is the path AWS receives, so a rule cannot be sidestepped by choosing the
+ * host a different way.
+ */
+export function sigV4RoutingSegmentCount(segments: readonly string[]): number {
+  if (segments[0] === SIGV4_GLOBAL_SEGMENT) return 1;
+  if (segments[0] === SIGV4_HOST_SEGMENT) return Math.min(2, segments.length);
+  return 0;
+}
+
 /** URI-encode as AWS defines it: every byte except `A-Z a-z 0-9 - . _ ~`, upper-case hex. */
 export function awsUriEncode(text: string): string {
   return encodeURIComponent(text).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+/**
+ * The path segments sent to AWS. For S3 each one is written in the one
+ * encoding S3 signs (the key decoded, then encoded by `awsUriEncode`), so the
+ * path on the wire and the path in the signature are the same text however
+ * the client spelled the key. Other services get the segments as sent.
+ */
+export function sigV4WireSegments(segments: readonly string[], service: string): string[] {
+  return service === 's3' ? segments.map((s) => awsUriEncode(decodeURIComponent(s))) : [...segments];
 }
 
 /**

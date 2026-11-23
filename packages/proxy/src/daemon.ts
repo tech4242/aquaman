@@ -35,7 +35,9 @@ import {
   sha256Hex,
   sigV4AuthorizationRefusal,
   sigV4RouteEnv,
+  sigV4RoutingSegmentCount,
   sigV4TokenCandidates,
+  sigV4WireSegments,
   signSigV4,
 } from './sigv4.js';
 import type { CredentialLinker } from './core/credentials/linked-store.js';
@@ -557,9 +559,13 @@ export class CredentialProxy {
     const credentialSlot = authMode === 'url-path' && serviceDef.authPathTemplate
       ? findUrlPathCredentialSlot(serviceSegments, serviceDef.authPathTemplate)
       : null;
+    // Likewise the segments that only select an AWS host: policy matches the
+    // path AWS receives, whichever way the host was chosen.
     const canonicalSegments = credentialSlot
       ? serviceSegments.filter((_, i) => i !== credentialSlot.index)
-      : serviceSegments;
+      : authMode === 'sigv4'
+        ? serviceSegments.slice(sigV4RoutingSegmentCount(serviceSegments))
+        : serviceSegments;
     const remainingPath = '/' + canonicalSegments.join('/');
 
     const requestInfo: RequestInfo = {
@@ -600,7 +606,7 @@ export class CredentialProxy {
     }
 
     if (authMode === 'sigv4') {
-      await this.forwardSigV4(req, res, serviceDef, canonicalSegments, target.search, url, requestInfo);
+      await this.forwardSigV4(req, res, serviceDef, serviceSegments, target.search, url, requestInfo);
       return;
     }
 
@@ -875,8 +881,6 @@ export class CredentialProxy {
       requestInfo.statusCode = status;
       this.emitRequest(requestInfo);
       res.setHeader('Content-Type', 'application/json');
-      // The body may not have been read, so this connection is not reused.
-      if (!req.complete) res.setHeader('Connection', 'close');
       res.statusCode = status;
       res.end(JSON.stringify(body));
     };
@@ -917,6 +921,52 @@ export class CredentialProxy {
       return;
     }
     const trailingSlash = awsTarget.segments.length > 0 && rawPath.endsWith('/');
+    // The URL goes to AWS as sent, so it must not carry what the headers are
+    // cleaned of.
+    let decodedUrl = rawUrl;
+    try { decodedUrl = decodeURIComponent(rawUrl); } catch { /* the raw form is checked */ }
+    if ([rawUrl, decodedUrl].some((u) => this.carriesLocalToken(u) || u.includes(SIGV4_PLACEHOLDER_SECRET))) {
+      refuse(400, { error: 'The request URL contains a local proxy token or the placeholder secret, which are never sent to AWS', fix: 'Remove it from the path and the query string', code: 'sigv4_local_token_in_url' });
+      return;
+    }
+
+    // Headers: everything the client's signature was made of is left behind,
+    // as is anything that carries one of this proxy's tokens or the placeholder.
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (isSigV4StrippedHeader(key)) continue;
+      const values = Array.isArray(value) ? value : [value ?? ''];
+      if (values.some((v) => this.carriesLocalToken(v) || v.includes(SIGV4_PLACEHOLDER_SECRET))) continue;
+      if (values[0]) headers[key] = values[0];
+    }
+
+    let body: Buffer | null = null;
+    let payloadHash: string;
+    if (plan.mode === 'literal') {
+      payloadHash = plan.value;
+    } else {
+      const read = await this.readBodyCapped(req, SIGV4_MAX_BUFFERED_BODY);
+      if (read === null) {
+        refuse(413, {
+          error: `The request body is larger than ${SIGV4_MAX_BUFFERED_BODY / (1024 * 1024)} MiB, the most the proxy holds in memory to hash for the signature`,
+          fix: 'Send it in smaller parts (a multipart upload), or for S3 with an unsigned payload (x-amz-content-sha256: UNSIGNED-PAYLOAD)',
+          code: 'sigv4_body_too_large',
+        });
+        // Closing a socket that still has unread input resets it, and the
+        // client would lose the answer. What is left of the body is read and
+        // dropped for a moment; a client still sending after that is cut off.
+        req.resume();
+        const closing = setTimeout(() => { if (!req.complete) req.destroy(); }, 2000);
+        closing.unref();
+        req.once('end', () => clearTimeout(closing));
+        req.once('close', () => clearTimeout(closing));
+        return;
+      }
+      body = read;
+      payloadHash = body.length === 0 ? EMPTY_PAYLOAD_SHA256 : sha256Hex(body);
+      delete headers['transfer-encoding'];
+      if (body.length > 0 || header('content-length') !== undefined) headers['content-length'] = String(body.length);
+    }
 
     let accessKeyId: string | null;
     let secretAccessKey: string | null;
@@ -942,38 +992,6 @@ export class CredentialProxy {
     }
     requestInfo.authenticated = true;
 
-    // Headers: everything the client's signature was made of is left behind,
-    // as is anything that carries one of this proxy's tokens or the placeholder.
-    const headers: Record<string, string> = {};
-    for (const [key, value] of Object.entries(req.headers)) {
-      if (isSigV4StrippedHeader(key)) continue;
-      const values = Array.isArray(value) ? value : [value ?? ''];
-      if (values.some((v) => this.carriesLocalToken(v) || v.includes(SIGV4_PLACEHOLDER_SECRET))) continue;
-      if (values[0]) headers[key] = values[0];
-    }
-
-    let body: Buffer | null = null;
-    let payloadHash: string;
-    if (plan.mode === 'literal') {
-      payloadHash = plan.value;
-    } else {
-      const read = await this.readBodyCapped(req, SIGV4_MAX_BUFFERED_BODY);
-      if (read === null) {
-        requestInfo.authenticated = false;
-        refuse(413, {
-          error: `The request body is larger than ${SIGV4_MAX_BUFFERED_BODY / (1024 * 1024)} MiB, the most the proxy holds in memory to hash for the signature`,
-          fix: 'Send it in smaller parts (a multipart upload), or for S3 with an unsigned payload (x-amz-content-sha256: UNSIGNED-PAYLOAD)',
-          code: 'sigv4_body_too_large',
-        });
-        res.once('finish', () => req.destroy());
-        return;
-      }
-      body = read;
-      payloadHash = body.length === 0 ? EMPTY_PAYLOAD_SHA256 : sha256Hex(body);
-      delete headers['transfer-encoding'];
-      if (body.length > 0 || header('content-length') !== undefined) headers['content-length'] = String(body.length);
-    }
-
     const now = amzDate(new Date());
     headers['host'] = awsTarget.host;
     headers['x-amz-date'] = now;
@@ -984,9 +1002,10 @@ export class CredentialProxy {
     for (const [key, value] of Object.entries(headers)) {
       if (key === 'host' || isSigV4SignedHeader(key)) toSign[key] = value;
     }
+    const wireSegments = sigV4WireSegments(awsTarget.segments, awsTarget.service);
     const signed = signSigV4({
       method: req.method || 'GET',
-      canonicalUri: canonicalUri(awsTarget.segments, trailingSlash, awsTarget.service),
+      canonicalUri: canonicalUri(wireSegments, trailingSlash, awsTarget.service),
       canonicalQuery: query.canonical,
       headers: toSign,
       payloadHash,
@@ -1004,7 +1023,7 @@ export class CredentialProxy {
     // while the Host header and the signature still name the AWS host.
     const base = new URL(serviceDef.upstream);
     const toAws = base.protocol === 'https:' && base.hostname === AWS_DNS_SUFFIX && base.port === '';
-    const upstreamPath = `/${awsTarget.segments.join('/')}${trailingSlash ? '/' : ''}${search}`;
+    const upstreamPath = `/${wireSegments.join('/')}${trailingSlash ? '/' : ''}${search}`;
     await this.sendUpstream(base.protocol === 'https:' ? https : http, {
       hostname: toAws ? awsTarget.host : base.hostname,
       port: toAws ? 443 : base.port || (base.protocol === 'https:' ? 443 : 80),

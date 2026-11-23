@@ -18,6 +18,8 @@ import {
   sigV4TokenCandidates,
   sigV4AuthorizationRefusal,
   resolveSigV4Target,
+  sigV4RoutingSegmentCount,
+  sigV4WireSegments,
   canonicalQuery,
   canonicalUri,
   payloadPlan,
@@ -154,6 +156,14 @@ describe('canonical URI and query', () => {
     expect(canonicalUri(['bucket', 'dir'], true, 's3')).toBe('/bucket/dir/');
   });
 
+  it('an S3 path goes on the wire in the encoding that is signed; other services get it as sent', () => {
+    const sent = ['bucket', 'a%20b', "it's(1)*.txt", '@x:y', 'a+b', '%C3%BC'];
+    const wire = sigV4WireSegments(sent, 's3');
+    expect(wire).toEqual(['bucket', 'a%20b', 'it%27s%281%29%2A.txt', '%40x%3Ay', 'a%2Bb', '%C3%BC']);
+    expect(canonicalUri(wire, false, 's3')).toBe(`/${wire.join('/')}`);
+    expect(sigV4WireSegments(sent, 'lambda')).toEqual(sent);
+  });
+
   it('awsUriEncode leaves only the unreserved characters', () => {
     expect(awsUriEncode("-._~Az09 !'()*/:=&+é")).toBe('-._~Az09%20%21%27%28%29%2A%2F%3A%3D%26%2B%C3%A9');
   });
@@ -251,7 +261,6 @@ describe('resolveSigV4Target', () => {
     ['no path at all', [], scope('us-east-1', 'dynamodb'), 'dynamodb.us-east-1.amazonaws.com', 'us-east-1', []],
     ['a GovCloud region', [], scope('us-gov-west-1', 'sts'), 'sts.us-gov-west-1.amazonaws.com', 'us-gov-west-1', []],
     ['an endpoint prefix that is not the signing name', ['_host', 'bedrock-runtime', 'model', 'm', 'invoke'], scope('us-west-2', 'bedrock'), 'bedrock-runtime.us-west-2.amazonaws.com', 'us-west-2', ['model', 'm', 'invoke']],
-    ['a prefix of several labels', ['_host', 'runtime.sagemaker', 'endpoints'], scope('us-east-1', 'sagemaker'), 'runtime.sagemaker.us-east-1.amazonaws.com', 'us-east-1', ['endpoints']],
     ['a global endpoint, signed for us-east-1', ['_global'], scope('eu-west-1', 'iam'), 'iam.amazonaws.com', 'us-east-1', []],
   ])('%s', (_name, segments, s, host, region, rest) => {
     expect(resolveSigV4Target(segments, s)).toEqual({ ok: true, host, region, service: s.service, segments: rest });
@@ -274,7 +283,8 @@ describe('resolveSigV4Target', () => {
     ['a prefix with an encoded slash', ['_host', 'evil.example%2Fx'], scope('us-east-1', 's3'), 'sigv4_host_invalid'],
     ['a prefix with an encoded dot', ['_host', 'evil%2Eexample'], scope('us-east-1', 's3'), 'sigv4_host_invalid'],
     ['a prefix with an underscore', ['_host', 'evil_example'], scope('us-east-1', 's3'), 'sigv4_host_invalid'],
-    ['a prefix of five labels', ['_host', 'a.b.c.d.e'], scope('us-east-1', 's3'), 'sigv4_host_invalid'],
+    ['a prefix of two labels', ['_host', 'runtime.sagemaker'], scope('us-east-1', 'sagemaker'), 'sigv4_host_invalid'],
+    ['a bucket addressed by its virtual-hosted name', ['_host', 'my-bucket.s3', 'key'], scope('us-east-1', 's3'), 'sigv4_host_invalid'],
     ['a prefix label longer than 63 characters', ['_host', 'a'.repeat(64)], scope('us-east-1', 's3'), 'sigv4_host_invalid'],
   ])('refuses %s', (_name, segments, s, code) => {
     const result = resolveSigV4Target(segments, s);
@@ -285,13 +295,27 @@ describe('resolveSigV4Target', () => {
   it('every accepted host ends in .amazonaws.com and holds only DNS characters', () => {
     const inputs: Array<[string[], { region: string; service: string }]> = [
       [[], scope('us-east-1', 's3')],
-      [['_host', 'a.b.c.d'], scope('ap-southeast-5', 'x')],
+      [['_host', 'bedrock-runtime'], scope('ap-southeast-5', 'bedrock')],
       [['_global', 'x'], scope('me-central-1', 'route53')],
     ];
     for (const [segments, s] of inputs) {
       const result = resolveSigV4Target(segments, s);
       expect(result.ok && /^[a-z0-9.-]+\.amazonaws\.com$/.test(result.host)).toBe(true);
     }
+  });
+});
+
+describe('sigV4RoutingSegmentCount', () => {
+  it.each([
+    [['bucket', 'key'], 0],
+    [[], 0],
+    [['_global'], 1],
+    [['_global', 'x'], 1],
+    [['_host', 'bedrock-runtime', 'model'], 2],
+    [['_host'], 1],
+    [['bucket', '_host', 'x'], 0],
+  ])('%j has %i host-selecting segments', (segments, count) => {
+    expect(sigV4RoutingSegmentCount(segments)).toBe(count);
   });
 });
 
