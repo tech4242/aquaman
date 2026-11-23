@@ -190,6 +190,8 @@ export {
 export {
   AskFirstGate,
   AskFirstMarks,
+  AskFirstFullError,
+  ASK_FIRST_MAX_MARKS,
   ASK_FIRST_PATH,
   ASK_FIRST_WINDOW_SECONDS,
   ASK_FIRST_WINDOW_MIN_SECONDS,

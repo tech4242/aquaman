@@ -105,6 +105,11 @@ export class OnePasswordStore implements CredentialStore {
     return `${ITEM_PREFIX}-${service}-${key}`;
   }
 
+  /** One title for `a-b` + `c` and `a` + `b-c`: both are read from the same item. */
+  itemIdentity(service: string, key: string): string {
+    return this.getItemName(service, key);
+  }
+
   private parseItemName(itemName: string): { service: string; key: string } | null {
     if (!itemName.startsWith(`${ITEM_PREFIX}-`)) {
       return null;

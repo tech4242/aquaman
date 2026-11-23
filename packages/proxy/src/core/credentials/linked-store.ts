@@ -143,6 +143,19 @@ export class LinkedStore implements CredentialStore {
     return locator ? `${locator}\u0000${this.generation}` : '';
   }
 
+  /**
+   * A linked reference is read from the item its link names, so that item is
+   * its identity, and two references linked to one locator are one item. A
+   * reference that is not linked has the backend's own item name, or its own
+   * name where the backend keeps one item per reference. The two kinds are
+   * prefixed apart, so a locator can never read as an item name.
+   */
+  itemIdentity(service: string, key: string): string {
+    const locator = this.locatorOf(service, key);
+    if (locator) return `link:${locator}`;
+    return `item:${this.inner.itemIdentity?.(service, key) ?? `${service}/${key}`}`;
+  }
+
   async readLinked(locator: ParsedLocator): Promise<string | null> {
     if (locator.backend !== this.backend || !this.inner.readLinked) {
       throw new Error(`The ${this.backend} backend cannot read ${locator.text}`);

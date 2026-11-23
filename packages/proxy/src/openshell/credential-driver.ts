@@ -241,18 +241,21 @@ export function createOpenShellDriverCore(opts: OpenShellDriverOptions): OpenShe
         if (!h) throw new DriverError('invalid_argument', `aquaman: not an aquaman handle: ${JSON.stringify(r.handle?.handle ?? '')}`);
         let value: string | null;
         try {
-          if (h.mode === 'reference') {
-            checkScope(h.service, h.key);
-            // Before the vault read, as in the broker. A copy is the
-            // gateway's own value and is not a reference anyone marked.
-            const asked = await opts.askFirst?.authorize(h.service, h.key, {
-              via: 'openshell',
-              project: provider ? `OpenShell provider ${provider}` : undefined,
-            });
-            if (asked && !asked.ok) {
-              throw new DriverError('failed_precondition', `aquaman: ${asked.error}${asked.fix ? `. Fix: ${asked.fix}` : ''}`);
-            }
+          if (h.mode === 'reference') checkScope(h.service, h.key);
+          // Before the vault read, as in the broker. A copy is the gateway's
+          // own value, which nobody marks; it goes through the gate all the
+          // same, because on a backend where two names can be one item a
+          // copy's name can be another name for a reference a person marked.
+          const asked = await opts.askFirst?.authorize(h.service, h.key, {
+            via: 'openshell',
+            project: provider ? `OpenShell provider ${provider}` : undefined,
+          });
+          if (asked && !asked.ok) {
+            throw new DriverError('failed_precondition', `aquaman: ${asked.error}${asked.fix ? `. Fix: ${asked.fix}` : ''}`);
           }
+          // The request may have waited for a dialog; a reference revoked in
+          // that time is not resolved on the strength of the yes.
+          if (h.mode === 'reference') checkScope(h.service, h.key);
           value = await store.get(h.service, h.key);
           if (value === null) {
             throw new DriverError('not_found', `aquaman: ${h.ref} is not in the vault. Fix: aquaman credentials add ${h.service} ${h.key}`);

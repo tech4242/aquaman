@@ -215,6 +215,13 @@ export interface BrokerScopeOptions {
   allowedRefs?: readonly string[];
   /** Services never materialized over the loopback listener (the Hermes LLM-provider tier). */
   loopbackDeniedServices?: readonly string[];
+  /**
+   * The credential store's `itemIdentity`, where it has one: the name of the
+   * item a reference is read from. On such a store two references can be one
+   * item, so a rule about a service has to hold for every name its items can
+   * be asked for under.
+   */
+  itemIdentity?: (service: string, key: string) => string | undefined;
 }
 
 export interface BrokerScope {
@@ -237,6 +244,24 @@ export function createBrokerScope(opts: BrokerScopeOptions = {}): BrokerScope {
   const staticRefs = new Set((opts.allowedRefs ?? []).filter(isDeclarableRef));
   const loopbackDenied = new Set(opts.loopbackDeniedServices ?? []);
 
+  /**
+   * The isolated service whose items `<service>/<key>` is read from, if any.
+   * By name, and where the store joins service and key into one item name
+   * also by that name: `<isolated>/<any key>` begins with the same text
+   * whatever the key, and a reference of another service whose item name
+   * begins with it is one of that service's items under a second name.
+   */
+  const isolatedService = (service: string, key: string): string | undefined => {
+    if (loopbackDenied.has(service)) return service;
+    const item = opts.itemIdentity?.(service, key);
+    if (item === undefined) return undefined;
+    for (const denied of loopbackDenied) {
+      const probe = opts.itemIdentity?.(denied, 'k');
+      if (probe !== undefined && probe.endsWith('k') && item.startsWith(probe.slice(0, -1))) return denied;
+    }
+    return undefined;
+  };
+
   const configRefs = (): DeclaredRefsResult => {
     const fromFile = configFileRefs();
     return { refs: new Set([...staticRefs, ...fromFile.refs]), error: fromFile.error };
@@ -254,12 +279,15 @@ export function createBrokerScope(opts: BrokerScopeOptions = {}): BrokerScope {
       const reserved = reservedServiceRefusal(service, key);
       if (reserved) return reserved;
 
-      if (caller === 'loopback' && loopbackDenied.has(service)) {
+      const isolated = caller === 'loopback' ? isolatedService(service, key) : undefined;
+      if (isolated !== undefined) {
         return {
           allowed: false,
           code: 'broker_ref_isolated',
-          reason: `${ref} is not materialized over the loopback listener: ${service} keys stay process-isolated on the proxy path`,
-          fix: `Keep ${service} on the proxy path (base URL + placeholder key in ~/.hermes/.env) and remove the binding from your Hermes secrets config`,
+          reason: isolated === service
+            ? `${ref} is not materialized over the loopback listener: ${service} keys stay process-isolated on the proxy path`
+            : `${ref} is not materialized over the loopback listener: it is read from the same vault item as a ${isolated} key, and ${isolated} keys stay process-isolated on the proxy path`,
+          fix: `Keep ${isolated} on the proxy path (base URL + placeholder key in ~/.hermes/.env) and remove the binding from your Hermes secrets config`,
         };
       }
 

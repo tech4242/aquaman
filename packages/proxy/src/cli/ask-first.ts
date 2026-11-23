@@ -17,7 +17,7 @@ import type { Command } from 'commander';
 import * as readline from 'node:readline';
 import type { CredentialStore } from '../core/index.js';
 import { parseAquamanRef, isReservedService, RESERVED_SERVICE_REASON } from '../broker-scope.js';
-import { AskFirstMarks, ASK_FIRST_PATH } from '../ask-first.js';
+import { AskFirstMarks, AskFirstFullError, keepable, ASK_FIRST_PATH } from '../ask-first.js';
 import { windowText, PROMPT_TIMEOUT_SECONDS, PROMPT_TIMEOUT_MIN_SECONDS, PROMPT_TIMEOUT_MAX_SECONDS, clampPromptTimeout } from '../credential-prompt.js';
 
 type ProxyPost = (
@@ -106,6 +106,7 @@ export async function markAskFirst(refs: string[], deps: AskFirstCliDeps): Promi
       marks ??= new AskFirstMarks(await deps.openStore());
       await marks.mark(`${service}/${key}`);
     } catch (err) {
+      if (err instanceof AskFirstFullError) return { ok: false, error: `${ref} was not marked: ${err.message}`, fix: err.fix, code: err.code };
       return { ok: false, error: `Could not write the ask-first mark to the vault: ${err instanceof Error ? err.message : String(err)}`, fix: 'aquaman doctor' };
     }
   }
@@ -216,12 +217,29 @@ Examples:
       }
       console.error(`No dialog can be shown on this machine (${json.reason}).`);
       console.error(`This removes the "ask first" mark from ${ref}: aquaman then hands the value out without asking, to any program running as you, whenever it is declared.`);
+      // A record that cannot be read marks everything, and is written again
+      // with a list. The list is settled and shown before the question, and
+      // is what gets written.
+      let marks: AskFirstMarks;
+      let keep: string[] | undefined;
+      try {
+        marks = new AskFirstMarks(await deps.openStore());
+        if ((await marks.list()) === 'all') {
+          keep = keepable(deps.declared(), `${service}/${key}`);
+          console.error('The record of marks in the vault cannot be read, so every reference counts as marked.');
+          console.error(keep.length === 0
+            ? 'After a yes no reference is marked.'
+            : `After a yes only ${keep.length === 1 ? 'this one stays' : `these ${keep.length} stay`} marked:\n${keep.map((n) => `  aquaman://${n}`).join('\n')}`);
+        }
+      } catch (err) {
+        fail(`Could not read the ask-first record in the vault: ${err instanceof Error ? err.message : String(err)}`, err instanceof AskFirstFullError ? 'Revoke references that are no longer used (aquaman broker revoke <ref>), then run the command again' : 'aquaman doctor');
+      }
       if (!(await askYes('Type yes to remove the mark: '))) {
         console.error('Still marked.');
         process.exit(2);
       }
       try {
-        await new AskFirstMarks(await deps.openStore()).unmark(`${service}/${key}`, deps.declared);
+        await marks.unmark(`${service}/${key}`, keep);
       } catch (err) {
         fail(`Could not change the ask-first record in the vault: ${err instanceof Error ? err.message : String(err)}`, 'aquaman doctor');
       }
