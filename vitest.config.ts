@@ -9,6 +9,10 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['test/**/*.test.ts'],
+    // This config runs every suite at once, the ones that start processes
+    // included. A worker can be kept off the CPU for seconds by that, which is
+    // not the test being slow, so the limit leaves room for it.
+    testTimeout: 15000,
     // Tests start the CLI and the daemon as separate processes. This hands those
     // processes a directory to write their own coverage into (see scripts/coverage.mjs).
     setupFiles: ['./test/helpers/child-coverage.ts'],
