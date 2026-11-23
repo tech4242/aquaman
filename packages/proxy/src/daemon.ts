@@ -21,6 +21,21 @@ import { isReservedService, reservedServiceRefusal, type BrokerScope } from './b
 import { routableKeys, routeKeyMismatch, basicTokenCandidates, basicValueCarries } from './route-auth.js';
 import type { CredentialLinker } from './core/credentials/linked-store.js';
 import { linkRequestPlan, linkUnreadableReply } from './link-request.js';
+import { isVaultLocked, VAULT_LOCKED_CODE, VAULT_UNLOCK_FIX } from './core/credentials/vault-lock.js';
+import { handleVaultUnlock, handleVaultLock, VAULT_UNLOCK_PATH, VAULT_LOCK_PATH } from './vault-session.js';
+
+/**
+ * What a caller is told when the vault is locked: a state a person ends with
+ * one command, not a missing credential and not a broken backend. 503
+ * because it passes; the code and the fix are the same on every endpoint.
+ */
+function vaultLockedBody(err: unknown): { error: string; fix: string; code: string } {
+  return {
+    error: err instanceof Error ? err.message : 'The vault is locked',
+    fix: (err as { fix?: string } | null)?.fix ?? VAULT_UNLOCK_FIX,
+    code: VAULT_LOCKED_CODE,
+  };
+}
 
 // Service name validation: lowercase alphanum, dots, hyphens, underscores
 const SAFE_SERVICE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
@@ -151,6 +166,11 @@ export interface CredentialProxyOptions {
      */
     links?: CredentialLinker;
   };
+  /**
+   * Called when a session handed over on `/_vault/unlock` opened the vault,
+   * so whatever waited for the vault (the audit anchor) can go on.
+   */
+  onVaultUnlocked?: () => void;
 }
 
 const AUDIT_UNAVAILABLE_FIX = 'Check that the audit directory (~/.aquaman/audit by default) is writable and the disk is not full. Run: aquaman doctor';
@@ -408,6 +428,10 @@ export class CredentialProxy {
         services: this.options.allowedServices,
         // Only over the socket: lets `aquaman init` confirm the pid file names this process before signalling it.
         ...(fromLoopback ? {} : { pid: process.pid }),
+        // Only over the socket, and only for a backend a person unlocks:
+        // whether reads are refused until `aquaman unlock`. Answered from
+        // memory, so a health check never starts the vault's CLI.
+        ...(fromLoopback || !this.options.store.vaultState ? {} : { vault: this.options.store.vaultState() }),
       }));
       return;
     }
@@ -467,6 +491,22 @@ export class CredentialProxy {
         audit: (error) => this.emitRequest({
           id: requestId, service: 'aquaman-service', method: 'SERVICE_CONSENT', path: SERVICE_CONSENT_PATH,
           timestamp: new Date(), authenticated: false, statusCode: 200, error,
+        }),
+      });
+      return;
+    }
+
+    const vaultPath = url.endsWith('/') ? url.slice(0, -1) : url;
+    if ((vaultPath === VAULT_UNLOCK_PATH || vaultPath === VAULT_LOCK_PATH) && req.method === 'POST') {
+      const unlock = vaultPath === VAULT_UNLOCK_PATH;
+      await (unlock ? handleVaultUnlock : handleVaultLock)(req, res, {
+        fromLoopback,
+        store: this.options.store,
+        refusals: this.unlockRefusals,
+        onUnlocked: this.options.onVaultUnlocked,
+        audit: (error) => this.emitRequest({
+          id: requestId, service: 'aquaman-vault', method: unlock ? 'VAULT_UNLOCK' : 'VAULT_LOCK', path: vaultPath,
+          timestamp: new Date(), authenticated: false, statusCode: error ? 403 : 200, error,
         }),
       });
       return;
@@ -651,6 +691,18 @@ export class CredentialProxy {
       await this.proxyRequest(req, res, upstreamUrl, serviceDef, credential, requestInfo);
 
     } catch (error) {
+      if (isVaultLocked(error)) {
+        // Nothing was sent upstream: the credential could not be read.
+        requestInfo.error = `${VAULT_LOCKED_CODE}: ${service}/${config.credentialKey}`;
+        requestInfo.statusCode = 503;
+        this.emitRequest(requestInfo);
+        if (!res.headersSent) {
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = 503;
+          res.end(JSON.stringify(vaultLockedBody(error)));
+        }
+        return;
+      }
       requestInfo.error = error instanceof Error ? error.message : String(error);
       requestInfo.statusCode = 500;
       this.emitRequest(requestInfo);
@@ -850,6 +902,8 @@ export class CredentialProxy {
    * v0.12.0+ — used by the aquaman-coder hook adapters to materialize
    * credentials per tool call without writing .env files to disk.
    */
+  /** When sessions handed to `/_vault/unlock` were refused (vault-session.ts). */
+  private readonly unlockRefusals: number[] = [];
   private requestPromptOpen = false;
   private requestPromptTimes: number[] = [];
   private requestDeclinedAt = new Map<string, number>();
@@ -1005,7 +1059,16 @@ export class CredentialProxy {
       let stored = false;
       try {
         stored = (await this.options.store.get(service, needed)) !== null;
-      } catch {
+      } catch (err) {
+        if (isVaultLocked(err)) {
+          // Not "not found": the fix is to unlock, not to add the credential again.
+          reply(503, vaultLockedBody(err));
+          this.emitRequest({
+            id: crypto.randomUUID(), service, method: 'BROKER', path: '/broker/route', timestamp: new Date(),
+            authenticated: false, statusCode: 503, error: `${VAULT_LOCKED_CODE}: ${service}/${needed}`,
+          });
+          return;
+        }
         stored = false;
       }
       if (!stored) {
@@ -1059,6 +1122,9 @@ export class CredentialProxy {
       return;
     }
     const available: boolean[] = [];
+    // Set only by a reference that passed the scope and then met a locked
+    // vault, so the answer still says nothing about references out of scope.
+    let locked: unknown;
     for (const ref of refs as Array<{ service?: unknown; key?: unknown } | null>) {
       const service = ref?.service;
       const key = ref?.key;
@@ -1073,13 +1139,16 @@ export class CredentialProxy {
       ) {
         try {
           ok = (await this.options.store.get(service, key)) !== null;
-        } catch {
+        } catch (err) {
+          if (isVaultLocked(err)) locked = err;
           ok = false;
         }
       }
       available.push(ok);
     }
-    reply(200, { available });
+    // `locked` tells "nothing resolves because the vault is locked" apart
+    // from "nothing is stored", which have different fixes.
+    reply(200, locked === undefined ? { available } : { available, locked: true, code: VAULT_LOCKED_CODE, fix: vaultLockedBody(locked).fix });
   }
 
   private async handleBrokerRequest(
@@ -1175,6 +1244,14 @@ export class CredentialProxy {
       return;
     }
 
+    // A locked vault is answered before any dialog, from memory: the person
+    // would be asked for a value or an approval that cannot be stored or
+    // checked until they have unlocked it.
+    if (this.options.store.vaultState?.() === 'locked') {
+      reply(503, { error: 'The vault is locked, so nothing can be stored or approved yet', fix: VAULT_UNLOCK_FIX, code: VAULT_LOCKED_CODE });
+      return;
+    }
+
     // `from` asks for a link to an item that already exists in the vault.
     // Until the person has agreed, only the locator's syntax and the link map
     // are looked at: reading or probing the item here would let a request
@@ -1182,7 +1259,16 @@ export class CredentialProxy {
     // `declare: false` with `from` links the reference and leaves it
     // undeclared: the proxy can inject the value, nothing is handed out.
     const linkOnly = body.from !== undefined && body.declare === false && !routed;
-    const link = await linkRequestPlan(requests.links, service, key, body.from, routed, !linkOnly);
+    // A locked vault is answered before any dialog: the person would be asked
+    // for a value or an approval that cannot be stored or checked.
+    let link: Awaited<ReturnType<typeof linkRequestPlan>>;
+    try {
+      link = await linkRequestPlan(requests.links, service, key, body.from, routed, !linkOnly);
+    } catch (err) {
+      if (!isVaultLocked(err)) throw err;
+      reply(503, vaultLockedBody(err));
+      return;
+    }
     if (link && !link.ok) {
       reply(link.status, { error: link.error, fix: link.fix, code: link.code });
       return;
@@ -1199,6 +1285,10 @@ export class CredentialProxy {
     try {
       exists = linkFrom === undefined && await this.options.store.exists(service, key);
     } catch (err) {
+      if (isVaultLocked(err)) {
+        reply(503, vaultLockedBody(err));
+        return;
+      }
       reply(500, {
         error: `Vault backend error checking ${service}/${key}: ${err instanceof Error ? err.message : String(err)}`,
         fix: 'Check that the configured backend is accessible. Run: aquaman doctor',
@@ -1300,8 +1390,10 @@ export class CredentialProxy {
       if (!declared && !routed && !linkOnly) await requests.declare(service, key);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      audit(message);
-      reply(500, { error: `Could not store ${service}/${key}: ${message}`, fix: 'Run: aquaman doctor' });
+      audit(isVaultLocked(err) ? `${VAULT_LOCKED_CODE}: ${service}/${key}` : message);
+      // The vault locked while the dialog was open: nothing was stored.
+      if (isVaultLocked(err)) reply(503, vaultLockedBody(err));
+      else reply(500, { error: `Could not store ${service}/${key}: ${message}`, fix: 'Run: aquaman doctor' });
       return;
     }
     audit();
@@ -1414,6 +1506,17 @@ export class CredentialProxy {
     try {
       value = await this.options.store.get(service, key);
     } catch (err) {
+      if (isVaultLocked(err)) {
+        // 503, not 404: a consumer must not treat a locked vault as one
+        // missing credential and carry on without it.
+        res.statusCode = 503;
+        res.end(JSON.stringify(vaultLockedBody(err)));
+        this.emitRequest({
+          id: requestId, service, method: 'BROKER', path: '/broker/resolve', timestamp: new Date(),
+          authenticated: false, statusCode: 503, error: `${VAULT_LOCKED_CODE}: ${service}/${key}`,
+        });
+        return;
+      }
       res.statusCode = 500;
       const message = err instanceof Error ? err.message : String(err);
       res.end(JSON.stringify({
