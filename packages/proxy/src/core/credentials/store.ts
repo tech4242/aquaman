@@ -59,15 +59,6 @@ export interface CredentialStore {
    */
   itemIdentity?(service: string, key: string): string;
   /**
-   * On a store that honours links, the locators a reference has to do with:
-   * `reads` is the item it is read from right now (linked in config.yaml and
-   * approved in the vault; `''` when it is read from the backend's own item),
-   * and `approved` is the locator a person approved for this reference,
-   * whatever config.yaml says at the moment. An unapproved line is neither:
-   * it reads nothing, so it does not make a reference into another item.
-   */
-  linkIdentities?(service: string, key: string): Promise<{ reads: string; approved: string }>;
-  /**
    * On a backend that a person's session opens (`bitwarden`), and on
    * wrappers around one; see vault-lock.ts. Absent everywhere else.
    * `vaultState` answers from memory, `checkSession` asks the vault's CLI.

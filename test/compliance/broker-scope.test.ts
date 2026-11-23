@@ -100,14 +100,13 @@ describe('Credential broker scoping — compliance (v0.15.0+)', () => {
       const ok = await udsFetch(socketPath, '/broker/resolve', resolveBody('github', 'token'));
       expect(ok.status).toBe(200);
       expect(JSON.parse(ok.body).value).toBe('ghp_declared_value_1234567890');
-      // The credential, and aquaman's own ask-first record, which a daemon reads once.
-      expect(counting.gets).toBe(2);
+      expect(counting.gets).toBe(1);
 
       const denied = await udsFetch(socketPath, '/broker/resolve', resolveBody('slack', 'bot_token'));
       expect(denied.status).toBe(404);
       expect(JSON.parse(denied.body).code).toBe('broker_ref_not_declared');
       expect(denied.body).not.toContain('xoxb-undeclared');
-      expect(counting.gets).toBe(2); // the refusal never reached the vault
+      expect(counting.gets).toBe(1); // the refusal never reached the vault
     });
 
     it('a refusal reads the same whether or not the vault holds the credential', async () => {
@@ -173,8 +172,7 @@ describe('Credential broker scoping — compliance (v0.15.0+)', () => {
 
       const project = await post('github', 'token');
       expect(project.status).toBe(200);
-      // The project secret and the ask-first record; never the provider key.
-      expect(counting.gets).toBe(2);
+      expect(counting.gets).toBe(1);
     });
   });
 

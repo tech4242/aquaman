@@ -181,22 +181,4 @@ export {
   promptMessage,
   LOGIN_ITEM_MESSAGE,
   createNativePrompter,
-  type ReadVia,
-  windowText,
-  readConsequence,
-  UNMARK_CONSEQUENCE,
 } from './credential-prompt.js';
-
-export {
-  AskFirstGate,
-  AskFirstMarks,
-  AskFirstFullError,
-  ASK_FIRST_MAX_MARKS,
-  ASK_FIRST_PATH,
-  ASK_FIRST_WINDOW_SECONDS,
-  ASK_FIRST_WINDOW_MIN_SECONDS,
-  ASK_FIRST_WINDOW_MAX_SECONDS,
-  clampAskFirstWindow,
-  type AskFirstDecision,
-  type AskFirstCode,
-} from './ask-first.js';
