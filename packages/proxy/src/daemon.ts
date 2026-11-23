@@ -327,7 +327,19 @@ export class CredentialProxy {
         via: fromLoopback ? 'loopback' : 'forward',
         upstream: oauth ? `${oauth.tokenUrl} and ${serviceDef.upstream}` : serviceDef.upstream,
       });
-      if (!asked.ok) return { key, code: asked.code, error: asked.error, fix: asked.fix };
+      if (!asked.ok) {
+        const ref = `aquaman://${service}/${key}`;
+        return {
+          key,
+          code: asked.code,
+          error: asked.error,
+          // The dialog is raised for a request on the Unix socket. Reading
+          // the value there is the short way, where the reference is declared.
+          fix: asked.code === 'ask_first_required'
+            ? `A person allows it in aquaman's dialog, on the machine itself. If the reference is declared, run: aquaman get ${ref} > /dev/null. If it is not, send this request over the Unix socket once, or remove the mark: aquaman broker ask ${ref} --off`
+            : asked.fix,
+        };
+      }
     }
     return undefined;
   }
