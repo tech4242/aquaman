@@ -360,8 +360,10 @@ describe('aws with a real daemon, up to the point a request would leave the mach
       '      - { method: DELETE, path: "/protected-bucket/**", action: deny }',
       '',
     ].join('\n'));
-    await vault().set('aws', 'access_key_id', REAL_KEY_ID);
-    await vault().set('aws', 'secret_access_key', REAL_SECRET);
+    // The commands docs/aws.md gives, with the value piped in place of typed.
+    expect((await sb.run(['credentials', 'add', 'aws', 'access_key_id'], { input: REAL_KEY_ID })).code).toBe(0);
+    expect((await sb.run(['credentials', 'add', 'aws', 'secret_access_key'], { input: REAL_SECRET })).code).toBe(0);
+    expect(await vault().get('aws', 'secret_access_key')).toBe(REAL_SECRET);
     sb.installRealCoder();
     expect((await coder(['init', '--agent', 'claude-code', '--no-hooks', '--json'])).code).toBe(0);
     const bound = await coder(['bind', 'AWS_ACCESS_KEY_ID=aquaman://aws/access_key_id', '--via-proxy', 'AWS_ENDPOINT_URL', '--json']);
