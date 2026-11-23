@@ -905,6 +905,31 @@ describe('installer: macOS only', () => {
   });
 });
 
+describe('installer: the bitwarden backend', () => {
+  let w: World;
+  beforeEach(() => { w = world('darwin'); });
+  afterEach(() => { fs.rmSync(w.root, { recursive: true, force: true }); });
+
+  it('says the daemon starts locked at login and points at aquaman unlock, on install, on a repeat and in status', async () => {
+    w.deps.backends = ['bitwarden', 'bitwarden'];
+    w.deps.env = { ...w.deps.env, BW_SESSION: 'a-session-of-the-installing-shell' };
+    const step = expect.stringContaining('aquaman unlock');
+    const installed = await installService(w.deps);
+    expect(installed.result['status']).toBe('installed');
+    expect(installed.result['human_steps']).toEqual([step]);
+    // The session is named as not carried, never written: not in the answer, not in the unit.
+    expect(installed.result['env_not_passed']).toContain('BW_SESSION');
+    expect(JSON.stringify(installed.result)).not.toContain('a-session-of-the-installing-shell');
+    expect(fs.readFileSync(unitFilePath('darwin', w.deps.home)!, 'utf-8')).not.toContain('a-session-of-the-installing-shell');
+    expect((await installService(w.deps)).result['human_steps']).toEqual([step]);
+    expect((await serviceStatus(w.deps)).result['human_steps']).toEqual([step]);
+  });
+
+  it('says nothing of it for another backend', async () => {
+    expect((await installService(w.deps)).result['human_steps']).toBeUndefined();
+  });
+});
+
 describe('installer: Linux only', () => {
   let w: World;
   beforeEach(() => { w = world('linux'); });

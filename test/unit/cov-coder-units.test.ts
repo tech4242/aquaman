@@ -99,7 +99,25 @@ describe('BrokerClient against a proxy that misbehaves', () => {
     expect(await client().available(refs)).toEqual([true, false]);
   });
 
-  it('route: a non-JSON answer, a refusal and an incomplete answer throw; a full answer returns url and token only', async () => {
+  it('availability: reports a locked vault with its fix, and "not locked" for an answer that does not mention it', async () => {
+    const refs = [{ service: 'a', key: 'k' }];
+    reply = json(200, { available: [false], locked: true, code: 'vault_locked', fix: 'Run: aquaman unlock' });
+    expect(await client().availability(refs)).toEqual({ available: [false], locked: true, fix: 'Run: aquaman unlock' });
+    expect(await client().available(refs)).toEqual([false]);
+    reply = json(200, { available: [true] });
+    expect(await client().availability(refs)).toEqual({ available: [true], locked: false });
+    reply = json(200, { available: [false], locked: 'yes' });
+    expect((await client().availability(refs)).locked).toBe(false);
+  });
+
+  it('resolve: a locked vault comes back as vault_locked with the fix, status 503', async () => {
+    reply = json(503, { error: 'The Bitwarden vault is locked, so the proxy cannot read credentials. Run: aquaman unlock', fix: 'Run: aquaman unlock', code: 'vault_locked' });
+    const locked = await client().resolve({ service: 'github', key: 'token' }).catch((e) => e);
+    expect(locked).toBeInstanceOf(BrokerError);
+    expect(locked).toMatchObject({ code: 'vault_locked', status: 503, fix: 'Run: aquaman unlock' });
+  });
+
+  it('route: a non-JSON answer, a refusal and an incomplete answer throw; a full answer returns url, token and named variables only', async () => {
     const ref = { service: 'openai', key: 'api_key' };
     reply = text(500, 'oops');
     const nonJson = await client().route(ref).catch((e) => e);
@@ -114,7 +132,13 @@ describe('BrokerClient against a proxy that misbehaves', () => {
     await expect(client().route(ref)).rejects.toThrow('Proxy returned no route (HTTP 200)');
 
     reply = json(200, { url: 'http://127.0.0.1:8585/openai', token: 'aqm_rt_x', value: 'must-not-surface' });
-    expect(await client().route(ref)).toEqual({ url: 'http://127.0.0.1:8585/openai', token: 'aqm_rt_x' });
+    expect(await client().route(ref)).toEqual({ url: 'http://127.0.0.1:8585/openai', token: 'aqm_rt_x', env: {} });
+
+    // Variables the proxy names for the program are passed on when they are strings, and nothing else is.
+    reply = json(200, { url: 'http://127.0.0.1:8585/aws', token: 'aqm_rt_x', env: { AWS_SECRET_ACCESS_KEY: 'placeholder', COUNT: 3, NESTED: { a: 1 } } });
+    expect(await client().route({ service: 'aws', key: 'access_key_id' })).toEqual({ url: 'http://127.0.0.1:8585/aws', token: 'aqm_rt_x', env: { AWS_SECRET_ACCESS_KEY: 'placeholder' } });
+    reply = json(200, { url: 'http://127.0.0.1:8585/aws', token: 'aqm_rt_x', env: ['AWS_SECRET_ACCESS_KEY'] });
+    expect((await client().route({ service: 'aws', key: 'access_key_id' })).env).toEqual({});
   });
 
   it('health: any status but 200 is a failure', async () => {

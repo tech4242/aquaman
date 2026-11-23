@@ -301,6 +301,16 @@ program
           const target = await broker.route(parsed);
           env[envName] = target.token;
           env[route.url_env] = target.url + (route.base_path ?? '');
+          // Variables the proxy says the program also needs, such as the
+          // placeholder secret an AWS client will not start without. A name
+          // the project binds itself is left to that binding, and one that
+          // changes how programs are loaded is never set from here.
+          for (const [name, value] of Object.entries(target.env)) {
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || isLoaderEnvName(name)) continue;
+            if (Object.hasOwn(match.config.env, name)) continue;
+            if (Object.values(match.config.routes ?? {}).some((r) => r.url_env === name)) continue;
+            env[name] = value;
+          }
           injectedValues.push(target.token);
           continue;
         }
@@ -315,6 +325,12 @@ program
         if (err instanceof BrokerError && err.status === 404 && err.code !== 'broker_disabled') {
           console.error(`aquaman: ${envName} is not set for this command: ${err.message}${route && err.fix ? `. ${err.fix}` : ''}`);
           continue;
+        }
+        if (err instanceof BrokerError && err.code === 'vault_locked') {
+          // Not one missing credential: nothing in the vault can be read
+          // until a person unlocks it, so the command is not run half-equipped.
+          console.error('aquaman: the vault is locked, so the command was not run. A person unlocks it in a terminal of their own with: aquaman unlock');
+          process.exit(1);
         }
         console.error(`aquaman: failed to resolve ${envName}: ${(err as Error).message}`);
         process.exit(1);
@@ -339,12 +355,15 @@ program
       // run after as defense-in-depth for any secrets the child surfaces that
       // we did NOT inject (hardcoded tokens, env vars leaked from parent, ...).
       // A value can arrive split across two chunks, so each stream goes
-      // through a redactor that holds back enough text to see it whole.
+      // through a redactor that holds back the end of the text while it could
+      // still be the start of one. A finished line that is not is written at
+      // once, which is what lets a program that answers and then waits (a
+      // stdio MCP server) run under exec.
       const { createStreamRedactor, buildValuePatterns, BUILTIN_PATTERNS } = await import('aquaman-proxy');
       const patterns = [...buildValuePatterns(injectedValues), ...BUILTIN_PATTERNS];
       const longestValue = injectedValues.reduce((n, v) => Math.max(n, v.length), 0);
       const pipeRedacted = (src: NodeJS.ReadableStream, dst: NodeJS.WritableStream) => {
-        const redactor = createStreamRedactor(patterns, longestValue);
+        const redactor = createStreamRedactor(patterns, longestValue, injectedValues);
         src.setEncoding('utf-8');
         src.on('data', (chunk: string) => {
           const out = redactor.push(chunk);
@@ -359,9 +378,16 @@ program
       if (child.stderr) pipeRedacted(child.stderr, process.stderr);
     }
 
+    // Whoever started this process stops it with a signal (an agent host
+    // ending a server it launched), and the command is what they meant to
+    // stop: without this it would be left running with the credentials.
+    for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+      process.on(signal, () => { child.kill(signal); });
+    }
+
     // `close` fires after the child's output streams have ended, so the held
     // back tail is written before this process exits.
-    child.on('close', (code) => process.exit(code ?? 0));
+    child.on('close', (code, signal) => process.exit(code ?? (signal ? 128 + (os.constants.signals[signal] ?? 0) : 0)));
     child.on('error', (err) => {
       console.error(`Failed to spawn "${cmd}": ${err.message}`);
       process.exit(1);
@@ -605,6 +631,8 @@ program
             const fix =
               code === 'broker_disabled'
                 ? 'The proxy on this socket was started by the OpenClaw plugin, which never hands out credentials. Run `aquaman daemon` for coding agents.'
+                : code === 'vault_locked'
+                  ? 'aquaman unlock   (a person, in a terminal: the vault is locked)'
                 : code === 'broker_ref_not_declared'
                   ? `aquaman broker list  (the daemon does not see this ref as declared — is it reading ${defaultProjectsPath()}?)`
                   : `aquaman credentials add ${parsed.service} ${parsed.key}`;

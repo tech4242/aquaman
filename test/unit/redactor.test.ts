@@ -358,6 +358,62 @@ describe('redactDeep', () => {
   });
 });
 
+describe('createStreamRedactor with the literal values', () => {
+  const value = 'vault-value-that-must-not-appear-0042';
+  const other = 'vault-other';
+  const multiline = 'first-line-of-a-key\nsecond-line-of-a-key';
+  const all = [value, other, multiline];
+  const patterns = [...buildValuePatterns(all), ...BUILTIN_PATTERNS];
+  const run = (chunks: string[]) => {
+    const r = createStreamRedactor(patterns, 0, all);
+    return chunks.map((c) => r.push(c)).join('') + r.end();
+  };
+
+  it('writes a finished line at once, with nothing kept back', () => {
+    const r = createStreamRedactor(patterns, 0, all);
+    const line = '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}\n';
+    expect(r.push(line)).toBe(line);
+    expect(r.end()).toBe('');
+  });
+
+  it('keeps back the end of a finished line only while it could be the start of a value', () => {
+    const r = createStreamRedactor(patterns, 0, all);
+    expect(r.push('x first-line-of-a-key\n')).toBe('x ');
+    expect(r.push('unrelated\n')).toBe('first-line-of-a-key\nunrelated\n');
+  });
+
+  for (const v of all) {
+    it(`redacts ${JSON.stringify(v.slice(0, 16))}... split at every position`, () => {
+      const text = `before ${v} after\n`;
+      for (let cut = 1; cut < text.length; cut++) {
+        expect(run([text.slice(0, cut), text.slice(cut)]), `cut at ${cut}`).toBe('before [REDACTED:injected-value] after\n');
+      }
+    });
+
+    it(`redacts ${JSON.stringify(v.slice(0, 16))}... delivered one character at a time`, () => {
+      expect(run([...`a\n${v}\nb=${v}\n`])).toBe('a\n[REDACTED:injected-value]\nb=[REDACTED:injected-value]\n');
+    });
+  }
+
+  it('redacts a value that begins like another one and then differs', () => {
+    // "vault-" starts both; the text goes on as the longer value.
+    const text = `k=${value}\n`;
+    for (let cut = 1; cut < text.length; cut++) {
+      expect(run([text.slice(0, cut), text.slice(cut)])).toBe('k=[REDACTED:injected-value]\n');
+    }
+  });
+
+  it('loses nothing and changes nothing when there is nothing to redact', () => {
+    const text = Array.from({ length: 500 }, (_, i) => `row ${i} vault- first-line ${'x'.repeat(40)}`).join('\n') + '\n';
+    expect(run(text.match(/[\s\S]{1,131}/g)!)).toBe(text);
+  });
+
+  it('ignores an empty value instead of holding everything back', () => {
+    const r = createStreamRedactor(BUILTIN_PATTERNS, 0, ['', '   ']);
+    expect(r.push('plain line\n')).toBe('plain line\n');
+  });
+});
+
 describe('createStreamRedactor', () => {
   const value = 'vault-value-that-must-not-appear-0042';
   const patterns = [...buildValuePatterns([value]), ...BUILTIN_PATTERNS];
@@ -397,5 +453,122 @@ describe('createStreamRedactor', () => {
     const text = Array.from({ length: 2000 }, (_, i) => `row ${i} ${'x'.repeat(50)}`).join('\n') + '\n';
     const chunks = text.match(/[\s\S]{1,777}/g)!;
     expect(run(chunks)).toBe(text);
+  });
+});
+
+/**
+ * The part a stream redactor keeps back is kept as it arrived. The beginning
+ * of an injected value can match a builtin pattern on its own (the first half
+ * of an API key is still key-shaped). If that part were stored redacted, the
+ * text would no longer end like the beginning of the value, and the rest of
+ * the value would be written when it arrived.
+ */
+describe('createStreamRedactor: an injected value whose beginning has a builtin shape', () => {
+  const tail = (n: number) => Array.from({ length: n }, (_, i) => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'[(i * 7 + 3) % 62]).join('');
+
+  const VALUES: Array<[string, string]> = [
+    ['an Anthropic key', `sk-ant-api03-${tail(95)}`],
+    ['an OpenAI project key', `sk-proj-${tail(120)}`],
+    ['a Slack bot token', `xoxb-1234567890-1234567890123-${tail(24)}`],
+    ['a GitLab token', `glpat-${tail(40)}`],
+    ['a GitHub token', `ghp_${tail(60)}`],
+  ];
+
+  /** exec's own wiring: value patterns first, then the builtin ones, the literal values handed over. */
+  const run = (value: string, chunks: string[]) => {
+    const r = createStreamRedactor([...buildValuePatterns([value]), ...BUILTIN_PATTERNS], value.length, [value]);
+    return chunks.map((c) => r.push(c)).join('') + r.end();
+  };
+
+  /** Whether 12 or more consecutive characters of the value reached the output. */
+  const leaks = (value: string, out: string): boolean => {
+    for (let i = 0; i + 12 <= value.length; i++) if (out.includes(value.slice(i, i + 12))) return true;
+    return false;
+  };
+
+  for (const [name, value] of VALUES) {
+    const text = `KEY=${value}\nnext line\n`;
+
+    it(`${name} cut at every position: no 12 characters of it are written`, () => {
+      const bad: number[] = [];
+      for (let cut = 1; cut < text.length; cut++) {
+        if (leaks(value, run(value, [text.slice(0, cut), text.slice(cut)]))) bad.push(cut);
+      }
+      expect(bad).toEqual([]);
+    });
+
+    it(`${name} cut twice, at every pair of positions: no 12 characters of it are written`, () => {
+      const bad: Array<[number, number]> = [];
+      for (let a = 1; a < text.length; a++) {
+        for (let b = a + 1; b < text.length; b++) {
+          if (leaks(value, run(value, [text.slice(0, a), text.slice(a, b), text.slice(b)]))) bad.push([a, b]);
+        }
+      }
+      expect(bad).toEqual([]);
+    });
+
+    it(`${name} cut at every position: what is written is what one piece gives`, () => {
+      const whole = run(value, [text]);
+      expect(whole).toBe('KEY=[REDACTED:injected-value]\nnext line\n');
+      for (let cut = 1; cut < text.length; cut++) {
+        expect(run(value, [text.slice(0, cut), text.slice(cut)])).toBe(whole);
+      }
+    });
+  }
+
+  it('a value cut after its key-shaped beginning is one marker, not a builtin marker and the rest', () => {
+    const value = VALUES[0][1];
+    expect(run(value, [`KEY=${value.slice(0, 50)}`, `${value.slice(50)}\n`])).toBe('KEY=[REDACTED:injected-value]\n');
+  });
+});
+
+describe('createStreamRedactor: a match that is still arriving is kept whole, inside the holdback bounds', () => {
+  const stream = (chunks: string[], patterns = BUILTIN_PATTERNS) => {
+    const r = createStreamRedactor(patterns, 0, []);
+    const written = chunks.map((c) => r.push(c));
+    return { written, out: written.join('') + r.end() };
+  };
+
+  it('a token still growing at the end of a line longer than the line holdback stays whole', () => {
+    const token = `sk-ant-${'a1B2'.repeat(40)}`;
+    const line = `${'x'.repeat(6000)} ${token}`;
+    for (const cut of [line.length - 150, line.length - 100, line.length - 40, line.length - 1]) {
+      const { out } = stream([line.slice(0, cut), `${line.slice(cut)}\n`]);
+      expect(out).toBe(`${'x'.repeat(6000)} [REDACTED:anthropic-key]\n`);
+    }
+  });
+
+  it('a token longer than the line holdback, delivered in small pieces, is one marker', () => {
+    const token = `sk-ant-${'a1B2'.repeat(2500)}`;
+    const chunks: string[] = [];
+    const text = `id=${token} done\n`;
+    for (let i = 0; i < text.length; i += 700) chunks.push(text.slice(i, i + 700));
+    expect(stream(chunks).out).toBe('id=[REDACTED:anthropic-key] done\n');
+  });
+
+  it('a private key block whose lines arrive one chunk each is redacted whole', () => {
+    const lines = ['before', '-----BEGIN OPENSSH PRIVATE KEY-----', 'b3BlbnNzaC1rZXktdjEAAAAA', 'QyNTUxOQAAACDh6vG0', '-----END OPENSSH PRIVATE KEY-----', 'after'];
+    const { written, out } = stream(lines.map((l) => `${l}\n`));
+    expect(out).toBe('before\n[REDACTED:private-key]\nafter\n');
+    // The line before the block is not kept waiting for it.
+    expect(written[0]).toBe('before\n');
+  });
+
+  it('a BEGIN line that is never closed does not hold the stream back for good', () => {
+    const r = createStreamRedactor(BUILTIN_PATTERNS, 0, []);
+    let written = r.push('-----BEGIN PRIVATE KEY-----\n');
+    expect(written).toBe('');
+    for (let i = 0; i < 80; i++) written += r.push(`${'m'.repeat(1023)}\n`);
+    expect(written.length).toBeGreaterThan(0);
+    expect(written + r.end()).toBe(`-----BEGIN PRIVATE KEY-----\n${`${'m'.repeat(1023)}\n`.repeat(80)}`);
+  });
+
+  it('text around a match is written unchanged and in order, at every cut', () => {
+    const text = `a ghp_${'Z9'.repeat(20)} b\nc xoxb-123456789012-abcdefghij d\ne\n`;
+    const whole = stream([text]).out;
+    expect(whole).toBe('a [REDACTED:github-token] b\nc [REDACTED:slack-token] d\ne\n');
+    for (let cut = 1; cut < text.length; cut++) {
+      expect(stream([text.slice(0, cut), text.slice(cut)]).out).toBe(whole);
+    }
   });
 });

@@ -55,7 +55,7 @@ Aquaman ships as four packages sharing one vault and one daemon, plus two host i
 | Package | What it does | When to install |
 |---|---|---|
 | **[`aquaman-proxy`](packages/proxy/)** | Core: vault, daemon, audit, policy, CLI. The piece everyone needs. | Always. |
-| **[`aquaman-plugin`](packages/plugin/)** | OpenClaw Gateway adapter. Spawns the proxy on Gateway startup; routes model and Telegram traffic through it; 26 builtin services across 5 auth modes. | If you run an OpenClaw Gateway. Also available at https://clawhub.ai/plugins/aquaman-plugin |
+| **[`aquaman-plugin`](packages/plugin/)** | OpenClaw Gateway adapter. Spawns the proxy on Gateway startup; routes model and Telegram traffic through it; 27 builtin services across 6 auth modes. | If you run an OpenClaw Gateway. Also available at https://clawhub.ai/plugins/aquaman-plugin |
 | **[`aquaman-coder`](packages/coder/)** | AI coding-agent adapter. Project-scoped `aquaman://service/key` references resolved per Bash tool call. | If you use Claude Code or Codex. |
 | **[`aquaman-hermes`](packages/hermes/)** | Hermes agent-host plugin (Python, on PyPI). Points Hermes at an opt-in, token-gated loopback listener via its native `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`; adds an in-session `/aquaman-status` command, tool, and health probe. Isolation is proxy-side; the plugin holds no credentials. | If you run the Hermes agent host. `pip install aquaman-hermes` |
 | **Docker Sandboxes** | Not a package: a separate path that needs only `aquaman-proxy`. Docker's own proxy injects the secrets; `aquaman get` supplies them from your vault, with the allow-list and audit log. | If you run agents in Docker Sandboxes. See [Quick Start 5](#5-docker-sandboxes). |
@@ -103,7 +103,7 @@ aquaman request aquaman://github/token --env GITHUB_TOKEN
 
 `init` creates the config, starts the daemon, installs the agent's hooks and a skill, registers the directory as a project and adds a short block to `CLAUDE.md` (or `AGENTS.md`). It never prompts, so the agent can run it for you. `request` opens a dialog where you type the value; it goes straight into your vault and the agent only ever sees the reference. With `--from '<locator>'` the reference points at an item that is already in your vault, and the dialog is an approval with nothing to type ([locator forms](https://aquaman.sh/docs/agent-setup/#an-item-that-is-already-in-the-vault)). Both print JSON with `--json`. Restart the agent session afterwards, and run `aquaman coder doctor` if anything looks off. What `init` changes on your machine, and how to undo it, is listed in [Using aquaman from an AI agent](https://aquaman.sh/docs/agent-setup/#what-init-changes).
 
-Your app does not change: it reads its keys from the environment as it would anyway, and aquaman is how those variables get set on your machine while the agent works. The app holds the key while one of its commands runs, the same as with `op run` or a `.env` file; what changes is that the agent, the transcript and your repository never do. In CI and production the same variable names are filled from that platform's own secrets. To keep the key out of the app as well, route it through the proxy: `aquaman request aquaman://stripe/secret_key --env STRIPE_SECRET_KEY --via-proxy STRIPE_API_BASE` gives the app a local token and the proxy's URL instead of the key, and request policies then apply to it ([guide](https://aquaman.sh/docs/app-through-proxy/)).
+Your app does not change: it reads its keys from the environment as it would anyway, and aquaman is how those variables get set on your machine while the agent works. The app holds the key while one of its commands runs, the same as with `op run` or a `.env` file; what changes is that the agent, the transcript and your repository never do. In CI and production the same variable names are filled from that platform's own secrets. To keep the key out of the app as well, route it through the proxy: `aquaman request aquaman://stripe/secret_key --env STRIPE_SECRET_KEY --via-proxy STRIPE_API_BASE` gives the app a local token and the proxy's URL instead of the key, and request policies then apply to it ([guide](https://aquaman.sh/docs/app-through-proxy/)). For AWS the proxy signs each request with the keys in your vault ([guide](https://aquaman.sh/docs/aws/)).
 
 Prefer to pick the vault backend and wire things by hand?
 
@@ -253,7 +253,7 @@ Agent / OpenClaw / Coding Agent             Aquaman Proxy
 
 1. **Store**: Credentials live in the vault backend you already run - no house vault (Keychain, 1Password, HashiCorp Vault, Bitwarden, Keeper, KeePassXC, systemd-creds, encrypted-file).
 2. **Policy**: Proxy checks method + path rules *before* touching credentials. Denied requests get a `403`, never real auth headers.
-3. **Inject**: Proxy looks up the credential and adds the auth header before forwarding. 26 builtin services, 4 injecting auth modes (header, URL-path, HTTP Basic, OAuth); a 5th, `none`, is at-rest-only (proxy rejects traffic).
+3. **Inject**: Proxy looks up the credential and adds the auth header before forwarding. 27 builtin services, 5 injecting auth modes (header, URL-path, HTTP Basic, OAuth, and AWS Signature Version 4, where the proxy signs the request); a 6th, `none`, is at-rest-only (proxy rejects traffic).
 4. **Broker (coder, Hermes secret source, `aquaman get`)**: `POST /broker/resolve` materializes a credential per tool call, scoped to a single command's env. Only `aquaman daemon` serves it, and only for refs you declared (`projects.yaml` or `aquaman broker allow`). The OpenClaw plugin's proxy never serves it (v0.15.0+).
 5. **Audit**: Every credential use is logged with SHA-256 hash chains.
 
@@ -367,10 +367,12 @@ Bring your own vault - aquaman has no house store. Pick the backend you already 
 | `1password` | Team credential sharing | `brew install 1password-cli && op signin`. For unattended agents use a [service account](https://developer.1password.com/docs/service-accounts/) (`OP_SERVICE_ACCOUNT_TOKEN`) |
 | `vault` | Enterprise secrets management | Set `VAULT_ADDR` + `VAULT_TOKEN` |
 | `systemd-creds` | Linux with systemd ≥ 256 | TPM2-backed, no root required |
-| `bitwarden` | Bitwarden users | `bw login && export BW_SESSION=$(bw unlock --raw)` |
+| `bitwarden` | Bitwarden users | `bw login`, then `aquaman unlock` in a terminal once the daemon runs (Bitwarden asks for the master password; the daemon keeps the session in memory). `export BW_SESSION=$(bw unlock --raw)` before starting the daemon works too |
 | `keeper` | Keeper password manager users (v0.16.0+) | `pip install keepercommander`, log in once with `keeper shell` and turn on `this-device persistent-login on`, create a folder for aquaman, then `export AQUAMAN_KEEPER_FOLDER_UID=<folder UID>`. Records are titled `aquaman::<service>::<key>` |
 
 `aquaman setup` auto-detects a sensible default (macOS → `keychain`; Linux → `keychain` if libsecret, else `systemd-creds` if systemd ≥ 256, else `encrypted-file`).
+
+With `bitwarden` the daemon starts and stays up while the vault is locked, for example after `aquaman service install` started it at login. Requests that need a credential answer `vault_locked` with the fix `Run: aquaman unlock` until a person has run it in a terminal; `aquaman lock` makes the daemon drop the session again. The session is never written to disk, the keychain or the login item. Details: [Bitwarden: unlock after you log in](https://aquaman.sh/docs/autostart/#bitwarden-unlock-after-you-log-in).
 
 `encrypted-file` is a last-resort for headless Linux/CI environments without a native keyring. For better security on Linux, install `libsecret-1-dev` (GNOME Keyring), use `systemd-creds` (TPM2 binding), or use 1Password/Vault.
 

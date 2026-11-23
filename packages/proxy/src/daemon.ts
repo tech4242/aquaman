@@ -18,9 +18,48 @@ import { parseRequestTarget, policyPathInterpretations, policyMethods, policyPat
 import { clampPromptTimeout, type CredentialPrompter, type PromptResult } from './credential-prompt.js';
 import { handleServiceConsent, SERVICE_CONSENT_PATH, type PromptLimiter } from './service-consent.js';
 import { isReservedService, reservedServiceRefusal, type BrokerScope } from './broker-scope.js';
-import { routableKeys, routeKeyMismatch, basicTokenCandidates, basicValueCarries } from './route-auth.js';
+import { routableKeys, routeRequiredKeys, routeKeyMismatch, basicTokenCandidates, basicValueCarries } from './route-auth.js';
+import {
+  AWS_DNS_SUFFIX,
+  EMPTY_PAYLOAD_SHA256,
+  SIGV4_MAX_BUFFERED_BODY,
+  SIGV4_MAX_BUFFERED_BODIES,
+  SIGV4_BODY_READ_TIMEOUT_MS,
+  sigV4HeaderPaths,
+  SIGV4_PLACEHOLDER_SECRET,
+  amzDate,
+  canonicalQuery,
+  canonicalUri,
+  isSigV4SignedHeader,
+  isSigV4StrippedHeader,
+  parseSigV4Authorization,
+  payloadPlan,
+  resolveSigV4Target,
+  sha256Hex,
+  sigV4AuthorizationRefusal,
+  sigV4RouteEnv,
+  sigV4RoutingSegmentCount,
+  sigV4TokenCandidates,
+  sigV4WireSegments,
+  signSigV4,
+} from './sigv4.js';
 import type { CredentialLinker } from './core/credentials/linked-store.js';
 import { linkRequestPlan, linkUnreadableReply } from './link-request.js';
+import { isVaultLocked, VAULT_LOCKED_CODE, VAULT_UNLOCK_FIX } from './core/credentials/vault-lock.js';
+import { handleVaultUnlock, handleVaultLock, VAULT_UNLOCK_PATH, VAULT_LOCK_PATH } from './vault-session.js';
+
+/**
+ * What a caller is told when the vault is locked: a state a person ends with
+ * one command, not a missing credential and not a broken backend. 503
+ * because it passes; the code and the fix are the same on every endpoint.
+ */
+function vaultLockedBody(err: unknown): { error: string; fix: string; code: string } {
+  return {
+    error: err instanceof Error ? err.message : 'The vault is locked',
+    fix: (err as { fix?: string } | null)?.fix ?? VAULT_UNLOCK_FIX,
+    code: VAULT_LOCKED_CODE,
+  };
+}
 
 // Service name validation: lowercase alphanum, dots, hyphens, underscores
 const SAFE_SERVICE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
@@ -151,6 +190,13 @@ export interface CredentialProxyOptions {
      */
     links?: CredentialLinker;
   };
+  /** Bounds on AWS request bodies held in memory to be hashed. Defaults: `SIGV4_MAX_BUFFERED_BODIES`, `SIGV4_BODY_READ_TIMEOUT_MS`. */
+  sigv4?: { maxBufferedBodies?: number; bodyReadTimeoutMs?: number };
+  /**
+   * Called when a session handed over on `/_vault/unlock` opened the vault,
+   * so whatever waited for the vault (the audit anchor) can go on.
+   */
+  onVaultUnlocked?: () => void;
 }
 
 const AUDIT_UNAVAILABLE_FIX = 'Check that the audit directory (~/.aquaman/audit by default) is writable and the disk is not full. Run: aquaman doctor';
@@ -204,6 +250,56 @@ export class CredentialProxy {
     this.options = options;
     this.serviceRegistry = options.serviceRegistry || createServiceRegistry();
     this.oauthCache = createOAuthTokenCache();
+  }
+
+  /** AWS request bodies being read into memory right now. */
+  private sigV4Buffering = 0;
+
+  /** Every vault key a service definition makes the proxy read. */
+  private static keysRead(def: ServiceDefinition): unknown[] {
+    const oauth = def.oauthConfig;
+    return [...new Set<string>([
+      def.credentialKey,
+      ...(def.additionalCredentialKeys ?? []),
+      ...Object.values(def.additionalHeaders ?? {}).map((h) => h.credentialKey),
+      // The client credentials go to the token URL, and so does every
+      // credential the URL names in braces.
+      ...(oauth ? [oauth.clientIdKey, oauth.clientSecretKey, ...(oauth.tokenUrl.match(/\{(\w+)\}/g) ?? []).map((t) => t.slice(1, -1))] : []),
+    ])];
+  }
+
+  /**
+   * The key of a services.yaml definition whose vault item is, by name, an
+   * item of a built-in service, and that service. Only a store that joins
+   * service and key into one item name can have one (`itemIdentity`): there
+   * `cloudflare` + `ai-api_token` and `cloudflare-ai` + `api_token` are one
+   * item, and so are `openai-org` + `id` and `openai` + `org-id`.
+   * `<builtin>/<any key>` begins with the same text whatever the key, so an
+   * item of another service that begins with it is one of the built-in's
+   * items under a second name, whichever key that is.
+   */
+  private builtinItemRead(service: string, def: ServiceDefinition): { key: string; builtin: string } | undefined {
+    const identity = this.options.store.itemIdentity?.bind(this.options.store);
+    if (!identity || ServiceRegistry.isBuiltinService(service)) return undefined;
+    // Item names are compared without regard to case: whether a vault tells
+    // `AI-api_token` from `ai-api_token` is the vault's business, and a name
+    // that differs only in case is not one to hand out on that hope.
+    const prefixes: Array<[string, string]> = [];
+    for (const builtin of ServiceRegistry.getBuiltinServiceNames()) {
+      const probe = identity(builtin, 'k');
+      if (probe !== undefined && probe.endsWith('k')) prefixes.push([builtin, probe.slice(0, -1).toLowerCase()]);
+    }
+    for (const key of CredentialProxy.keysRead(def)) {
+      // A key that is not text cannot be compared, and a store would turn it
+      // into text of its own making: it is not read at all.
+      if (typeof key !== 'string') return { key: String(key), builtin: prefixes[0]?.[0] ?? 'a built-in service' };
+      if (key === '') continue;
+      const item = identity(service, key);
+      if (item === undefined) continue;
+      const hit = prefixes.find(([, prefix]) => item.toLowerCase().startsWith(prefix));
+      if (hit) return { key, builtin: hit[0] };
+    }
+    return undefined;
   }
 
   async start(): Promise<void> {
@@ -308,6 +404,9 @@ export class CredentialProxy {
     }
     // A basic client builds the header itself, so the token is one half of the pair.
     if (def.authMode === 'basic') candidates.push(...basicTokenCandidates(req.headers.authorization));
+    // An AWS client signs with the token as its access key id, so it arrives
+    // inside the credential scope of the signature.
+    if (def.authMode === 'sigv4') candidates.push(...sigV4TokenCandidates(req.headers.authorization));
     return candidates.some(c => timingSafeStrEqual(c, this.routeToken));
   }
 
@@ -408,6 +507,10 @@ export class CredentialProxy {
         services: this.options.allowedServices,
         // Only over the socket: lets `aquaman init` confirm the pid file names this process before signalling it.
         ...(fromLoopback ? {} : { pid: process.pid }),
+        // Only over the socket, and only for a backend a person unlocks:
+        // whether reads are refused until `aquaman unlock`. Answered from
+        // memory, so a health check never starts the vault's CLI.
+        ...(fromLoopback || !this.options.store.vaultState ? {} : { vault: this.options.store.vaultState() }),
       }));
       return;
     }
@@ -467,6 +570,22 @@ export class CredentialProxy {
         audit: (error) => this.emitRequest({
           id: requestId, service: 'aquaman-service', method: 'SERVICE_CONSENT', path: SERVICE_CONSENT_PATH,
           timestamp: new Date(), authenticated: false, statusCode: 200, error,
+        }),
+      });
+      return;
+    }
+
+    const vaultPath = url.endsWith('/') ? url.slice(0, -1) : url;
+    if ((vaultPath === VAULT_UNLOCK_PATH || vaultPath === VAULT_LOCK_PATH) && req.method === 'POST') {
+      const unlock = vaultPath === VAULT_UNLOCK_PATH;
+      await (unlock ? handleVaultUnlock : handleVaultLock)(req, res, {
+        fromLoopback,
+        store: this.options.store,
+        refusals: this.unlockRefusals,
+        onUnlocked: () => this.options.onVaultUnlocked?.(),
+        audit: (error) => this.emitRequest({
+          id: requestId, service: 'aquaman-vault', method: unlock ? 'VAULT_UNLOCK' : 'VAULT_LOCK', path: vaultPath,
+          timestamp: new Date(), authenticated: false, statusCode: error ? 403 : 200, error,
         }),
       });
       return;
@@ -535,9 +654,13 @@ export class CredentialProxy {
     const credentialSlot = authMode === 'url-path' && serviceDef.authPathTemplate
       ? findUrlPathCredentialSlot(serviceSegments, serviceDef.authPathTemplate)
       : null;
+    // Likewise the segments that only select an AWS host: policy matches the
+    // path AWS receives, whichever way the host was chosen.
     const canonicalSegments = credentialSlot
       ? serviceSegments.filter((_, i) => i !== credentialSlot.index)
-      : serviceSegments;
+      : authMode === 'sigv4'
+        ? serviceSegments.slice(sigV4RoutingSegmentCount(serviceSegments))
+        : serviceSegments;
     const remainingPath = '/' + canonicalSegments.join('/');
 
     const requestInfo: RequestInfo = {
@@ -559,10 +682,22 @@ export class CredentialProxy {
       // A path-override header the parser refuses cannot be evaluated, so a
       // service that has rules does not get the request.
       const overrides = policyPathOverrides(req.headers);
+      // An S3 copy reads a second object, named in a header. That object is
+      // read, whatever the method of the request that names it, so it is
+      // checked as a GET: a rule that stops reading a bucket also stops
+      // copying out of it, and a bucket that may only be read can be copied from.
+      const named = authMode === 'sigv4'
+        ? sigV4HeaderPaths(req.headers, (p) => {
+            const t = parseRequestTarget(p);
+            return t.ok ? policyPathInterpretations(t.segments) : null;
+          })
+        : { ok: true as const, paths: [] };
       const paths = [...policyPathInterpretations(canonicalSegments), ...(overrides.ok ? overrides.paths : [])];
-      const denied = (!overrides.ok && policyConfig[service] !== undefined) ||
-        policyMethods(req.method || 'GET', req.headers, target.search).some((method) =>
-          paths.some((p) => !matchPolicy(service, method, p, policyConfig).allowed));
+      const methods = policyMethods(req.method || 'GET', req.headers, target.search);
+      const refused = (method: string, p: string) => !matchPolicy(service, method, p, policyConfig).allowed;
+      const denied = ((!overrides.ok || !named.ok) && policyConfig[service] !== undefined) ||
+        methods.some((method) => paths.some((p) => refused(method, p))) ||
+        (named.ok && named.paths.some((p) => refused('GET', p)));
       if (denied) {
         requestInfo.error = `Policy denied: ${req.method || 'GET'} ${remainingPath}`;
         requestInfo.statusCode = 403;
@@ -575,6 +710,31 @@ export class CredentialProxy {
         }));
         return;
       }
+    }
+
+    // A service from services.yaml sends what the proxy reads for it to an
+    // upstream that file names. On a store that joins service and key into
+    // one item name, such a service can be given a name and a key that
+    // together spell an item of a built-in service, and would be handed
+    // that service's credential. It gets nothing instead.
+    const borrowed = this.builtinItemRead(service, serviceDef);
+    if (borrowed) {
+      requestInfo.error = `service_item_collision: ${service}/${borrowed.key} is an item of ${borrowed.builtin}`;
+      requestInfo.statusCode = 403;
+      this.emitRequest(requestInfo);
+      res.setHeader('Content-Type', 'application/json');
+      res.statusCode = 403;
+      res.end(JSON.stringify({
+        error: `The credential ${service}/${borrowed.key} is stored under the same vault item name as a credential of the built-in service "${borrowed.builtin}", so it is not sent to the upstream services.yaml names for "${service}"`,
+        fix: `Rename the service or the key in services.yaml, or use the built-in "${borrowed.builtin}" service`,
+        code: 'service_item_collision',
+      }));
+      return;
+    }
+
+    if (authMode === 'sigv4') {
+      await this.forwardSigV4(req, res, serviceDef, serviceSegments, target.search, url, requestInfo);
+      return;
     }
 
     try {
@@ -651,6 +811,18 @@ export class CredentialProxy {
       await this.proxyRequest(req, res, upstreamUrl, serviceDef, credential, requestInfo);
 
     } catch (error) {
+      if (isVaultLocked(error)) {
+        // Nothing was sent upstream: the credential could not be read.
+        requestInfo.error = `${VAULT_LOCKED_CODE}: ${service}/${config.credentialKey}`;
+        requestInfo.statusCode = 503;
+        this.emitRequest(requestInfo);
+        if (!res.headersSent) {
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = 503;
+          res.end(JSON.stringify(vaultLockedBody(error)));
+        }
+        return;
+      }
       requestInfo.error = error instanceof Error ? error.message : String(error);
       requestInfo.statusCode = 500;
       this.emitRequest(requestInfo);
@@ -733,16 +905,30 @@ export class CredentialProxy {
       }
     }
 
+    return this.sendUpstream(transport, {
+      hostname: upstreamUrl.hostname,
+      port: upstreamUrl.port || (isHttps ? 443 : 80),
+      path: upstreamUrl.pathname + upstreamUrl.search,
+      method: clientReq.method,
+      headers
+    }, clientReq, null, clientRes, serviceDef, requestInfo);
+  }
+
+  /**
+   * Send one request upstream and hand the answer back once its audit entry
+   * is written. The body is the client's stream, or `body` when the proxy has
+   * already read it.
+   */
+  private sendUpstream(
+    transport: typeof http | typeof https,
+    options: https.RequestOptions,
+    clientReq: IncomingMessage,
+    body: Buffer | null,
+    clientRes: ServerResponse,
+    serviceDef: ServiceDefinition,
+    requestInfo: RequestInfo
+  ): Promise<void> {
     return new Promise((resolve) => {
-
-      const options = {
-        hostname: upstreamUrl.hostname,
-        port: upstreamUrl.port || (isHttps ? 443 : 80),
-        path: upstreamUrl.pathname + upstreamUrl.search,
-        method: clientReq.method,
-        headers
-      };
-
       const proxyReq = transport.request(options, (proxyRes) => {
         requestInfo.statusCode = proxyRes.statusCode;
         // The upstream has answered, so the credential was used. The client
@@ -803,7 +989,271 @@ export class CredentialProxy {
       });
 
       // Forward request body
-      clientReq.pipe(proxyReq);
+      if (body) proxyReq.end(body);
+      else clientReq.pipe(proxyReq);
+    });
+  }
+
+  /**
+   * Forward a request to AWS, signed by the proxy (authMode `sigv4`).
+   *
+   * The client signed with placeholder credentials. Its `Authorization`
+   * header is read for two things only, the region and the signing name, and
+   * then dropped with everything else its signature consisted of. The host
+   * is built from validated labels under amazonaws.com (sigv4.ts), the body
+   * is hashed by the proxy, the date is the proxy's clock, and the request
+   * that leaves is signed with the keys from the vault. A request the proxy
+   * cannot sign completely is refused before any key is read.
+   */
+  private async forwardSigV4(
+    req: IncomingMessage,
+    res: ServerResponse,
+    serviceDef: ServiceDefinition,
+    segments: string[],
+    search: string,
+    rawUrl: string,
+    requestInfo: RequestInfo
+  ): Promise<void> {
+    const service = requestInfo.service;
+    const refuse = (status: number, body: { error: string; fix: string; code?: string }) => {
+      requestInfo.error = body.code ? `${body.code}: ${body.error}` : body.error;
+      requestInfo.statusCode = status;
+      this.emitRequest(requestInfo);
+      res.setHeader('Content-Type', 'application/json');
+      res.statusCode = status;
+      res.end(JSON.stringify(body));
+    };
+    const header = (name: string): string | undefined => {
+      const v = req.headers[name];
+      return Array.isArray(v) ? v[0] : v;
+    };
+
+    const scope = parseSigV4Authorization(header('authorization'));
+    if (!scope) {
+      const r = sigV4AuthorizationRefusal(header('authorization'));
+      refuse(r.status, { error: r.error, fix: r.fix, code: r.code });
+      return;
+    }
+    const awsTarget = resolveSigV4Target(segments, scope);
+    if (!awsTarget.ok) {
+      refuse(awsTarget.status, { error: awsTarget.error, fix: awsTarget.fix, code: awsTarget.code });
+      return;
+    }
+    const query = canonicalQuery(search);
+    if (!query.ok) {
+      refuse(query.status, { error: query.error, fix: query.fix, code: query.code });
+      return;
+    }
+    const plan = payloadPlan(header('x-amz-content-sha256'), awsTarget.service);
+    if (!plan.ok) {
+      refuse(plan.status, { error: plan.error, fix: plan.fix, code: plan.code });
+      return;
+    }
+    // The request-target parser drops empty segments. For most services that
+    // changes nothing; for AWS a doubled slash is part of an object key and a
+    // trailing slash part of an API path, and the signature covers the path
+    // byte for byte. The trailing slash is kept, a doubled slash is refused.
+    const q = rawUrl.indexOf('?');
+    const rawPath = q === -1 ? rawUrl : rawUrl.slice(0, q);
+    if (rawPath.includes('//')) {
+      refuse(400, { error: 'The path contains an empty segment ("//"), which the proxy does not forward to AWS', fix: 'Use object keys and paths without doubled slashes', code: 'sigv4_path_unsupported' });
+      return;
+    }
+    const trailingSlash = awsTarget.segments.length > 0 && rawPath.endsWith('/');
+    // The URL goes to AWS as sent, so it must not carry what the headers are
+    // cleaned of.
+    let decodedUrl = rawUrl;
+    try { decodedUrl = decodeURIComponent(rawUrl); } catch { /* the raw form is checked */ }
+    if ([rawUrl, decodedUrl].some((u) => this.carriesLocalToken(u) || u.includes(SIGV4_PLACEHOLDER_SECRET))) {
+      refuse(400, { error: 'The request URL contains a local proxy token or the placeholder secret, which are never sent to AWS', fix: 'Remove it from the path and the query string', code: 'sigv4_local_token_in_url' });
+      return;
+    }
+
+    // Headers: everything the client's signature was made of is left behind,
+    // as is anything that carries one of this proxy's tokens or the placeholder.
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (isSigV4StrippedHeader(key)) continue;
+      const values = Array.isArray(value) ? value : [value ?? ''];
+      if (values.some((v) => this.carriesLocalToken(v) || v.includes(SIGV4_PLACEHOLDER_SECRET))) continue;
+      if (values[0]) headers[key] = values[0];
+    }
+
+    let body: Buffer | null = null;
+    let payloadHash: string;
+    if (plan.mode === 'literal') {
+      payloadHash = plan.value;
+    } else {
+      // Reading the rest of a refused body for a moment lets the client
+      // receive the answer; one still sending after that is cut off.
+      const drain = () => {
+        req.resume();
+        const closing = setTimeout(() => { if (!req.complete) req.destroy(); }, 2000);
+        closing.unref();
+        req.once('end', () => clearTimeout(closing));
+        req.once('close', () => clearTimeout(closing));
+      };
+      // Each body waiting to be hashed is held whole, before any credential
+      // is read, so both how many are held at once and how long a client may
+      // take are bounded: a program with a route token cannot make the proxy
+      // hold memory without end.
+      const limits = this.options.sigv4 ?? {};
+      if (this.sigV4Buffering >= (limits.maxBufferedBodies ?? SIGV4_MAX_BUFFERED_BODIES)) {
+        refuse(503, {
+          error: 'The proxy is already holding as many AWS request bodies as it hashes at one time',
+          fix: 'Send the request again in a moment, or send fewer requests with a body at once',
+          code: 'sigv4_busy',
+        });
+        drain();
+        return;
+      }
+      let read: Buffer | null | 'timeout';
+      this.sigV4Buffering++;
+      try {
+        read = await this.readBodyCapped(req, SIGV4_MAX_BUFFERED_BODY, limits.bodyReadTimeoutMs ?? SIGV4_BODY_READ_TIMEOUT_MS);
+      } catch (error) {
+        // The client went away in the middle of its body: nobody is left to answer.
+        requestInfo.error = `sigv4_body_aborted: ${error instanceof Error ? error.message : String(error)}`;
+        requestInfo.statusCode = 400;
+        this.emitRequest(requestInfo);
+        if (!res.headersSent && !res.destroyed) { res.statusCode = 400; res.end(); }
+        return;
+      } finally {
+        this.sigV4Buffering--;
+      }
+      if (read === 'timeout') {
+        refuse(408, {
+          error: 'The request body did not arrive in time for the proxy to hash it for the signature',
+          fix: 'Send the request again',
+          code: 'sigv4_body_timeout',
+        });
+        drain();
+        return;
+      }
+      if (read === null) {
+        refuse(413, {
+          error: `The request body is larger than ${SIGV4_MAX_BUFFERED_BODY / (1024 * 1024)} MiB, the most the proxy holds in memory to hash for the signature`,
+          fix: 'Send it in smaller parts (a multipart upload), or for S3 with an unsigned payload (x-amz-content-sha256: UNSIGNED-PAYLOAD)',
+          code: 'sigv4_body_too_large',
+        });
+        // Closing a socket that still has unread input resets it, and the
+        // client would lose the answer.
+        drain();
+        return;
+      }
+      body = read;
+      payloadHash = body.length === 0 ? EMPTY_PAYLOAD_SHA256 : sha256Hex(body);
+      delete headers['transfer-encoding'];
+      if (body.length > 0 || header('content-length') !== undefined) headers['content-length'] = String(body.length);
+    }
+
+    let accessKeyId: string | null;
+    let secretAccessKey: string | null;
+    let sessionToken: string | null;
+    const secretKeyName = serviceDef.additionalCredentialKeys?.[0] ?? 'secret_access_key';
+    const tokenKeyName = serviceDef.additionalCredentialKeys?.[1];
+    try {
+      accessKeyId = await this.options.store.get(service, serviceDef.credentialKey);
+      secretAccessKey = accessKeyId === null ? null : await this.options.store.get(service, secretKeyName);
+      sessionToken = secretAccessKey === null || !tokenKeyName ? null : await this.options.store.get(service, tokenKeyName);
+    } catch (error) {
+      if (isVaultLocked(error)) {
+        requestInfo.error = `${VAULT_LOCKED_CODE}: ${service}/${serviceDef.credentialKey}`;
+        requestInfo.statusCode = 503;
+        this.emitRequest(requestInfo);
+        res.statusCode = 503;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(vaultLockedBody(error)));
+        return;
+      }
+      requestInfo.error = error instanceof Error ? error.message : String(error);
+      requestInfo.statusCode = 500;
+      this.emitRequest(requestInfo);
+      res.statusCode = 500;
+      res.end('Proxy error');
+      return;
+    }
+    if (accessKeyId === null || secretAccessKey === null) {
+      const missing = accessKeyId === null ? serviceDef.credentialKey : secretKeyName;
+      refuse(401, { error: `No credential found for ${service}/${missing}`, fix: `Run: aquaman credentials add ${service} ${missing}` });
+      return;
+    }
+    requestInfo.authenticated = true;
+
+    const now = amzDate(new Date());
+    headers['host'] = awsTarget.host;
+    headers['x-amz-date'] = now;
+    headers['x-amz-content-sha256'] = payloadHash;
+    if (sessionToken) headers['x-amz-security-token'] = sessionToken;
+
+    const toSign: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      if (key === 'host' || isSigV4SignedHeader(key)) toSign[key] = value;
+    }
+    const wireSegments = sigV4WireSegments(awsTarget.segments, awsTarget.service);
+    const signed = signSigV4({
+      method: req.method || 'GET',
+      canonicalUri: canonicalUri(wireSegments, trailingSlash, awsTarget.service),
+      canonicalQuery: query.canonical,
+      headers: toSign,
+      payloadHash,
+      region: awsTarget.region,
+      service: awsTarget.service,
+      accessKeyId,
+      secretAccessKey,
+      amzDate: now,
+    });
+    headers['authorization'] = signed.authorization;
+
+    // The connection goes to the host named above, over TLS. A definition
+    // whose upstream is not the AWS suffix exists only through `override()`,
+    // which tests use to stand in for AWS: the connection then goes there,
+    // while the Host header and the signature still name the AWS host.
+    const base = new URL(serviceDef.upstream);
+    const toAws = base.protocol === 'https:' && base.hostname === AWS_DNS_SUFFIX && base.port === '';
+    const upstreamPath = `/${wireSegments.join('/')}${trailingSlash ? '/' : ''}${search}`;
+    await this.sendUpstream(base.protocol === 'https:' ? https : http, {
+      hostname: toAws ? awsTarget.host : base.hostname,
+      port: toAws ? 443 : base.port || (base.protocol === 'https:' ? 443 : 80),
+      path: upstreamPath,
+      method: req.method,
+      headers,
+      ...(toAws ? { servername: awsTarget.host } : {}),
+    }, req, body, res, serviceDef, requestInfo);
+  }
+
+  /** Read a request body into memory, or return null once it is known to exceed `cap` bytes. */
+  private readBodyCapped(req: IncomingMessage, cap: number, timeoutMs: number): Promise<Buffer | null | 'timeout'> {
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > cap) return Promise.resolve(null);
+    // Listeners, not `for await`: leaving that loop early destroys the
+    // socket, and the refusal still has to be written to it.
+    return new Promise((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      const done = (result: Buffer | null | 'timeout') => {
+        clearTimeout(deadline);
+        req.off('data', onData);
+        req.off('end', onEnd);
+        req.off('error', fail);
+        resolve(result);
+      };
+      const fail = (err: Error) => { clearTimeout(deadline); reject(err); };
+      const deadline = setTimeout(() => { req.pause(); done('timeout'); }, timeoutMs);
+      deadline.unref();
+      const onData = (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > cap) {
+          req.pause();
+          done(null);
+          return;
+        }
+        chunks.push(chunk);
+      };
+      const onEnd = () => done(Buffer.concat(chunks));
+      req.on('data', onData);
+      req.on('end', onEnd);
+      req.on('error', fail);
     });
   }
 
@@ -850,6 +1300,8 @@ export class CredentialProxy {
    * v0.12.0+ — used by the aquaman-coder hook adapters to materialize
    * credentials per tool call without writing .env files to disk.
    */
+  /** When sessions handed to `/_vault/unlock` were refused (vault-session.ts). */
+  private readonly unlockRefusals: number[] = [];
   private requestPromptOpen = false;
   private requestPromptTimes: number[] = [];
   private requestDeclinedAt = new Map<string, number>();
@@ -892,9 +1344,9 @@ export class CredentialProxy {
 
   /**
    * Whether a project has routed a program to this service in a way the
-   * proxy can serve: the service takes its credential in a header or as
-   * HTTP basic auth, and the routed reference is a key the proxy injects for
-   * it (route-auth.ts).
+   * proxy can serve: the service takes its credential in a header, as HTTP
+   * basic auth or as an AWS signature, and the routed reference is a key a
+   * program presents the route token in place of (route-auth.ts).
    */
   private isServiceRouted(service: string): boolean {
     const def = this.serviceRegistry.get(service);
@@ -995,17 +1447,37 @@ export class CredentialProxy {
       return;
     }
     if (!keys.includes(key)) {
-      const mismatch = routeKeyMismatch(service, keys, key);
+      const mismatch = routeKeyMismatch(service, keys, key, serviceDef.authMode);
       refuse('route_key_mismatch', mismatch.error, mismatch.fix);
       return;
     }
+    // A route for a services.yaml service whose key is, by item name, a
+    // built-in's: forwarding would refuse every request, and the vault read
+    // below would say whether the built-in's item exists.
+    const borrowedItem = this.builtinItemRead(service, serviceDef);
+    if (borrowedItem) {
+      refuse('service_item_collision',
+        `The credential ${service}/${borrowedItem.key} is stored under the same vault item name as a credential of the built-in service "${borrowedItem.builtin}", so it is not routed`,
+        `Rename the service or the key in services.yaml, or use the built-in "${borrowedItem.builtin}" service`);
+      return;
+    }
     // Every key the proxy injects for the service, the routed one first: a
-    // basic request sent with half a pair would only fail at the upstream.
-    for (const needed of [key, ...keys.filter((k) => k !== key)]) {
+    // basic request sent with half a pair, or an AWS request with no key to
+    // sign with, would only fail at the upstream.
+    for (const needed of [key, ...routeRequiredKeys(serviceDef).filter((k) => k !== key)]) {
       let stored = false;
       try {
         stored = (await this.options.store.get(service, needed)) !== null;
-      } catch {
+      } catch (err) {
+        if (isVaultLocked(err)) {
+          // Not "not found": the fix is to unlock, not to add the credential again.
+          reply(503, vaultLockedBody(err));
+          this.emitRequest({
+            id: crypto.randomUUID(), service, method: 'BROKER', path: '/broker/route', timestamp: new Date(),
+            authenticated: false, statusCode: 503, error: `${VAULT_LOCKED_CODE}: ${service}/${needed}`,
+          });
+          return;
+        }
         stored = false;
       }
       if (!stored) {
@@ -1013,7 +1485,11 @@ export class CredentialProxy {
         return;
       }
     }
-    reply(200, { url: `http://${address}/${service}`, token: this.routeToken });
+    const routeUrl = `http://${address}/${service}`;
+    // An AWS client also needs a secret access key to start, and some
+    // services need their own endpoint variable; `env` names those. The
+    // secret it carries is a fixed placeholder, never a stored value.
+    reply(200, { url: routeUrl, token: this.routeToken, ...(serviceDef.authMode === 'sigv4' ? { env: sigV4RouteEnv(routeUrl) } : {}) });
     this.emitRequest({
       id: crypto.randomUUID(),
       service,
@@ -1059,6 +1535,9 @@ export class CredentialProxy {
       return;
     }
     const available: boolean[] = [];
+    // Set only by a reference that passed the scope and then met a locked
+    // vault, so the answer still says nothing about references out of scope.
+    let locked: unknown;
     for (const ref of refs as Array<{ service?: unknown; key?: unknown } | null>) {
       const service = ref?.service;
       const key = ref?.key;
@@ -1073,13 +1552,16 @@ export class CredentialProxy {
       ) {
         try {
           ok = (await this.options.store.get(service, key)) !== null;
-        } catch {
+        } catch (err) {
+          if (isVaultLocked(err)) locked = err;
           ok = false;
         }
       }
       available.push(ok);
     }
-    reply(200, { available });
+    // `locked` tells "nothing resolves because the vault is locked" apart
+    // from "nothing is stored", which have different fixes.
+    reply(200, locked === undefined ? { available } : { available, locked: true, code: VAULT_LOCKED_CODE, fix: vaultLockedBody(locked).fix });
   }
 
   private async handleBrokerRequest(
@@ -1175,6 +1657,14 @@ export class CredentialProxy {
       return;
     }
 
+    // A locked vault is answered before any dialog, from memory: the person
+    // would be asked for a value or an approval that cannot be stored or
+    // checked until they have unlocked it.
+    if (this.options.store.vaultState?.() === 'locked') {
+      reply(503, { error: 'The vault is locked, so nothing can be stored or approved yet', fix: VAULT_UNLOCK_FIX, code: VAULT_LOCKED_CODE });
+      return;
+    }
+
     // `from` asks for a link to an item that already exists in the vault.
     // Until the person has agreed, only the locator's syntax and the link map
     // are looked at: reading or probing the item here would let a request
@@ -1182,7 +1672,16 @@ export class CredentialProxy {
     // `declare: false` with `from` links the reference and leaves it
     // undeclared: the proxy can inject the value, nothing is handed out.
     const linkOnly = body.from !== undefined && body.declare === false && !routed;
-    const link = await linkRequestPlan(requests.links, service, key, body.from, routed, !linkOnly);
+    // A locked vault is answered before any dialog: the person would be asked
+    // for a value or an approval that cannot be stored or checked.
+    let link: Awaited<ReturnType<typeof linkRequestPlan>>;
+    try {
+      link = await linkRequestPlan(requests.links, service, key, body.from, routed, !linkOnly);
+    } catch (err) {
+      if (!isVaultLocked(err)) throw err;
+      reply(503, vaultLockedBody(err));
+      return;
+    }
     if (link && !link.ok) {
       reply(link.status, { error: link.error, fix: link.fix, code: link.code });
       return;
@@ -1199,6 +1698,10 @@ export class CredentialProxy {
     try {
       exists = linkFrom === undefined && await this.options.store.exists(service, key);
     } catch (err) {
+      if (isVaultLocked(err)) {
+        reply(503, vaultLockedBody(err));
+        return;
+      }
       reply(500, {
         error: `Vault backend error checking ${service}/${key}: ${err instanceof Error ? err.message : String(err)}`,
         fix: 'Check that the configured backend is accessible. Run: aquaman doctor',
@@ -1300,8 +1803,10 @@ export class CredentialProxy {
       if (!declared && !routed && !linkOnly) await requests.declare(service, key);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      audit(message);
-      reply(500, { error: `Could not store ${service}/${key}: ${message}`, fix: 'Run: aquaman doctor' });
+      audit(isVaultLocked(err) ? `${VAULT_LOCKED_CODE}: ${service}/${key}` : message);
+      // The vault locked while the dialog was open: nothing was stored.
+      if (isVaultLocked(err)) reply(503, vaultLockedBody(err));
+      else reply(500, { error: `Could not store ${service}/${key}: ${message}`, fix: 'Run: aquaman doctor' });
       return;
     }
     audit();
@@ -1414,6 +1919,17 @@ export class CredentialProxy {
     try {
       value = await this.options.store.get(service, key);
     } catch (err) {
+      if (isVaultLocked(err)) {
+        // 503, not 404: a consumer must not treat a locked vault as one
+        // missing credential and carry on without it.
+        res.statusCode = 503;
+        res.end(JSON.stringify(vaultLockedBody(err)));
+        this.emitRequest({
+          id: requestId, service, method: 'BROKER', path: '/broker/resolve', timestamp: new Date(),
+          authenticated: false, statusCode: 503, error: `${VAULT_LOCKED_CODE}: ${service}/${key}`,
+        });
+        return;
+      }
       res.statusCode = 500;
       const message = err instanceof Error ? err.message : String(err);
       res.end(JSON.stringify({

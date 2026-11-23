@@ -127,7 +127,7 @@ describe('BitwardenStore: error and branch paths', () => {
     it('returns null when the item is found but cannot be read', async () => {
       bw((_c, args) => {
         if (args[0] === 'list' && args[1] === 'items') return json([{ id: 'i1', name: 'aquaman::github::token' }]);
-        if (args[0] === 'get') return fail('Vault is locked.');
+        if (args[0] === 'get') return fail('Item could not be decrypted.');
         return undefined;
       });
       expect(await new BitwardenStore().get('github', 'token')).toBeNull();
@@ -246,8 +246,8 @@ describe('BitwardenStore: error and branch paths', () => {
     });
 
     it('rethrows any other failure', async () => {
-      bw((c, args, o) => (args[0] === 'delete' ? fail('Vault is locked.') : found(c, args, o)));
-      await expect(new BitwardenStore().delete('github', 'token')).rejects.toThrow('bw command failed: Vault is locked.');
+      bw((c, args, o) => (args[0] === 'delete' ? fail('Request failed.') : found(c, args, o)));
+      await expect(new BitwardenStore().delete('github', 'token')).rejects.toThrow('bw command failed: Request failed.');
     });
 
     it('a failed sync after a delete is not an error', async () => {
@@ -281,8 +281,8 @@ describe('BitwardenStore: error and branch paths', () => {
     it('returns an empty list for "not found" and rethrows anything else', async () => {
       bw((_c, args) => (args[0] === 'list' && args[1] === 'items' ? fail('Folder not found.') : undefined));
       expect(await new BitwardenStore().list()).toEqual([]);
-      bw((_c, args) => (args[0] === 'list' && args[1] === 'items' ? fail('Vault is locked.') : undefined));
-      await expect(new BitwardenStore().list()).rejects.toThrow('bw command failed: Vault is locked.');
+      bw((_c, args) => (args[0] === 'list' && args[1] === 'items' ? fail('Request failed.') : undefined));
+      await expect(new BitwardenStore().list()).rejects.toThrow('bw command failed: Request failed.');
     });
   });
 
@@ -754,7 +754,7 @@ describe('createCredentialStore: refusals', () => {
   it('refuses encrypted-file without a password, and with a weak one', async () => {
     await expect(createCredentialStore({ backend: 'encrypted-file' })).rejects.toThrow('encryptionPassword required for encrypted-file backend');
     await expect(createCredentialStore({ backend: 'encrypted-file', encryptionPassword: 'short' }))
-      .rejects.toThrow('Weak encryption password: Password must be at least 12 characters (got 5)');
+      .rejects.toThrow(/^Weak encryption password: Password must be at least 12 characters$/);
   });
 
   it('refuses vault without an address, and takes the address from VAULT_ADDR', async () => {

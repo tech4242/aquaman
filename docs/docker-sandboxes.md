@@ -35,8 +35,8 @@ sbx secret set github \
 With Bitwarden (`aquaman setup --backend bitwarden`, the `bw` CLI logged in):
 
 ```bash
-export BW_SESSION="$(bw unlock --raw)"                             # unlock; the session exists in this shell only
-aquaman daemon &                                                   # started from the same shell, so it has the session
+aquaman daemon &                                                   # starts with the vault locked, unless this shell has a BW_SESSION
+aquaman unlock                                                     # Bitwarden asks for your master password; the daemon gets the session
 aquaman credentials link github/token 'bw://GitHub/password'       # you allow it in the dialog
 aquaman broker allow aquaman://github/token
 
@@ -53,12 +53,15 @@ sbx secret set github \
 
 ## The Bitwarden session
 
-The Bitwarden backend runs the `bw` CLI, and `bw` only reads a vault that is unlocked. aquaman does not unlock it and never asks for your master password. It takes the session key from `BW_SESSION` in the environment of the process that runs `aquaman daemon`, keeps it in that process's memory and passes it to each `bw` it starts. `aquaman setup --backend bitwarden` stops with the unlock command if the vault is locked and no session is set.
+The Bitwarden backend runs the `bw` CLI, and `bw` only reads a vault that is unlocked. aquaman never asks for your master password. The daemon starts with the vault locked, and `aquaman unlock`, run in a terminal, opens it: Bitwarden's own `bw unlock` asks for the master password there, and aquaman hands the session key that comes out to the running daemon over its Unix socket.
 
-- **Where the session is:** in your shell's environment and in the daemon's. aquaman does not write it to `config.yaml` or anywhere else on disk.
-- **How long it lasts:** until `bw lock` or `bw logout`, per Bitwarden's documentation. After that the daemon's reads fail until you unlock again and restart the daemon from a shell that has the new `BW_SESSION`.
-- **Values are cached in the daemon's memory for 15 minutes** by default with Bitwarden, so `sbx` asking often does not start `bw` each time. `credentials.cacheTtlSeconds: 0` in `~/.aquaman/config.yaml` turns that off.
-- **`aquaman service install` does not carry the session.** A daemon started at login does not inherit your shell, and aquaman writes no secret into the login item. `install` and `aquaman service status` name `BW_SESSION` under `env_not_passed`. With Bitwarden, start the daemon by hand from a shell where the vault is unlocked. The same holds for a HashiCorp Vault token in `VAULT_TOKEN` and a 1Password service account token in `OP_SERVICE_ACCOUNT_TOKEN`. The macOS Keychain needs nothing from the environment, so the login item works with it: [Start the aquaman daemon at login](autostart.md).
+- **Where the session is:** in the daemon's memory. aquaman does not write it to `config.yaml`, the keychain, the login item or anywhere else on disk, does not print it, and does not put it into a command's arguments. The daemon passes it to each `bw` it starts, in that process's environment.
+- **How long it lasts:** until the daemon stops, until `aquaman lock`, or until Bitwarden ends it. Bitwarden's documentation says a session key is valid until `bw lock` or `bw logout`, and the CLI's help for `bw unlock` says that unlocking ends earlier session keys. After that `aquaman get` fails with the code `vault_locked` and the fix `Run: aquaman unlock`, and `sbx` gets no value until you have run it. The daemon does not have to be restarted.
+- **Until you unlock,** `aquaman get` exits non-zero and prints nothing on stdout, so `sbx` is not handed an empty or wrong secret.
+- **Values are cached in the daemon's memory for 15 minutes** by default with Bitwarden, so `sbx` asking often does not start `bw` each time. `credentials.cacheTtlSeconds: 0` in `~/.aquaman/config.yaml` turns that off. `aquaman lock` drops the cached values together with the session. A session ended with `bw lock` is noticed at the next read that reaches `bw`, so a value already cached can be served until its 15 minutes are over.
+- **A `BW_SESSION` in the shell still works.** A daemon started from a shell where `BW_SESSION` holds a session `bw` accepts starts unlocked, and `aquaman unlock` in such a shell hands that session over without asking for the password again.
+- **With `aquaman service install`** the daemon starts at login without a session, because aquaman writes no secret into the login item. Run `aquaman unlock` once after logging in: [Bitwarden: unlock after you log in](autostart.md#bitwarden-unlock-after-you-log-in). A HashiCorp Vault token in `VAULT_TOKEN` and a 1Password service account token in `OP_SERVICE_ACCOUNT_TOKEN` are not carried into the login item either, and for those the daemon is started by hand from a shell that has them. The macOS Keychain needs nothing from the environment.
+- **Some commands read the vault themselves,** from your shell and not through the daemon: `aquaman setup`, `aquaman credentials add`, `list`, `delete` and `unlink`, and `aquaman audit verify`. They need a session in that shell. Unlock there first (`export BW_SESSION="$(bw unlock --raw)"`) and then run `aquaman unlock` in the same shell, so the daemon is handed that same session. Unlocking a second time would end the first session, the daemon's with it. `aquaman get`, `aquaman request` and `aquaman credentials link` go through the daemon and need nothing in the shell.
 
 ## A service sbx has no built-in definition for
 

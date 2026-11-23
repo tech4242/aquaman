@@ -125,6 +125,15 @@ export class BrokerClient {
    * No values travel. Throws when the proxy cannot answer the question.
    */
   async available(refs: Array<{ service: string; key: string }>): Promise<boolean[]> {
+    return (await this.availability(refs)).available;
+  }
+
+  /**
+   * `available()` plus whether the vault is locked: then nothing resolves
+   * because a person has to unlock it (`aquaman unlock`), not because
+   * nothing is stored, and the two have different fixes.
+   */
+  async availability(refs: Array<{ service: string; key: string }>): Promise<{ available: boolean[]; locked: boolean; fix?: string }> {
     const { statusCode, payload } = await this.request('POST', '/broker/available', JSON.stringify({ refs }));
     let json: any;
     try {
@@ -135,15 +144,21 @@ export class BrokerClient {
     if (statusCode !== 200 || !Array.isArray(json.available) || json.available.length !== refs.length) {
       throw new BrokerError(json.error || `Proxy cannot report availability (HTTP ${statusCode})`, { code: json.code, status: statusCode });
     }
-    return json.available.map((v: unknown) => v === true);
+    return {
+      available: json.available.map((v: unknown) => v === true),
+      locked: json.locked === true,
+      ...(typeof json.fix === 'string' ? { fix: json.fix } : {}),
+    };
   }
 
   /**
    * Where a program should send requests for this reference's service so the
    * proxy injects the credential: the proxy's URL for the service and the
-   * token it accepts in place of the key. Never a credential value.
+   * token it accepts in place of the key. Never a credential value. `env`
+   * holds other variables the program needs to start (for an AWS client, a
+   * placeholder secret access key), none of them a stored value.
    */
-  async route(ref: { service: string; key: string }): Promise<{ url: string; token: string }> {
+  async route(ref: { service: string; key: string }): Promise<{ url: string; token: string; env: Record<string, string> }> {
     const { statusCode, payload } = await this.request('POST', '/broker/route', JSON.stringify(ref));
     let json: any;
     try {
@@ -154,7 +169,13 @@ export class BrokerClient {
     if (statusCode !== 200 || typeof json.url !== 'string' || typeof json.token !== 'string') {
       throw new BrokerError(json.error || `Proxy returned no route (HTTP ${statusCode})`, { code: json.code, fix: json.fix, status: statusCode });
     }
-    return { url: json.url, token: json.token };
+    const env: Record<string, string> = {};
+    if (json.env && typeof json.env === 'object' && !Array.isArray(json.env)) {
+      for (const [name, value] of Object.entries(json.env)) {
+        if (typeof value === 'string') env[name] = value;
+      }
+    }
+    return { url: json.url, token: json.token, env };
   }
 
   /**

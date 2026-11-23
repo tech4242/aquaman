@@ -172,12 +172,36 @@ export async function handlePreToolUse(
   // would be a way to switch permission prompts off.
   const refs = Object.values(match.config.env).map(parseRef).filter((r): r is NonNullable<typeof r> => r !== null);
   let anyAvailable = true;
+  let vaultLocked = false;
   try {
-    anyAvailable = (await broker.available(refs)).some(Boolean);
+    // A broker handed in through the context may only know the plain question.
+    const answer = typeof broker.availability === 'function'
+      ? await broker.availability(refs)
+      : { available: await broker.available(refs), locked: false };
+    anyAvailable = answer.available.some(Boolean);
+    vaultLocked = answer.locked;
   } catch {
     // A proxy that cannot answer still gets the wrapper, which stops the
     // command itself when it has nothing to inject.
     anyAvailable = true;
+  }
+  if (!anyAvailable && vaultLocked) {
+    // The proxy is up and its vault is locked (the bitwarden backend after a
+    // login, until a person runs `aquaman unlock`). No command is denied and
+    // none is wrapped: with no credential to inject there is nothing to
+    // answer `allow` for, so every command, `aquaman unlock` included, goes
+    // to the host's own permission handling and runs without credentials.
+    // The agent is told why, and that the step is a person's.
+    return ctx.host === 'codex' ? null : {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        additionalContext:
+          `aquaman: the vault is locked, so this command runs without this project's credentials ` +
+          `(${Object.keys(match.config.env).join(', ')}). Only a person can unlock it: ask the user to run ` +
+          `\`aquaman unlock\` in a terminal of their own and enter the vault's master password there. ` +
+          `Do not run it yourself; it needs a terminal.`,
+      },
+    };
   }
   if (!anyAvailable) {
     return ctx.host === 'codex' ? null : {

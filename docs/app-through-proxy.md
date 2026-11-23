@@ -11,7 +11,7 @@ How a request travels:
 3. The request goes on to the API over HTTPS with the real key.
 
 
-Requires aquaman 0.18.1 or later, and an app that reads its API base URL from the environment. Services that use HTTP basic auth (Zendesk, Twilio) need 0.19.0.
+Requires aquaman 0.18.1 or later, and an app that reads its API base URL from the environment. Services that use HTTP basic auth (Zendesk, Twilio) need 0.19.0. AWS, where the proxy signs each request, needs 0.21.0 and has [its own page](aws.md).
 
 ## Set up
 
@@ -135,7 +135,7 @@ services:
 
 | Field | Meaning |
 |---|---|
-| `name` | Lowercase letters, digits, `.`, `_` and `-`. It is the service part of references (`aquaman://zendesk/...`) and the first segment of the proxy URL (`http://127.0.0.1:8585/zendesk`). It cannot be the name of a built-in service |
+| `name` | Lowercase letters, digits, `.`, `_` and `-`. It is the service part of references (`aquaman://zendesk/...`) and the first segment of the proxy URL (`http://127.0.0.1:8585/zendesk`). It cannot be the name of a built-in service. The `1password` backend stores a credential as one item named `aquaman-<service>-<key>`, so there a name must not begin with a built-in service's name and a hyphen (`openai-eu`), and a name that is the first part of a built-in one (`cloudflare`, because `cloudflare-ai` is built in) cannot have a key that completes it (`ai-api_token`): the proxy refuses a request whose key would be read from a built-in service's item (`service_item_collision`). The `systemd-creds` backend joins with two hyphens, so there only a name of the form `<built-in>--x` is affected |
 | `description` | Optional text |
 | `upstream` | Where the proxy sends the request. `http` or `https`; only the scheme, host and port are used. The path the app sends after `/zendesk` is the path the API receives |
 | `authMode` | `basic` here. Left out, it is `header`, which puts one credential into `authHeader` after `authPrefix`. The other modes (`url-path`, `oauth`, `none`) cannot be routed with `--via-proxy` |
@@ -225,7 +225,7 @@ Every client in the table is run in aquaman's test suite as its own process agai
 
 ## Which services can be routed
 
-A service the proxy has a definition for and injects either a request header or HTTP basic auth for. Built in, with a header:
+A service the proxy has a definition for and injects a request header or HTTP basic auth for, and AWS, whose requests the proxy signs. Built in, with a header:
 
 | Service | Reference | Service | Reference |
 |---|---|---|---|
@@ -248,6 +248,8 @@ Built in, with basic auth:
 | bluebubbles | `aquaman://bluebubbles/password` | none |
 
 For a basic-auth service the route can name either key of the pair, usually the password. The app sends ordinary basic auth with the route token in that position, and the proxy accepts the token as either the user name or the password. Both keys have to be in the vault. Only the routed key is withheld from `aquaman get` and from being set as a value; if the app also needs the user name as a plain value, bind it without `--via-proxy`. The `nextcloud` and `bluebubbles` definitions point at `localhost`; for your own server add an entry under another name to `services.yaml`.
+
+Built in, signed by the proxy: `aws`, routed by `aquaman://aws/access_key_id`. The app's AWS client signs with the route token and a placeholder secret, and the proxy signs again with the stored keys. Setup, the hosts it reaches and what it refuses are in [Call AWS without giving the app your AWS keys](aws.md).
 
 For any other API, add a definition to `~/.aquaman/services.yaml`:
 
@@ -331,7 +333,7 @@ A service with no entry under `policy` has no restriction. A request is refused 
 - The listener is plain HTTP on a loopback address. aquaman refuses to start it on any other address, and refuses requests addressed to it by any name other than `127.0.0.1` or `localhost`.
 - One route token covers every service your projects have routed, and nothing else. Policy rules narrow what it can do on each. A long-running app has to be started again after the daemon restarts, because the token changes.
 - The proxy does not forward a header that carries one of its own tokens, as plain text or inside a `Basic` value. It does not look for the token under other encodings, so an app that copies its "key" into another header in some other form sends that local token to the API. The token is of no use there.
-- Only HTTP APIs with header or basic authentication. For everything else the variable is set to the value, as before.
+- Only HTTP APIs with header or basic authentication, and AWS. For everything else the variable is set to the value, as before.
 - It is for your machine. In CI and production leave the URL variable unset and supply the key from that platform's secrets.
 
 Compared with a tool that intercepts all HTTPS traffic through a local certificate authority (fnox `proxy run`, Claude Code's sandbox masking): aquaman needs no certificate in your trust store and the app's TLS to the proxy is not terminated by anything, because the app talks plain HTTP to a local address and the proxy makes the HTTPS call. The cost is that the app has to accept a base URL.

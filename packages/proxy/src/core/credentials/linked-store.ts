@@ -143,6 +143,11 @@ export class LinkedStore implements CredentialStore {
     return locator ? `${locator}\u0000${this.generation}` : '';
   }
 
+  /** The backend's own item name, passed through. Links play no part in it. */
+  get itemIdentity(): CredentialStore['itemIdentity'] {
+    return this.inner.itemIdentity ? (service, key) => this.inner.itemIdentity!(service, key) : undefined;
+  }
+
   async readLinked(locator: ParsedLocator): Promise<string | null> {
     if (locator.backend !== this.backend || !this.inner.readLinked) {
       throw new Error(`The ${this.backend} backend cannot read ${locator.text}`);
@@ -191,6 +196,23 @@ export class LinkedStore implements CredentialStore {
   /** Remove the approval of a link. Returns whether there was one. */
   async revokeLink(service: string, key: string): Promise<boolean> {
     return this.approvals.revoke(`${service}/${key}`);
+  }
+
+  /** The backend's session, passed through; absent when the backend takes none (vault-lock.ts). */
+  get vaultState(): CredentialStore['vaultState'] {
+    return this.inner.vaultState ? () => this.inner.vaultState!() : undefined;
+  }
+
+  get adoptSession(): CredentialStore['adoptSession'] {
+    return this.inner.adoptSession ? (session) => this.inner.adoptSession!(session) : undefined;
+  }
+
+  get checkSession(): CredentialStore['checkSession'] {
+    return this.inner.checkSession ? () => this.inner.checkSession!() : undefined;
+  }
+
+  get forgetSession(): CredentialStore['forgetSession'] {
+    return this.inner.forgetSession ? () => this.inner.forgetSession!() : undefined;
   }
 
   async set(service: string, key: string, value: string, metadata?: Record<string, string>): Promise<void> {

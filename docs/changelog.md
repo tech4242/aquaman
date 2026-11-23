@@ -10,6 +10,51 @@ openclaw plugins install clawhub:aquaman-plugin   # OpenClaw users
 pip install -U aquaman-hermes                     # Hermes users
 ```
 
+## 0.21.0
+
+Three things that kept aquaman from being the answer in cases people asked about: a stdio MCP server can now run under `aquaman-coder exec`, the Bitwarden backend works with the login item, and the proxy signs AWS requests.
+
+### A stdio MCP server under `aquaman-coder exec`
+
+- `aquaman-coder exec -- node ./mcp/server.js` works as the `command` of a stdio server in `.mcp.json`. Each reply reaches the host when the server writes it; before, the end of a reply was held back until the next one.
+- A reply that contains an injected value reaches the host with `[REDACTED:injected-value]` in its place.
+- **Fixed: output redaction of a value that arrives in two pieces.** When the output of a command was split inside an injected value and the first piece already looked like a key of a known format (the first half of an Anthropic, OpenAI, Slack or GitLab key does), that piece was replaced and the rest of the value was written as it was. The part held back between pieces is now kept as it arrived and redacted together with what follows. The tests cut values of five formats at every position and at every pair of positions. The redactor also holds back a token that is still arriving, a private key block whose END line has not come, and a header or variable name whose value follows on the next line (`Authorization: Bearer`, `aws_secret_access_key`). A seeded random test compares the result with redacting the whole output in one piece on twelve kinds of text, and it is the same wherever the text stays inside these limits: a single token of at most 1 MiB; a key block of at most 64 KiB with nothing but key lines between BEGIN and END; at most 256 characters between a header or variable name and where the output currently ends. A BEGIN line followed by other text, as in a log message or a JSON string that mentions one, is written at once and not waited for.
+- A token bound with `--via-proxy` gives the server a local token and the proxy's address in place of the key, so the key is never in the server's process.
+- `exec` passes SIGTERM, SIGINT and SIGHUP on to the command, so a server stops when its host stops the wrapper.
+- What was run, in Claude Code 2.1.330 with a stand-in server and a stand-in API: the server connected, the tool that calls the API was answered with the real key added by the proxy, the tool that returns its own token came back redacted, and no server was left running after the session. Guide: [Credentials for MCP servers](https://aquaman.sh/docs/mcp/).
+
+### AWS through the proxy
+
+- A new built-in service, `aws`, and a new auth mode in which the proxy signs each request with AWS Signature Version 4. `aquaman-coder bind AWS_ACCESS_KEY_ID=aquaman://aws/access_key_id --via-proxy AWS_ENDPOINT_URL` gives a command a local token as its access key id, a fixed placeholder as its secret access key and the proxy as its AWS endpoint. The access key id, secret access key and optional session token stay in the vault. Guide: [Call AWS without giving the app your AWS keys](https://aquaman.sh/docs/aws/).
+- The proxy builds the AWS host itself, always under `amazonaws.com`, from the region and service the client signed for. `/aws/_host/<prefix>` reaches an endpoint whose name is not its signing name and `/aws/_global` a service with one endpoint for all regions; `exec` sets `AWS_ENDPOINT_URL_IAM` and `AWS_ENDPOINT_URL_BEDROCK_RUNTIME` to those forms.
+- Refused with an error, a code and a fix, and never forwarded half-signed: bodies sent as signed chunks, presigned URLs, SigV4A, and bodies over 16 MiB other than S3 uploads with an unsigned payload.
+- Request policy applies to the method and the path AWS receives, and an S3 copy is also checked as a read (`GET`) of the object it names in `x-amz-copy-source`. It does not see an action named in `X-Amz-Target` or in the body, or which AWS service a request is for.
+- At most 8 request bodies are held to be hashed at one time, each for at most 60 seconds (`sigv4_busy`, `sigv4_body_timeout`).
+- What was run: the signer against ten cases of AWS's published Signature Version 4 test suite, and an app using the AWS SDK for JavaScript v3 (S3, DynamoDB, IAM, Bedrock Runtime) started by `aquaman-coder exec`, against a local server that checks every signature with the stored secret using the SDK's own signer.
+- `POST /broker/route` can name further variables for the program in `env` (for `aws`, the placeholder secret and the two endpoint variables). `exec` sets them, except names that change how programs are loaded and names the project binds itself.
+- Built-in services: 27.
+
+### Bitwarden works with the login item: `aquaman unlock`
+
+With the `bitwarden` backend the daemon needed a Bitwarden session in the environment it was started from, so a daemon started at login by `aquaman service install` could not read the vault. Now:
+
+- **The daemon starts and stays up while the vault is locked.** Requests that need a credential are answered with the code `vault_locked` and the fix `Run: aquaman unlock`. Health checks, status, request policy and everything else that needs no credential keep working.
+- **`aquaman unlock`**, run by a person in a terminal, opens it. Bitwarden's own CLI asks for the master password (`bw unlock --raw`, attached to your terminal), so aquaman never sees it. aquaman takes the session that comes out and hands it to the running daemon over its Unix socket; the daemon checks it with `bw status` and keeps it in memory. It is not printed, not passed as a command argument, and not written to disk, the keychain or the login item.
+- **`aquaman lock`** makes the daemon drop the session and the values it had cached. It does not run `bw`; to end the session everywhere, run `bw lock`.
+- **A session that Bitwarden ends** (`bw lock`, `bw logout`, another `bw unlock`) puts the daemon back into `vault_locked` with the same fix. It does not have to be restarted.
+- `aquaman status`, `aquaman doctor` and `aquaman init --agent` report a locked vault, and `aquaman service install` and `aquaman service status` list `aquaman unlock` as the step after each login.
+- A coding agent's commands are not blocked while the vault is locked: they run without the project's credentials and the agent is told that a person has to unlock. `aquaman request` answers `vault_locked` without showing a dialog.
+- The endpoint that takes the session answers on the Unix socket only, never on the loopback listener. Other software running as you can call it; with a session it already holds it makes the daemon read the vault `bw` is logged in to, and anything else is refused. It can also lock the daemon.
+- The audit anchor is not read or written while the vault is locked, so entries written in that time are anchored after the next unlock.
+- Starting the daemon from a shell with `export BW_SESSION=$(bw unlock --raw)` works as before.
+
+How to use it: [Bitwarden: unlock after you log in](https://aquaman.sh/docs/autostart/#bitwarden-unlock-after-you-log-in).
+
+### Fixed: one vault item under two names
+
+- On the `1password` and `systemd-creds` backends two references can name the same vault item: `openai-org/id` and `openai/org-id` are both the 1Password item `aquaman-openai-org-id`. The provider keys that are never handed out over the loopback listener are now refused there under every name of their items, with the code `broker_ref_isolated`. A line in `credentials.links` does not change which item a name stands for.
+- For the same reason a service you define in `services.yaml` could be given a name and a key that together spell an item of a built-in service (`cloudflare` with the key `ai-api_token` is the built-in `cloudflare-ai` key), and the proxy would have sent that credential to the upstream the file names. Such a request is now refused with `service_item_collision` before the vault is read. On `1password`, name a service in `services.yaml` so that it does not begin with a built-in service's name and a hyphen; a name that is the first part of a built-in one keeps working for keys that do not complete it. On `systemd-creds` only a name of the form `<built-in>--x` is affected. Every key a definition names now has to be a plain key name.
+
 ## 0.20.0
 
 The guides now show the cases people asked about: an item that is already in your vault on every host page, Bitwarden with Docker Sandboxes, OpenAI and Linux for Hermes, the model provider step for OpenClaw, and a new page for MCP servers.

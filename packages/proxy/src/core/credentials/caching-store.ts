@@ -18,7 +18,7 @@
  * and should not extend credential residency.
  */
 
-import type { CredentialStore, ParsedLocator } from './store.js';
+import type { CredentialStore, ParsedLocator, SessionAdoption, VaultState } from './store.js';
 
 interface CacheEntry {
   value: string;
@@ -49,10 +49,21 @@ export class CachingStore implements CredentialStore {
     // A value read through one link, or from aquaman's own item, is not the
     // value of the reference once its link is made, changed or removed.
     const link = this.inner.linkStamp?.(service, key) ?? '';
-    if (entry && entry.link === link && Date.now() - entry.fetchedAt < this.ttlMs) {
+    // A vault known to be locked, by whichever call found out, serves
+    // nothing that was read while it was open.
+    if (this.inner.vaultState?.() === 'locked') this.cache.clear();
+    else if (entry && entry.link === link && Date.now() - entry.fetchedAt < this.ttlMs) {
       return entry.value;
     }
-    const value = await this.inner.get(service, key);
+    let value: string | null;
+    try {
+      value = await this.inner.get(service, key);
+    } catch (err) {
+      // The vault locked under this process. What was read while it was open
+      // is not served past that point.
+      if ((err as { code?: unknown } | null)?.code === 'vault_locked') this.cache.clear();
+      throw err;
+    }
     if (value !== null) {
       this.cache.set(k, { value, fetchedAt: Date.now(), link });
     } else {
@@ -101,6 +112,11 @@ export class CachingStore implements CredentialStore {
     return this.inner.linkStamp?.(service, key) ?? '';
   }
 
+  /** Passed through; present only when the store underneath can have two names for one item. */
+  get itemIdentity(): ((service: string, key: string) => string) | undefined {
+    return this.inner.itemIdentity ? (service, key) => this.inner.itemIdentity!(service, key) : undefined;
+  }
+
   async approveLink(service: string, key: string, locator: string): Promise<void> {
     if (!this.inner.approveLink) throw new Error('This credential store does not record link approvals');
     await this.inner.approveLink(service, key, locator);
@@ -112,6 +128,37 @@ export class CachingStore implements CredentialStore {
 
   async linkApproved(name: string, locator: string): Promise<boolean> {
     return (await this.inner.linkApproved?.(name, locator)) === true;
+  }
+
+  /**
+   * The session of a backend that a person unlocks, passed through. Only
+   * present when the backend has it, so the proxy can tell which stores take
+   * a session. Letting go of the session also drops every cached value, and
+   * so does finding out that the vault's CLI no longer accepts it.
+   */
+  get vaultState(): (() => VaultState) | undefined {
+    return this.inner.vaultState ? () => this.inner.vaultState!() : undefined;
+  }
+
+  get adoptSession(): ((session: string) => Promise<SessionAdoption>) | undefined {
+    return this.inner.adoptSession ? (session) => this.inner.adoptSession!(session) : undefined;
+  }
+
+  get checkSession(): (() => Promise<VaultState>) | undefined {
+    if (!this.inner.checkSession) return undefined;
+    return async () => {
+      const state = await this.inner.checkSession!();
+      if (state === 'locked') this.cache.clear();
+      return state;
+    };
+  }
+
+  get forgetSession(): (() => void) | undefined {
+    if (!this.inner.forgetSession) return undefined;
+    return () => {
+      this.inner.forgetSession!();
+      this.cache.clear();
+    };
   }
 
   /** Drop every cached value (next reads go to the backend). */

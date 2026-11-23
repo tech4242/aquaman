@@ -28,7 +28,7 @@ const MARK = '[REDACTED:injected-value]';
 function redactStream(chunks: string[], values: string[] = [VALUE, OTHER]): string {
   const patterns = [...buildValuePatterns(values), ...BUILTIN_PATTERNS];
   const longest = values.reduce((n, v) => Math.max(n, v.length), 0);
-  const redactor = createStreamRedactor(patterns, longest);
+  const redactor = createStreamRedactor(patterns, longest, values);
   return chunks.map((c) => redactor.push(c)).join('') + redactor.end();
 }
 
@@ -118,6 +118,30 @@ describe('LLM02: an injected value does not reach the transcript', () => {
         }
       }
     });
+
+    // The values above have no vendor's shape. A real key does, and its
+    // first part matches a built-in pattern before the rest has arrived: the
+    // held-back text must still end like the start of the value afterwards.
+    const body = (n: number) => Array.from({ length: n }, (_, i) => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'[(i * 7 + 3) % 62]).join('');
+    const VENDOR_SHAPED: Array<[string, string]> = [
+      ['an Anthropic key', `sk-ant-api03-${body(95)}`],
+      ['an OpenAI project key', `sk-proj-${body(120)}`],
+      ['a Slack bot token', `xoxb-1234567890-1234567890123-${body(24)}`],
+      ['a GitLab token', `glpat-${body(40)}`],
+      ['a GitHub token', `ghp_${body(60)}`],
+    ];
+    for (const [name, value] of VENDOR_SHAPED) {
+      it(`redacted at every split point: an injected value shaped like ${name}`, () => {
+        const text = `+ curl -H 'x-api-key: ${value}' https://api.example/v1\nok\n`;
+        for (let cut = 1; cut < text.length; cut++) {
+          const out = redactStream([text.slice(0, cut), text.slice(cut)], [value]);
+          for (let i = 0; i + 12 <= value.length; i++) {
+            expect(out.includes(value.slice(i, i + 12)), `cut at ${cut}: 12 characters of the value from ${i}`).toBe(false);
+          }
+          expect(out, `cut at ${cut}`).toBe(`+ curl -H 'x-api-key: ${MARK}' https://api.example/v1\nok\n`);
+        }
+      });
+    }
 
     it('the text around a redaction is written unchanged and in order', () => {
       const lines = Array.from({ length: 200 }, (_, i) => `line ${i} of ordinary output`);
