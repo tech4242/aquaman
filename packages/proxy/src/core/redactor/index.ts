@@ -235,18 +235,21 @@ const PRIVATE_KEY_END = new RegExp(`-----END ${KEY_KIND}-----`, 'g');
  * What can stand between a BEGIN line and its END line in a key somebody
  * printed: a line break, real or written as `\n` in a quoted string, then
  * lines of base64, the header lines PEM and PGP armor use, or a marker left
- * by an earlier pattern. `KEY_LINE` reads one line and its break from where
- * it is applied; the break is empty at the end of the text, or the first
- * half of a CRLF whose second half has not arrived.
+ * by an earlier pattern. A line may be indented and may end in spaces or
+ * tabs: a key in a YAML block scalar is a key. `KEY_LINE` reads one line and its break from where
+ * it is applied; the break is empty at the end of the text, or the part of
+ * a line break that has arrived so far (the first half of a CRLF, the
+ * backslash of an escaped one). A header line may likewise stop after its
+ * colon: the text can end anywhere.
  */
-const KEY_LINE = /([^\r\n\\]*)(\r?\n|\\r\\n|\\n|\r?$)/y;
-const KEY_BODY_LINE = /^(?:(?:[A-Za-z0-9+/=]|\[REDACTED:[a-z-]+\])*|(?:Proc-Type|DEK-Info|Version|Comment): .*)$/;
+const KEY_LINE = /([^\r\n\\]*)(\r?\n|\\r\\n|\\n|(?:\r|\\|\\r|\\r\\)?$)/y;
+const KEY_BODY_LINE = /^(?:[ \t]*(?:[A-Za-z0-9+/=]|\[REDACTED:[a-z-]+\])*[ \t]*|[ \t]*(?:Proc-Type|DEK-Info|Version|Comment): .*)$/;
 /** Whole lines of base64 and nothing else: what a key that is being held is continued by. */
 const KEY_LINES_ONLY = /^(?:[A-Za-z0-9+/=]+\r?\n)+$/;
 /** A BEGIN line on a line of its own. */
-const KEY_BEGIN_LINE = new RegExp(`^-----BEGIN ${KEY_KIND}-----$`);
+const KEY_BEGIN_LINE = new RegExp(`^[ \\t]*-----BEGIN ${KEY_KIND}-----[ \\t]*$`);
 /** The line the text ends in, which may be a body line, a header, or an END line that is still arriving. */
-const KEY_LAST_LINE = /^(?:(?:[A-Za-z0-9+/=-]|\[REDACTED:[a-z-]+\])*|[A-Za-z-]+: .*|-----END [A-Z ]*-{0,5})$/;
+const KEY_LAST_LINE = /^[ \t]*(?:(?:[A-Za-z0-9+/=-]|\[REDACTED:[a-z-]+\])*[ \t]*|[A-Za-z-]+:(?: .*)?|-----END [A-Z ]*-{0,5})$/;
 /** A line break written as an escape, cut off where the text ends. */
 const PARTIAL_ESCAPE = /(?:\\|\\r|\\r\\)$/;
 

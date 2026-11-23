@@ -255,6 +255,46 @@ export class CredentialProxy {
   /** AWS request bodies being read into memory right now. */
   private sigV4Buffering = 0;
 
+  /** Every vault key a service definition makes the proxy read. */
+  private static keysRead(def: ServiceDefinition): string[] {
+    const oauth = def.oauthConfig;
+    return [...new Set<string>([
+      def.credentialKey,
+      ...(def.additionalCredentialKeys ?? []),
+      ...Object.values(def.additionalHeaders ?? {}).map((h) => h.credentialKey),
+      // The client credentials go to the token URL, and so does every
+      // credential the URL names in braces.
+      ...(oauth ? [oauth.clientIdKey, oauth.clientSecretKey, ...(oauth.tokenUrl.match(/\{(\w+)\}/g) ?? []).map((t) => t.slice(1, -1))] : []),
+    ])].filter((key) => typeof key === 'string' && key !== '');
+  }
+
+  /**
+   * The key of a services.yaml definition whose vault item is, by name, an
+   * item of a built-in service, and that service. Only a store that joins
+   * service and key into one item name can have one (`itemIdentity`): there
+   * `cloudflare` + `ai-api_token` and `cloudflare-ai` + `api_token` are one
+   * item, and so are `openai-org` + `id` and `openai` + `org-id`.
+   * `<builtin>/<any key>` begins with the same text whatever the key, so an
+   * item of another service that begins with it is one of the built-in's
+   * items under a second name, whichever key that is.
+   */
+  private builtinItemRead(service: string, def: ServiceDefinition): { key: string; builtin: string } | undefined {
+    const identity = this.options.store.itemIdentity?.bind(this.options.store);
+    if (!identity || ServiceRegistry.isBuiltinService(service)) return undefined;
+    const prefixes: Array<[string, string]> = [];
+    for (const builtin of ServiceRegistry.getBuiltinServiceNames()) {
+      const probe = identity(builtin, 'k');
+      if (probe !== undefined && probe.endsWith('k')) prefixes.push([builtin, probe.slice(0, -1)]);
+    }
+    for (const key of CredentialProxy.keysRead(def)) {
+      const item = identity(service, key);
+      if (item === undefined) continue;
+      const hit = prefixes.find(([, prefix]) => item.startsWith(prefix));
+      if (hit) return { key, builtin: hit[0] };
+    }
+    return undefined;
+  }
+
   async start(): Promise<void> {
     if (this.running) {
       throw new Error('Credential proxy already running');
@@ -663,6 +703,26 @@ export class CredentialProxy {
         }));
         return;
       }
+    }
+
+    // A service from services.yaml sends what the proxy reads for it to an
+    // upstream that file names. On a store that joins service and key into
+    // one item name, such a service can be given a name and a key that
+    // together spell an item of a built-in service, and would be handed
+    // that service's credential. It gets nothing instead.
+    const borrowed = this.builtinItemRead(service, serviceDef);
+    if (borrowed) {
+      requestInfo.error = `service_item_collision: ${service}/${borrowed.key} is an item of ${borrowed.builtin}`;
+      requestInfo.statusCode = 403;
+      this.emitRequest(requestInfo);
+      res.setHeader('Content-Type', 'application/json');
+      res.statusCode = 403;
+      res.end(JSON.stringify({
+        error: `The credential ${service}/${borrowed.key} is stored under the same vault item name as a credential of the built-in service "${borrowed.builtin}", so it is not sent to the upstream services.yaml names for "${service}"`,
+        fix: `Rename the service in services.yaml so that its name with the key does not begin with "${borrowed.builtin}-", or use the built-in "${borrowed.builtin}" service`,
+        code: 'service_item_collision',
+      }));
+      return;
     }
 
     if (authMode === 'sigv4') {

@@ -135,7 +135,7 @@ services:
 
 | Field | Meaning |
 |---|---|
-| `name` | Lowercase letters, digits, `.`, `_` and `-`. It is the service part of references (`aquaman://zendesk/...`) and the first segment of the proxy URL (`http://127.0.0.1:8585/zendesk`). It cannot be the name of a built-in service |
+| `name` | Lowercase letters, digits, `.`, `_` and `-`. It is the service part of references (`aquaman://zendesk/...`) and the first segment of the proxy URL (`http://127.0.0.1:8585/zendesk`). It cannot be the name of a built-in service. On the `1password` and `systemd-creds` backends it also must not begin with a built-in service's name and a hyphen (`openai-eu`), or be the first part of one (`cloudflare`, because `cloudflare-ai` is built in): those backends join service and key into one item name, and the proxy refuses a request whose key would be read from a built-in service's item (`service_item_collision`) |
 | `description` | Optional text |
 | `upstream` | Where the proxy sends the request. `http` or `https`; only the scheme, host and port are used. The path the app sends after `/zendesk` is the path the API receives |
 | `authMode` | `basic` here. Left out, it is `header`, which puts one credential into `authHeader` after `authPrefix`. The other modes (`url-path`, `oauth`, `none`) cannot be routed with `--via-proxy` |

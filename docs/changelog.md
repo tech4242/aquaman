@@ -50,9 +50,10 @@ With the `bitwarden` backend the daemon needed a Bitwarden session in the enviro
 
 How to use it: [Bitwarden: unlock after you log in](https://aquaman.sh/docs/autostart/#bitwarden-unlock-after-you-log-in).
 
-### Fixed: a provider key under a second name on the loopback listener
+### Fixed: one vault item under two names
 
 - On the `1password` and `systemd-creds` backends two references can name the same vault item: `openai-org/id` and `openai/org-id` are both the 1Password item `aquaman-openai-org-id`. The provider keys that are never handed out over the loopback listener are now refused there under every name of their items, with the code `broker_ref_isolated`. A line in `credentials.links` does not change which item a name stands for.
+- For the same reason a service you define in `services.yaml` could be given a name and a key that together spell an item of a built-in service (`cloudflare` with the key `ai-api_token` is the built-in `cloudflare-ai` key), and the proxy would have sent that credential to the upstream the file names. Such a request is now refused with `service_item_collision` before the vault is read. On these two backends, name a service in `services.yaml` so that it neither begins with a built-in service's name and a hyphen nor is the first part of one.
 
 ## 0.20.0
 

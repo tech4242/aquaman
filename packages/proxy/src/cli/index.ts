@@ -215,7 +215,7 @@ function loadLoopbackOptions(config: WrapperConfig): { port: number; token: stri
 }
 
 /** Broker scope for `aquaman daemon`, or undefined when `broker.enabled: false`. */
-function daemonBrokerScope(config: WrapperConfig, store?: CredentialStore): BrokerScope | undefined {
+function daemonBrokerScope(config: WrapperConfig, store?: Pick<CredentialStore, 'itemIdentity'>): BrokerScope | undefined {
   if (config.broker?.enabled === false) return undefined;
   return createBrokerScope({
     configPath: getConfigPath(),
@@ -1597,7 +1597,15 @@ hermes
       } else if (bound.refs.length === 0) {
         console.log(`  • No aquaman secret-source bindings in ${bound.path} (optional)`);
       } else {
-        const scope = daemonBrokerScope(config);
+        // The daemon decides with its store's item names, so a binding that is
+        // a second name for a provider key is refused there. The same joining,
+        // without opening the vault: `aquaman-<service>-<key>` on 1Password
+        // and `<service>--<key>` on systemd-creds (their `itemIdentity`).
+        const backend = config.credentials.backend;
+        const itemIdentity = backend === '1password' ? (service: string, key: string) => `aquaman-${service}-${key}`
+          : backend === 'systemd-creds' ? (service: string, key: string) => `${service}--${key}`
+          : undefined;
+        const scope = daemonBrokerScope(config, { itemIdentity });
         if (!scope) {
           fail(`${bound.refs.length} secret-source binding(s) in ${bound.path}, but broker.enabled is false — none will resolve`);
         } else {
