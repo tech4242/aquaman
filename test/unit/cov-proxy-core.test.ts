@@ -974,7 +974,8 @@ describe('KeePassXCStore: key file, groups and directories', () => {
     expect(fs.statSync(dbPath).mode & 0o777).toBe(0o600);
     expect(fs.readFileSync(dbPath).includes('ghp_kdbx')).toBe(false);
     expect(await open({ dbPath, password: PASSWORD }).get('github', 'token')).toBe('ghp_kdbx');
-  });
+    // The first database made in this file loads the key-derivation library and derives a key, which under a full parallel run takes longer than the default.
+  }, 30_000);
 
   it('opens with a key file alone, and not with a different key file', async () => {
     const dbPath = path.join(dir, 'keyfile.kdbx');

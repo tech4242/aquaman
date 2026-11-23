@@ -53,7 +53,8 @@ describe('KeePassXCStore', () => {
       const list = await store.list();
       expect(list).toHaveLength(0);
       expect(fs.existsSync(dbPath)).toBe(true);
-    });
+      // The first database made in this file loads the key-derivation library and derives a key, which under a full parallel run takes longer than the default.
+    }, 30_000);
   });
 
   describe('set and get', () => {
