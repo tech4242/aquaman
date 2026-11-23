@@ -223,10 +223,17 @@ export interface StreamRedactor {
  * A secret can straddle two chunks (a pipe delivers whatever the writer
  * flushed, and a 64 KB buffer boundary can fall anywhere), and redacting each
  * chunk on its own would let both halves through. This keeps back the end of
- * what it has seen until more arrives: at least one character less than the
- * longest literal value (`longestValue`), so a value split anywhere is whole
- * again before it is written, and the unfinished last line (up to
- * STREAM_LINE_HOLDBACK), so shape-based patterns see whole lines.
+ * what it has seen until more arrives: the part that could be the beginning of
+ * a literal value, so a value split anywhere is whole again before it is
+ * written, and the unfinished last line (up to STREAM_LINE_HOLDBACK), so
+ * shape-based patterns see whole lines.
+ *
+ * With the literal `values` given, the part kept back for them is exactly the
+ * end of the text that is also the beginning of one of them, which for a
+ * finished line is normally nothing. A program that answers one line at a
+ * time and then waits (a stdio MCP server, a REPL) therefore has each reply
+ * written when it is produced. Without `values` the length alone is known, and
+ * one character less than `longestValue` is kept back whatever the text is.
  *
  * Text is redacted before it is cut, so a match is never split by the cut
  * itself; only a redaction marker can be, and that is harmless.
@@ -234,15 +241,18 @@ export interface StreamRedactor {
 export function createStreamRedactor(
   patterns: readonly SecretPattern[] = BUILTIN_PATTERNS,
   longestValue = 0,
+  values?: readonly string[],
 ): StreamRedactor {
   let pending = '';
+  const literals = values?.filter((v) => v && v.trim().length > 0);
   return {
     push(chunk: string): string {
       pending = redact(pending + chunk, patterns).output;
       const unfinishedLine = pending.length - (pending.lastIndexOf('\n') + 1);
+      const forValues = literals ? valuePrefixAtEnd(pending, literals) : longestValue - 1;
       const hold = Math.min(
         pending.length,
-        Math.max(longestValue - 1, Math.min(unfinishedLine, STREAM_LINE_HOLDBACK)),
+        Math.max(forValues, Math.min(unfinishedLine, STREAM_LINE_HOLDBACK)),
       );
       const out = pending.slice(0, pending.length - hold);
       pending = pending.slice(pending.length - hold);
@@ -254,6 +264,17 @@ export function createStreamRedactor(
       return out;
     },
   };
+}
+
+/** Length of the longest end of `text` that is the beginning, and not the whole, of one of `values`. */
+function valuePrefixAtEnd(text: string, values: readonly string[]): number {
+  let longest = 0;
+  for (const value of values) {
+    for (let k = Math.min(value.length - 1, text.length); k > longest; k--) {
+      if (text.endsWith(value.slice(0, k))) { longest = k; break; }
+    }
+  }
+  return longest;
 }
 
 /**

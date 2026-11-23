@@ -339,12 +339,15 @@ program
       // run after as defense-in-depth for any secrets the child surfaces that
       // we did NOT inject (hardcoded tokens, env vars leaked from parent, ...).
       // A value can arrive split across two chunks, so each stream goes
-      // through a redactor that holds back enough text to see it whole.
+      // through a redactor that holds back the end of the text while it could
+      // still be the start of one. A finished line that is not is written at
+      // once, which is what lets a program that answers and then waits (a
+      // stdio MCP server) run under exec.
       const { createStreamRedactor, buildValuePatterns, BUILTIN_PATTERNS } = await import('aquaman-proxy');
       const patterns = [...buildValuePatterns(injectedValues), ...BUILTIN_PATTERNS];
       const longestValue = injectedValues.reduce((n, v) => Math.max(n, v.length), 0);
       const pipeRedacted = (src: NodeJS.ReadableStream, dst: NodeJS.WritableStream) => {
-        const redactor = createStreamRedactor(patterns, longestValue);
+        const redactor = createStreamRedactor(patterns, longestValue, injectedValues);
         src.setEncoding('utf-8');
         src.on('data', (chunk: string) => {
           const out = redactor.push(chunk);
@@ -359,9 +362,16 @@ program
       if (child.stderr) pipeRedacted(child.stderr, process.stderr);
     }
 
+    // Whoever started this process stops it with a signal (an agent host
+    // ending a server it launched), and the command is what they meant to
+    // stop: without this it would be left running with the credentials.
+    for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+      process.on(signal, () => { child.kill(signal); });
+    }
+
     // `close` fires after the child's output streams have ended, so the held
     // back tail is written before this process exits.
-    child.on('close', (code) => process.exit(code ?? 0));
+    child.on('close', (code, signal) => process.exit(code ?? (signal ? 128 + (os.constants.signals[signal] ?? 0) : 0)));
     child.on('error', (err) => {
       console.error(`Failed to spawn "${cmd}": ${err.message}`);
       process.exit(1);

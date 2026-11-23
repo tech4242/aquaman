@@ -358,6 +358,62 @@ describe('redactDeep', () => {
   });
 });
 
+describe('createStreamRedactor with the literal values', () => {
+  const value = 'vault-value-that-must-not-appear-0042';
+  const other = 'vault-other';
+  const multiline = 'first-line-of-a-key\nsecond-line-of-a-key';
+  const all = [value, other, multiline];
+  const patterns = [...buildValuePatterns(all), ...BUILTIN_PATTERNS];
+  const run = (chunks: string[]) => {
+    const r = createStreamRedactor(patterns, 0, all);
+    return chunks.map((c) => r.push(c)).join('') + r.end();
+  };
+
+  it('writes a finished line at once, with nothing kept back', () => {
+    const r = createStreamRedactor(patterns, 0, all);
+    const line = '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}\n';
+    expect(r.push(line)).toBe(line);
+    expect(r.end()).toBe('');
+  });
+
+  it('keeps back the end of a finished line only while it could be the start of a value', () => {
+    const r = createStreamRedactor(patterns, 0, all);
+    expect(r.push('x first-line-of-a-key\n')).toBe('x ');
+    expect(r.push('unrelated\n')).toBe('first-line-of-a-key\nunrelated\n');
+  });
+
+  for (const v of all) {
+    it(`redacts ${JSON.stringify(v.slice(0, 16))}... split at every position`, () => {
+      const text = `before ${v} after\n`;
+      for (let cut = 1; cut < text.length; cut++) {
+        expect(run([text.slice(0, cut), text.slice(cut)]), `cut at ${cut}`).toBe('before [REDACTED:injected-value] after\n');
+      }
+    });
+
+    it(`redacts ${JSON.stringify(v.slice(0, 16))}... delivered one character at a time`, () => {
+      expect(run([...`a\n${v}\nb=${v}\n`])).toBe('a\n[REDACTED:injected-value]\nb=[REDACTED:injected-value]\n');
+    });
+  }
+
+  it('redacts a value that begins like another one and then differs', () => {
+    // "vault-" starts both; the text goes on as the longer value.
+    const text = `k=${value}\n`;
+    for (let cut = 1; cut < text.length; cut++) {
+      expect(run([text.slice(0, cut), text.slice(cut)])).toBe('k=[REDACTED:injected-value]\n');
+    }
+  });
+
+  it('loses nothing and changes nothing when there is nothing to redact', () => {
+    const text = Array.from({ length: 500 }, (_, i) => `row ${i} vault- first-line ${'x'.repeat(40)}`).join('\n') + '\n';
+    expect(run(text.match(/[\s\S]{1,131}/g)!)).toBe(text);
+  });
+
+  it('ignores an empty value instead of holding everything back', () => {
+    const r = createStreamRedactor(BUILTIN_PATTERNS, 0, ['', '   ']);
+    expect(r.push('plain line\n')).toBe('plain line\n');
+  });
+});
+
 describe('createStreamRedactor', () => {
   const value = 'vault-value-that-must-not-appear-0042';
   const patterns = [...buildValuePatterns([value]), ...BUILTIN_PATTERNS];

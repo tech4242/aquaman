@@ -28,7 +28,7 @@ const MARK = '[REDACTED:injected-value]';
 function redactStream(chunks: string[], values: string[] = [VALUE, OTHER]): string {
   const patterns = [...buildValuePatterns(values), ...BUILTIN_PATTERNS];
   const longest = values.reduce((n, v) => Math.max(n, v.length), 0);
-  const redactor = createStreamRedactor(patterns, longest);
+  const redactor = createStreamRedactor(patterns, longest, values);
   return chunks.map((c) => redactor.push(c)).join('') + redactor.end();
 }
 

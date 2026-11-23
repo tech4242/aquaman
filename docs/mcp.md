@@ -6,9 +6,10 @@ An MCP server that talks to an API needs a token, and the usual place for it is 
 |---|---|
 | Remote, and offers OAuth sign-in | The host's own sign-in. aquaman is not needed |
 | Remote, and takes a fixed token in a request header | Claude Code's `headersHelper`, running `aquaman get` |
-| Local, started by the host over stdio | A start command that reads the token with `aquaman get` |
+| Local, started by the host over stdio, and it lets you set the API's base URL | `aquaman-coder exec` around the server, with the token bound `--via-proxy`: the server gets a local token and never holds the key |
+| Local, started by the host over stdio, any other | `aquaman-coder exec` around the server, or a start command that reads the token with `aquaman get` |
 
-Facts about Claude Code on this page are from its [MCP documentation](https://code.claude.com/docs/en/mcp), read on 2026-11-18. Both aquaman forms below were run inside Claude Code 2.1.327 with aquaman 0.19.0, a stand-in remote server that refuses a request without the right token, and a stand-in stdio server: both servers connected, a tool call on each worked, and neither token appeared in Claude Code's output.
+Facts about Claude Code on this page are from its [MCP documentation](https://code.claude.com/docs/en/mcp), read on 2026-11-18. Both aquaman forms below were run inside Claude Code 2.1.327 with aquaman 0.19.0, a stand-in remote server that refuses a request without the right token, and a stand-in stdio server: both servers connected, a tool call on each worked, and neither token appeared in Claude Code's output. The `aquaman-coder exec` form was run inside Claude Code 2.1.330 with aquaman 0.21.0; what that run showed is written under its section.
 
 ## A remote server with OAuth
 
@@ -108,11 +109,51 @@ The setup is the same as above: the token stored or linked as `github/token`, `a
 
 What was run, in Claude Code 2.1.327: the entry above, with a stand-in server that reports whether its variable is set and never the value. The server connected, its tool answered with the variable set, and `aquaman audit tail` showed one read for the start. Outside Claude Code, with the reference revoked, the server did not start and its stderr carried aquaman's fix.
 
-### Do not wrap a stdio server in `aquaman-coder exec`
+## A stdio server under `aquaman-coder exec`
 
-`aquaman-coder exec -- node ./mcp/server.js` does not work as a stdio MCP server. `exec` redacts the command's output as a stream and holds back the last few bytes until more output arrives, so the end of each reply reaches the host only when the server writes its next message, and the host waits on a reply that is incomplete. In the same test as above, the reply to the first request was still incomplete after five seconds and completed only when the second reply was written. `--raw` turns redaction off, but it only works with a terminal on stdout, which a host does not give a server.
+`aquaman-coder exec` runs a command with the project's credentials and redacts them from what the command writes. Since 0.21.0 that works for a stdio server too, so the entry in `.mcp.json` can be the wrapper followed by the server's own command:
 
-For the same reason a stdio server cannot be given a route token in place of the value today: `--via-proxy` bindings are applied by `aquaman-coder exec`.
+```json
+{
+  "mcpServers": {
+    "github-tools": {
+      "command": "aquaman-coder",
+      "args": ["exec", "--", "node", "./mcp/server.js"]
+    }
+  }
+}
+```
+
+The project folder has to be registered and the server's variables bound in it, once:
+
+```bash
+aquaman init --agent claude-code --no-hooks        # registers this folder, if it is not yet
+aquaman request aquaman://github/token --env GITHUB_TOKEN
+```
+
+Compared with the start command above:
+
+- **Replies are redacted.** A reply that contains a value `exec` injected reaches the host with `[REDACTED:injected-value]` in its place, so a server that returns its own token in a tool result does not put it in the conversation. The match is on the literal value: a server that encodes or transforms it is not caught.
+- **The server gets every variable bound in the project**, not only its own.
+- **The folder decides.** `exec` uses the bindings of the project that covers the folder it is started in, and refuses to run outside one. Claude Code starts a stdio server in the project folder.
+- If none of the project's credentials can be handed out (the daemon is not running, nothing is stored), the server is not started and the reason is on its stderr.
+
+### Keeping the key out of the server: `--via-proxy`
+
+If the server lets you set the base URL of the API it calls, bind its token through the proxy. The server is then started with a local token and the proxy's address, the proxy adds the real key to each request on the way out, and the key is never in the server's process:
+
+```bash
+aquaman init --agent claude-code --no-hooks --loopback
+aquaman request aquaman://github/token --env GITHUB_TOKEN --via-proxy GITHUB_API_URL
+```
+
+`GITHUB_API_URL` stands for whatever variable your server reads its base URL from. The `.mcp.json` entry is the same as above. [Routing an app through the proxy](app-through-proxy.md) has the details, including which services can be routed and how to add your own.
+
+- A reference bound this way cannot be read with `aquaman get`, by the server or by anything else.
+- The local token is made new each time the daemon starts. After a daemon restart, restart the server (in Claude Code, reconnect it from `/mcp`).
+- Each request the server makes is one entry in `aquaman audit tail`, where the start command above records one read per server start.
+
+What was run, in Claude Code 2.1.330: a stand-in stdio server started by the entry above, in a project with one variable bound as a value and one bound `--via-proxy` to a stand-in API that answers only the real key. The server connected and its tools answered. The tool that calls the API got its answer, and the API saw the real key while the server held a token beginning `aqm_rt_`. The tool that returns the value-bound variable came back as `[REDACTED:injected-value]`. Neither real value appeared in Claude Code's output, the audit log had an entry for each request to the API, and the server was not left running after the session ended.
 
 ## If you are an agent
 
