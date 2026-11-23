@@ -47,7 +47,21 @@ export interface PromptRequest {
    * injected by the proxy and not handed to commands. Picks the wording.
    */
   linkOnly?: boolean;
+  /**
+   * A program is asking for the value of a reference marked ask-first
+   * (ask-first.ts). An approval: nothing is typed. `windowSeconds` is how
+   * long a yes lasts, and the dialog says so.
+   */
+  read?: { windowSeconds: number; via: ReadVia };
+  /** A command is asking to remove the ask-first mark from the reference. An approval. */
+  unmark?: boolean;
 }
+
+/**
+ * How a request for a value reached the daemon. This is all aquaman knows
+ * about who is asking, so it is all the dialog says about them.
+ */
+export type ReadVia = 'socket' | 'loopback' | 'openshell';
 
 export type PromptResult =
   | { outcome: 'entered'; value: string }
@@ -148,12 +162,63 @@ const CONSEQUENCE = {
 } as const;
 
 /**
+ * A window in the words a person would use: "8 hours", "90 minutes",
+ * "45 seconds". Whole units only, so the dialog never states a longer time
+ * than the daemon keeps.
+ */
+export function windowText(seconds: number): string {
+  const unit = (n: number, name: string) => `${n} ${name}${n === 1 ? '' : 's'}`;
+  if (seconds % 3600 === 0) return unit(seconds / 3600, 'hour');
+  if (seconds % 60 === 0) return unit(seconds / 60, 'minute');
+  return unit(seconds, 'second');
+}
+
+/**
+ * Who is asking, as far as aquaman can say: the listener the request came in
+ * on. It cannot name the program, and the sentence after it says so.
+ */
+const READ_OPENING: Record<ReadVia, string> = {
+  socket: 'A program running as you is asking aquaman for the value of a credential that is marked "ask first".',
+  loopback: 'A program that holds aquaman\'s local token is asking aquaman for the value of a credential that is marked "ask first".',
+  openshell: 'A program connected to aquaman\'s OpenShell driver is asking aquaman for the value of a credential that is marked "ask first".',
+};
+
+/**
+ * What a yes to a read means, for the window the daemon will keep. True for
+ * every caller: the approval is for the reference, not for a program.
+ */
+export function readConsequence(windowSeconds: number): string {
+  return `aquaman cannot tell which program is asking. Allow hands it the value, and for the next ${windowText(windowSeconds)} (or until aquaman is restarted) any program running as you can read this value from aquaman without another dialog. Deny if you did not expect this.`;
+}
+
+/** What a yes to removing the mark means. */
+export const UNMARK_CONSEQUENCE = 'Allow removes the "ask first" mark. aquaman then hands this value out without asking, to any program running as you, whenever the credential is declared for handing out. Deny if you did not expect this.';
+
+function askFirstMessage(request: PromptRequest): string {
+  const lines = [
+    request.read
+      ? READ_OPENING[request.read.via]
+      : 'A command is asking aquaman to stop asking you before it hands out the credential below.',
+    '',
+    `Credential: ${displayText(`${request.service}/${request.key}`, 140)}`,
+    '',
+    request.read ? readConsequence(request.read.windowSeconds) : UNMARK_CONSEQUENCE,
+    '',
+    'aquaman never asks for your login, Apple ID or password-manager password.',
+  ];
+  // Last, on its own line: everything above is aquaman's own wording.
+  if (request.project) lines.push('', `Requested from (as the caller reports it): ${displayText(request.project)}`);
+  return lines.join('\n');
+}
+
+/**
  * Room for a whole locator (links.ts caps one at 200 characters), so the
  * person sees all of what they are agreeing to and never a shortened form.
  */
 const LOCATOR_DISPLAY_MAX = 220;
 
 export function promptMessage(request: PromptRequest, kind: 'value' | 'approval'): string {
+  if (kind === 'approval' && (request.read !== undefined || request.unmark === true)) return askFirstMessage(request);
   // An approval that names a vault item is a different decision from one
   // about a stored credential, and is worded as such.
   const what = kind === 'approval' && request.from !== undefined ? 'link' : kind;

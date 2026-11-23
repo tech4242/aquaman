@@ -17,7 +17,8 @@ import { matchPolicy, type PolicyConfig } from './request-policy.js';
 import { parseRequestTarget, policyPathInterpretations, policyMethods, policyPathOverrides } from './request-target.js';
 import { clampPromptTimeout, type CredentialPrompter, type PromptResult } from './credential-prompt.js';
 import { handleServiceConsent, SERVICE_CONSENT_PATH, type PromptLimiter } from './service-consent.js';
-import { isReservedService, reservedServiceRefusal, type BrokerScope } from './broker-scope.js';
+import { isReservedService, reservedServiceRefusal, parseAquamanRef, type BrokerScope } from './broker-scope.js';
+import { AskFirstGate, handleAskFirst, ASK_FIRST_PATH } from './ask-first.js';
 import { routableKeys, routeKeyMismatch, basicTokenCandidates, basicValueCarries } from './route-auth.js';
 import type { CredentialLinker } from './core/credentials/linked-store.js';
 import { linkRequestPlan, linkUnreadableReply } from './link-request.js';
@@ -151,6 +152,12 @@ export interface CredentialProxyOptions {
      */
     links?: CredentialLinker;
   };
+  /**
+   * Ask first (ask-first.ts): how long a person's yes to a marked reference
+   * lasts, already clamped. The marks themselves are in the vault. `now` is
+   * the clock approvals and cooldowns are measured on.
+   */
+  askFirst?: { windowSeconds?: number; now?: () => number };
 }
 
 const AUDIT_UNAVAILABLE_FIX = 'Check that the audit directory (~/.aquaman/audit by default) is writable and the disk is not full. Run: aquaman doctor';
@@ -176,6 +183,8 @@ export interface RequestInfo {
   authenticated: boolean;
   statusCode?: number;
   error?: string;
+  /** Free text for an outcome that is not a request for a service, such as a person's answer in a dialog. Never a value. */
+  note?: string;
 }
 
 interface ServiceConfig {
@@ -204,7 +213,29 @@ export class CredentialProxy {
     this.options = options;
     this.serviceRegistry = options.serviceRegistry || createServiceRegistry();
     this.oauthCache = createOAuthTokenCache();
+    // Wherever values are handed out there is a gate, so a marked reference
+    // is never served unasked: a daemon without a prompter refuses it.
+    this.askFirstGate = options.broker
+      ? new AskFirstGate({
+          store: options.store,
+          prompter: options.credentialRequests?.prompter,
+          limiter: this.promptLimiter,
+          windowSeconds: options.askFirst?.windowSeconds,
+          now: options.askFirst?.now,
+          audit: (event) => this.emitRequest({
+            id: crypto.randomUUID(), service: event.service, method: 'BROKER_ASK', path: ASK_FIRST_PATH,
+            timestamp: new Date(), authenticated: false, statusCode: 200, error: event.error, note: event.note,
+          }),
+        })
+      : undefined;
   }
+
+  /**
+   * The ask-first gate of this proxy, for the other path that returns values
+   * (the OpenShell driver): one set of approvals and one dialog budget.
+   * Absent without a broker scope.
+   */
+  readonly askFirstGate: AskFirstGate | undefined;
 
   async start(): Promise<void> {
     if (this.running) {
@@ -455,6 +486,18 @@ export class CredentialProxy {
 
     if ((url === '/broker/request' || url === '/broker/request/') && req.method === 'POST') {
       await this.handleBrokerRequest(req, res, requestId, fromLoopback);
+      return;
+    }
+
+    if ((url === ASK_FIRST_PATH || url === `${ASK_FIRST_PATH}/`) && req.method === 'POST') {
+      await handleAskFirst(req, res, {
+        fromLoopback,
+        gate: this.askFirstGate,
+        declared: () => (this.options.broker?.declared() ?? []).flatMap(({ ref }) => {
+          const parsed = parseAquamanRef(ref);
+          return parsed ? [`${parsed.service}/${parsed.key}`] : [];
+        }),
+      });
       return;
     }
 
@@ -1072,7 +1115,14 @@ export class CredentialProxy {
           (!fromLoopback && scope.routedRefs?.().has(`aquaman://${service}/${key}`) === true))
       ) {
         try {
-          ok = (await this.options.store.get(service, key)) !== null;
+          // A routed reference is never handed out, so a mark on it gates
+          // nothing. For the rest, a marked reference counts while a person
+          // could still say yes: the hook wraps, the resolve raises the
+          // dialog, and a command for which nothing then resolves is not run.
+          // After a no it does not count until the cooldown ends.
+          const handedOut = scope.check(service, key, fromLoopback ? 'loopback' : 'uds').allowed;
+          ok = (!handedOut || await this.askFirstGate!.wouldServe(service, key)) &&
+            (await this.options.store.get(service, key)) !== null;
         } catch {
           ok = false;
         }
@@ -1327,7 +1377,7 @@ export class CredentialProxy {
       }
     }
 
-    let body: { service?: unknown; key?: unknown; ttl_seconds?: unknown };
+    let body: { service?: unknown; key?: unknown; ttl_seconds?: unknown; ask?: unknown; ask_timeout_seconds?: unknown; project?: unknown };
     try {
       body = JSON.parse(bodyBuf);
     } catch {
@@ -1406,6 +1456,45 @@ export class CredentialProxy {
         statusCode: 404,
         error: `${decision.code}: ${service}/${key}`,
       });
+      return;
+    }
+
+    // Ask first, after the scope and before the vault read: a reference a
+    // person marked leaves this process only once a person allowed it in the
+    // dialog, on either listener. The request waits while the dialog is up.
+    // A refusal is a 404 with a `code`, like the scope's.
+    const refuseRead = (statusCode: number, payload: { error: string; fix?: string; code?: string }, logged: string) => {
+      res.statusCode = statusCode;
+      res.end(JSON.stringify(payload));
+      this.emitRequest({
+        id: requestId,
+        service,
+        method: 'BROKER',
+        path: '/broker/resolve',
+        timestamp: new Date(),
+        authenticated: false,
+        statusCode,
+        error: logged,
+      });
+    };
+    try {
+      const asked = await this.askFirstGate!.authorize(service, key, {
+        via: fromLoopback ? 'loopback' : 'socket',
+        project: typeof body.project === 'string' ? body.project : undefined,
+        timeoutSeconds: clampPromptTimeout(body.ask_timeout_seconds),
+        ask: body.ask !== false,
+      });
+      if (!asked.ok) {
+        refuseRead(404, { error: asked.error, ...(asked.fix ? { fix: asked.fix } : {}), code: asked.code }, `${asked.code}: ${service}/${key}`);
+        return;
+      }
+    } catch (err) {
+      // The marks could not be read, so it is not known whether a person has to be asked.
+      const message = err instanceof Error ? err.message : String(err);
+      refuseRead(500, {
+        error: `Vault backend error resolving ${service}/${key}: ${message}`,
+        fix: 'Check that the configured backend (keychain, 1password, vault, etc.) is accessible. Run: aquaman doctor',
+      }, message);
       return;
     }
 

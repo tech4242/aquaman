@@ -298,6 +298,16 @@ class _BrokerHandler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         if self.headers.get("x-aquaman-token") != TOKEN:
             self._reply(401, {"error": "Loopback request rejected", "fix": "aquaman hermes status"})
+        elif body["service"] == "marked":
+            # What the daemon answers for an ask-first ref nobody has allowed,
+            # when the request carries "ask": false. With anything else it
+            # would open a dialog, which this stand-in reports as a failure.
+            if body.get("ask") is False:
+                self._reply(404, {"error": "aquaman://marked/key is marked ask-first, and nobody has allowed it in the current window",
+                                  "fix": "A person allows it in aquaman's dialog. To raise the dialog, run: aquaman get aquaman://marked/key > /dev/null",
+                                  "code": "ask_first_required"})
+            else:
+                self._reply(500, {"error": "the request would have raised a dialog"})
         elif body["service"] == "github":
             self._reply(200, {"value": "ghp_live_value", "expires_at": "2026-01-01T00:00:00Z"})
         else:
@@ -336,6 +346,13 @@ def test_broker_resolve_http_not_found(broker_server):
     assert value is None
     assert status == 404
     assert "No credential found" in error and "fix:" in error
+
+
+def test_broker_resolve_http_never_raises_the_ask_first_dialog(broker_server):
+    value, error, status = plugin._broker_resolve_http(broker_server, TOKEN, "marked", "key", 2.0)
+    assert value is None
+    assert status == 404
+    assert "marked ask-first" in error and "aquaman get aquaman://marked/key" in error
 
 
 def test_broker_resolve_http_bad_token(broker_server):

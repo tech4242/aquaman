@@ -33,6 +33,7 @@
 
 import type { CredentialStore } from '../core/credentials/store.js';
 import { formatAquamanRef, parseAquamanRef, reservedServiceRefusal, type BrokerScope } from '../broker-scope.js';
+import type { AskFirstGate } from '../ask-first.js';
 
 export const OPENSHELL_PROTOCOL = { major: 1, minor: 0 } as const;
 export const CREDENTIALS_CONTRACT = 'openshell.credentials.contract';
@@ -104,6 +105,12 @@ export interface OpenShellDriverOptions {
   /** Declared-ref scope shared with the broker. Absent means the broker is off: references are refused. */
   scope?: BrokerScope;
   version: string;
+  /**
+   * The daemon's ask-first gate. A reference a person marked is resolved only
+   * once a person allowed it in the daemon's dialog; the approvals and the
+   * dialog budget are the ones `/broker/resolve` uses.
+   */
+  askFirst?: AskFirstGate;
   /**
    * Writes the audit entry. If it throws or rejects for a successful resolve,
    * the entry was not written and the value is not returned.
@@ -234,7 +241,18 @@ export function createOpenShellDriverCore(opts: OpenShellDriverOptions): OpenShe
         if (!h) throw new DriverError('invalid_argument', `aquaman: not an aquaman handle: ${JSON.stringify(r.handle?.handle ?? '')}`);
         let value: string | null;
         try {
-          if (h.mode === 'reference') checkScope(h.service, h.key);
+          if (h.mode === 'reference') {
+            checkScope(h.service, h.key);
+            // Before the vault read, as in the broker. A copy is the
+            // gateway's own value and is not a reference anyone marked.
+            const asked = await opts.askFirst?.authorize(h.service, h.key, {
+              via: 'openshell',
+              project: provider ? `OpenShell provider ${provider}` : undefined,
+            });
+            if (asked && !asked.ok) {
+              throw new DriverError('failed_precondition', `aquaman: ${asked.error}${asked.fix ? `. Fix: ${asked.fix}` : ''}`);
+            }
+          }
           value = await store.get(h.service, h.key);
           if (value === null) {
             throw new DriverError('not_found', `aquaman: ${h.ref} is not in the vault. Fix: aquaman credentials add ${h.service} ${h.key}`);

@@ -129,6 +129,24 @@ Scoped since v0.15.0, because it hands out values rather than injecting them:
 
 `aquaman get <aquaman://service/key>` (v0.16.0+) is the command-line form, for tools that take a command printing a secret: Docker Sandboxes (`sbx secret set <svc> --command`), Codex (`model_providers.<id>.auth.command`), Claude Code (`apiKeyHelper`), OpenClaw exec secret providers and Hermes command secret sources. It only talks to the running daemon, so the same scope applies and every read is audited. It refuses to print to an interactive terminal without `--show`, and prints no trailing newline when another program reads it. The value goes to the program that runs the command.
 
+### Ask first
+
+A declared ref is handed to any program running as you that asks. To be asked before that happens, mark the ref:
+
+```bash
+aquaman broker ask aquaman://github/token            # or: aquaman broker allow <ref> --ask, aquaman request <ref> --ask
+aquaman broker ask aquaman://github/token --off      # remove the mark; you approve this in the daemon's dialog
+```
+
+- The first time a marked ref's value is requested (`aquaman get`, `aquaman-coder exec`, `POST /broker/resolve` on either listener, the OpenShell driver's Resolve), the daemon shows a dialog and the request waits, 90 seconds by default. `aquaman get --ask-timeout <seconds>` changes the wait.
+- The dialog says what a yes means: aquaman cannot tell which program is asking, the value is handed to it, and for the next 8 hours (or until the daemon is restarted) any program running as you can read that value without another dialog. The window is `broker.askFirstWindowSeconds` in `config.yaml`, between 60 and 86400 seconds, read when the daemon starts. One yes covers one ref.
+- `aquaman get` exits 0 with the value, 2 when you declined, 3 when nobody answered or no dialog could be shown, 1 for anything else. A refusal is `404` with `code` `ask_first_declined`, `ask_first_unanswered` or `prompt_unavailable`; a request that carries `"ask": false` raises no dialog and gets `ask_first_required`.
+- The mark is one item in your vault (`aquaman_internal/ask_first`), not a line in `config.yaml` or `projects.yaml`, so editing those files does not remove it. A record there that cannot be read marks every ref, so a damaged record means more dialogs, never fewer. `aquaman broker list` shows the marks while the daemon runs.
+- Setting a mark asks nobody. Removing one is decided in the dialog; no flag or environment variable answers it. Where the daemon cannot show a dialog, `aquaman broker ask <ref> --off` asks for a typed `yes` at a terminal.
+- Not gated: requests the proxy forwards (the credential is added on the way out, the caller never holds it) and refs bound with `--via-proxy`, which are never handed out.
+- Every dialog outcome is an audit entry; the read after a yes is one as before.
+- Limits: a yes is for the ref, not for a program, so inside the window every program running as you reads it; software that can write to the vault itself can delete the mark; and where no dialog can be shown, the typed `yes` is the only check on removing a mark, and a program can give itself a terminal.
+
 ## Credential requests: the agent asks, a person supplies
 
 ```bash

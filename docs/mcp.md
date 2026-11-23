@@ -99,6 +99,8 @@ exec node "$(dirname "$0")/server.js"
 
 The setup is the same as above: the token stored or linked as `github/token`, `aquaman broker allow aquaman://github/token`, and the daemon running.
 
+To be asked before a server gets its token, mark the reference: `aquaman broker ask aquaman://github/token`. `aquaman get` then waits while the daemon shows a dialog on your machine, up to 90 seconds, and prints the token after you allow it. A yes is remembered for that reference for 8 hours or until the daemon stops, so a server that restarts in that time starts without another dialog, and so does any other program running as you that asks for the same reference. If you deny it or nobody answers, `aquaman get` prints why and exits with 2 or 3, and with `|| exit 1` the server does not start. More: [ask first](agent-setup.md#ask-first-a-dialog-before-a-value-is-handed-out).
+
 - **`exec` matters.** The shell is replaced by the server, so the host's pipes are the server's own stdin and stdout and nothing sits between them.
 - **`|| exit 1` matters.** If aquaman cannot hand out the token (the daemon is not running, the reference is not declared), the server does not start, and aquaman's message with the fix is written to the server's stderr. Without it the server would start with an empty token.
 - **Where the token is:** in the environment of the server process, for as long as it runs. It is not in `.mcp.json`, not in the host's own environment, and not in the environment of the commands the agent runs. Each server start is one entry in `aquaman audit tail`.

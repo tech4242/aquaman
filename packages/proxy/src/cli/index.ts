@@ -56,7 +56,10 @@ import { createBrokerScope, parseAquamanRef, formatAquamanRef, defaultProjectsPa
 import { startAuditAnchor } from '../audit-anchor.js';
 import { auditVerifyCommand, auditAcceptCommand } from './audit-commands.js';
 import { routableKeys, routeKeyMismatch } from '../route-auth.js';
+import { windowText } from '../credential-prompt.js';
 import { createNativePrompter, clampPromptTimeout, PROMPT_TIMEOUT_SECONDS, PROMPT_TIMEOUT_MIN_SECONDS, PROMPT_TIMEOUT_MAX_SECONDS } from '../credential-prompt.js';
+import { clampAskFirstWindow } from '../ask-first.js';
+import { registerAskFirstCommands, markAskFirst, askFirstListing, type AskFirstCliDeps } from './ask-first.js';
 import { registerServiceCommands, loginItemForInit, loginItemPresent, type ServiceCliHelpers } from './service.js';
 import { loadPolicyFromConfig, validatePolicyConfig, lintPolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
@@ -228,7 +231,7 @@ function writeBrokerAllowedRefs(refs: string[], mode: 'allow' | 'revoke'): Recor
   return raw;
 }
 
-function updateBrokerAllowedRefs(refs: string[], mode: 'allow' | 'revoke'): void {
+function updateBrokerAllowedRefs(refs: string[], mode: 'allow' | 'revoke', askFirst = false): void {
   const invalid = refs.filter(r => !parseAquamanRef(r));
   if (invalid.length > 0) {
     console.error(`Invalid ref${invalid.length > 1 ? 's' : ''}: ${invalid.join(', ')}`);
@@ -246,8 +249,11 @@ function updateBrokerAllowedRefs(refs: string[], mode: 'allow' | 'revoke'): void
 
   const verb = mode === 'allow' ? 'Allowed' : 'Revoked';
   for (const ref of refs) console.log(`${verb}: ${ref}`);
-  if (mode === 'allow') {
+  if (mode === 'allow' && askFirst) {
+    console.log(`\nMarked ask-first: the daemon shows a dialog before it hands these values out. A yes lasts ${windowText(clampAskFirstWindow(raw.broker?.askFirstWindowSeconds))} or until the daemon stops, and covers every process running as you.`);
+  } else if (mode === 'allow') {
     console.log('\nAny process running as you can now fetch these values from `aquaman daemon`. Only allow refs you intend to materialize.');
+    console.log('To be asked in a dialog first: aquaman broker ask <ref>');
   }
   if (raw.broker.enabled === false) {
     console.log('Note: broker.enabled is false in config.yaml, so the broker is off regardless.');
@@ -264,8 +270,9 @@ function brokerResolve(
   service: string,
   key: string,
   timeoutMs: number,
+  extra: Record<string, unknown> = {},
 ): Promise<{ value: string } | { error: string; fix?: string; code?: string }> {
-  const body = JSON.stringify({ service, key });
+  const body = JSON.stringify({ service, key, ...extra });
   return new Promise((resolve) => {
     const req = http.request(
       {
@@ -1135,6 +1142,7 @@ program
       policyConfig: policyConfig2,
       loopback: loadLoopbackOptions(config),
       broker: brokerScope,
+      askFirst: { windowSeconds: clampAskFirstWindow(config.broker?.askFirstWindowSeconds) },
       // `aquaman request`: the human supplies or approves a credential in a
       // dialog this daemon shows. Off when the broker is off.
       credentialRequests: brokerScope
@@ -1149,10 +1157,12 @@ program
         return auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
           // A broker resolve hands the value out, a broker request stores or
-          // declares one, everything else injects it.
-          operation: info.method === 'BROKER' ? 'read' : info.method === 'BROKER_REQUEST' || info.method === 'SERVICE_CONSENT' ? 'rotate' : 'use',
+          // declares one, an ask-first entry is a person's answer or a change
+          // to a mark, everything else injects it.
+          operation: info.method === 'BROKER' ? 'read' : info.method === 'BROKER_REQUEST' || info.method === 'SERVICE_CONSENT' || info.method === 'BROKER_ASK' ? 'rotate' : 'use',
           success: !info.error,
-          error: info.error
+          error: info.error,
+          ...(info.note ? { note: info.note } : {}),
         });
       }
     });
@@ -1166,7 +1176,7 @@ program
     if (config.openshell?.driver?.enabled) {
       try {
         const { startOpenShellDriver } = await import('../openshell/integration.js');
-        openshellDriver = await startOpenShellDriver({ config, store: credentialStore, scope: brokerScope, audit: auditLogger, version: VERSION });
+        openshellDriver = await startOpenShellDriver({ config, store: credentialStore, scope: brokerScope, askFirst: credentialProxy.askFirstGate, audit: auditLogger, version: VERSION });
       } catch (err) {
         openshellDriverError = err instanceof Error ? err.message : String(err);
       }
@@ -3618,8 +3628,8 @@ const broker = program
 
 broker
   .command('list')
-  .description('List the refs the daemon broker will materialize, and where each is declared')
-  .action(() => {
+  .description('List the refs the daemon broker will materialize, where each is declared, and which ask first')
+  .action(async () => {
     const config = loadConfig();
     console.log('Credential broker: served by `aquaman daemon` only. OpenClaw-hosted proxies never hand out credential values.\n');
     if (config.broker?.enabled === false) {
@@ -3631,7 +3641,19 @@ broker
     if (declared.length === 0) {
       console.log('  No declared refs — every broker request is refused.');
     }
-    for (const d of declared) console.log(`  ${d.ref}  (${d.source})`);
+    // The marks are in the vault; the daemon is asked, since it is what enforces them.
+    const asks = await askFirstListing(askFirstDeps);
+    const asksFirst = (ref: string) => asks !== undefined && (asks.marked === 'all' || asks.marked.has(ref));
+    for (const d of declared) console.log(`  ${d.ref}  (${d.source})${asksFirst(d.ref) ? '  asks first' : ''}`);
+    if (asks === undefined) {
+      console.log('\n  Ask-first marks are not shown: they are kept in the vault and read by `aquaman daemon`, which is not serving the broker right now.');
+    } else if (asks.marked === 'all') {
+      console.log('\n  ⚠ The ask-first record in the vault cannot be read, so the daemon asks before handing out every ref. To write it again, remove one mark: aquaman broker ask <ref> --off');
+    } else {
+      const undeclared = [...asks.marked].filter((ref) => !declared.some((d) => d.ref === ref));
+      if (asks.marked.size > 0) console.log(`\n  Asks first: a dialog before the value is handed out; a yes lasts ${windowText(asks.windowSeconds)} or until the daemon stops.`);
+      if (undeclared.length > 0) console.log(`  Marked ask-first, not declared: ${undeclared.join(', ')}`);
+    }
     const err = scope.declarationError();
     if (err) console.log(`\n  ⚠ ${err} — refs declared there are refused until it parses`);
     console.log(`\n  Never over the loopback listener: ${HERMES_SUPPORTED_SERVICES.join(', ')} (process-isolated on the proxy path)`);
@@ -3639,13 +3661,39 @@ broker
     console.log(`  Other refs:        broker.allowedRefs in ${getConfigPath()}  (aquaman broker allow ...)`);
   });
 
+/** What the ask-first commands need from this file. */
+const askFirstDeps: AskFirstCliDeps = {
+  proxyPost,
+  socketPath: () => path.join(getConfigDir(), 'proxy.sock'),
+  openStore: () => createCredentialStore(storeOptionsFromConfig(loadConfig())),
+  declared: () => (daemonBrokerScope(loadConfig())?.declared() ?? []).map((d) => d.ref.slice('aquaman://'.length)),
+  routedOnly: (ref) => {
+    const scope = daemonBrokerScope(loadConfig());
+    const parsed = parseAquamanRef(ref);
+    return !!scope && !!parsed && scope.routedRefs?.().has(ref) === true && !scope.check(parsed.service, parsed.key, 'uds').allowed;
+  },
+  windowSeconds: () => clampAskFirstWindow(loadConfig().broker?.askFirstWindowSeconds),
+};
+
 broker
   .command('allow')
   .description('Allow aquaman://service/key refs to be materialized (e.g. Hermes secret-source bindings)')
   .argument('<refs...>', 'one or more aquaman://service/key refs')
-  .action((refs: string[]) => {
-    updateBrokerAllowedRefs(refs, 'allow');
+  .option('--ask', 'Also mark them "ask first": the daemon shows a dialog before it hands the value out (see: aquaman broker ask --help)')
+  .action(async (refs: string[], opts: { ask?: boolean }) => {
+    if (opts.ask) {
+      // The mark first, so the ref is never declared without it.
+      const marked = await markAskFirst(refs, askFirstDeps);
+      if (!marked.ok) {
+        console.error(marked.error);
+        if (marked.fix) console.error(`Fix: ${marked.fix}`);
+        process.exit(1);
+      }
+    }
+    updateBrokerAllowedRefs(refs, 'allow', opts.ask === true);
   });
+
+registerAskFirstCommands(broker, askFirstDeps);
 
 broker
   .command('revoke')
@@ -3666,6 +3714,7 @@ program
   .argument('<ref>', 'aquaman://service/key, declared with `aquaman broker allow` or in projects.yaml')
   .option('--show', 'Allow printing to an interactive terminal')
   .option('--timeout <ms>', 'How long to wait for the daemon (vaults that prompt may need longer)', '15000')
+  .option('--ask-timeout <seconds>', `For a ref marked ask-first: how long the dialog waits for an answer (${PROMPT_TIMEOUT_MIN_SECONDS}-${PROMPT_TIMEOUT_MAX_SECONDS})`, String(PROMPT_TIMEOUT_SECONDS))
   .addHelpText('after', `
 Examples:
   sbx secret set github --command "$(command -v node) $(command -v aquaman) get aquaman://github/token"
@@ -3673,8 +3722,18 @@ Examples:
   Claude Code:        "apiKeyHelper": "aquaman get aquaman://anthropic/api_key"
 
 The value lands in whichever process runs this command. Every read is checked
-against the broker scope and written to the audit log.`)
-  .action(async (ref: string, opts: { show?: boolean; timeout: string }) => {
+against the broker scope and written to the audit log.
+
+A ref marked ask-first (aquaman broker ask) is printed only after a person
+allowed it in the daemon's dialog. The command waits for the answer, up to
+--ask-timeout seconds; a yes is remembered, so later runs print at once.
+
+Exit codes:
+  0   the value was printed
+  2   a person declined in the dialog
+  3   the ref is marked ask-first and nobody could be asked or nobody answered
+  1   anything else: not declared, not stored, the daemon is not running`)
+  .action(async (ref: string, opts: { show?: boolean; timeout: string; askTimeout: string }) => {
     const parsed = parseAquamanRef(ref);
     if (!parsed) {
       console.error(`Invalid ref: ${ref}`);
@@ -3694,7 +3753,20 @@ against the broker scope and written to the audit log.`)
       process.exit(1);
     }
 
-    const result = await brokerResolve(path.join(getConfigDir(), 'proxy.sock'), parsed.service, parsed.key, timeoutMs);
+    if (!/^\d+$/.test(opts.askTimeout)) {
+      console.error(`Invalid --ask-timeout: ${opts.askTimeout} (seconds, between ${PROMPT_TIMEOUT_MIN_SECONDS} and ${PROMPT_TIMEOUT_MAX_SECONDS})`);
+      process.exit(1);
+    }
+    const askSeconds = clampPromptTimeout(Number(opts.askTimeout));
+    const socket = path.join(getConfigDir(), 'proxy.sock');
+    // First without a dialog, inside the usual --timeout. Only a ref that is
+    // marked ask-first and not allowed right now is asked for again, with
+    // the time a person needs to answer.
+    let result = await brokerResolve(socket, parsed.service, parsed.key, timeoutMs, { ask: false });
+    if (!('value' in result) && result.code === 'ask_first_required') {
+      console.error(`${ref} is marked ask-first. Waiting up to ${askSeconds} seconds for an answer in aquaman's dialog on this machine.`);
+      result = await brokerResolve(socket, parsed.service, parsed.key, timeoutMs + askSeconds * 1000, { ask_timeout_seconds: askSeconds, project: process.cwd() });
+    }
     if ('value' in result) {
       // No trailing newline when piped: credential-helper consumers differ on
       // whether they trim, and a stray "\n" in an auth header breaks requests.
@@ -3709,7 +3781,7 @@ against the broker scope and written to the audit log.`)
     } else if (result.fix) {
       console.error(`Fix: ${result.fix}`);
     }
-    process.exit(1);
+    process.exit(result.code === 'ask_first_declined' ? 2 : result.code === 'ask_first_unanswered' || result.code === 'prompt_unavailable' ? 3 : 1);
   });
 
 
@@ -3724,6 +3796,7 @@ program
   .option('--via-proxy <URL_ENV>', 'With --env: route the program through the proxy. NAME gets the proxy token, URL_ENV the proxy URL; the program never holds the credential')
   .option('--base-path <path>', 'With --via-proxy: path appended to the proxy URL (default /v1 for openai, /api for slack)')
   .option('--from <locator>', 'Use an item that already exists in your vault instead of asking for the value (see: aquaman credentials link --help)')
+  .option('--ask', 'Mark the ref "ask first": once it is usable, the daemon shows a dialog before it hands the value out (see: aquaman broker ask --help)')
   .option('--timeout <seconds>', `How long the dialog waits for an answer (${PROMPT_TIMEOUT_MIN_SECONDS}-${PROMPT_TIMEOUT_MAX_SECONDS})`, String(PROMPT_TIMEOUT_SECONDS))
   .option('--json', 'Print one JSON object and nothing else')
   .addHelpText('after', `
@@ -3743,7 +3816,7 @@ Statuses and exit codes:
 
 Example:
   aquaman request aquaman://github/token --env GITHUB_TOKEN --json`)
-  .action(async (ref: string, opts: { env?: string; json?: boolean; timeout: string; viaProxy?: string; basePath?: string; from?: string }) => {
+  .action(async (ref: string, opts: { env?: string; json?: boolean; timeout: string; viaProxy?: string; basePath?: string; from?: string; ask?: boolean }) => {
     const out = (result: Record<string, unknown>, code: number): never => {
       if (opts.json) {
         console.log(JSON.stringify(result, null, 2));
@@ -3751,6 +3824,7 @@ Example:
         const stream = code === 0 ? console.log : console.error;
         stream(`${result.status}: ${ref}${result.reason ? ` (${result.reason})` : ''}`);
         if (result.error) stream(String(result.error));
+        if (result.ask_first) stream('Marked ask-first: the daemon shows a dialog before it hands the value out');
         if (result.env) stream(result.via_proxy ? `Bound to ${result.env} for this project, through the proxy` : `Bound to ${result.env} for this project`);
         if (result.fix) stream(`Fix: ${result.fix}`);
       }
@@ -3769,6 +3843,9 @@ Example:
       out({ status: 'error', ref, error: `Invalid --timeout: ${opts.timeout}`, fix: `Give a whole number of seconds between ${PROMPT_TIMEOUT_MIN_SECONDS} and ${PROMPT_TIMEOUT_MAX_SECONDS}` }, 1);
     }
     const timeoutSeconds = clampPromptTimeout(Number(opts.timeout));
+    if (opts.ask && opts.viaProxy !== undefined) {
+      out({ status: 'error', ref, error: '--ask does nothing with --via-proxy: a ref bound through the proxy is never handed to a program, so there is no read to ask about', fix: 'Drop --ask, or drop --via-proxy to have the variable set to the value' }, 1);
+    }
     if (opts.from !== undefined) {
       const locator = checkRequestLocator(opts.from);
       if (!locator.ok) out({ status: 'error', ref, error: locator.error, code: locator.code, fix: locator.fix }, 1);
@@ -3822,6 +3899,19 @@ Example:
       }
     }
 
+    if (opts.ask) {
+      // Before the request, so the ref is never declared without its mark.
+      // Through the daemon only: it is the one about to declare the ref.
+      const marked = await proxyPost(path.join(getConfigDir(), 'proxy.sock'), '/broker/ask-first', { service: parsed!.service, key: parsed!.key, ask: true }, 30_000);
+      if ('error' in marked) {
+        out({ status: 'error', ref, error: marked.error, code: marked.code, fix: 'Start the daemon in the background: aquaman init --agent <agent> --no-hooks   (in a terminal of your own: aquaman daemon)' }, 4);
+      }
+      const answer = marked as { status: number; json: any };
+      if (answer.status !== 200) {
+        out({ status: 'error', ref, error: answer.json.error, code: answer.json.code, fix: answer.json.fix }, 4);
+      }
+    }
+
     const response = await proxyPost(
       path.join(getConfigDir(), 'proxy.sock'),
       '/broker/request',
@@ -3836,7 +3926,7 @@ Example:
       out({ status: 'error', ref, error: json.error, code: json.code, fix: json.fix }, 4);
     }
 
-    const result: Record<string, unknown> = { status: json.status, ref, reason: json.reason, fix: json.fix };
+    const result: Record<string, unknown> = { status: json.status, ref, reason: json.reason, fix: json.fix, ...(opts.ask ? { ask_first: true } : {}) };
     const usable = json.status === 'ready' || json.status === 'stored' || json.status === 'approved' || json.status === 'linked';
     if (!usable && opts.env && typeof result.fix === 'string') {
       // The by-hand route has to end in the same place this command would have.

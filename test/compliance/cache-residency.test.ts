@@ -113,7 +113,9 @@ describe('Credential cache — compliance (v0.13.1+)', () => {
       expect(first.status).toBe(200);
       expect(second.status).toBe(200);
       expect(JSON.parse(second.body).value).toBe(REAL_KEY);
-      expect(counting.gets).toBe(1); // second resolve served from cache
+      // The second resolve is served from the cache. The other read is
+      // aquaman's own ask-first record, which a daemon reads once.
+      expect(counting.gets).toBe(2);
       expect(requestLog.filter(r => r.method === 'BROKER')).toHaveLength(2);
     });
 
@@ -126,7 +128,8 @@ describe('Credential cache — compliance (v0.13.1+)', () => {
         body: JSON.stringify({ service: 'anthropic', key: 'api_key' }),
       });
       expect(res.status).toBe(200);
-      expect(counting.gets).toBe(1);
+      // One read of the credential for both paths, and one of the ask-first record.
+      expect(counting.gets).toBe(2);
     });
   });
 
