@@ -48,6 +48,16 @@ export interface CredentialStore {
   revokeLink?(service: string, key: string): Promise<boolean>;
   linkApproved?(name: string, locator: string): Promise<boolean>;
   /**
+   * The name of the item a reference is read from, on a backend where two
+   * references can be one item: one that joins service and key into a single
+   * name (`a-b` + `c` and `a` + `b-c`), and a store that honours links, where
+   * a linked reference is read from the item its link names. Whatever decides
+   * by `<service>/<key>` who may be handed a value compares this as well, so
+   * a rule set on one name holds for every name of the same item. Answered
+   * from memory. Absent where each reference is its own item.
+   */
+  itemIdentity?(service: string, key: string): string;
+  /**
    * On a backend that a person's session opens (`bitwarden`), and on
    * wrappers around one; see vault-lock.ts. Absent everywhere else.
    * `vaultState` answers from memory, `checkSession` asks the vault's CLI.

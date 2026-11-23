@@ -112,6 +112,11 @@ export class CachingStore implements CredentialStore {
     return this.inner.linkStamp?.(service, key) ?? '';
   }
 
+  /** Passed through; present only when the store underneath can have two names for one item. */
+  get itemIdentity(): ((service: string, key: string) => string) | undefined {
+    return this.inner.itemIdentity ? (service, key) => this.inner.itemIdentity!(service, key) : undefined;
+  }
+
   async approveLink(service: string, key: string, locator: string): Promise<void> {
     if (!this.inner.approveLink) throw new Error('This credential store does not record link approvals');
     await this.inner.approveLink(service, key, locator);

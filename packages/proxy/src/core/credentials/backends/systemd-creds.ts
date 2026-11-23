@@ -85,6 +85,11 @@ export class SystemdCredsStore implements CredentialStore {
     return `${service}--${key}`;
   }
 
+  /** One file for `a--b` + `c` and `a` + `b--c`: both are read from the same credential. */
+  itemIdentity(service: string, key: string): string {
+    return `${service}--${key}`;
+  }
+
   private credPath(service: string, key: string): string {
     const candidate = path.resolve(this.credsDir, `${this.credName(service, key)}.cred`);
     const root = path.resolve(this.credsDir) + path.sep;

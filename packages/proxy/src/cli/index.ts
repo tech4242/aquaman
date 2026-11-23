@@ -34,6 +34,7 @@ import {
   resolveCacheTtl,
   createCredentialLinker,
   isVaultLocked,
+  type CredentialStore,
   type CredentialStoreOptions,
   type WrapperConfig
 } from '../core/index.js';
@@ -218,11 +219,13 @@ function loadLoopbackOptions(config: WrapperConfig): { port: number; token: stri
 }
 
 /** Broker scope for `aquaman daemon`, or undefined when `broker.enabled: false`. */
-function daemonBrokerScope(config: WrapperConfig): BrokerScope | undefined {
+function daemonBrokerScope(config: WrapperConfig, store?: CredentialStore): BrokerScope | undefined {
   if (config.broker?.enabled === false) return undefined;
   return createBrokerScope({
     configPath: getConfigPath(),
     loopbackDeniedServices: HERMES_SUPPORTED_SERVICES,
+    // So the isolated tier holds for every name one of its items can have.
+    itemIdentity: store ? (service, key) => store.itemIdentity?.(service, key) : undefined,
   });
 }
 
@@ -1182,7 +1185,7 @@ program
     // The daemon is the only proxy that serves the credential broker, and only
     // for declared refs (projects.yaml + broker.allowedRefs). Over loopback the
     // Hermes LLM-provider keys are never materialized.
-    const brokerScope = daemonBrokerScope(config);
+    const brokerScope = daemonBrokerScope(config, credentialStore);
     // Set once the audit anchor exists; called when `aquaman unlock` opened the vault.
     const vaultOpened = { run: (): void => {} };
     const credentialProxy = createCredentialProxy({
