@@ -245,7 +245,7 @@ const PRIVATE_KEY_END = new RegExp(`-----END ${KEY_KIND}-----`, 'g');
 const KEY_BREAK = /\r?\n|\\r\\n|\\n|(?:\r|\\|\\r|\\r\\)?$/y;
 // One run of white space, then at most one of the two forms: written so that
 // no part of a line can be matched by two parts of the pattern.
-const KEY_BODY_LINE = /^[ \t]*(?:(?:[A-Za-z0-9+/=]|\[REDACTED:[a-z-]+\])+[ \t]*|(?:Proc-Type|DEK-Info|Version|Comment): .*)?$/;
+const KEY_BODY_LINE = /^[ \t]*(?:(?:[A-Za-z0-9+/=]|\[REDACTED:[a-z-]+\])+[ \t]*|(?:Proc-Type|DEK-Info|Version|Comment):(?: .*)?)?$/;
 /** Whole lines of base64 and nothing else: what a key that is being held is continued by. */
 const KEY_LINES_ONLY = /^(?:[A-Za-z0-9+/=]+\r?\n)+$/;
 /** A BEGIN line on a line of its own. */
@@ -397,11 +397,11 @@ function isKeyMaterial(text: string, at: number, stop: number): boolean {
       const partial = PARTIAL_ESCAPE.exec(rest);
       if (pos + content.length < stop && !partial) return false;
       const last = partial ? rest.slice(0, partial.index) : rest;
-      return first ? last === '' : KEY_LAST_LINE.test(last);
+      return first ? /^[ \t]*$/.test(last) : KEY_LAST_LINE.test(last);
     }
     // The BEGIN line ends where its dashes end; after that, body lines.
     if (first) {
-      if (content !== '') return false;
+      if (!/^[ \t]*$/.test(content)) return false;
     } else if (KEY_BEGIN_LINE.test(content)) {
       if (keyLines === 0) return false;
       keyLines = 0;

@@ -520,6 +520,23 @@ export class ServiceRegistry {
     if (!service.credentialKey || typeof service.credentialKey !== 'string') {
       return { valid: false, error: 'credentialKey is required and must be a string' };
     }
+    // Every key a definition names is read from the vault under that name,
+    // so each has to be a plain key name: a list or a number would be turned
+    // into text by a store and read as a name nobody checked.
+    const namedKeys: Array<[string, unknown]> = [
+      ['credentialKey', service.credentialKey],
+      ...Object.entries(service.additionalHeaders ?? {}).map(([header, h]): [string, unknown] =>
+        [`additionalHeaders.${header}.credentialKey`, (h as { credentialKey?: unknown } | null)?.credentialKey]),
+      ...(service.oauthConfig ? [
+        ['oauthConfig.clientIdKey', service.oauthConfig.clientIdKey] as [string, unknown],
+        ['oauthConfig.clientSecretKey', service.oauthConfig.clientSecretKey] as [string, unknown],
+      ] : []),
+    ];
+    for (const [field, value] of namedKeys) {
+      if (typeof value !== 'string' || !CREDENTIAL_KEY_NAME.test(value)) {
+        return { valid: false, error: `${field} must be a key name: letters, digits, ".", "_" and "-", beginning with a letter or digit` };
+      }
+    }
 
     if (service.authPrefix !== undefined && typeof service.authPrefix !== 'string') {
       return { valid: false, error: 'authPrefix must be a string if provided' };

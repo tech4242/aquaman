@@ -256,7 +256,7 @@ export class CredentialProxy {
   private sigV4Buffering = 0;
 
   /** Every vault key a service definition makes the proxy read. */
-  private static keysRead(def: ServiceDefinition): string[] {
+  private static keysRead(def: ServiceDefinition): unknown[] {
     const oauth = def.oauthConfig;
     return [...new Set<string>([
       def.credentialKey,
@@ -265,7 +265,7 @@ export class CredentialProxy {
       // The client credentials go to the token URL, and so does every
       // credential the URL names in braces.
       ...(oauth ? [oauth.clientIdKey, oauth.clientSecretKey, ...(oauth.tokenUrl.match(/\{(\w+)\}/g) ?? []).map((t) => t.slice(1, -1))] : []),
-    ])].filter((key) => typeof key === 'string' && key !== '');
+    ])];
   }
 
   /**
@@ -281,15 +281,22 @@ export class CredentialProxy {
   private builtinItemRead(service: string, def: ServiceDefinition): { key: string; builtin: string } | undefined {
     const identity = this.options.store.itemIdentity?.bind(this.options.store);
     if (!identity || ServiceRegistry.isBuiltinService(service)) return undefined;
+    // Item names are compared without regard to case: whether a vault tells
+    // `AI-api_token` from `ai-api_token` is the vault's business, and a name
+    // that differs only in case is not one to hand out on that hope.
     const prefixes: Array<[string, string]> = [];
     for (const builtin of ServiceRegistry.getBuiltinServiceNames()) {
       const probe = identity(builtin, 'k');
-      if (probe !== undefined && probe.endsWith('k')) prefixes.push([builtin, probe.slice(0, -1)]);
+      if (probe !== undefined && probe.endsWith('k')) prefixes.push([builtin, probe.slice(0, -1).toLowerCase()]);
     }
     for (const key of CredentialProxy.keysRead(def)) {
+      // A key that is not text cannot be compared, and a store would turn it
+      // into text of its own making: it is not read at all.
+      if (typeof key !== 'string') return { key: String(key), builtin: prefixes[0]?.[0] ?? 'a built-in service' };
+      if (key === '') continue;
       const item = identity(service, key);
       if (item === undefined) continue;
-      const hit = prefixes.find(([, prefix]) => item.startsWith(prefix));
+      const hit = prefixes.find(([, prefix]) => item.toLowerCase().startsWith(prefix));
       if (hit) return { key, builtin: hit[0] };
     }
     return undefined;
@@ -719,7 +726,7 @@ export class CredentialProxy {
       res.statusCode = 403;
       res.end(JSON.stringify({
         error: `The credential ${service}/${borrowed.key} is stored under the same vault item name as a credential of the built-in service "${borrowed.builtin}", so it is not sent to the upstream services.yaml names for "${service}"`,
-        fix: `Rename the service in services.yaml so that its name with the key does not begin with "${borrowed.builtin}-", or use the built-in "${borrowed.builtin}" service`,
+        fix: `Rename the service or the key in services.yaml, or use the built-in "${borrowed.builtin}" service`,
         code: 'service_item_collision',
       }));
       return;
@@ -1442,6 +1449,16 @@ export class CredentialProxy {
     if (!keys.includes(key)) {
       const mismatch = routeKeyMismatch(service, keys, key, serviceDef.authMode);
       refuse('route_key_mismatch', mismatch.error, mismatch.fix);
+      return;
+    }
+    // A route for a services.yaml service whose key is, by item name, a
+    // built-in's: forwarding would refuse every request, and the vault read
+    // below would say whether the built-in's item exists.
+    const borrowedItem = this.builtinItemRead(service, serviceDef);
+    if (borrowedItem) {
+      refuse('service_item_collision',
+        `The credential ${service}/${borrowedItem.key} is stored under the same vault item name as a credential of the built-in service "${borrowedItem.builtin}", so it is not routed`,
+        `Rename the service or the key in services.yaml, or use the built-in "${borrowedItem.builtin}" service`);
       return;
     }
     // Every key the proxy injects for the service, the routed one first: a
