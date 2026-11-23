@@ -442,6 +442,11 @@ function notes(deps: ServiceDeps): Record<string, unknown> {
   if (deps.platform === 'linux' && !fs.existsSync(path.join(deps.root, 'var/lib/systemd/linger', deps.username))) {
     steps.push(`on a machine nobody logs in to, the unit only starts at boot with lingering: loginctl enable-linger ${deps.username}`);
   }
+  // The unit carries no Bitwarden session (`BW_SESSION` is one of the settings
+  // reported below as not carried), so a daemon started at login starts locked.
+  if (deps.backends.includes('bitwarden')) {
+    steps.push('with the bitwarden backend the daemon starts locked at every login: run `aquaman unlock` in a terminal after logging in (it takes the place of BW_SESSION)');
+  }
   if (steps.length) out['human_steps'] = steps;
   const notPassed = ENV_ONLY_SETTINGS.filter((name) => deps.env[name]);
   if (notPassed.length) out['env_not_passed'] = notPassed;
