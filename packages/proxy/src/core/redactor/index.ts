@@ -236,20 +236,22 @@ const PRIVATE_KEY_END = new RegExp(`-----END ${KEY_KIND}-----`, 'g');
  * printed: a line break, real or written as `\n` in a quoted string, then
  * lines of base64, the header lines PEM and PGP armor use, or a marker left
  * by an earlier pattern. A line may be indented and may end in spaces or
- * tabs: a key in a YAML block scalar is a key. `KEY_LINE` reads one line and its break from where
+ * tabs: a key in a YAML block scalar is a key. `keyLineAt()` reads one line and its break from where
  * it is applied; the break is empty at the end of the text, or the part of
  * a line break that has arrived so far (the first half of a CRLF, the
  * backslash of an escaped one). A header line may likewise stop after its
  * colon: the text can end anywhere.
  */
-const KEY_LINE = /([^\r\n\\]*)(\r?\n|\\r\\n|\\n|(?:\r|\\|\\r|\\r\\)?$)/y;
-const KEY_BODY_LINE = /^(?:[ \t]*(?:[A-Za-z0-9+/=]|\[REDACTED:[a-z-]+\])*[ \t]*|[ \t]*(?:Proc-Type|DEK-Info|Version|Comment): .*)$/;
+const KEY_BREAK = /\r?\n|\\r\\n|\\n|(?:\r|\\|\\r|\\r\\)?$/y;
+// One run of white space, then at most one of the two forms: written so that
+// no part of a line can be matched by two parts of the pattern.
+const KEY_BODY_LINE = /^[ \t]*(?:(?:[A-Za-z0-9+/=]|\[REDACTED:[a-z-]+\])+[ \t]*|(?:Proc-Type|DEK-Info|Version|Comment): .*)?$/;
 /** Whole lines of base64 and nothing else: what a key that is being held is continued by. */
 const KEY_LINES_ONLY = /^(?:[A-Za-z0-9+/=]+\r?\n)+$/;
 /** A BEGIN line on a line of its own. */
 const KEY_BEGIN_LINE = new RegExp(`^[ \\t]*-----BEGIN ${KEY_KIND}-----[ \\t]*$`);
 /** The line the text ends in, which may be a body line, a header, or an END line that is still arriving. */
-const KEY_LAST_LINE = /^[ \t]*(?:(?:[A-Za-z0-9+/=-]|\[REDACTED:[a-z-]+\])*[ \t]*|[A-Za-z-]+:(?: .*)?|-----END [A-Z ]*-{0,5})$/;
+const KEY_LAST_LINE = /^[ \t]*(?:(?:[A-Za-z0-9+/=-]|\[REDACTED:[a-z-]+\])+[ \t]*|[A-Za-z-]+:(?: .*)?|-----END [A-Z ]*-{0,5})?$/;
 /** A line break written as an escape, cut off where the text ends. */
 const PARTIAL_ESCAPE = /(?:\\|\\r|\\r\\)$/;
 
@@ -351,6 +353,24 @@ function redactTracked(input: string, patterns: readonly SecretPattern[]): Track
 }
 
 /**
+ * The line that begins at `pos`, without its break, and the break: a real
+ * one, one written as an escape, the part of either that has arrived where
+ * the text ends, or nothing at the end of the text. Null where the line is
+ * ended by a backslash that is none of these.
+ */
+function keyLineAt(text: string, pos: number): [content: string, lineBreak: string] | null {
+  let end = pos;
+  for (; end < text.length; end++) {
+    const c = text.charCodeAt(end);
+    if (c === 10 || c === 13 || c === 92) break;
+  }
+  KEY_BREAK.lastIndex = end;
+  const found = KEY_BREAK.exec(text);
+  KEY_BREAK.lastIndex = 0;
+  return found ? [text.slice(pos, end), found[0]] : null;
+}
+
+/**
  * Whether everything in `text` from `at` (the end of a BEGIN line) to `stop`
  * could be the body of a key that is still arriving. `stop` is where the
  * text ends, or where a literal value that is still arriving begins: that
@@ -367,11 +387,10 @@ function isKeyMaterial(text: string, at: number, stop: number): boolean {
   let first = true;
   let keyLines = 0;
   for (;;) {
-    KEY_LINE.lastIndex = pos;
-    const line = KEY_LINE.exec(text);
-    KEY_LINE.lastIndex = 0;
+    const line = keyLineAt(text, pos);
     if (!line) return false;
-    const [whole, content, lineBreak] = line;
+    const [content, lineBreak] = line;
+    const whole = content + lineBreak;
     if (pos + content.length >= stop || lineBreak === '') {
       // The line the text stops in, or a backslash that is not a line break.
       const rest = text.slice(pos, stop);
