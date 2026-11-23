@@ -49,7 +49,10 @@ export class CachingStore implements CredentialStore {
     // A value read through one link, or from aquaman's own item, is not the
     // value of the reference once its link is made, changed or removed.
     const link = this.inner.linkStamp?.(service, key) ?? '';
-    if (entry && entry.link === link && Date.now() - entry.fetchedAt < this.ttlMs) {
+    // A vault known to be locked, by whichever call found out, serves
+    // nothing that was read while it was open.
+    if (this.inner.vaultState?.() === 'locked') this.cache.clear();
+    else if (entry && entry.link === link && Date.now() - entry.fetchedAt < this.ttlMs) {
       return entry.value;
     }
     let value: string | null;

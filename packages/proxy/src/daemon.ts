@@ -24,6 +24,9 @@ import {
   AWS_DNS_SUFFIX,
   EMPTY_PAYLOAD_SHA256,
   SIGV4_MAX_BUFFERED_BODY,
+  SIGV4_MAX_BUFFERED_BODIES,
+  SIGV4_BODY_READ_TIMEOUT_MS,
+  sigV4HeaderPaths,
   SIGV4_PLACEHOLDER_SECRET,
   amzDate,
   canonicalQuery,
@@ -194,6 +197,8 @@ export interface CredentialProxyOptions {
    * the clock approvals and cooldowns are measured on.
    */
   askFirst?: { windowSeconds?: number; now?: () => number };
+  /** Bounds on AWS request bodies held in memory to be hashed. Defaults: `SIGV4_MAX_BUFFERED_BODIES`, `SIGV4_BODY_READ_TIMEOUT_MS`. */
+  sigv4?: { maxBufferedBodies?: number; bodyReadTimeoutMs?: number };
   /**
    * Called when a session handed over on `/_vault/unlock` opened the vault,
    * so whatever waited for the vault (the audit anchor) can go on.
@@ -277,6 +282,9 @@ export class CredentialProxy {
    * Absent without a broker scope.
    */
   readonly askFirstGate: AskFirstGate | undefined;
+
+  /** AWS request bodies being read into memory right now. */
+  private sigV4Buffering = 0;
 
   async start(): Promise<void> {
     if (this.running) {
@@ -670,8 +678,20 @@ export class CredentialProxy {
       // A path-override header the parser refuses cannot be evaluated, so a
       // service that has rules does not get the request.
       const overrides = policyPathOverrides(req.headers);
-      const paths = [...policyPathInterpretations(canonicalSegments), ...(overrides.ok ? overrides.paths : [])];
-      const denied = (!overrides.ok && policyConfig[service] !== undefined) ||
+      // An S3 copy reads a second object, named in a header. A rule on a
+      // path covers the object read as well as the one written.
+      const named = authMode === 'sigv4'
+        ? sigV4HeaderPaths(req.headers, (p) => {
+            const t = parseRequestTarget(p);
+            return t.ok ? policyPathInterpretations(t.segments) : null;
+          })
+        : { ok: true as const, paths: [] };
+      const paths = [
+        ...policyPathInterpretations(canonicalSegments),
+        ...(overrides.ok ? overrides.paths : []),
+        ...(named.ok ? named.paths : []),
+      ];
+      const denied = ((!overrides.ok || !named.ok) && policyConfig[service] !== undefined) ||
         policyMethods(req.method || 'GET', req.headers, target.search).some((method) =>
           paths.some((p) => !matchPolicy(service, method, p, policyConfig).allowed));
       if (denied) {
@@ -1040,7 +1060,52 @@ export class CredentialProxy {
     if (plan.mode === 'literal') {
       payloadHash = plan.value;
     } else {
-      const read = await this.readBodyCapped(req, SIGV4_MAX_BUFFERED_BODY);
+      // Reading the rest of a refused body for a moment lets the client
+      // receive the answer; one still sending after that is cut off.
+      const drain = () => {
+        req.resume();
+        const closing = setTimeout(() => { if (!req.complete) req.destroy(); }, 2000);
+        closing.unref();
+        req.once('end', () => clearTimeout(closing));
+        req.once('close', () => clearTimeout(closing));
+      };
+      // Each body waiting to be hashed is held whole, before any credential
+      // is read, so both how many are held at once and how long a client may
+      // take are bounded: a program with a route token cannot make the proxy
+      // hold memory without end.
+      const limits = this.options.sigv4 ?? {};
+      if (this.sigV4Buffering >= (limits.maxBufferedBodies ?? SIGV4_MAX_BUFFERED_BODIES)) {
+        refuse(503, {
+          error: 'The proxy is already holding as many AWS request bodies as it hashes at one time',
+          fix: 'Send the request again in a moment, or send fewer requests with a body at once',
+          code: 'sigv4_busy',
+        });
+        drain();
+        return;
+      }
+      let read: Buffer | null | 'timeout';
+      this.sigV4Buffering++;
+      try {
+        read = await this.readBodyCapped(req, SIGV4_MAX_BUFFERED_BODY, limits.bodyReadTimeoutMs ?? SIGV4_BODY_READ_TIMEOUT_MS);
+      } catch (error) {
+        // The client went away in the middle of its body: nobody is left to answer.
+        requestInfo.error = `sigv4_body_aborted: ${error instanceof Error ? error.message : String(error)}`;
+        requestInfo.statusCode = 400;
+        this.emitRequest(requestInfo);
+        if (!res.headersSent && !res.destroyed) { res.statusCode = 400; res.end(); }
+        return;
+      } finally {
+        this.sigV4Buffering--;
+      }
+      if (read === 'timeout') {
+        refuse(408, {
+          error: 'The request body did not arrive in time for the proxy to hash it for the signature',
+          fix: 'Send the request again',
+          code: 'sigv4_body_timeout',
+        });
+        drain();
+        return;
+      }
       if (read === null) {
         refuse(413, {
           error: `The request body is larger than ${SIGV4_MAX_BUFFERED_BODY / (1024 * 1024)} MiB, the most the proxy holds in memory to hash for the signature`,
@@ -1048,13 +1113,8 @@ export class CredentialProxy {
           code: 'sigv4_body_too_large',
         });
         // Closing a socket that still has unread input resets it, and the
-        // client would lose the answer. What is left of the body is read and
-        // dropped for a moment; a client still sending after that is cut off.
-        req.resume();
-        const closing = setTimeout(() => { if (!req.complete) req.destroy(); }, 2000);
-        closing.unref();
-        req.once('end', () => clearTimeout(closing));
-        req.once('close', () => clearTimeout(closing));
+        // client would lose the answer.
+        drain();
         return;
       }
       body = read;
@@ -1139,7 +1199,7 @@ export class CredentialProxy {
   }
 
   /** Read a request body into memory, or return null once it is known to exceed `cap` bytes. */
-  private readBodyCapped(req: IncomingMessage, cap: number): Promise<Buffer | null> {
+  private readBodyCapped(req: IncomingMessage, cap: number, timeoutMs: number): Promise<Buffer | null | 'timeout'> {
     const declared = Number(req.headers['content-length']);
     if (Number.isFinite(declared) && declared > cap) return Promise.resolve(null);
     // Listeners, not `for await`: leaving that loop early destroys the
@@ -1147,12 +1207,16 @@ export class CredentialProxy {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
       let size = 0;
-      const done = (result: Buffer | null) => {
+      const done = (result: Buffer | null | 'timeout') => {
+        clearTimeout(deadline);
         req.off('data', onData);
         req.off('end', onEnd);
-        req.off('error', reject);
+        req.off('error', fail);
         resolve(result);
       };
+      const fail = (err: Error) => { clearTimeout(deadline); reject(err); };
+      const deadline = setTimeout(() => { req.pause(); done('timeout'); }, timeoutMs);
+      deadline.unref();
       const onData = (chunk: Buffer) => {
         size += chunk.length;
         if (size > cap) {
@@ -1165,7 +1229,7 @@ export class CredentialProxy {
       const onEnd = () => done(Buffer.concat(chunks));
       req.on('data', onData);
       req.on('end', onEnd);
-      req.on('error', reject);
+      req.on('error', fail);
     });
   }
 

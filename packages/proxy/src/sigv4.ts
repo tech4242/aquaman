@@ -345,10 +345,15 @@ export function sha256Hex(data: Buffer | string): string {
   return crypto.createHash('sha256').update(data).digest('hex');
 }
 
-/** Sign one request. Header values are trimmed and runs of spaces collapsed, as AWS does before it verifies. */
+/**
+ * Sign one request. Header values are trimmed and every run of white space
+ * (a tab counts) becomes one space, which is what the AWS SDKs' signers do; a
+ * value canonicalised differently here would be sent with a signature AWS
+ * does not accept.
+ */
 export function signSigV4(input: SigV4SignInput): SigV4Signature {
   const headers = Object.entries(input.headers)
-    .map(([name, value]) => [name.toLowerCase(), value.trim().replace(/ {2,}/g, ' ')] as const)
+    .map(([name, value]) => [name.toLowerCase(), value.trim().replace(/\s+/g, ' ')] as const)
     .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   const signedHeaders = headers.map(([name]) => name).join(';');
   const canonicalRequest = [
@@ -415,4 +420,39 @@ export function sigV4RouteEnv(url: string): Record<string, string> {
     AWS_ENDPOINT_URL_IAM: `${url}/${SIGV4_GLOBAL_SEGMENT}`,
     AWS_ENDPOINT_URL_BEDROCK_RUNTIME: `${url}/${SIGV4_HOST_SEGMENT}/bedrock-runtime`,
   };
+}
+
+/** How many request bodies the proxy holds in memory at once to hash for a signature. */
+export const SIGV4_MAX_BUFFERED_BODIES = 8;
+
+/** How long a client has to finish sending a body the proxy has to hash. */
+export const SIGV4_BODY_READ_TIMEOUT_MS = 60_000;
+
+/**
+ * Paths a request names in a header, for policy. S3's CopyObject and
+ * UploadPartCopy read the object named by `x-amz-copy-source`
+ * (`/bucket/key`, `bucket/key`, optionally `?versionId=`), so a rule on a
+ * bucket's path has to see that path too. `parse` turns a path into the
+ * readings policy matches; a value it refuses, or one that names an access
+ * point by ARN (which is not a path under any bucket), cannot be evaluated.
+ */
+export function sigV4HeaderPaths(
+  headers: Record<string, string | string[] | undefined>,
+  parse: (path: string) => string[] | null,
+): { ok: true; paths: string[] } | { ok: false; reason: string } {
+  const paths: string[] = [];
+  const value = headers['x-amz-copy-source'];
+  for (const raw of Array.isArray(value) ? value : value ? [value] : []) {
+    const text = raw.trim();
+    if (text === '') continue;
+    let decodedStart = text.slice(0, 16);
+    try { decodedStart = decodeURIComponent(decodedStart); } catch { /* the raw form is checked */ }
+    if (/^\/?arn:/i.test(text) || /^\/?arn:/i.test(decodedStart)) {
+      return { ok: false, reason: 'x-amz-copy-source names an access point by ARN, which path rules cannot be matched against' };
+    }
+    const readings = parse(text.startsWith('/') ? text : `/${text}`);
+    if (readings === null) return { ok: false, reason: 'x-amz-copy-source is not a path the proxy can read' };
+    for (const p of readings) if (!paths.includes(p)) paths.push(p);
+  }
+  return { ok: true, paths };
 }

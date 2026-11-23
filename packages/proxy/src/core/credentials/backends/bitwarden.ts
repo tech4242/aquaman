@@ -213,7 +213,8 @@ export class BitwardenStore implements CredentialStore {
     if (status.status !== 'unlocked') {
       return { ok: false, code: 'session_refused', error: 'The Bitwarden CLI does not open the vault with that session', fix: again };
     }
-    if (this.userId !== null && status.userId !== null && status.userId !== this.userId) {
+    // A status that names no account cannot be told from another account's.
+    if (this.userId !== null && status.userId !== this.userId) {
       return {
         ok: false,
         code: 'account_changed',

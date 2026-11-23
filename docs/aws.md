@@ -75,6 +75,8 @@ A request the proxy cannot sign completely is refused with an `error`, a `code` 
 | A presigned URL, or a session token in the query string | 400 | `sigv4_presigned_unsupported` |
 | SigV4A (`AWS4-ECDSA-P256-SHA256`), used by multi-Region access points | 400 | `sigv4a_unsupported` |
 | A body over 16 MiB that is not an unsigned S3 upload | 413 | `sigv4_body_too_large` |
+| More than 8 bodies waiting to be hashed at the same time | 503 | `sigv4_busy` |
+| A body that takes longer than 60 seconds to arrive | 408 | `sigv4_body_timeout` |
 | A `+` in the query string, which decoders read two ways | 400 | `sigv4_query_ambiguous` |
 | A doubled slash in the path | 400 | `sigv4_path_unsupported` |
 | A region whose endpoints are under another suffix (`cn-north-1`) | 400 | `sigv4_partition_unsupported` |
@@ -103,7 +105,7 @@ policy:
 
 A denied request gets a 403 from the proxy before any key is read. The rule above holds whichever endpoint form the request uses.
 
-Policy sees the method and the path and nothing else. Many AWS APIs name the action in the `X-Amz-Target` header or in the body and use one path for everything (the DynamoDB and IAM calls in the runs below are all `POST /`), and the service is not in the path at all. So a path rule is useful where the path names the resource, as with S3 buckets, and it cannot tell `GetItem` from `DeleteTable`, or one service from another. What the keys may do is decided by the IAM policy attached to them: store keys for a user or role that has only the permissions this project needs.
+Policy sees the method and the path, with one addition: for an S3 copy (CopyObject, UploadPartCopy) the object named in `x-amz-copy-source` is checked against the same rules, so a rule that denies a bucket also denies copying out of it. A copy source given as an access point ARN is refused when the service has rules, because it is not a path. Beyond that, policy sees nothing else. A multi-object delete (`POST /<bucket>?delete`) names its keys in the body, so a `DELETE` rule on the bucket's path does not stop it: deny `POST` on the bucket's path as well. Many AWS APIs name the action in the `X-Amz-Target` header or in the body and use one path for everything (the DynamoDB and IAM calls in the runs below are all `POST /`), and the service is not in the path at all. So a path rule is useful where the path names the resource, as with S3 buckets, and it cannot tell `GetItem` from `DeleteTable`, or one service from another. What the keys may do is decided by the IAM policy attached to them: store keys for a user or role that has only the permissions this project needs.
 
 Each forwarded request is one entry in the audit log, and so is each request refused by policy or by the checks above.
 
