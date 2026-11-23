@@ -264,41 +264,6 @@ project
 
 // ---------------- exec ----------------
 
-/** How long the daemon's dialog waits for a person before a marked reference counts as unanswered. */
-const ASK_FIRST_DIALOG_SECONDS = 90;
-
-/** The daemon's refusals for a reference marked ask-first: the credential is there, and a person has not allowed it. */
-const ASK_FIRST_REFUSALS = new Set(['ask_first_declined', 'ask_first_unanswered', 'ask_first_required', 'prompt_unavailable']);
-
-/**
- * Resolve one reference for `exec`. First without a dialog and inside the
- * client's usual timeout, which is every reference that is not marked
- * ask-first and every marked one a person already allowed. Only a marked
- * reference nobody has allowed is asked for again, this time waiting for the
- * daemon's dialog.
- */
-async function resolveAskingIfMarked(
-  broker: BrokerClient,
-  parsed: { service: string; key: string },
-  ref: string,
-  cwd: string,
-): Promise<{ value: string }> {
-  try {
-    return await broker.resolve({ service: parsed.service, key: parsed.key, ttlSeconds: 60, ask: false });
-  } catch (err) {
-    if (!(err instanceof BrokerError) || err.code !== 'ask_first_required') throw err;
-  }
-  console.error(`aquaman: ${ref} is marked ask-first. Waiting up to ${ASK_FIRST_DIALOG_SECONDS} seconds for an answer in aquaman's dialog on this machine.`);
-  return broker.resolve({
-    service: parsed.service,
-    key: parsed.key,
-    ttlSeconds: 60,
-    askTimeoutSeconds: ASK_FIRST_DIALOG_SECONDS,
-    project: cwd,
-    timeoutMs: (ASK_FIRST_DIALOG_SECONDS + 30) * 1000,
-  });
-}
-
 program
   .command('exec <cmd> [args...]')
   .description('Run a command with project env injected and stdout/stderr redacted')
@@ -324,7 +289,6 @@ program
     const broker = new BrokerClient();
     const env: Record<string, string> = { ...process.env as Record<string, string> };
     const injectedValues: string[] = [];
-    let askFirstRefused = false;
     for (const [envName, ref] of Object.entries(match.config.env)) {
       // loadProjects() refuses a file with a reference that does not parse.
       const parsed = parseRef(ref)!;
@@ -350,11 +314,10 @@ program
           injectedValues.push(target.token);
           continue;
         }
-        const result = await resolveAskingIfMarked(broker, parsed, ref, cwd);
+        const result = await broker.resolve({ service: parsed.service, key: parsed.key, ttlSeconds: 60 });
         env[envName] = result.value;
         injectedValues.push(result.value);
       } catch (err) {
-        if (err instanceof BrokerError && err.code !== undefined && ASK_FIRST_REFUSALS.has(err.code)) askFirstRefused = true;
         // One reference the daemon will not serve (not stored yet, not
         // declared) leaves that one variable unset. The command still runs:
         // most commands in a project need none of its credentials, and the
@@ -378,11 +341,6 @@ program
     // proxy first. The hook's `allow` was for a command run with credentials,
     // so this one is not run under it.
     if (injectedValues.length === 0 && Object.keys(match.config.env).length > 0) {
-      if (askFirstRefused) {
-        // Nothing to add or bind: the credential is there, and a person has not allowed it.
-        console.error('aquaman: none of this project\'s credentials were handed out (see above), so the command was not run.');
-        process.exit(1);
-      }
       console.error('aquaman: none of this project\'s credentials are available, so the command was not run. Add one (aquaman request <ref> --env <NAME>) or run the command without aquaman-coder exec.');
       process.exit(1);
     }
@@ -666,15 +624,10 @@ program
           // loadProjects() refuses a file with a reference that does not parse.
           const parsed = parseRef(ref)!;
           try {
-            // A check never raises a dialog.
-            await broker.resolve({ service: parsed.service, key: parsed.key, ttlSeconds: 1, ask: false });
+            await broker.resolve({ service: parsed.service, key: parsed.key, ttlSeconds: 1 });
             checks.push({ name: `project ${name}: ${envName}`, ok: true, detail: ref });
           } catch (err) {
             const code = err instanceof BrokerError ? err.code : undefined;
-            if (code === 'ask_first_required') {
-              checks.push({ name: `project ${name}: ${envName}`, ok: true, detail: `${ref} (marked ask-first: a person is asked in a dialog when a command needs it)` });
-              continue;
-            }
             const fix =
               code === 'broker_disabled'
                 ? 'The proxy on this socket was started by the OpenClaw plugin, which never hands out credentials. Run `aquaman daemon` for coding agents.'

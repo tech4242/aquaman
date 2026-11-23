@@ -23,17 +23,6 @@ export interface BrokerResolveOptions {
   service: string;
   key: string;
   ttlSeconds?: number;
-  /**
-   * `false`: for a reference marked ask-first that nobody has allowed in the
-   * current window, answer at once (`ask_first_required`) and show no dialog.
-   */
-  ask?: boolean;
-  /** How long the daemon's dialog waits for a person, for a reference marked ask-first. */
-  askTimeoutSeconds?: number;
-  /** Where the request comes from; the dialog shows it as the caller's own words. */
-  project?: string;
-  /** For this one request, in place of the client's timeout: a dialog needs longer than a vault read. */
-  timeoutMs?: number;
 }
 
 export interface BrokerResolveResult {
@@ -105,12 +94,9 @@ export class BrokerClient {
       service: opts.service,
       key: opts.key,
       ttl_seconds: opts.ttlSeconds,
-      ask: opts.ask,
-      ask_timeout_seconds: opts.askTimeoutSeconds,
-      project: opts.project,
     });
 
-    const { statusCode, payload } = await this.request('POST', '/broker/resolve', body, opts.timeoutMs);
+    const { statusCode, payload } = await this.request('POST', '/broker/resolve', body);
 
     let json: any;
     try {
@@ -206,8 +192,7 @@ export class BrokerClient {
   private request(
     method: 'GET' | 'POST',
     urlPath: string,
-    body?: string,
-    timeoutMs: number = this.timeoutMs
+    body?: string
   ): Promise<{ statusCode: number; payload: string }> {
     return new Promise((resolve, reject) => {
       const req = http.request(
@@ -218,7 +203,7 @@ export class BrokerClient {
           headers: body
             ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
             : undefined,
-          timeout: timeoutMs,
+          timeout: this.timeoutMs,
         },
         (res) => {
           let chunks = '';
@@ -245,7 +230,7 @@ export class BrokerClient {
 
       req.on('timeout', () => {
         req.destroy();
-        reject(new Error(`Broker request timed out after ${timeoutMs}ms`));
+        reject(new Error(`Broker request timed out after ${this.timeoutMs}ms`));
       });
 
       if (body) req.write(body);
