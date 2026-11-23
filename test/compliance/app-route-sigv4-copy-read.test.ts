@@ -11,7 +11,6 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as http from 'node:http';
-import * as net from 'node:net';
 import { createCredentialProxy, createBrokerScope, createServiceRegistry, type CredentialProxy, type RequestInfo, type PolicyConfig } from 'aquaman-proxy';
 import { MemoryStore } from 'aquaman-core';
 import { CountingStore } from '../helpers/counting-store.js';
@@ -38,20 +37,6 @@ function send(address: string, opts: { method?: string; path: string; headers?: 
     });
     req.on('error', reject);
     req.end(opts.body);
-  });
-}
-
-/** Raw bytes (latin1) to the listener; resolves with the whole answer. */
-function rawBytes(address: string, text: string): Promise<string> {
-  const [host, port] = address.split(':');
-  return new Promise((resolve) => {
-    const socket = net.connect(Number(port), host, () => socket.write(Buffer.from(text, 'latin1')));
-    let data = '';
-    const finish = () => { socket.destroy(); resolve(data); };
-    socket.on('data', (c) => { data += c.toString('latin1'); });
-    socket.on('close', finish);
-    socket.on('error', finish);
-    socket.setTimeout(3000, finish);
   });
 }
 
