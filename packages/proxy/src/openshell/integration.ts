@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import type { WrapperConfig } from '../core/types.js';
 import type { CredentialStore } from '../core/credentials/store.js';
 import type { BrokerScope } from '../broker-scope.js';
+import type { AskFirstGate } from '../ask-first.js';
 import { getConfigDir } from '../core/utils/config.js';
 import { createOpenShellDriverCore, type DriverAccessEvent } from './credential-driver.js';
 import { startOpenShellDriverServer, loadGrpc, type OpenShellDriverServer } from './grpc-server.js';
@@ -71,6 +72,8 @@ export async function startOpenShellDriver(opts: {
   config: WrapperConfig;
   store: CredentialStore;
   scope: BrokerScope | undefined;
+  /** The proxy's gate, so a marked reference is asked about here as it is on the broker. */
+  askFirst: AskFirstGate | undefined;
   audit: AuditSink;
   version: string;
 }): Promise<OpenShellDriverServer> {
@@ -81,6 +84,7 @@ export async function startOpenShellDriver(opts: {
   const core = createOpenShellDriverCore({
     store: opts.store,
     scope: opts.scope,
+    askFirst: opts.askFirst,
     version: opts.version,
     onAccess: (e) => auditDriverAccess(opts.audit, e),
   });

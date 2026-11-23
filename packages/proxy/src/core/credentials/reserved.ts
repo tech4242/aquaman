@@ -10,6 +10,12 @@ export const RESERVED_SERVICE = 'aquaman_internal';
 /** Under the reserved service: which links to existing vault items a person approved. */
 export const LINK_APPROVALS_KEY = 'link_approvals';
 
+/**
+ * Under the reserved service: which references are handed out only after a
+ * person allowed it in the daemon's dialog (ask-first.ts).
+ */
+export const ASK_FIRST_KEY = 'ask_first';
+
 export function isReservedService(service: unknown): boolean {
   return typeof service === 'string' && /^aquaman[._-]?internal$/i.test(service);
 }

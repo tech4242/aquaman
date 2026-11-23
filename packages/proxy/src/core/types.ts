@@ -159,6 +159,13 @@ export interface BrokerConfig {
   enabled: boolean;
   /** Extra `aquaman://service/key` refs callers may materialize. Manage with `aquaman broker allow|revoke`. */
   allowedRefs?: string[];
+  /**
+   * How long a person's yes to a reference marked ask-first lasts, in
+   * seconds. Default 28800 (8 hours); held between 60 and 86400. Read when
+   * the daemon starts. The marks themselves are kept in the vault
+   * (`aquaman broker ask`), not here.
+   */
+  askFirstWindowSeconds?: number;
 }
 
 /** NVIDIA OpenShell integration (v0.17.0+). */
