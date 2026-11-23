@@ -433,8 +433,8 @@ export const SIGV4_BODY_READ_TIMEOUT_MS = 60_000;
  * UploadPartCopy read the object named by `x-amz-copy-source`
  * (`/bucket/key`, `bucket/key`, optionally `?versionId=`), so that path is
  * checked by policy as a read (GET), whatever the request's own method. `parse` turns a path into the
- * readings policy matches; a value it refuses, or one that names an access
- * point by ARN (which is not a path under any bucket), cannot be evaluated.
+ * readings policy matches; a value it refuses, or one whose first part is
+ * not a plain bucket name, cannot be evaluated.
  */
 export function sigV4HeaderPaths(
   headers: Record<string, string | string[] | undefined>,
@@ -445,18 +445,21 @@ export function sigV4HeaderPaths(
   for (const raw of Array.isArray(value) ? value : value ? [value] : []) {
     const text = raw.trim();
     if (text === '') continue;
-    let decodedStart = text.slice(0, 16);
-    try { decodedStart = decodeURIComponent(decodedStart); } catch { /* the raw form is checked */ }
-    if (/^\/?arn:/i.test(text) || /^\/?arn:/i.test(decodedStart)) {
-      return { ok: false, reason: 'x-amz-copy-source names an access point by ARN, which path rules cannot be matched against' };
+    // The bucket is the first part, and only a plain bucket name is
+    // accepted there: letters, digits, dots, hyphens and underscores once
+    // decoded. Anything else (an access point ARN in any encoding, white
+    // space, an escape that does not decode) is not a name policy can be
+    // sure S3 reads the way the proxy does. A raw `+` anywhere in the path
+    // is refused for the same reason: it may be read as a space.
+    const pathPart = (text.startsWith('/') ? text.slice(1) : text).split('?')[0];
+    const first = pathPart.split('/')[0];
+    let bucket: string | null;
+    try { bucket = decodeURIComponent(first); } catch { bucket = null; }
+    if (bucket === null || !/^[A-Za-z0-9._-]{1,255}$/.test(bucket)) {
+      return { ok: false, reason: 'x-amz-copy-source does not begin with a plain bucket name (an access point ARN cannot be matched against path rules)' };
     }
-    // The bucket is the first part. One that is empty or has white space at
-    // either end, encoded or not, is not a name policy can be sure S3 reads the same way.
-    const first = (text.startsWith('/') ? text.slice(1) : text).split(/[/?]/)[0];
-    let bucket = first;
-    try { bucket = decodeURIComponent(first); } catch { /* the raw form is checked */ }
-    if (bucket === '' || bucket !== bucket.trim()) {
-      return { ok: false, reason: 'x-amz-copy-source does not begin with a bucket name' };
+    if (pathPart.includes('+')) {
+      return { ok: false, reason: 'x-amz-copy-source contains a + that is not percent-encoded' };
     }
     const readings = parse(text.startsWith('/') ? text : `/${text}`);
     if (readings === null) return { ok: false, reason: 'x-amz-copy-source is not a path the proxy can read' };
