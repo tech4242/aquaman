@@ -754,7 +754,7 @@ describe('createCredentialStore: refusals', () => {
   it('refuses encrypted-file without a password, and with a weak one', async () => {
     await expect(createCredentialStore({ backend: 'encrypted-file' })).rejects.toThrow('encryptionPassword required for encrypted-file backend');
     await expect(createCredentialStore({ backend: 'encrypted-file', encryptionPassword: 'short' }))
-      .rejects.toThrow('Weak encryption password: Password must be at least 12 characters (got 5)');
+      .rejects.toThrow(/^Weak encryption password: Password must be at least 12 characters$/);
   });
 
   it('refuses vault without an address, and takes the address from VAULT_ADDR', async () => {

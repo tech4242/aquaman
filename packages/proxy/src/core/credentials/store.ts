@@ -407,7 +407,9 @@ export function validatePasswordStrength(password: string): { valid: boolean; er
   if (!password) {
     errors.push('Password must not be empty');
   } else if (password.length < 12) {
-    errors.push(`Password must be at least 12 characters (got ${password.length})`);
+    // Nothing about the rejected password goes into the message, its length
+    // included: the message is printed and logged.
+    errors.push('Password must be at least 12 characters');
   }
   return { valid: errors.length === 0, errors };
 }
