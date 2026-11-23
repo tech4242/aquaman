@@ -431,8 +431,8 @@ export const SIGV4_BODY_READ_TIMEOUT_MS = 60_000;
 /**
  * Paths a request names in a header, for policy. S3's CopyObject and
  * UploadPartCopy read the object named by `x-amz-copy-source`
- * (`/bucket/key`, `bucket/key`, optionally `?versionId=`), so a rule on a
- * bucket's path has to see that path too. `parse` turns a path into the
+ * (`/bucket/key`, `bucket/key`, optionally `?versionId=`), so that path is
+ * checked by policy as a read (GET), whatever the request's own method. `parse` turns a path into the
  * readings policy matches; a value it refuses, or one that names an access
  * point by ARN (which is not a path under any bucket), cannot be evaluated.
  */
@@ -449,6 +449,14 @@ export function sigV4HeaderPaths(
     try { decodedStart = decodeURIComponent(decodedStart); } catch { /* the raw form is checked */ }
     if (/^\/?arn:/i.test(text) || /^\/?arn:/i.test(decodedStart)) {
       return { ok: false, reason: 'x-amz-copy-source names an access point by ARN, which path rules cannot be matched against' };
+    }
+    // The bucket is the first part. One that is empty or has white space at
+    // either end, encoded or not, is not a name policy can be sure S3 reads the same way.
+    const first = (text.startsWith('/') ? text.slice(1) : text).split(/[/?]/)[0];
+    let bucket = first;
+    try { bucket = decodeURIComponent(first); } catch { /* the raw form is checked */ }
+    if (bucket === '' || bucket !== bucket.trim()) {
+      return { ok: false, reason: 'x-amz-copy-source does not begin with a bucket name' };
     }
     const readings = parse(text.startsWith('/') ? text : `/${text}`);
     if (readings === null) return { ok: false, reason: 'x-amz-copy-source is not a path the proxy can read' };

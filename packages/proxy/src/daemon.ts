@@ -744,22 +744,22 @@ export class CredentialProxy {
       // A path-override header the parser refuses cannot be evaluated, so a
       // service that has rules does not get the request.
       const overrides = policyPathOverrides(req.headers);
-      // An S3 copy reads a second object, named in a header. A rule on a
-      // path covers the object read as well as the one written.
+      // An S3 copy reads a second object, named in a header. That object is
+      // read, whatever the method of the request that names it, so it is
+      // checked as a GET: a rule that stops reading a bucket also stops
+      // copying out of it, and a bucket that may only be read can be copied from.
       const named = authMode === 'sigv4'
         ? sigV4HeaderPaths(req.headers, (p) => {
             const t = parseRequestTarget(p);
             return t.ok ? policyPathInterpretations(t.segments) : null;
           })
         : { ok: true as const, paths: [] };
-      const paths = [
-        ...policyPathInterpretations(canonicalSegments),
-        ...(overrides.ok ? overrides.paths : []),
-        ...(named.ok ? named.paths : []),
-      ];
+      const paths = [...policyPathInterpretations(canonicalSegments), ...(overrides.ok ? overrides.paths : [])];
+      const methods = policyMethods(req.method || 'GET', req.headers, target.search);
+      const refused = (method: string, p: string) => !matchPolicy(service, method, p, policyConfig).allowed;
       const denied = ((!overrides.ok || !named.ok) && policyConfig[service] !== undefined) ||
-        policyMethods(req.method || 'GET', req.headers, target.search).some((method) =>
-          paths.some((p) => !matchPolicy(service, method, p, policyConfig).allowed));
+        methods.some((method) => paths.some((p) => refused(method, p))) ||
+        (named.ok && named.paths.some((p) => refused('GET', p)));
       if (denied) {
         requestInfo.error = `Policy denied: ${req.method || 'GET'} ${remainingPath}`;
         requestInfo.statusCode = 403;
