@@ -33,6 +33,7 @@ import {
   wrapWithCache,
   resolveCacheTtl,
   createCredentialLinker,
+  isVaultLocked,
   type CredentialStoreOptions,
   type WrapperConfig
 } from '../core/index.js';
@@ -57,6 +58,7 @@ import { startAuditAnchor } from '../audit-anchor.js';
 import { auditVerifyCommand, auditAcceptCommand } from './audit-commands.js';
 import { routableKeys, routeKeyMismatch } from '../route-auth.js';
 import { createNativePrompter, clampPromptTimeout, PROMPT_TIMEOUT_SECONDS, PROMPT_TIMEOUT_MIN_SECONDS, PROMPT_TIMEOUT_MAX_SECONDS } from '../credential-prompt.js';
+import { registerUnlockCommands } from './unlock.js';
 import { registerServiceCommands, loginItemForInit, loginItemPresent, type ServiceCliHelpers } from './service.js';
 import { loadPolicyFromConfig, validatePolicyConfig, lintPolicyConfig, getDefaultPolicyPresets, matchPolicy, type ServicePolicy } from '../request-policy.js';
 import { stringify as yamlStringify, parse as yamlParse } from 'yaml';
@@ -163,6 +165,25 @@ function storeOptionsFromConfig(config: WrapperConfig): CredentialStoreOptions {
     // A daemon outlives the config it started with, so a link made later has to reach it.
     links: 'always'
   };
+}
+
+/**
+ * The audit operation for what a proxy reports: a broker resolve hands the
+ * value out (`read`); a credential request, a login-item approval and a vault
+ * session taken or dropped change what the proxy holds (`rotate`); everything
+ * else injects a credential (`use`).
+ */
+function auditOperation(method: string): 'read' | 'rotate' | 'use' {
+  if (method === 'BROKER') return 'read';
+  if (method === 'BROKER_REQUEST' || method === 'SERVICE_CONSENT' || method === 'VAULT_UNLOCK' || method === 'VAULT_LOCK') return 'rotate';
+  return 'use';
+}
+
+/** What a serving process prints at start when its vault needs a person's session. */
+function reportVaultState(store: { vaultState?(): string }): void {
+  if (store.vaultState?.() === 'locked') {
+    console.log('Vault: locked. Requests that need a credential answer vault_locked until a person runs: aquaman unlock');
+  }
 }
 
 /**
@@ -639,23 +660,41 @@ program
         printOnePasswordModeHint(config);
         issues += reportLinks(config.credentials.backend);
       } catch (err) {
-        console.log(`    \u2717 Backend not accessible: ${(err as Error).message}`);
-        console.log('      \u2192 Run: aquaman setup');
-        issues++;
+        if (isVaultLocked(err)) {
+          // This command reads the vault itself and has no session. The
+          // daemon holds its own; whether that one works is reported below.
+          console.log(`    \u2022 ${loadConfig().credentials.backend} backend: locked in this shell, so credentials are not listed here`);
+          console.log('      The daemon keeps its own session (see the proxy lines below). For commands in this shell: export BW_SESSION=$(bw unlock --raw)');
+        } else {
+          console.log(`    \u2717 Backend not accessible: ${(err as Error).message}`);
+          console.log('      \u2192 Run: aquaman setup');
+          issues++;
+        }
       }
 
       // Vault \u2014 proxy running
       const sockPath = path.join(configDir, 'proxy.sock');
       try {
-        await new Promise<void>((resolve, reject) => {
+        const vault = await new Promise<unknown>((resolve, reject) => {
           const req = http.request({ socketPath: sockPath, path: '/_health', method: 'GET' }, (res) => {
-            res.resume();
-            res.on('end', () => res.statusCode === 200 ? resolve() : reject(new Error(`HTTP ${res.statusCode}`)));
+            let text = '';
+            res.on('data', (c) => { text += c; });
+            res.on('end', () => {
+              if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
+              try { resolve(JSON.parse(text).vault); } catch { resolve(undefined); }
+            });
           });
           req.on('error', reject);
           req.end();
         });
         console.log(`    \u2713 Proxy running on socket`);
+        if (vault === 'locked') {
+          console.log('    \u2717 The daemon\'s vault is locked: requests that need a credential answer vault_locked');
+          console.log('      \u2192 Run in a terminal: aquaman unlock');
+          issues++;
+        } else if (vault === 'unlocked') {
+          console.log('    \u2713 The daemon\'s vault is unlocked (session in memory only)');
+        }
       } catch {
         console.log(`    \u2717 Proxy not running`);
         console.log('      \u2192 Run: aquaman daemon &');
@@ -773,6 +812,9 @@ program
       });
       const health = JSON.parse(body);
       proxyLine = `  ${aqua('Proxy:')} running  (v${health.version}, uptime ${Math.floor(health.uptime ?? 0)}s)`;
+      // Reported only by a proxy whose backend a person unlocks (bitwarden).
+      if (health.vault === 'locked') proxyLine += `\n  ${aqua('Vault:')} locked  (run in a terminal: aquaman unlock)`;
+      else if (health.vault === 'unlocked') proxyLine += `\n  ${aqua('Vault:')} unlocked  (the daemon holds a session in memory; to drop it: aquaman lock)`;
     } catch { /* not running */ }
     console.log(proxyLine);
 
@@ -936,7 +978,7 @@ openclaw
     // Initialize credential store
     let credentialStore;
     try {
-      credentialStore = wrapWithCache(await createCredentialStore({ ...storeOptionsFromConfig(config), onLinkChange: recordLinkChange(() => auditLogger) }), resolveCacheTtl(config));
+      credentialStore = wrapWithCache(await createCredentialStore({ ...storeOptionsFromConfig(config), serving: true, onLinkChange: recordLinkChange(() => auditLogger) }), resolveCacheTtl(config));
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
       console.error('Fix the backend configuration and retry. Run: aquaman doctor');
@@ -951,6 +993,8 @@ openclaw
     const policyConfig = loadPolicyFromConfig(config);
     // No `broker`: this proxy fronts OpenClaw, and the OpenClaw path never
     // hands credential values out (v0.15.0; see broker-scope.ts).
+    // Set once the audit anchor exists; called when `aquaman unlock` opened the vault.
+    const vaultOpened = { run: (): void => {} };
     const credentialProxy = createCredentialProxy({
       socketPath,
       store: credentialStore,
@@ -958,12 +1002,13 @@ openclaw
       serviceRegistry,
       policyConfig,
       loopback: loadLoopbackOptions(config),
+      onVaultUnlocked: () => vaultOpened.run(),
       // Returned, so the proxy knows whether the entry was written.
       onRequest: (info) => {
         return auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
           // A broker resolve hands the value out; everything else injects it.
-          operation: info.method === 'BROKER' ? 'read' : 'use',
+          operation: auditOperation(info.method),
           success: !info.error,
           error: info.error
         });
@@ -971,8 +1016,10 @@ openclaw
     });
     await credentialProxy.start();
     const auditAnchor = startAuditAnchor(config, auditLogger, credentialStore);
+    vaultOpened.run = () => { void auditAnchor.recheck(); };
 
     console.log(`Credential proxy started on ${socketPath}`);
+    reportVaultState(credentialStore);
 
     if (options.launch !== false && config.openclaw.autoLaunch) {
       // Get services for OpenClaw integration
@@ -1111,7 +1158,7 @@ program
     // Initialize credential store
     let credentialStore;
     try {
-      credentialStore = wrapWithCache(await createCredentialStore({ ...storeOptionsFromConfig(config), onLinkChange: recordLinkChange(() => auditLogger) }), resolveCacheTtl(config));
+      credentialStore = wrapWithCache(await createCredentialStore({ ...storeOptionsFromConfig(config), serving: true, onLinkChange: recordLinkChange(() => auditLogger) }), resolveCacheTtl(config));
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
       console.error('Fix the backend configuration and retry. Run: aquaman doctor');
@@ -1127,6 +1174,8 @@ program
     // for declared refs (projects.yaml + broker.allowedRefs). Over loopback the
     // Hermes LLM-provider keys are never materialized.
     const brokerScope = daemonBrokerScope(config);
+    // Set once the audit anchor exists; called when `aquaman unlock` opened the vault.
+    const vaultOpened = { run: (): void => {} };
     const credentialProxy = createCredentialProxy({
       socketPath,
       store: credentialStore,
@@ -1134,6 +1183,7 @@ program
       serviceRegistry,
       policyConfig: policyConfig2,
       loopback: loadLoopbackOptions(config),
+      onVaultUnlocked: () => vaultOpened.run(),
       broker: brokerScope,
       // `aquaman request`: the human supplies or approves a credential in a
       // dialog this daemon shows. Off when the broker is off.
@@ -1150,7 +1200,7 @@ program
           service: info.service,
           // A broker resolve hands the value out, a broker request stores or
           // declares one, everything else injects it.
-          operation: info.method === 'BROKER' ? 'read' : info.method === 'BROKER_REQUEST' || info.method === 'SERVICE_CONSENT' ? 'rotate' : 'use',
+          operation: auditOperation(info.method),
           success: !info.error,
           error: info.error
         });
@@ -1158,6 +1208,7 @@ program
     });
     await credentialProxy.start();
     const auditAnchor = startAuditAnchor(config, auditLogger, credentialStore);
+    vaultOpened.run = () => { void auditAnchor.recheck(); };
 
     // OpenShell external credential driver (v0.17.0+). Opt-in; a failure here
     // is reported but never takes the proxy down.
@@ -1184,6 +1235,7 @@ program
     }
     console.log(`Audit logging: ${config.audit.enabled ? 'enabled' : 'disabled'}`);
     console.log(`Credential backend: ${config.credentials.backend}`);
+    reportVaultState(credentialStore);
     console.log(`PID file: ${getPidFile()}`);
     console.log('');
     console.log('Press Ctrl+C to stop, or run: aquaman stop\n');
@@ -1214,7 +1266,7 @@ openclaw
     // Initialize credential store
     let credentialStore;
     try {
-      credentialStore = wrapWithCache(await createCredentialStore({ ...storeOptionsFromConfig(config), onLinkChange: recordLinkChange(() => auditLogger) }), resolveCacheTtl(config));
+      credentialStore = wrapWithCache(await createCredentialStore({ ...storeOptionsFromConfig(config), serving: true, onLinkChange: recordLinkChange(() => auditLogger) }), resolveCacheTtl(config));
     } catch (err) {
       console.error(`Credential backend "${config.credentials.backend}" failed to initialize: ${err instanceof Error ? err.message : err}`);
       console.error('Fix the backend configuration and retry. Run: aquaman doctor');
@@ -1236,6 +1288,8 @@ openclaw
     // No `broker`: this proxy runs inside the OpenClaw plugin's lifecycle and
     // must never hand credential values to the gateway or its agents — that
     // was the ClawScan finding against 0.14.x (v0.15.0; see broker-scope.ts).
+    // Set once the audit anchor exists; called when `aquaman unlock` opened the vault.
+    const vaultOpened = { run: (): void => {} };
     const credentialProxy = createCredentialProxy({
       socketPath,
       store: credentialStore,
@@ -1243,12 +1297,13 @@ openclaw
       serviceRegistry,
       policyConfig: policyConfig3,
       loopback: loadLoopbackOptions(config),
+      onVaultUnlocked: () => vaultOpened.run(),
       // Returned, so the proxy knows whether the entry was written.
       onRequest: (info) => {
         return auditLogger.logCredentialAccess('system', 'system', {
           service: info.service,
           // A broker resolve hands the value out; everything else injects it.
-          operation: info.method === 'BROKER' ? 'read' : 'use',
+          operation: auditOperation(info.method),
           success: !info.error,
           error: info.error
         });
@@ -1256,6 +1311,7 @@ openclaw
     });
     await credentialProxy.start();
     const auditAnchor = startAuditAnchor(config, auditLogger, credentialStore);
+    vaultOpened.run = () => { void auditAnchor.recheck(); };
 
     // Build host map from service registry for the plugin's interceptor
     const hostMap = serviceRegistry.buildHostMap();
@@ -1829,6 +1885,23 @@ async function initForAgent(agent: string, json: boolean, hooks: boolean, loopba
     result.daemon = { running, started, socket: socketPath };
   }
   say(`  ✓ Daemon ${started ? 'started' : 'already running'}`);
+  // A backend a person unlocks (bitwarden): the daemon runs, and reads from
+  // the vault wait for the one step only a person can take.
+  const vaultState = await new Promise<unknown>((resolve) => {
+    const req = http.request({ socketPath, path: '/_health', method: 'GET', timeout: 1500 }, (res) => {
+      let text = '';
+      res.on('data', (c) => { text += c; });
+      res.on('end', () => { try { resolve(JSON.parse(text).vault); } catch { resolve(undefined); } });
+    });
+    req.on('error', () => resolve(undefined));
+    req.on('timeout', () => { req.destroy(); resolve(undefined); });
+    req.end();
+  });
+  if (vaultState === 'locked' || vaultState === 'unlocked') result.vault = vaultState;
+  if (vaultState === 'locked') {
+    result.human_steps.push('unlock the Bitwarden vault for the daemon: run `aquaman unlock` in a terminal and enter the master password there (an agent cannot do this step)');
+    say('  • Vault: locked (credentials are not available until a person runs: aquaman unlock)');
+  }
 
   // 3. The agent side lives in aquaman-coder.
   const { spawnSync } = await import('node:child_process');
@@ -4440,6 +4513,7 @@ const serviceCliHelpers: ServiceCliHelpers = {
   cliPath: __cliFilename, proxyPost, proxyHealthy, proxyPid, readPidFile, removePidFile, isProcessRunning,
 };
 registerServiceCommands(program, serviceCliHelpers);
+registerUnlockCommands(program, proxyPost);
 
 // Register the `coder` namespace so it shows up in `aquaman --help`.
 // Its action is unreachable (the intercept above bypasses Commander entirely),

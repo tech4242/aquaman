@@ -181,6 +181,26 @@ describe('cli-core: aquaman init --agent', () => {
     expect(await tcpHealth(port)).toBe(200);
   }, T * 2);
 
+  it('a daemon whose vault is locked: setup still succeeds, and unlocking is reported as a person\'s step', async () => {
+    sb.writeConfig('credentials:\n  backend: encrypted-file\n');
+    sb.installFakeCoder('echo \'{"ok":true,"project":{"name":"app","path":"/x"},"mode":"exec","human_steps":[]}\'');
+    // What a daemon on the bitwarden backend reports before `aquaman unlock`.
+    let vault = 'locked';
+    proxy = await fakeProxy(sb.socket, (_req, res) => json(res, 200, { status: 'ok', vault }));
+    const locked = await init(['claude-code', '--no-hooks', '--json']);
+    expect(locked.code, locked.stdout + locked.stderr).toBe(0);
+    const out = JSON.parse(locked.stdout);
+    expect(out).toMatchObject({ ok: true, vault: 'locked', daemon: { running: true, started: false } });
+    expect(out.human_steps).toEqual([expect.stringContaining('aquaman unlock')]);
+    const text = await init(['claude-code', '--no-hooks']);
+    expect(text.stdout).toContain('Vault: locked');
+    expect(text.stdout).toMatch(/→ A person needs to: .*aquaman unlock/);
+
+    vault = 'unlocked';
+    const open = JSON.parse((await init(['claude-code', '--no-hooks', '--json'])).stdout);
+    expect(open).toMatchObject({ ok: true, vault: 'unlocked', human_steps: [] });
+  }, T * 2);
+
   it('--loopback will not signal a proxy it cannot identify as its own daemon', async () => {
     const port = await freePort();
     sb.writeConfig(`credentials:\n  backend: encrypted-file\nloopback:\n  port: ${port}\n`);
