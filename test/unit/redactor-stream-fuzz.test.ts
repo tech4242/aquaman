@@ -76,7 +76,7 @@ const SPREAD_TOKENS = [
   'aws_secret_access_key\n:\n"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
   'sk_live_' + 'abcdefghijklmnopqrstuvwx', // made up; in two parts, as above
   'npm_abcdefghijklmnopqrstuvwxyz0123456789',
-  'AIzaSyA-abcdefghijklmnopqrstuvwxyz01234',
+  'AIza' + 'SyA-abcdefghijklmnopqrstuvwxyz01234', // made up; in two parts, as above
 ];
 
 const FILLER = ['\n', '\n', ' ', 'x', 'hello world', '[REDACTED:anthropic-key]', '[REDACTED:injected-value]', '=', '"', '.', '-', 'sk-', 'sk-ant-', '\n\n', 'Authorization:', 'eyJ'];
