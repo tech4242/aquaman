@@ -15,8 +15,9 @@
  *     cannot remove a mark.
  *   - `AskFirstGate`: the check every path that returns a value goes through
  *     before the vault read (`/broker/resolve` on both listeners, the
- *     OpenShell driver's Resolve). It owns the approvals, which live in this
- *     process's memory only.
+ *     OpenShell driver's Resolve), and forwarding for a service that
+ *     services.yaml defines, whose upstream is whatever that file says. It
+ *     owns the approvals, which live in this process's memory only.
  *   - `handleAskFirst`: `POST /broker/ask-first`, where a mark is set (which
  *     tightens, so nobody is asked) and removed (which loosens, so a person
  *     decides in the dialog).
@@ -32,7 +33,7 @@ import type { CredentialStore } from './core/credentials/store.js';
 import { RESERVED_SERVICE, ASK_FIRST_KEY, isReservedService } from './core/credentials/reserved.js';
 import { clampPromptTimeout, type CredentialPrompter, type PromptResult, type ReadVia } from './credential-prompt.js';
 import type { PromptLimiter } from './service-consent.js';
-import { isVaultLocked, VAULT_LOCKED_CODE, VAULT_UNLOCK_FIX } from './core/credentials/vault-lock.js';
+import { isVaultLocked, VaultLockedError, VAULT_LOCKED_CODE, VAULT_UNLOCK_FIX } from './core/credentials/vault-lock.js';
 
 export const ASK_FIRST_PATH = '/broker/ask-first';
 
@@ -53,6 +54,24 @@ export function clampAskFirstWindow(seconds: unknown): number {
 
 const NAME = /^[a-z0-9][a-z0-9._-]*\/[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
+/**
+ * The most names the record holds. Marking asks nobody and removing a mark
+ * takes a dialog each, so without a bound a program could pile up marks
+ * faster than a person can clear them, in a record every resolve consults.
+ */
+export const ASK_FIRST_MAX_MARKS = 256;
+
+/** The record is full: nothing more is marked until a mark is removed. */
+export class AskFirstFullError extends Error {
+  readonly code = 'ask_first_full';
+  readonly fix = 'Remove a mark that is no longer needed (aquaman broker list shows them): aquaman broker ask <ref> --off';
+
+  constructor() {
+    super(`The ask-first record holds ${ASK_FIRST_MAX_MARKS} references, which is the most it takes`);
+    this.name = 'AskFirstFullError';
+  }
+}
+
 /** What the record says: these references, or (a record that cannot be read as one) every reference. */
 type Marked = Set<string> | 'all';
 
@@ -72,51 +91,105 @@ type Marked = Set<string> | 'all';
  */
 export class AskFirstMarks {
   private cached: Marked | undefined;
+  /** Counts `forget()`, so a read that was under way when the record changed is not kept. */
+  private generation = 0;
+  /** Every read and every change of the record, one after another. */
+  private chain: Promise<unknown> = Promise.resolve();
 
   constructor(private store: CredentialStore) {}
 
-  private async load(): Promise<Marked> {
+  /**
+   * Run `step` after everything queued before it. A change is "read the
+   * record, alter it, write it back"; two of them interleaved would each
+   * write a list that lacks the other's name, and the daemon would have
+   * answered "marked" for a reference that is not.
+   */
+  private queued<T>(step: () => Promise<T>): Promise<T> {
+    const run = this.chain.then(step, step);
+    this.chain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async read(): Promise<Marked> {
     // Past a cache in front of the backend, where there is one: this read
     // happens because the record may have changed.
     const fresh = (this.store as { getFresh?: (service: string, key: string) => Promise<string | null> }).getFresh;
-    const raw = fresh
-      ? await fresh.call(this.store, RESERVED_SERVICE, ASK_FIRST_KEY)
-      : await this.store.get(RESERVED_SERVICE, ASK_FIRST_KEY);
     let marked: Marked = new Set<string>();
-    if (raw !== null) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        parsed = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const generation = this.generation;
+      const raw = fresh
+        ? await fresh.call(this.store, RESERVED_SERVICE, ASK_FIRST_KEY)
+        : await this.store.get(RESERVED_SERVICE, ASK_FIRST_KEY);
+      marked = new Set<string>();
+      if (raw !== null) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          parsed = null;
+        }
+        const record = parsed as { v?: unknown; refs?: unknown } | null;
+        if (
+          record !== null && typeof record === 'object' && record.v === 1 &&
+          Array.isArray(record.refs) && record.refs.every((r) => typeof r === 'string' && NAME.test(r))
+        ) {
+          marked = new Set(record.refs as string[]);
+        } else {
+          marked = 'all';
+        }
       }
-      const record = parsed as { v?: unknown; refs?: unknown } | null;
-      if (
-        record !== null && typeof record === 'object' && record.v === 1 &&
-        Array.isArray(record.refs) && record.refs.every((r) => typeof r === 'string' && NAME.test(r))
-      ) {
-        marked = new Set(record.refs as string[]);
-      } else {
-        marked = 'all';
+      // Told to forget while the vault was being read: what came back may
+      // be the record as it was before the change, so read it again.
+      if (generation === this.generation) {
+        this.cached = marked;
+        break;
       }
     }
-    this.cached = marked;
     return marked;
   }
 
-  private async current(): Promise<Marked> {
-    return this.cached ?? this.load();
+  private current(): Promise<Marked> {
+    if (this.cached !== undefined) return Promise.resolve(this.cached);
+    return this.queued(async () => this.cached ?? this.read());
   }
 
   private async save(set: Set<string>): Promise<void> {
+    const generation = this.generation;
     await this.store.set(RESERVED_SERVICE, ASK_FIRST_KEY, JSON.stringify({ v: 1, refs: [...set].sort() }));
-    this.cached = set;
+    if (generation === this.generation) this.cached = set;
   }
 
-  /** Whether `<service>/<key>` is marked. Throws when the vault cannot be read: the caller hands nothing out. */
+  /**
+   * What a name is compared on: the item the store reads it from, where two
+   * names can be one item, and the name itself everywhere else.
+   */
+  identity(name: string): string {
+    if (!this.store.itemIdentity) return name;
+    const slash = name.indexOf('/');
+    return this.store.itemIdentity(name.slice(0, slash), name.slice(slash + 1));
+  }
+
+  /** The marked names that are read from the same item as `name`, `name` itself left out. */
+  private sameItemIn(marked: Set<string>, name: string): string[] {
+    if (!this.store.itemIdentity) return [];
+    const identity = this.identity(name);
+    return [...marked].filter((other) => other !== name && this.identity(other) === identity).sort();
+  }
+
+  /**
+   * Whether `<service>/<key>` is marked: by its own name, or because a
+   * marked name is read from the same item. Throws when the vault cannot be
+   * read: the caller hands nothing out.
+   */
   async has(name: string): Promise<boolean> {
     const marked = await this.current();
-    return marked === 'all' || marked.has(name);
+    return marked === 'all' || marked.has(name) || this.sameItemIn(marked, name).length > 0;
+  }
+
+  /** The marked names, other than `name`, that are the same item as `name`. For the dialog. */
+  async sameItemAs(name: string): Promise<string[]> {
+    const marked = await this.current();
+    return marked === 'all' ? [] : this.sameItemIn(marked, name);
   }
 
   /** The marked references, or `'all'` for a record that cannot be read as one. */
@@ -125,39 +198,69 @@ export class AskFirstMarks {
     return marked === 'all' ? 'all' : [...marked].sort();
   }
 
-  /** Mark a reference. Returns whether it was not marked before. */
-  async mark(name: string): Promise<boolean> {
-    const marked = await this.load();
-    // Everything is marked already, and writing a list here would unmark the rest.
-    if (marked === 'all' || marked.has(name)) return false;
-    marked.add(name);
-    await this.save(marked);
-    return true;
+  /**
+   * Mark a reference. Returns whether it was not marked before. Throws
+   * `AskFirstFullError` when the record holds `ASK_FIRST_MAX_MARKS` names.
+   */
+  mark(name: string): Promise<boolean> {
+    return this.queued(async () => {
+      const marked = await this.read();
+      // Everything is marked already, and writing a list here would unmark the rest.
+      if (marked === 'all' || marked.has(name)) return false;
+      if (marked.size >= ASK_FIRST_MAX_MARKS) throw new AskFirstFullError();
+      const next = new Set(marked).add(name);
+      await this.save(next);
+      return true;
+    });
   }
 
   /**
-   * Remove a mark, after a person agreed. Returns whether there was one.
+   * Remove a mark, after a person agreed. Returns whether there was one. A
+   * marked name that is read from the same item goes with it: the item is
+   * what the person was asked about, and it would stay gated otherwise.
    *
    * On a record that cannot be read as one, every reference counts as marked
-   * and the person agreed about this one only. `others` names the references
-   * that are in use now (the declared ones); the record is written again
-   * with those marked and this one not.
+   * and the person agreed about this one only. `keep` is the list the person
+   * was shown, fixed before they were asked; the record is written again
+   * with exactly those names marked.
    */
-  async unmark(name: string, others: () => string[] = () => []): Promise<boolean> {
-    const marked = await this.load();
-    if (marked === 'all') {
-      await this.save(new Set(others().filter((n) => NAME.test(n) && n !== name)));
+  unmark(name: string, keep?: readonly string[]): Promise<boolean> {
+    return this.queued(async () => {
+      const marked = await this.read();
+      if (marked === 'all') {
+        // Without the list nothing is written: an empty one would unmark everything.
+        if (keep === undefined) {
+          throw new Error('The ask-first record cannot be read as one, and the references that stay marked were not settled before asking. Run the command again');
+        }
+        await this.save(new Set(keepable(keep, name)));
+        return true;
+      }
+      const gone = [name, ...this.sameItemIn(marked, name)].filter((n) => marked.has(n));
+      if (gone.length === 0) return false;
+      const next = new Set(marked);
+      for (const n of gone) next.delete(n);
+      await this.save(next);
       return true;
-    }
-    if (!marked.delete(name)) return false;
-    await this.save(marked);
-    return true;
+    });
   }
 
   /** Drop the copy in memory, so the next question is answered from the vault. */
   forget(): void {
     this.cached = undefined;
+    this.generation++;
   }
+}
+
+/**
+ * The names that stay marked when one mark is removed from a record that
+ * cannot be read: the references in use, without the one the person is asked
+ * about, each once and in order. More than the record takes is an error, not
+ * a shorter list: a name left off would lose its mark without anyone seeing.
+ */
+export function keepable(names: readonly string[], removed: string): string[] {
+  const keep = [...new Set(names.filter((n) => NAME.test(n) && n !== removed))].sort();
+  if (keep.length > ASK_FIRST_MAX_MARKS) throw new AskFirstFullError();
+  return keep;
 }
 
 export type AskFirstCode =
@@ -175,8 +278,16 @@ export type AskFirstDecision =
   | { ok: false; code: AskFirstCode; error: string; fix?: string };
 
 export interface AskFirstRequest {
-  /** Which listener the request came in on. Aquaman's own knowledge, and all it knows about the caller. */
-  via: ReadVia;
+  /**
+   * How the request reached the daemon. Aquaman's own knowledge, and all it
+   * knows about the caller. A request on the loopback listener never raises
+   * a dialog: whoever holds the local token could otherwise put one on the
+   * person's screen from wherever it runs, and the person in front of the
+   * machine has no way to connect it with anything they did.
+   */
+  via: ReadVia | 'loopback';
+  /** With `via: 'forward'`: where the value would be sent, as services.yaml gives it. */
+  upstream?: string;
   /** Where the caller says it is. Shown as the caller's own words. */
   project?: string;
   /** How long the dialog stays up. */
@@ -211,9 +322,14 @@ const unmarkKey = (name: string) => `unmark:${name}`;
 export class AskFirstGate {
   readonly marks: AskFirstMarks;
   readonly windowSeconds: number;
-  /** `<service>/<key>` to the time its approval ends. Memory only: a restarted daemon has none. */
+  /**
+   * The item a reference is read from, to the time its approval ends. Memory
+   * only: a restarted daemon has none. Keyed by item, like the cooldowns and
+   * the open dialogs, so a yes or a no about one name of an item is the
+   * answer for its other names.
+   */
   private approvedUntil = new Map<string, number>();
-  /** A dialog that is up, so a second request for the same reference waits for the same answer. */
+  /** A dialog that is up, so a second request for the same item waits for the same answer. */
   private asking = new Map<string, Promise<AskFirstDecision>>();
   private now: () => number;
 
@@ -223,12 +339,32 @@ export class AskFirstGate {
     this.now = opts.now ?? Date.now;
   }
 
-  private approved(name: string): boolean {
-    const until = this.approvedUntil.get(name);
+  private approved(id: string): boolean {
+    const until = this.approvedUntil.get(id);
     if (until === undefined) return false;
     if (this.now() < until) return true;
-    this.approvedUntil.delete(name);
+    this.approvedUntil.delete(id);
     return false;
+  }
+
+  /**
+   * Forget every yes. Called when the vault's session is dropped or handed
+   * over again: a person who locked the vault has taken back what they
+   * allowed while it was open.
+   */
+  dropApprovals(): void {
+    this.approvedUntil.clear();
+  }
+
+  /**
+   * A vault the store knows to be locked: no value can be read, so nobody is
+   * asked about one, and what was allowed while it was open is not carried
+   * over to when it is opened again.
+   */
+  private refuseWhileLocked(): void {
+    if (this.opts.store.vaultState?.() !== 'locked') return;
+    this.dropApprovals();
+    throw new VaultLockedError('The vault is locked, so no credential can be read. Run: aquaman unlock');
   }
 
   private declinedRecently(key: string): boolean {
@@ -244,44 +380,52 @@ export class AskFirstGate {
    */
   async wouldServe(service: string, key: string): Promise<boolean> {
     const name = `${service}/${key}`;
+    // A locked vault is reported as that, with its own fix, by the caller.
+    this.refuseWhileLocked();
     try {
       if (!(await this.marks.has(name))) return true;
     } catch (err) {
-      // A locked vault is reported as that, with its own fix, by the caller.
       if (isVaultLocked(err)) throw err;
       return false;
     }
-    return this.approved(name) || !this.declinedRecently(readKey(name));
+    const id = this.marks.identity(name);
+    return this.approved(id) || !this.declinedRecently(readKey(id));
   }
 
   /**
    * Whether the value of this reference may leave the daemon now. Called
    * after the scope check and before the vault read. Shows the dialog when
    * the reference is marked and nobody has allowed it in the current window.
-   * Throws when the marks cannot be read; the caller then hands nothing out.
+   * Throws when the marks cannot be read or the vault is locked; the caller
+   * then hands nothing out. A caller that waited for a dialog checks its
+   * scope again afterwards: the reference may have been revoked meanwhile.
    */
   async authorize(service: string, key: string, request: AskFirstRequest): Promise<AskFirstDecision> {
     const name = `${service}/${key}`;
+    // Before anything else: a person is not asked about a value that cannot be read.
+    this.refuseWhileLocked();
     if (!(await this.marks.has(name))) return { ok: true };
-    if (this.approved(name)) return { ok: true };
+    const id = this.marks.identity(name);
+    if (this.approved(id)) return { ok: true };
     const ref = `aquaman://${name}`;
-    if (request.ask === false) {
+    if (request.ask === false || request.via === 'loopback') {
       return {
         ok: false,
         code: 'ask_first_required',
         error: `${ref} is marked ask-first, and nobody has allowed it in the current window`,
-        fix: `A person allows it in aquaman's dialog. To raise the dialog, run: aquaman get ${ref} > /dev/null`,
+        fix: `A person allows it in aquaman's dialog. To raise the dialog, run on the machine itself: aquaman get ${ref} > /dev/null`,
       };
     }
-    const open = this.asking.get(name);
+    const open = this.asking.get(id);
     if (open) return open;
-    const asked = this.ask(service, key, request).finally(() => this.asking.delete(name));
-    this.asking.set(name, asked);
+    const asked = this.ask(service, key, { ...request, via: request.via }).finally(() => this.asking.delete(id));
+    this.asking.set(id, asked);
     return asked;
   }
 
-  private async ask(service: string, key: string, request: AskFirstRequest): Promise<AskFirstDecision> {
+  private async ask(service: string, key: string, request: AskFirstRequest & { via: ReadVia }): Promise<AskFirstDecision> {
     const name = `${service}/${key}`;
+    const id = this.marks.identity(name);
     const ref = `aquaman://${name}`;
     const { limiter, prompter } = this.opts;
     const audit = (error?: string, note?: string) => this.opts.audit?.({ service, error, note });
@@ -293,7 +437,7 @@ export class AskFirstGate {
     });
     if (!prompter) return unavailable('it was started without one');
 
-    if (this.declinedRecently(readKey(name))) {
+    if (this.declinedRecently(readKey(id))) {
       // No `fix`: nothing that undoes what the person refused is handed back.
       return { ok: false, code: 'ask_first_declined', error: `A person declined to hand out ${ref} a few minutes ago; not asking again yet` };
     }
@@ -312,12 +456,14 @@ export class AskFirstGate {
     limiter.times().push(now);
     let result: PromptResult;
     try {
+      const sameItemAs = await this.marks.sameItemAs(name);
       result = await prompter.askApproval({
         service,
         key,
         project: request.project,
         timeoutSeconds: clampPromptTimeout(request.timeoutSeconds),
-        read: { windowSeconds: this.windowSeconds, via: request.via },
+        read: { windowSeconds: this.windowSeconds, via: request.via, ...(request.upstream !== undefined ? { upstream: request.upstream } : {}) },
+        ...(sameItemAs.length > 0 ? { sameItemAs } : {}),
       });
     } catch (err) {
       result = { outcome: 'unavailable', reason: err instanceof Error ? err.message : String(err) };
@@ -325,13 +471,17 @@ export class AskFirstGate {
       limiter.setOpen(false);
     }
 
+    // The vault was locked while the dialog was up: the yes is not kept and
+    // nothing is read.
+    if (result.outcome === 'approved') this.refuseWhileLocked();
+
     if (result.outcome === 'approved') {
-      this.approvedUntil.set(name, this.now() + this.windowSeconds * 1000);
+      this.approvedUntil.set(id, this.now() + this.windowSeconds * 1000);
       audit(undefined, `ask-first: a person allowed ${name} for ${this.windowSeconds} seconds`);
       return { ok: true };
     }
     if (result.outcome === 'declined') {
-      limiter.declinedAt.set(readKey(name), this.now());
+      limiter.declinedAt.set(readKey(id), this.now());
       audit(`ask_first_declined: ${name}`);
       return { ok: false, code: 'ask_first_declined', error: `The person at the dialog declined to hand out ${ref}` };
     }
@@ -354,7 +504,7 @@ export class AskFirstGate {
     const name = `${service}/${key}`;
     const added = await this.marks.mark(name);
     if (added) {
-      this.approvedUntil.delete(name);
+      this.approvedUntil.delete(this.marks.identity(name));
       this.opts.audit?.({ service, note: `ask-first: ${name} marked` });
     }
     return added;
@@ -362,16 +512,21 @@ export class AskFirstGate {
 
   /**
    * Remove a mark. Loosens, so a person decides in the dialog. `declared`
-   * lists the references in use, for a record that cannot be read (see
-   * `AskFirstMarks.unmark`).
+   * lists the references in use, for a record that cannot be read: there
+   * every reference counts as marked, and a yes about one writes the record
+   * again with the others. Which others is settled here, before the dialog
+   * is shown, and the dialog names them, so the list the person agreed to is
+   * the list that is written whatever happens to the declaring files while
+   * the dialog is up.
    */
   async unmark(
     service: string,
     key: string,
     request: { project?: string; timeoutSeconds?: number },
     declared: () => string[],
-  ): Promise<{ status: 'ready' | 'unmarked' | 'declined' | 'pending'; reason?: string; code?: string }> {
+  ): Promise<{ status: 'ready' | 'unmarked' | 'declined' | 'pending'; reason?: string; code?: string; fix?: string }> {
     const name = `${service}/${key}`;
+    const id = this.marks.identity(name);
     const { limiter, prompter } = this.opts;
     const audit = (error?: string, note?: string) => this.opts.audit?.({ service, error, note });
     // Read from the vault, not from memory: the answer decides whether anyone is asked.
@@ -379,9 +534,24 @@ export class AskFirstGate {
     if (!(await this.marks.has(name))) return { status: 'ready' };
     if (!prompter) return { status: 'pending', code: 'prompt_unavailable', reason: 'this daemon was started without a dialog' };
 
-    if (this.declinedRecently(unmarkKey(name))) {
+    if (this.declinedRecently(unmarkKey(id))) {
       return { status: 'declined', reason: 'declined a few minutes ago; not asking again yet' };
     }
+    let keepMarked: string[] | undefined;
+    if ((await this.marks.list()) === 'all') {
+      try {
+        keepMarked = keepable(declared(), name);
+      } catch (err) {
+        if (!(err instanceof AskFirstFullError)) throw err;
+        return {
+          status: 'pending',
+          code: err.code,
+          reason: `the ask-first record cannot be read, and more than ${ASK_FIRST_MAX_MARKS} references are declared, which is more than it can be written again with`,
+          fix: 'Revoke references that are no longer used (aquaman broker revoke <ref>), then run the command again',
+        };
+      }
+    }
+    const sameItemAs = await this.marks.sameItemAs(name);
     const now = this.now();
     limiter.setTimes(limiter.times().filter((t) => now - t < limiter.windowMs));
     if (limiter.isOpen() || limiter.times().length >= limiter.maxPerWindow) {
@@ -391,7 +561,15 @@ export class AskFirstGate {
     limiter.times().push(now);
     let result: PromptResult;
     try {
-      result = await prompter.askApproval({ service, key, project: request.project, timeoutSeconds: clampPromptTimeout(request.timeoutSeconds), unmark: true });
+      result = await prompter.askApproval({
+        service,
+        key,
+        project: request.project,
+        timeoutSeconds: clampPromptTimeout(request.timeoutSeconds),
+        unmark: true,
+        ...(keepMarked !== undefined ? { keepMarked } : {}),
+        ...(sameItemAs.length > 0 ? { sameItemAs } : {}),
+      });
     } catch (err) {
       result = { outcome: 'unavailable', reason: err instanceof Error ? err.message : String(err) };
     } finally {
@@ -399,13 +577,13 @@ export class AskFirstGate {
     }
 
     if (result.outcome === 'approved') {
-      await this.marks.unmark(name, declared);
-      this.approvedUntil.delete(name);
+      await this.marks.unmark(name, keepMarked);
+      this.approvedUntil.delete(id);
       audit(undefined, `ask-first: a person removed the mark from ${name}`);
       return { status: 'unmarked' };
     }
     if (result.outcome === 'declined') {
-      limiter.declinedAt.set(unmarkKey(name), this.now());
+      limiter.declinedAt.set(unmarkKey(id), this.now());
       audit(`declined: remove the ask-first mark from ${name}`);
       return { status: 'declined', reason: 'the person at the dialog said no' };
     }
@@ -438,6 +616,7 @@ export interface AskFirstContext {
  *   { list: true }                 200 { marked: [refs] | "all", window_seconds }
  *   { reload: true }               200 { status: "reloaded" }  (the record was changed in the vault by a command)
  *   404 { code }                   no broker on this proxy, not the Unix socket, or a reserved name
+ *   409 { code: "ask_first_full" } the record holds as many names as it takes
  */
 export async function handleAskFirst(req: IncomingMessage, res: ServerResponse, ctx: AskFirstContext): Promise<void> {
   res.setHeader('Content-Type', 'application/json');
@@ -540,9 +719,13 @@ export async function handleAskFirst(req: IncomingMessage, res: ServerResponse, 
       ref,
       // A `declined` reply carries no command: the one that does what the
       // person refused is not handed back.
-      ...(outcome.status === 'pending' ? { fix: `Run in a terminal: aquaman broker ask ${ref} --off` } : {}),
+      ...(outcome.status === 'pending' ? { fix: outcome.fix ?? `Run in a terminal: aquaman broker ask ${ref} --off` } : {}),
     });
   } catch (err) {
+    if (err instanceof AskFirstFullError) {
+      reply(409, { error: `${ref} was not marked: ${err.message}`, fix: err.fix, code: err.code });
+      return;
+    }
     vaultError(err);
   }
 }

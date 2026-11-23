@@ -274,6 +274,15 @@ export class CredentialProxy {
           }),
         })
       : undefined;
+    // A proxy that hands no values out still forwards, and can be given a
+    // service definition of someone's choosing. It has nobody to ask, so a
+    // marked reference is refused there.
+    this.forwardGate = this.askFirstGate ?? new AskFirstGate({
+      store: options.store,
+      limiter: this.promptLimiter,
+      windowSeconds: options.askFirst?.windowSeconds,
+      now: options.askFirst?.now,
+    });
   }
 
   /**
@@ -282,6 +291,46 @@ export class CredentialProxy {
    * Absent without a broker scope.
    */
   readonly askFirstGate: AskFirstGate | undefined;
+
+  /** The gate forwarding goes through: `askFirstGate`, or one that can only refuse. */
+  private readonly forwardGate: AskFirstGate;
+
+  /**
+   * Ask first, for a request about to be forwarded. A builtin service sends
+   * its credential to an upstream nobody can change, which is the use the
+   * person stored it for. A service that services.yaml defines sends it
+   * wherever that file says, and the file can be written by any program
+   * running as the user: forwarding for it would hand a marked value to a
+   * host of that program's choosing. So each key the proxy would read for
+   * such a service goes through the gate first, as a resolve does.
+   * Returns the refusal, or `undefined` when the request may go on. Throws
+   * what the gate throws (a locked vault, marks that cannot be read).
+   */
+  private async authorizeForward(
+    service: string,
+    serviceDef: ServiceDefinition,
+    fromLoopback: boolean,
+  ): Promise<{ key: string; code: string; error: string; fix?: string } | undefined> {
+    if (ServiceRegistry.isBuiltinService(service)) return undefined;
+    const oauth = serviceDef.oauthConfig;
+    const keys = new Set<string>([
+      serviceDef.credentialKey,
+      ...(serviceDef.additionalCredentialKeys ?? []),
+      ...Object.values(serviceDef.additionalHeaders ?? {}).map((h) => h.credentialKey),
+      // The client credentials go to the token URL, and so does every
+      // credential the URL names in braces.
+      ...(oauth ? [oauth.clientIdKey, oauth.clientSecretKey, ...(oauth.tokenUrl.match(/\{(\w+)\}/g) ?? []).map((t) => t.slice(1, -1))] : []),
+    ]);
+    for (const key of keys) {
+      if (typeof key !== 'string' || key === '') continue;
+      const asked = await this.forwardGate.authorize(service, key, {
+        via: fromLoopback ? 'loopback' : 'forward',
+        upstream: oauth ? `${oauth.tokenUrl} and ${serviceDef.upstream}` : serviceDef.upstream,
+      });
+      if (!asked.ok) return { key, code: asked.code, error: asked.error, fix: asked.fix };
+    }
+    return undefined;
+  }
 
   /** AWS request bodies being read into memory right now. */
   private sigV4Buffering = 0;
@@ -578,7 +627,12 @@ export class CredentialProxy {
         fromLoopback,
         store: this.options.store,
         refusals: this.unlockRefusals,
-        onUnlocked: this.options.onVaultUnlocked,
+        // A yes given before the vault was locked does not outlast the lock.
+        onUnlocked: () => {
+          this.forwardGate.dropApprovals();
+          this.options.onVaultUnlocked?.();
+        },
+        onLocked: () => this.forwardGate.dropApprovals(),
         audit: (error) => this.emitRequest({
           id: requestId, service: 'aquaman-vault', method: unlock ? 'VAULT_UNLOCK' : 'VAULT_LOCK', path: vaultPath,
           timestamp: new Date(), authenticated: false, statusCode: error ? 403 : 200, error,
@@ -714,6 +768,17 @@ export class CredentialProxy {
     }
 
     try {
+      const refused = await this.authorizeForward(service, serviceDef, fromLoopback);
+      if (refused) {
+        requestInfo.error = `${refused.code}: ${service}/${refused.key}`;
+        requestInfo.statusCode = 403;
+        this.emitRequest(requestInfo);
+        res.setHeader('Content-Type', 'application/json');
+        res.statusCode = 403;
+        res.end(JSON.stringify({ error: refused.error, ...(refused.fix ? { fix: refused.fix } : {}), code: refused.code }));
+        return;
+      }
+
       // Get primary credential from store
       const credential = await this.options.store.get(service, config.credentialKey);
 
@@ -1914,6 +1979,13 @@ export class CredentialProxy {
       });
       if (!asked.ok) {
         refuseRead(404, { error: asked.error, ...(asked.fix ? { fix: asked.fix } : {}), code: asked.code }, `${asked.code}: ${service}/${key}`);
+        return;
+      }
+      // The request may have waited for a dialog. A reference revoked in
+      // that time is not handed out on the strength of the yes.
+      const still = scope!.check(service, key, fromLoopback ? 'loopback' : 'uds');
+      if (!still.allowed) {
+        refuseRead(404, { error: still.reason, fix: still.fix, code: still.code }, `${still.code}: ${service}/${key}`);
         return;
       }
     } catch (err) {

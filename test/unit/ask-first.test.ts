@@ -9,6 +9,8 @@ import { MemoryStore, CachingStore, type CredentialStore } from 'aquaman-core';
 import {
   AskFirstGate,
   AskFirstMarks,
+  AskFirstFullError,
+  ASK_FIRST_MAX_MARKS,
   RESERVED_SERVICE,
   windowText,
   promptMessage,
@@ -110,9 +112,88 @@ describe('AskFirstMarks: the record in the vault', () => {
 
   it('unmarking on such a record writes it again with the references in use still marked', async () => {
     await store.set(RESERVED_SERVICE, KEY, '{broken');
-    expect(await marks.unmark('github/token', () => ['github/token', 'slack/bot_token', 'not a name'])).toBe(true);
+    expect(await marks.unmark('github/token', ['github/token', 'slack/bot_token', 'not a name', 'slack/bot_token'])).toBe(true);
     expect(await store.get(RESERVED_SERVICE, KEY)).toBe('{"v":1,"refs":["slack/bot_token"]}');
     expect(await marks.has('github/token')).toBe(false);
+  });
+
+  it('unmarking on such a record without the list of what stays marked writes nothing', async () => {
+    await store.set(RESERVED_SERVICE, KEY, '{broken');
+    await expect(marks.unmark('github/token')).rejects.toThrow('cannot be read as one');
+    expect(await store.get(RESERVED_SERVICE, KEY)).toBe('{broken');
+  });
+
+  it('changes are made one after another: marks set together are all in the record', async () => {
+    const names = Array.from({ length: 20 }, (_, i) => `svc/key${String(i).padStart(2, '0')}`);
+    expect(await Promise.all(names.map((n) => marks.mark(n)))).toEqual(names.map(() => true));
+    expect(await marks.list()).toEqual(names);
+    await Promise.all([marks.unmark(names[0]), marks.mark('late/key'), marks.unmark(names[1])]);
+    expect(await marks.list()).toEqual(['late/key', ...names.slice(2)]);
+  });
+
+  it('a change that fails does not stop the ones queued after it', async () => {
+    let writes = 0;
+    const flaky = new MemoryStore();
+    const set = flaky.set.bind(flaky);
+    flaky.set = async (...args: Parameters<MemoryStore['set']>) => {
+      if (writes++ === 0) throw new Error('vault write failed');
+      return set(...args);
+    };
+    const m = new AskFirstMarks(flaky);
+    const first = m.mark('a/b');
+    const second = m.mark('c/d');
+    await expect(first).rejects.toThrow('vault write failed');
+    expect(await second).toBe(true);
+    expect(await m.list()).toEqual(['c/d']);
+  });
+
+  it('a read that was under way when the record was changed elsewhere is not kept', async () => {
+    let release: (() => void) | undefined;
+    const slow = new MemoryStore();
+    const get = slow.get.bind(slow);
+    let hold = true;
+    slow.get = async (service: string, key: string) => {
+      const value = await get(service, key);
+      if (hold) await new Promise<void>((r) => { release = r; });
+      return value;
+    };
+    const m = new AskFirstMarks(slow);
+    const reading = m.has('github/token');
+    await new Promise((r) => setTimeout(r, 5));
+    // Another process writes the record and the daemon is told to read it again.
+    await slow.set(RESERVED_SERVICE, KEY, '{"v":1,"refs":["github/token"]}');
+    m.forget();
+    hold = false;
+    release!();
+    expect(await reading).toBe(true);
+    expect(await m.has('github/token')).toBe(true);
+  });
+
+  it(`holds ${ASK_FIRST_MAX_MARKS} names and refuses the next; a name already there still answers`, async () => {
+    for (let i = 0; i < ASK_FIRST_MAX_MARKS; i++) await marks.mark(`svc/key${i}`);
+    await expect(marks.mark('one/more')).rejects.toBeInstanceOf(AskFirstFullError);
+    expect(await marks.mark('svc/key0')).toBe(false);
+    expect((await marks.list() as string[]).length).toBe(ASK_FIRST_MAX_MARKS);
+    await marks.unmark('svc/key0');
+    expect(await marks.mark('one/more')).toBe(true);
+  });
+
+  it('on a store where two names can be one item, a name is marked when a marked name is the same item', async () => {
+    class JoinedStore extends MemoryStore {
+      itemIdentity(service: string, key: string): string { return `${service}-${key}`; }
+    }
+    const m = new AskFirstMarks(new JoinedStore());
+    await m.mark('cloudflare-ai/api_key');
+    expect(await m.has('cloudflare/ai-api_key')).toBe(true);
+    expect(await m.has('cloudflare/other')).toBe(false);
+    expect(await m.sameItemAs('cloudflare/ai-api_key')).toEqual(['cloudflare-ai/api_key']);
+    expect(await m.sameItemAs('cloudflare-ai/api_key')).toEqual([]);
+    // The list is what was marked, by name.
+    expect(await m.list()).toEqual(['cloudflare-ai/api_key']);
+    // Removing the mark under the other name removes it: the item is what was asked about.
+    expect(await m.unmark('cloudflare/ai-api_key')).toBe(true);
+    expect(await m.list()).toEqual([]);
+    expect(await m.has('cloudflare-ai/api_key')).toBe(false);
   });
 
   it('a vault that cannot be read is an error, not "nothing is marked"', async () => {
@@ -163,7 +244,7 @@ describe('AskFirstGate: the window', () => {
   it('the dialog is told the window the gate keeps', async () => {
     await read();
     expect(asked[0].read).toEqual({ windowSeconds: 120, via: 'socket' });
-    expect(promptMessage(asked[0], 'approval')).toContain('for the next 2 minutes (or until aquaman is restarted)');
+    expect(promptMessage(asked[0], 'approval')).toContain('for the next 2 minutes (or until aquaman is restarted or its vault is locked)');
   });
 
   it('one yes covers one reference', async () => {

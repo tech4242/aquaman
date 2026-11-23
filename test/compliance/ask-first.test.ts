@@ -8,6 +8,12 @@
  * the dialog says no. The row does something to get the value anyway, and
  * passes when the value did not leave the daemon.
  *
+ * The dialog is raised for a request on the Unix socket, by the OpenShell
+ * driver, and for a request to be forwarded to a service that services.yaml
+ * defines. A request on the loopback listener never raises one. A yes does
+ * not outlast the vault being locked, and is not a yes for a reference that
+ * was revoked while the dialog was up.
+ *
  * A real proxy on a temporary socket and a loopback port, the real broker
  * scope over a config.yaml and a projects.yaml in a temp directory, and the
  * real OpenShell driver core. The person is a scripted prompter that records
@@ -15,9 +21,13 @@
  * request it was handed); no dialog is opened. Time is a clock the test owns.
  *
  * Limits, as `it.fails` rows: the mark is an item in the vault, so software
- * that can write to the vault itself can delete it; and the daemon cannot
- * tell programs apart, so inside the window any program running as the user
- * reads the value without a dialog.
+ * that can write to the vault itself can delete it; the daemon cannot tell
+ * programs apart, so inside the window any program running as the user reads
+ * the value without a dialog; marking asks nobody, so a program can fill the
+ * record; two processes that each change the record with their own access to
+ * the vault can lose one change; a daemon is not told about a change another
+ * process made in the vault; and on a record that cannot be read, a reference
+ * that is in no declaring file when one mark is removed loses its mark.
  *
  * MITRE ATLAS AML.T0055 (unsecured credentials); NIST SP 800-53 AC-3 (access
  * enforcement), AC-6 (least privilege), AU-2 (audit events); OWASP Agentic
@@ -26,12 +36,15 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
+import * as http from 'node:http';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   createCredentialProxy,
   createBrokerScope,
+  createServiceRegistry,
+  AskFirstMarks,
   promptMessage,
   readConsequence,
   UNMARK_CONSEQUENCE,
@@ -71,6 +84,10 @@ describe('ask first: no value without a person\'s yes', () => {
   let shown: Array<{ text: string; request: PromptRequest }>;
   let answers: PromptResult[];
   let log: RequestInfo[];
+  let servicesPath: string;
+  /** Set to keep the next dialog up: `answer` is then called to close it. */
+  let holdNext = false;
+  let answer: ((r: PromptResult) => void) | undefined;
 
   /** The person: answers from `answers` in order, then says no. */
   const prompter: CredentialPrompter = {
@@ -78,9 +95,13 @@ describe('ask first: no value without a person\'s yes', () => {
       shown.push({ text: promptMessage(request, 'value'), request });
       return { outcome: 'declined' };
     },
-    async askApproval(request) {
+    askApproval(request) {
       shown.push({ text: promptMessage(request, 'approval'), request });
-      return answers.shift() ?? { outcome: 'declined' };
+      if (holdNext) {
+        holdNext = false;
+        return new Promise((r) => { answer = r; });
+      }
+      return Promise.resolve(answers.shift() ?? { outcome: 'declined' });
     },
     async askLoginItem() {
       return { outcome: 'declined' };
@@ -92,7 +113,7 @@ describe('ask first: no value without a person\'s yes', () => {
   const writeProjects = (env: Record<string, string>) =>
     fs.writeFileSync(projectsPath, `projects:\n  app:\n    paths: ["${dir}"]\n    env:\n${Object.entries(env).map(([k, v]) => `      ${k}: "${v}"`).join('\n')}\n`);
 
-  async function startProxy(opts: { store?: CredentialStore; prompter?: CredentialPrompter | null } = {}): Promise<void> {
+  async function startProxy(opts: { store?: CredentialStore; prompter?: CredentialPrompter | null; allowedServices?: string[]; broker?: false } = {}): Promise<void> {
     socketPath = tmpSocketPath();
     port = await new Promise<number>((resolve) => {
       const s = net.createServer();
@@ -102,8 +123,9 @@ describe('ask first: no value without a person\'s yes', () => {
     proxy = createCredentialProxy({
       socketPath,
       store: opts.store ?? store,
-      allowedServices: [],
-      broker: scope,
+      allowedServices: opts.allowedServices ?? [],
+      serviceRegistry: createServiceRegistry({ configPath: servicesPath }),
+      broker: opts.broker === false ? undefined : scope,
       credentialRequests: opts.prompter === null ? undefined : { prompter: opts.prompter ?? prompter, declare: () => {} },
       loopback: { port, token: TOKEN },
       askFirst: { windowSeconds: WINDOW, now: () => clock },
@@ -123,6 +145,9 @@ describe('ask first: no value without a person\'s yes', () => {
     dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aq-askfirst-')));
     configPath = path.join(dir, 'config.yaml');
     projectsPath = path.join(dir, 'projects.yaml');
+    servicesPath = path.join(dir, 'services.yaml');
+    holdNext = false;
+    answer = undefined;
     writeConfig(['aquaman://github/token', 'aquaman://slack/bot_token', 'aquaman://plain/key']);
     store = new MemoryStore();
     await store.set('github', 'token', SECRET);
@@ -201,7 +226,7 @@ describe('ask first: no value without a person\'s yes', () => {
         '',
         'Credential: github/token',
         '',
-        'aquaman cannot tell which program is asking. Allow hands it the value, and for the next 1 hour (or until aquaman is restarted) any program running as you can read this value from aquaman without another dialog. Deny if you did not expect this.',
+        'aquaman cannot tell which program is asking. Allow hands it the value, and for the next 1 hour (or until aquaman is restarted or its vault is locked) any program running as you can read this value from aquaman without another dialog. Deny if you did not expect this.',
         '',
         'aquaman never asks for your login, Apple ID or password-manager password.',
         '',
@@ -220,10 +245,10 @@ describe('ask first: no value without a person\'s yes', () => {
       expect((await loopback('/broker/resolve', { service: 'github', key: 'token' })).body).not.toContain(SECRET);
     });
 
-    it('the dialog names the listener the request came in on, which is all aquaman knows about the caller', async () => {
-      await loopback('/broker/resolve', { service: 'github', key: 'token' });
+    it('the dialog names the way the request came in, which is all aquaman knows about the caller', async () => {
+      await resolve();
       await openshellResolve({ driver: 'aquaman', handle: 'aquaman://slack/bot_token' });
-      expect(shown[0].text.split('\n')[0]).toBe('A program that holds aquaman\'s local token is asking aquaman for the value of a credential that is marked "ask first".');
+      expect(shown[0].text.split('\n')[0]).toBe('A program running as you is asking aquaman for the value of a credential that is marked "ask first".');
       expect(shown[1].text.split('\n')[0]).toBe('A program connected to aquaman\'s OpenShell driver is asking aquaman for the value of a credential that is marked "ask first".');
       for (const s of shown) expect(s.text).toContain('aquaman cannot tell which program is asking.');
     });
@@ -374,7 +399,8 @@ describe('ask first: no value without a person\'s yes', () => {
       ['the loopback listener, with the token agent hosts hold', async () => {
         const res = await loopback('/broker/resolve', { service: 'github', key: 'token' });
         expect(res.status).toBe(404);
-        expect(shown).toHaveLength(1);
+        expect(JSON.parse(res.body).code).toBe('ask_first_required');
+        expect(shown).toEqual([]);
         return res.body;
       }],
       ['the loopback listener, with the token sent as a provider key', async () => {
@@ -579,15 +605,64 @@ describe('ask first: no value without a person\'s yes', () => {
       expect(await store.get(...RECORD)).toBe('{broken');
     });
 
-    it('a person removing one mark writes the record again with every declared reference still marked', async () => {
+    it('a person removing one mark writes the record again with every declared reference still marked, and the dialog names them', async () => {
       await store.set(...RECORD, '{broken');
       await restartDaemon();
       answers = [{ outcome: 'approved' }];
       const res = await post('/broker/ask-first', { service: 'plain', key: 'key', ask: false });
       expect(JSON.parse(res.body).status).toBe('unmarked');
+      expect(shown[0].text.split('\n').at(-1)).toBe('The record of marks cannot be read, so every credential counts as marked. After Allow only these 2 stay marked: github/token, slack/bot_token');
       expect(await marked()).toEqual(['aquaman://github/token', 'aquaman://slack/bot_token']);
       expect(JSON.parse((await resolve({}, 'plain', 'key')).body).value).toBe('plain-value-not-marked');
       expect((await resolve()).body).not.toContain(SECRET);
+    });
+
+    it('the list that is written is the list the person was shown: a reference taken out of the declaring file while the dialog is up keeps its mark', async () => {
+      await store.set(...RECORD, '{broken');
+      await restartDaemon();
+      holdNext = true;
+      const pending = post('/broker/ask-first', { service: 'plain', key: 'key', ask: false });
+      await until(() => answer !== undefined);
+      expect(shown[0].text).toContain('After Allow only these 2 stay marked: github/token, slack/bot_token');
+      // A program takes github/token out of config.yaml while the person reads the dialog.
+      await new Promise((r) => setTimeout(r, 20));
+      writeConfig(['aquaman://slack/bot_token', 'aquaman://plain/key']);
+      answer!({ outcome: 'approved' });
+      expect(JSON.parse((await pending).body).status).toBe('unmarked');
+      expect(await store.get(...RECORD)).toBe('{"v":1,"refs":["github/token","slack/bot_token"]}');
+      // It writes the declaration back and asks for the value.
+      await new Promise((r) => setTimeout(r, 20));
+      writeConfig(['aquaman://github/token', 'aquaman://slack/bot_token', 'aquaman://plain/key']);
+      expect((await resolve()).body).not.toContain(SECRET);
+    });
+
+    it('a reference that is in no declaring file when the person is asked is not in the list, and the dialog says how many stay marked', async () => {
+      await store.set(...RECORD, '{broken');
+      await restartDaemon();
+      // Out of config.yaml before the command is run: only what is declared now can be kept.
+      await new Promise((r) => setTimeout(r, 20));
+      writeConfig(['aquaman://plain/key']);
+      // The person reads the dialog, sees that nothing would stay marked, and says no.
+      const res = await post('/broker/ask-first', { service: 'plain', key: 'key', ask: false });
+      expect(JSON.parse(res.body).status).toBe('declined');
+      expect(shown[0].text.split('\n').at(-1)).toBe('The record of marks cannot be read, so every credential counts as marked. After Allow none is marked.');
+      expect(await store.get(...RECORD)).toBe('{broken');
+      await new Promise((r) => setTimeout(r, 20));
+      writeConfig(['aquaman://github/token', 'aquaman://plain/key']);
+      expect((await resolve()).body).not.toContain(SECRET);
+    });
+
+    it('a list too long to show in full is counted, and the names in it cannot add lines to the dialog', async () => {
+      await store.set(...RECORD, '{broken');
+      const many = Array.from({ length: 20 }, (_, i) => `aquaman://svc${String(i).padStart(2, '0')}/key`);
+      await new Promise((r) => setTimeout(r, 20));
+      writeConfig(['aquaman://plain/key', ...many]);
+      await restartDaemon();
+      await post('/broker/ask-first', { service: 'plain', key: 'key', ask: false });
+      const lines = shown[0].text.split('\n');
+      expect(lines.at(-1)).toBe(`The record of marks cannot be read, so every credential counts as marked. After Allow only these 20 stay marked: ${many.slice(0, 8).map((r) => r.slice('aquaman://'.length)).join(', ')} and 12 more`);
+      // aquaman's own sentences come first, as in every dialog.
+      expect(lines.indexOf(UNMARK_CONSEQUENCE)).toBeLessThan(lines.length - 1);
     });
 
     it('a vault that cannot be read hands nothing out: 500, and no dialog', async () => {
@@ -726,6 +801,371 @@ describe('ask first: no value without a person\'s yes', () => {
     });
   });
 
+  describe('two changes to the record at once', () => {
+    /** A vault that takes a few milliseconds per call, as every backend but the in-memory one does. */
+    class SlowStore extends MemoryStore {
+      private wait = () => new Promise((r) => setTimeout(r, 5));
+      override async get(service: string, key: string): Promise<string | null> {
+        await this.wait();
+        return super.get(service, key);
+      }
+      override async set(service: string, key: string, value: string, metadata?: Record<string, string>): Promise<void> {
+        await this.wait();
+        return super.set(service, key, value, metadata);
+      }
+    }
+    const markRef = (service: string, key: string) => post('/broker/ask-first', { service, key, ask: true });
+
+    beforeEach(async () => {
+      const slow = new SlowStore();
+      await slow.set('github', 'token', SECRET);
+      await proxy.stop();
+      cleanupSocket(socketPath);
+      store = slow;
+      await startProxy();
+    });
+
+    it('two marks set at the same moment are both kept, and both references are asked about', async () => {
+      const [mine, theirs] = await Promise.all([markRef('github', 'token'), markRef('junk', 'a')]);
+      expect(JSON.parse(mine.body).status).toBe('marked');
+      expect(JSON.parse(theirs.body).status).toBe('marked');
+      expect(await marked()).toEqual(['aquaman://github/token', 'aquaman://junk/a']);
+      const res = await resolve();
+      expect(res.body).not.toContain(SECRET);
+      expect(shown).toHaveLength(1);
+    });
+
+    it('a mark set while another program floods the endpoint with marks of its own is kept', async () => {
+      let n = 0;
+      let flooding = true;
+      const flood = (async () => { while (flooding) await markRef('junk', `n${n++}`); })();
+      const flood2 = (async () => { while (flooding) await markRef('junk', `m${n++}`); })();
+      await new Promise((r) => setTimeout(r, 30));
+      const mine: string[] = [];
+      for (let i = 0; i < 10; i++) {
+        expect(JSON.parse((await markRef('mine', `ref${i}`)).body)).toMatchObject({ status: 'marked' });
+        mine.push(`aquaman://mine/ref${i}`);
+        await new Promise((r) => setTimeout(r, 7));
+      }
+      flooding = false;
+      await Promise.all([flood, flood2]);
+      const list = (await marked()) as string[];
+      expect(mine.filter((r) => !list.includes(r))).toEqual([]);
+    });
+
+    it('a mark set and another removed at the same moment: the record has the one and not the other', async () => {
+      await markRef('github', 'token');
+      await markRef('slack', 'bot_token');
+      answers = [{ outcome: 'approved' }];
+      const [off, on] = await Promise.all([
+        post('/broker/ask-first', { service: 'slack', key: 'bot_token', ask: false }),
+        markRef('late', 'key'),
+      ]);
+      expect(JSON.parse(off.body).status).toBe('unmarked');
+      expect(JSON.parse(on.body).status).toBe('marked');
+      expect(await marked()).toEqual(['aquaman://github/token', 'aquaman://late/key']);
+    });
+  });
+
+  describe('the record is bounded', () => {
+    it('256 names are kept, the next is refused with a code and a fix, and a name already marked still answers', async () => {
+      // github/token and slack/bot_token are marked already.
+      for (let i = 0; i < 254; i++) await mark('junk', `k${i}`);
+      const res = await post('/broker/ask-first', { service: 'junk', key: 'one-more', ask: true });
+      expect(res.status).toBe(409);
+      expect(JSON.parse(res.body)).toMatchObject({ code: 'ask_first_full' });
+      expect(JSON.parse(res.body).fix).toContain('aquaman broker ask <ref> --off');
+      expect(JSON.parse((await store.get(...RECORD))!).refs).toHaveLength(256);
+      expect(JSON.parse((await post('/broker/ask-first', { service: 'github', key: 'token', ask: true })).body).status).toBe('ready');
+      // The marks that were there hold.
+      expect((await resolve()).body).not.toContain(SECRET);
+    });
+  });
+
+  describe('the loopback listener never raises a dialog', () => {
+    const attempts: Array<[string, Record<string, unknown>]> = [
+      ['a plain request', {}],
+      ['ask: true', { ask: true }],
+      ['a long wait and a project', { ask_timeout_seconds: 600, project: '/code/app' }],
+      ['ask as text', { ask: 'yes' }],
+    ];
+    for (const [name, extra] of attempts) {
+      it(`${name}: ask_first_required, with the command a person runs to be asked, and nobody is asked`, async () => {
+        const res = await loopback('/broker/resolve', { service: 'github', key: 'token', ...extra });
+        expect(res.status).toBe(404);
+        const body = JSON.parse(res.body);
+        expect(body.code).toBe('ask_first_required');
+        expect(body.fix).toContain('aquaman get aquaman://github/token > /dev/null');
+        expect(res.body).not.toContain(SECRET);
+        expect(shown).toEqual([]);
+      });
+    }
+
+    it('it does not use up the dialogs a person on the socket has, and after their yes the value is served there too', async () => {
+      for (let i = 0; i < 20; i++) await loopback('/broker/resolve', { service: 'github', key: 'token' });
+      answers = [{ outcome: 'approved' }];
+      expect(JSON.parse((await resolve()).body).value).toBe(SECRET);
+      expect(shown).toHaveLength(1);
+      expect(JSON.parse((await loopback('/broker/resolve', { service: 'github', key: 'token' })).body).value).toBe(SECRET);
+    });
+  });
+
+  describe('a reference revoked while its dialog is up', () => {
+    it('/broker/resolve: the yes does not hand it out', async () => {
+      holdNext = true;
+      const pending = resolve();
+      await until(() => answer !== undefined);
+      // `aquaman broker revoke aquaman://github/token`, while the dialog waits.
+      await new Promise((r) => setTimeout(r, 20));
+      writeConfig(['aquaman://slack/bot_token', 'aquaman://plain/key']);
+      answer!({ outcome: 'approved' });
+      const res = await pending;
+      expect(res.status).toBe(404);
+      expect(JSON.parse(res.body).code).toBe('broker_ref_not_declared');
+      expect(res.body).not.toContain(SECRET);
+      expect(log.at(-1)).toMatchObject({ statusCode: 404, error: 'broker_ref_not_declared: github/token' });
+    });
+
+    it('the OpenShell driver: the yes does not resolve it', async () => {
+      holdNext = true;
+      const pending = openshellResolve({ driver: 'aquaman', handle: 'aquaman://github/token' });
+      await until(() => answer !== undefined);
+      await new Promise((r) => setTimeout(r, 20));
+      writeConfig(['aquaman://slack/bot_token', 'aquaman://plain/key']);
+      answer!({ outcome: 'approved' });
+      const out = await pending;
+      expect(out).not.toContain(SECRET);
+      expect(out).toContain('failed_precondition');
+    });
+  });
+
+  describe('forwarding for a service that services.yaml defines', () => {
+    const ACME_SECRET = 'acme-ask-first-secret-0123456789';
+    let upstream: http.Server;
+    let got: http.IncomingHttpHeaders[];
+    let upstreamPort = 0;
+
+    /** What a program running as the user can write: a service definition with an upstream of its choosing. */
+    async function defineAcme(definition: string, allowedServices = ['acme']): Promise<void> {
+      fs.writeFileSync(servicesPath, `services:\n  - name: acme\n    upstream: http://127.0.0.1:${upstreamPort}\n${definition}`);
+      await proxy.stop();
+      cleanupSocket(socketPath);
+      await startProxy({ allowedServices });
+    }
+
+    beforeEach(async () => {
+      got = [];
+      upstream = http.createServer((req, res) => { got.push(req.headers); res.end('ok'); });
+      await new Promise<void>((r) => upstream.listen(0, '127.0.0.1', () => r()));
+      upstreamPort = (upstream.address() as net.AddressInfo).port;
+      await store.set('acme', 'api_key', ACME_SECRET);
+      await store.set('acme', 'second', 'acme-second-value');
+    });
+
+    afterEach(async () => {
+      await new Promise((r) => upstream.close(r));
+    });
+
+    const sent = () => JSON.stringify(got);
+
+    it('the marked credential is not sent to the upstream the file names: the person is asked, told where it would go, and says no', async () => {
+      await mark('acme', 'api_key');
+      await defineAcme('    authHeader: x-acme-key\n    credentialKey: api_key\n');
+      const res = await udsFetch(socketPath, '/acme/anything');
+      expect(res.status).toBe(403);
+      expect(JSON.parse(res.body).code).toBe('ask_first_declined');
+      expect(JSON.parse(res.body).fix).toBeUndefined();
+      expect(sent()).not.toContain(ACME_SECRET);
+      expect(got).toEqual([]);
+      expect(shown[0].text).toBe([
+        'A program running as you is asking aquaman to send a request that carries a credential marked "ask first" to a service that is not built into aquaman.',
+        '',
+        'Credential: acme/api_key',
+        '',
+        'aquaman cannot tell which program is asking. Allow sends the value to the address this service is defined with in services.yaml, shown below, and for the next 1 hour (or until aquaman is restarted or its vault is locked) any program running as you can have it sent there, or read it from aquaman, without another dialog. Deny if you did not expect this, or if the address below is not one this value should go to.',
+        '',
+        'aquaman never asks for your login, Apple ID or password-manager password.',
+        '',
+        `Sent to (as services.yaml says): http://127.0.0.1:${upstreamPort}`,
+      ].join('\n'));
+      expect(log.at(-1)).toMatchObject({ service: 'acme', statusCode: 403, error: 'ask_first_declined: acme/api_key' });
+    });
+
+    it('with a yes the request goes on, and the yes is the one a resolve would have needed', async () => {
+      await mark('acme', 'api_key');
+      await defineAcme('    authHeader: x-acme-key\n    credentialKey: api_key\n');
+      answers = [{ outcome: 'approved' }];
+      expect((await udsFetch(socketPath, '/acme/anything')).status).toBe(200);
+      expect(got[0]['x-acme-key']).toBe(ACME_SECRET);
+      expect((await udsFetch(socketPath, '/acme/again')).status).toBe(200);
+      expect(shown).toHaveLength(1);
+    });
+
+    it('on the loopback listener nobody is asked: ask_first_required, and nothing is sent', async () => {
+      await mark('acme', 'api_key');
+      await defineAcme('    authHeader: x-acme-key\n    credentialKey: api_key\n');
+      const res = await fetch(`http://127.0.0.1:${port}/acme/anything`, { headers: { 'x-aquaman-token': TOKEN } });
+      expect(res.status).toBe(403);
+      expect(JSON.parse(await res.text()).code).toBe('ask_first_required');
+      expect(got).toEqual([]);
+      expect(shown).toEqual([]);
+    });
+
+    /** The other keys a definition can make the proxy read: each is sent somewhere the definition names. */
+    const otherKeys: Array<[string, () => Record<string, unknown>]> = [
+      ['the password half of a basic pair', () => ({ authHeader: 'Authorization', authMode: 'basic', credentialKey: 'second', additionalCredentialKeys: ['api_key'] })],
+      ['a credential sent in an additional header', () => ({ authHeader: 'x-acme-key', authMode: 'header', credentialKey: 'second', additionalHeaders: { 'x-extra': { credentialKey: 'api_key' } } })],
+      ['the client secret of a token exchange', () => ({ authHeader: 'Authorization', authMode: 'oauth', credentialKey: 'second', oauthConfig: { tokenUrl: `http://127.0.0.1:${upstreamPort}/token`, clientIdKey: 'second', clientSecretKey: 'api_key' } })],
+      ['a credential named in braces in the token URL', () => ({ authHeader: 'Authorization', authMode: 'oauth', credentialKey: 'second', oauthConfig: { tokenUrl: `http://127.0.0.1:${upstreamPort}/{api_key}/token`, clientIdKey: 'second', clientSecretKey: 'second' } })],
+    ];
+    for (const [name, definition] of otherKeys) {
+      it(`the marked credential as ${name}: not sent`, async () => {
+        await mark('acme', 'api_key');
+        await proxy.stop();
+        cleanupSocket(socketPath);
+        await startProxy({ allowedServices: ['acme'] });
+        proxy.getServiceRegistry().register({ name: 'acme', upstream: `http://127.0.0.1:${upstreamPort}`, ...definition() } as never);
+        const res = await udsFetch(socketPath, '/acme/anything');
+        expect(res.status).toBe(403);
+        expect(JSON.parse(res.body).code).toBe('ask_first_declined');
+        expect(shown.map((d) => `${d.request.service}/${d.request.key}`)).toEqual(['acme/api_key']);
+        expect(got).toEqual([]);
+      });
+    }
+
+    it('a proxy without a broker (as OpenClaw hosts one) has nobody to ask, and refuses', async () => {
+      await mark('acme', 'api_key');
+      fs.writeFileSync(servicesPath, `services:\n  - name: acme\n    upstream: http://127.0.0.1:${upstreamPort}\n    authHeader: x-acme-key\n    credentialKey: api_key\n`);
+      await proxy.stop();
+      cleanupSocket(socketPath);
+      await startProxy({ allowedServices: ['acme'], broker: false });
+      const res = await udsFetch(socketPath, '/acme/anything');
+      expect(res.status).toBe(403);
+      expect(JSON.parse(res.body).code).toBe('prompt_unavailable');
+      expect(got).toEqual([]);
+      expect(shown).toEqual([]);
+    });
+
+    it('a credential that is not marked is forwarded as before, with no dialog', async () => {
+      await defineAcme('    authHeader: x-acme-key\n    credentialKey: api_key\n');
+      expect((await udsFetch(socketPath, '/acme/anything')).status).toBe(200);
+      expect(got[0]['x-acme-key']).toBe(ACME_SECRET);
+      expect(shown).toEqual([]);
+    });
+
+    it('a builtin service is not gated: a definition for its name in services.yaml is not used, so its upstream is the one aquaman ships', async () => {
+      // github is a builtin and github/token is marked. The file names another upstream for it.
+      fs.writeFileSync(servicesPath, `services:\n  - name: github\n    upstream: http://127.0.0.1:${upstreamPort}\n    authHeader: x-acme-key\n    credentialKey: token\n`);
+      await proxy.stop();
+      cleanupSocket(socketPath);
+      await startProxy({ allowedServices: ['github'] });
+      const registry = proxy.getServiceRegistry();
+      expect(registry.get('github')!.upstream).toBe('https://api.github.com');
+      expect(() => registry.register({ name: 'github', upstream: `http://127.0.0.1:${upstreamPort}`, authHeader: 'x-acme-key', credentialKey: 'token' })).toThrow();
+      // With the shipped upstream replaced by a stand-in (which only a test
+      // can do), the marked credential is forwarded and nobody is asked.
+      registry.override('github', { upstream: `http://127.0.0.1:${upstreamPort}` });
+      expect((await udsFetch(socketPath, '/github/user')).status).toBe(200);
+      expect(String(got[0].authorization)).toContain(SECRET);
+      expect(shown).toEqual([]);
+    });
+  });
+
+  describe('a vault that is locked', () => {
+    /** A store a person's session opens, as far as the proxy can see one. */
+    class SessionStore extends MemoryStore {
+      state: 'locked' | 'unlocked' = 'unlocked';
+      vaultState(): 'locked' | 'unlocked' { return this.state; }
+      forgetSession(): void { this.state = 'locked'; }
+      async adoptSession(): Promise<{ ok: true }> { this.state = 'unlocked'; return { ok: true }; }
+      async checkSession(): Promise<'locked' | 'unlocked'> { return this.state; }
+      override async get(service: string, key: string): Promise<string | null> {
+        if (this.state === 'locked') throw Object.assign(new Error('The vault is locked'), { code: 'vault_locked' });
+        return super.get(service, key);
+      }
+    }
+    let session: SessionStore;
+    const SESSION = Buffer.from('a session only the stand-in store looks at, long enough to pass as one').toString('base64');
+
+    beforeEach(async () => {
+      session = new SessionStore();
+      await session.set('github', 'token', SECRET);
+      await session.set('acme', 'api_key', 'acme-locked-value');
+      await session.set(...RECORD, '{"v":1,"refs":["acme/api_key","github/token"]}');
+      fs.writeFileSync(servicesPath, 'services:\n  - name: acme\n    upstream: http://127.0.0.1:9\n    authHeader: x-acme-key\n    credentialKey: api_key\n');
+      await proxy.stop();
+      cleanupSocket(socketPath);
+      store = session;
+      await startProxy({ allowedServices: ['acme'] });
+    });
+
+    it('nobody is asked about a value that cannot be read: resolve, forwarding and the OpenShell driver answer vault_locked', async () => {
+      // The marks are in the daemon's memory from a read while the vault was open.
+      expect(await marked()).toEqual(['aquaman://acme/api_key', 'aquaman://github/token']);
+      session.state = 'locked';
+      const res = await resolve();
+      expect(res.status).toBe(503);
+      expect(JSON.parse(res.body)).toMatchObject({ code: 'vault_locked', fix: 'Run: aquaman unlock' });
+      const forwarded = await udsFetch(socketPath, '/acme/anything');
+      expect(forwarded.status).toBe(503);
+      expect(JSON.parse(forwarded.body).code).toBe('vault_locked');
+      const driven = await openshellResolve({ driver: 'aquaman', handle: 'aquaman://github/token' });
+      expect(driven).toContain('aquaman unlock');
+      expect(driven).not.toContain(SECRET);
+      expect(shown).toEqual([]);
+    });
+
+    it('aquaman lock takes back every yes: after the vault is opened again the person is asked again', async () => {
+      answers = [{ outcome: 'approved' }];
+      expect(JSON.parse((await resolve()).body).value).toBe(SECRET);
+      expect(JSON.parse((await resolve()).body).value).toBe(SECRET);
+      expect(shown).toHaveLength(1);
+
+      expect(JSON.parse((await post('/_vault/lock', {})).body).status).toBe('locked');
+      expect((await resolve()).status).toBe(503);
+      expect((await post('/_vault/unlock', { session: SESSION })).status).toBe(200);
+
+      const after = await resolve();
+      expect(after.body).not.toContain(SECRET);
+      expect(shown).toHaveLength(2);
+    });
+
+    it('a vault that was locked from outside and opened again without the daemon seeing it locked: the next unlock still takes back every yes', async () => {
+      answers = [{ outcome: 'approved' }];
+      expect(JSON.parse((await resolve()).body).value).toBe(SECRET);
+      // The session ended outside (`bw lock`); no request reached the gate meanwhile.
+      session.state = 'locked';
+      expect((await post('/_vault/unlock', { session: SESSION })).status).toBe(200);
+      expect((await resolve()).body).not.toContain(SECRET);
+      expect(shown).toHaveLength(2);
+    });
+
+    it('a vault found locked by a request drops the yes too: asked again once it is open', async () => {
+      answers = [{ outcome: 'approved' }];
+      expect(JSON.parse((await resolve()).body).value).toBe(SECRET);
+      session.state = 'locked';
+      expect((await resolve()).status).toBe(503);
+      // Opened again by something that is not the daemon's own unlock.
+      session.state = 'unlocked';
+      expect((await resolve()).body).not.toContain(SECRET);
+      expect(shown).toHaveLength(2);
+    });
+
+    it('a vault locked while the dialog is up: the yes hands nothing out and is not kept', async () => {
+      holdNext = true;
+      const pending = resolve();
+      await until(() => answer !== undefined);
+      session.state = 'locked';
+      answer!({ outcome: 'approved' });
+      const res = await pending;
+      expect(res.status).toBe(503);
+      expect(res.body).not.toContain(SECRET);
+      session.state = 'unlocked';
+      expect((await resolve()).body).not.toContain(SECRET);
+      expect(shown).toHaveLength(2);
+    });
+  });
+
   describe('limits', () => {
     it.fails('LIMIT: software that can write to the vault itself (the vault\'s own CLI or API) can delete the ask-first record, and the value is then handed out with no dialog', async () => {
       // Not through aquaman: straight into the vault, as `op`, `bw`, `vault kv delete` or a keychain call would.
@@ -743,6 +1183,58 @@ describe('ask first: no value without a person\'s yes', () => {
       expect(other.status).toBe(200);
       // What an approval for one program would do: the second caller is a different one, and is asked about.
       expect(shown).toHaveLength(2);
+    });
+
+    it.fails('LIMIT: marking asks nobody, so a program can fill the record, and the person\'s own mark is then refused until marks are removed, one dialog each', async () => {
+      for (let i = 0; i < 254; i++) await mark('junk', `k${i}`);
+      const res = await post('/broker/ask-first', { service: 'plain', key: 'key', ask: true });
+      // What a record that told a person's marks from a program's would do.
+      expect(JSON.parse(res.body).status).toBe('marked');
+    });
+
+    it.fails('LIMIT: two processes that each change the record with their own access to the vault (a command with no daemon, twice) can lose one of the two changes', async () => {
+      class SlowStore extends MemoryStore {
+        override async get(service: string, key: string): Promise<string | null> {
+          const value = await super.get(service, key);
+          await new Promise((r) => setTimeout(r, 5));
+          return value;
+        }
+      }
+      const vault = new SlowStore();
+      // Each `aquaman broker ask` with no daemon running is its own process, with its own queue.
+      await Promise.all([new AskFirstMarks(vault).mark('github/token'), new AskFirstMarks(vault).mark('slack/bot_token')]);
+      // What a record changed under a lock every process takes would hold.
+      expect(await new AskFirstMarks(vault).list()).toEqual(['github/token', 'slack/bot_token']);
+    });
+
+    it.fails('LIMIT: a daemon that is not on the socket (an OpenClaw-hosted proxy took it) is not told when a command writes a mark into the vault itself, and goes on answering from the record it read', async () => {
+      // The daemon has read the record: plain/key is not marked.
+      expect(JSON.parse((await resolve({}, 'plain', 'key')).body).value).toBe('plain-value-not-marked');
+      // `aquaman broker ask aquaman://plain/key` finds no broker on the socket and writes the vault itself.
+      await new AskFirstMarks(store).mark('plain/key');
+      // The daemon still serves its other listeners (the loopback port, the OpenShell driver).
+      const res = await loopback('/broker/resolve', { service: 'plain', key: 'key' });
+      // What a daemon that saw every change to the record would do.
+      expect(res.body).not.toContain('plain-value-not-marked');
+    });
+
+    it.fails('LIMIT: on a record that cannot be read, a reference that is in no declaring file when a person agrees to remove another mark loses its own; the dialog lists what stays marked, not what does not', async () => {
+      await store.set(...RECORD, 'not a record');
+      await restartDaemon();
+      // A program takes slack/bot_token out of config.yaml; the person removes the mark from github/token.
+      await new Promise((r) => setTimeout(r, 20));
+      writeConfig(['aquaman://github/token']);
+      answers = [{ outcome: 'approved' }];
+      const off = await post('/broker/ask-first', { service: 'github', key: 'token', ask: false });
+      expect(JSON.parse(off.body).status).toBe('unmarked');
+      // The dialog did say that nothing else stays marked.
+      expect(shown[0].text).toContain('After Allow none is marked.');
+      // The program writes the declaration back and reads the value.
+      await new Promise((r) => setTimeout(r, 20));
+      writeConfig(['aquaman://github/token', 'aquaman://slack/bot_token']);
+      const res = await resolve({}, 'slack', 'bot_token');
+      // What a record that could still be read would do: slack/bot_token was marked.
+      expect(res.body).not.toContain(OTHER_SECRET);
     });
   });
 });

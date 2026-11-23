@@ -52,16 +52,36 @@ export interface PromptRequest {
    * (ask-first.ts). An approval: nothing is typed. `windowSeconds` is how
    * long a yes lasts, and the dialog says so.
    */
-  read?: { windowSeconds: number; via: ReadVia };
+  read?: {
+    windowSeconds: number;
+    via: ReadVia;
+    /** With `via: 'forward'`: the address the value would be sent to, as services.yaml gives it. Shown as such. */
+    upstream?: string;
+  };
   /** A command is asking to remove the ask-first mark from the reference. An approval. */
   unmark?: boolean;
+  /**
+   * With `unmark`, when the record of marks cannot be read: the references
+   * that stay marked if the person agrees. Every other one loses its mark,
+   * so the dialog names them. The names come from the declaring files.
+   */
+  keepMarked?: readonly string[];
+  /**
+   * With `read` or `unmark`: marked references that are read from the same
+   * vault item as this one, so the person sees which mark the question is
+   * about when the name asked for is not the name they marked.
+   */
+  sameItemAs?: readonly string[];
 }
 
 /**
- * How a request for a value reached the daemon. This is all aquaman knows
- * about who is asking, so it is all the dialog says about them.
+ * How a request that needs a value reached the daemon: a program asking for
+ * it on the Unix socket, the OpenShell driver, or a request to be forwarded
+ * to a service that services.yaml defines. This is all aquaman knows about
+ * who is asking, so it is all the dialog says about them. There is no entry
+ * for the loopback listener: a request there never raises a dialog.
  */
-export type ReadVia = 'socket' | 'loopback' | 'openshell';
+export type ReadVia = 'socket' | 'openshell' | 'forward';
 
 export type PromptResult =
   | { outcome: 'entered'; value: string }
@@ -179,16 +199,32 @@ export function windowText(seconds: number): string {
  */
 const READ_OPENING: Record<ReadVia, string> = {
   socket: 'A program running as you is asking aquaman for the value of a credential that is marked "ask first".',
-  loopback: 'A program that holds aquaman\'s local token is asking aquaman for the value of a credential that is marked "ask first".',
   openshell: 'A program connected to aquaman\'s OpenShell driver is asking aquaman for the value of a credential that is marked "ask first".',
+  forward: 'A program running as you is asking aquaman to send a request that carries a credential marked "ask first" to a service that is not built into aquaman.',
 };
 
 /**
  * What a yes to a read means, for the window the daemon will keep. True for
- * every caller: the approval is for the reference, not for a program.
+ * every caller: the approval is for the reference, not for a program. For a
+ * forwarded request the value goes to the address services.yaml gives, which
+ * a program running as the user can have written, so the dialog says where.
  */
-export function readConsequence(windowSeconds: number): string {
-  return `aquaman cannot tell which program is asking. Allow hands it the value, and for the next ${windowText(windowSeconds)} (or until aquaman is restarted) any program running as you can read this value from aquaman without another dialog. Deny if you did not expect this.`;
+export function readConsequence(windowSeconds: number, via: ReadVia = 'socket'): string {
+  const window = `for the next ${windowText(windowSeconds)} (or until aquaman is restarted or its vault is locked)`;
+  if (via === 'forward') {
+    return `aquaman cannot tell which program is asking. Allow sends the value to the address this service is defined with in services.yaml, shown below, and ${window} any program running as you can have it sent there, or read it from aquaman, without another dialog. Deny if you did not expect this, or if the address below is not one this value should go to.`;
+  }
+  return `aquaman cannot tell which program is asking. Allow hands it the value, and ${window} any program running as you can read this value from aquaman without another dialog. Deny if you did not expect this.`;
+}
+
+/** At most this many names of a list are written out in a dialog; the rest are counted. */
+const DIALOG_LIST_MAX = 8;
+
+/** A list of reference names as one bounded line: the first few, then how many more. */
+function listText(names: readonly string[]): string {
+  const shown = names.slice(0, DIALOG_LIST_MAX).map((n) => displayText(n, 140));
+  const more = names.length - shown.length;
+  return more > 0 ? `${shown.join(', ')} and ${more} more` : shown.join(', ');
 }
 
 /** What a yes to removing the mark means. */
@@ -202,12 +238,27 @@ function askFirstMessage(request: PromptRequest): string {
     '',
     `Credential: ${displayText(`${request.service}/${request.key}`, 140)}`,
     '',
-    request.read ? readConsequence(request.read.windowSeconds) : UNMARK_CONSEQUENCE,
+    request.read ? readConsequence(request.read.windowSeconds, request.read.via) : UNMARK_CONSEQUENCE,
     '',
     'aquaman never asks for your login, Apple ID or password-manager password.',
   ];
-  // Last, on its own line: everything above is aquaman's own wording.
-  if (request.project) lines.push('', `Requested from (as the caller reports it): ${displayText(request.project)}`);
+  // Last, one line each: everything above is aquaman's own wording, and
+  // every name, address and path below was chosen by something else.
+  const reported: string[] = [];
+  if (request.read?.via === 'forward') {
+    reported.push(`Sent to (as services.yaml says): ${displayText(request.read.upstream ?? 'not given', 200)}`);
+  }
+  if (request.sameItemAs && request.sameItemAs.length > 0) {
+    reported.push(`This is the same vault item as the marked credential: ${listText(request.sameItemAs)}`);
+  }
+  if (request.unmark === true && request.keepMarked !== undefined) {
+    const n = request.keepMarked.length;
+    reported.push(n === 0
+      ? 'The record of marks cannot be read, so every credential counts as marked. After Allow none is marked.'
+      : `The record of marks cannot be read, so every credential counts as marked. After Allow only ${n === 1 ? 'this one stays' : `these ${n} stay`} marked: ${listText(request.keepMarked)}`);
+  }
+  if (request.project) reported.push(`Requested from (as the caller reports it): ${displayText(request.project)}`);
+  if (reported.length > 0) lines.push('', ...reported);
   return lines.join('\n');
 }
 
