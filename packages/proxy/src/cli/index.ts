@@ -3797,7 +3797,7 @@ Example:
         out({ status: 'error', ref, error: `"${parsedRef.service}" does not take its credential in a request header or as HTTP basic auth, so a program cannot be routed to it`, fix: 'Drop --via-proxy' }, 1);
       }
       if (!routeKeys.includes(parsedRef.key)) {
-        out({ status: 'error', ref, ...routeKeyMismatch(parsedRef.service, routeKeys, parsedRef.key) }, 1);
+        out({ status: 'error', ref, ...routeKeyMismatch(parsedRef.service, routeKeys, parsedRef.key, def!.authMode) }, 1);
       }
       if (routeConfig.loopback?.enabled !== true || !routeConfig.loopback.token) {
         out({ status: 'error', ref, error: 'The loopback listener is off, so there is nowhere for the program to send its requests', fix: 'aquaman init --agent <agent> --loopback' }, 1);

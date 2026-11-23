@@ -8,8 +8,13 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { parse as parseYaml } from 'yaml';
 
-export type AuthMode = 'header' | 'url-path' | 'basic' | 'oauth' | 'none';
+export type AuthMode = 'header' | 'url-path' | 'basic' | 'oauth' | 'sigv4' | 'none';
 
+/**
+ * Modes a services.yaml entry may use. `sigv4` is not among them: the proxy
+ * signs only for hosts under amazonaws.com, which it names itself, so a
+ * definition from a file has no upstream to contribute.
+ */
 const AUTH_MODES: readonly string[] = ['header', 'url-path', 'basic', 'oauth', 'none'];
 const CREDENTIAL_KEY_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
@@ -286,6 +291,20 @@ const BUILTIN_SERVICES: ServiceDefinition[] = [
     hostPatterns: []
   },
 
+  // ── AWS Signature Version 4 ─────────────────────────────────────────
+  {
+    // `upstream` is the DNS suffix only. The host of each request is built in
+    // sigv4.ts from the region and service of the client's credential scope.
+    name: 'aws',
+    upstream: 'https://amazonaws.com',
+    authHeader: 'Authorization',
+    credentialKey: 'access_key_id',
+    description: 'AWS APIs (requests signed by the proxy with Signature Version 4)',
+    authMode: 'sigv4',
+    additionalCredentialKeys: ['secret_access_key', 'session_token'],
+    hostPatterns: []
+  },
+
   // ── OAuth Client Credentials Channels ───────────────────────────────
   {
     name: 'ms-teams',
@@ -451,7 +470,10 @@ export class ServiceRegistry {
     }
 
     const mode = service.authMode || 'header';
-    if (!AUTH_MODES.includes(mode)) {
+    if (mode === 'sigv4' && !BUILTIN_SERVICE_NAMES.has(service.name)) {
+      return { valid: false, error: 'authMode sigv4 is only available as the builtin "aws" service' };
+    }
+    if (mode !== 'sigv4' && !AUTH_MODES.includes(mode)) {
       return { valid: false, error: `authMode must be one of: ${AUTH_MODES.join(', ')}` };
     }
 

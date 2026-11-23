@@ -18,7 +18,26 @@ import { parseRequestTarget, policyPathInterpretations, policyMethods, policyPat
 import { clampPromptTimeout, type CredentialPrompter, type PromptResult } from './credential-prompt.js';
 import { handleServiceConsent, SERVICE_CONSENT_PATH, type PromptLimiter } from './service-consent.js';
 import { isReservedService, reservedServiceRefusal, type BrokerScope } from './broker-scope.js';
-import { routableKeys, routeKeyMismatch, basicTokenCandidates, basicValueCarries } from './route-auth.js';
+import { routableKeys, routeRequiredKeys, routeKeyMismatch, basicTokenCandidates, basicValueCarries } from './route-auth.js';
+import {
+  AWS_DNS_SUFFIX,
+  EMPTY_PAYLOAD_SHA256,
+  SIGV4_MAX_BUFFERED_BODY,
+  SIGV4_PLACEHOLDER_SECRET,
+  amzDate,
+  canonicalQuery,
+  canonicalUri,
+  isSigV4SignedHeader,
+  isSigV4StrippedHeader,
+  parseSigV4Authorization,
+  payloadPlan,
+  resolveSigV4Target,
+  sha256Hex,
+  sigV4AuthorizationRefusal,
+  sigV4RouteEnv,
+  sigV4TokenCandidates,
+  signSigV4,
+} from './sigv4.js';
 import type { CredentialLinker } from './core/credentials/linked-store.js';
 import { linkRequestPlan, linkUnreadableReply } from './link-request.js';
 
@@ -308,6 +327,9 @@ export class CredentialProxy {
     }
     // A basic client builds the header itself, so the token is one half of the pair.
     if (def.authMode === 'basic') candidates.push(...basicTokenCandidates(req.headers.authorization));
+    // An AWS client signs with the token as its access key id, so it arrives
+    // inside the credential scope of the signature.
+    if (def.authMode === 'sigv4') candidates.push(...sigV4TokenCandidates(req.headers.authorization));
     return candidates.some(c => timingSafeStrEqual(c, this.routeToken));
   }
 
@@ -577,6 +599,11 @@ export class CredentialProxy {
       }
     }
 
+    if (authMode === 'sigv4') {
+      await this.forwardSigV4(req, res, serviceDef, canonicalSegments, target.search, url, requestInfo);
+      return;
+    }
+
     try {
       // Get primary credential from store
       const credential = await this.options.store.get(service, config.credentialKey);
@@ -733,16 +760,30 @@ export class CredentialProxy {
       }
     }
 
+    return this.sendUpstream(transport, {
+      hostname: upstreamUrl.hostname,
+      port: upstreamUrl.port || (isHttps ? 443 : 80),
+      path: upstreamUrl.pathname + upstreamUrl.search,
+      method: clientReq.method,
+      headers
+    }, clientReq, null, clientRes, serviceDef, requestInfo);
+  }
+
+  /**
+   * Send one request upstream and hand the answer back once its audit entry
+   * is written. The body is the client's stream, or `body` when the proxy has
+   * already read it.
+   */
+  private sendUpstream(
+    transport: typeof http | typeof https,
+    options: https.RequestOptions,
+    clientReq: IncomingMessage,
+    body: Buffer | null,
+    clientRes: ServerResponse,
+    serviceDef: ServiceDefinition,
+    requestInfo: RequestInfo
+  ): Promise<void> {
     return new Promise((resolve) => {
-
-      const options = {
-        hostname: upstreamUrl.hostname,
-        port: upstreamUrl.port || (isHttps ? 443 : 80),
-        path: upstreamUrl.pathname + upstreamUrl.search,
-        method: clientReq.method,
-        headers
-      };
-
       const proxyReq = transport.request(options, (proxyRes) => {
         requestInfo.statusCode = proxyRes.statusCode;
         // The upstream has answered, so the credential was used. The client
@@ -803,7 +844,205 @@ export class CredentialProxy {
       });
 
       // Forward request body
-      clientReq.pipe(proxyReq);
+      if (body) proxyReq.end(body);
+      else clientReq.pipe(proxyReq);
+    });
+  }
+
+  /**
+   * Forward a request to AWS, signed by the proxy (authMode `sigv4`).
+   *
+   * The client signed with placeholder credentials. Its `Authorization`
+   * header is read for two things only, the region and the signing name, and
+   * then dropped with everything else its signature consisted of. The host
+   * is built from validated labels under amazonaws.com (sigv4.ts), the body
+   * is hashed by the proxy, the date is the proxy's clock, and the request
+   * that leaves is signed with the keys from the vault. A request the proxy
+   * cannot sign completely is refused before any key is read.
+   */
+  private async forwardSigV4(
+    req: IncomingMessage,
+    res: ServerResponse,
+    serviceDef: ServiceDefinition,
+    segments: string[],
+    search: string,
+    rawUrl: string,
+    requestInfo: RequestInfo
+  ): Promise<void> {
+    const service = requestInfo.service;
+    const refuse = (status: number, body: { error: string; fix: string; code?: string }) => {
+      requestInfo.error = body.code ? `${body.code}: ${body.error}` : body.error;
+      requestInfo.statusCode = status;
+      this.emitRequest(requestInfo);
+      res.setHeader('Content-Type', 'application/json');
+      // The body may not have been read, so this connection is not reused.
+      if (!req.complete) res.setHeader('Connection', 'close');
+      res.statusCode = status;
+      res.end(JSON.stringify(body));
+    };
+    const header = (name: string): string | undefined => {
+      const v = req.headers[name];
+      return Array.isArray(v) ? v[0] : v;
+    };
+
+    const scope = parseSigV4Authorization(header('authorization'));
+    if (!scope) {
+      const r = sigV4AuthorizationRefusal(header('authorization'));
+      refuse(r.status, { error: r.error, fix: r.fix, code: r.code });
+      return;
+    }
+    const awsTarget = resolveSigV4Target(segments, scope);
+    if (!awsTarget.ok) {
+      refuse(awsTarget.status, { error: awsTarget.error, fix: awsTarget.fix, code: awsTarget.code });
+      return;
+    }
+    const query = canonicalQuery(search);
+    if (!query.ok) {
+      refuse(query.status, { error: query.error, fix: query.fix, code: query.code });
+      return;
+    }
+    const plan = payloadPlan(header('x-amz-content-sha256'), awsTarget.service);
+    if (!plan.ok) {
+      refuse(plan.status, { error: plan.error, fix: plan.fix, code: plan.code });
+      return;
+    }
+    // The request-target parser drops empty segments. For most services that
+    // changes nothing; for AWS a doubled slash is part of an object key and a
+    // trailing slash part of an API path, and the signature covers the path
+    // byte for byte. The trailing slash is kept, a doubled slash is refused.
+    const q = rawUrl.indexOf('?');
+    const rawPath = q === -1 ? rawUrl : rawUrl.slice(0, q);
+    if (rawPath.includes('//')) {
+      refuse(400, { error: 'The path contains an empty segment ("//"), which the proxy does not forward to AWS', fix: 'Use object keys and paths without doubled slashes', code: 'sigv4_path_unsupported' });
+      return;
+    }
+    const trailingSlash = awsTarget.segments.length > 0 && rawPath.endsWith('/');
+
+    let accessKeyId: string | null;
+    let secretAccessKey: string | null;
+    let sessionToken: string | null;
+    const secretKeyName = serviceDef.additionalCredentialKeys?.[0] ?? 'secret_access_key';
+    const tokenKeyName = serviceDef.additionalCredentialKeys?.[1];
+    try {
+      accessKeyId = await this.options.store.get(service, serviceDef.credentialKey);
+      secretAccessKey = accessKeyId === null ? null : await this.options.store.get(service, secretKeyName);
+      sessionToken = secretAccessKey === null || !tokenKeyName ? null : await this.options.store.get(service, tokenKeyName);
+    } catch (error) {
+      requestInfo.error = error instanceof Error ? error.message : String(error);
+      requestInfo.statusCode = 500;
+      this.emitRequest(requestInfo);
+      res.statusCode = 500;
+      res.end('Proxy error');
+      return;
+    }
+    if (accessKeyId === null || secretAccessKey === null) {
+      const missing = accessKeyId === null ? serviceDef.credentialKey : secretKeyName;
+      refuse(401, { error: `No credential found for ${service}/${missing}`, fix: `Run: aquaman credentials add ${service} ${missing}` });
+      return;
+    }
+    requestInfo.authenticated = true;
+
+    // Headers: everything the client's signature was made of is left behind,
+    // as is anything that carries one of this proxy's tokens or the placeholder.
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (isSigV4StrippedHeader(key)) continue;
+      const values = Array.isArray(value) ? value : [value ?? ''];
+      if (values.some((v) => this.carriesLocalToken(v) || v.includes(SIGV4_PLACEHOLDER_SECRET))) continue;
+      if (values[0]) headers[key] = values[0];
+    }
+
+    let body: Buffer | null = null;
+    let payloadHash: string;
+    if (plan.mode === 'literal') {
+      payloadHash = plan.value;
+    } else {
+      const read = await this.readBodyCapped(req, SIGV4_MAX_BUFFERED_BODY);
+      if (read === null) {
+        requestInfo.authenticated = false;
+        refuse(413, {
+          error: `The request body is larger than ${SIGV4_MAX_BUFFERED_BODY / (1024 * 1024)} MiB, the most the proxy holds in memory to hash for the signature`,
+          fix: 'Send it in smaller parts (a multipart upload), or for S3 with an unsigned payload (x-amz-content-sha256: UNSIGNED-PAYLOAD)',
+          code: 'sigv4_body_too_large',
+        });
+        res.once('finish', () => req.destroy());
+        return;
+      }
+      body = read;
+      payloadHash = body.length === 0 ? EMPTY_PAYLOAD_SHA256 : sha256Hex(body);
+      delete headers['transfer-encoding'];
+      if (body.length > 0 || header('content-length') !== undefined) headers['content-length'] = String(body.length);
+    }
+
+    const now = amzDate(new Date());
+    headers['host'] = awsTarget.host;
+    headers['x-amz-date'] = now;
+    headers['x-amz-content-sha256'] = payloadHash;
+    if (sessionToken) headers['x-amz-security-token'] = sessionToken;
+
+    const toSign: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      if (key === 'host' || isSigV4SignedHeader(key)) toSign[key] = value;
+    }
+    const signed = signSigV4({
+      method: req.method || 'GET',
+      canonicalUri: canonicalUri(awsTarget.segments, trailingSlash, awsTarget.service),
+      canonicalQuery: query.canonical,
+      headers: toSign,
+      payloadHash,
+      region: awsTarget.region,
+      service: awsTarget.service,
+      accessKeyId,
+      secretAccessKey,
+      amzDate: now,
+    });
+    headers['authorization'] = signed.authorization;
+
+    // The connection goes to the host named above, over TLS. A definition
+    // whose upstream is not the AWS suffix exists only through `override()`,
+    // which tests use to stand in for AWS: the connection then goes there,
+    // while the Host header and the signature still name the AWS host.
+    const base = new URL(serviceDef.upstream);
+    const toAws = base.protocol === 'https:' && base.hostname === AWS_DNS_SUFFIX && base.port === '';
+    const upstreamPath = `/${awsTarget.segments.join('/')}${trailingSlash ? '/' : ''}${search}`;
+    await this.sendUpstream(base.protocol === 'https:' ? https : http, {
+      hostname: toAws ? awsTarget.host : base.hostname,
+      port: toAws ? 443 : base.port || (base.protocol === 'https:' ? 443 : 80),
+      path: upstreamPath,
+      method: req.method,
+      headers,
+      ...(toAws ? { servername: awsTarget.host } : {}),
+    }, req, body, res, serviceDef, requestInfo);
+  }
+
+  /** Read a request body into memory, or return null once it is known to exceed `cap` bytes. */
+  private readBodyCapped(req: IncomingMessage, cap: number): Promise<Buffer | null> {
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > cap) return Promise.resolve(null);
+    // Listeners, not `for await`: leaving that loop early destroys the
+    // socket, and the refusal still has to be written to it.
+    return new Promise((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      const done = (result: Buffer | null) => {
+        req.off('data', onData);
+        req.off('end', onEnd);
+        req.off('error', reject);
+        resolve(result);
+      };
+      const onData = (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > cap) {
+          req.pause();
+          done(null);
+          return;
+        }
+        chunks.push(chunk);
+      };
+      const onEnd = () => done(Buffer.concat(chunks));
+      req.on('data', onData);
+      req.on('end', onEnd);
+      req.on('error', reject);
     });
   }
 
@@ -892,9 +1131,9 @@ export class CredentialProxy {
 
   /**
    * Whether a project has routed a program to this service in a way the
-   * proxy can serve: the service takes its credential in a header or as
-   * HTTP basic auth, and the routed reference is a key the proxy injects for
-   * it (route-auth.ts).
+   * proxy can serve: the service takes its credential in a header, as HTTP
+   * basic auth or as an AWS signature, and the routed reference is a key a
+   * program presents the route token in place of (route-auth.ts).
    */
   private isServiceRouted(service: string): boolean {
     const def = this.serviceRegistry.get(service);
@@ -995,13 +1234,14 @@ export class CredentialProxy {
       return;
     }
     if (!keys.includes(key)) {
-      const mismatch = routeKeyMismatch(service, keys, key);
+      const mismatch = routeKeyMismatch(service, keys, key, serviceDef.authMode);
       refuse('route_key_mismatch', mismatch.error, mismatch.fix);
       return;
     }
     // Every key the proxy injects for the service, the routed one first: a
-    // basic request sent with half a pair would only fail at the upstream.
-    for (const needed of [key, ...keys.filter((k) => k !== key)]) {
+    // basic request sent with half a pair, or an AWS request with no key to
+    // sign with, would only fail at the upstream.
+    for (const needed of [key, ...routeRequiredKeys(serviceDef).filter((k) => k !== key)]) {
       let stored = false;
       try {
         stored = (await this.options.store.get(service, needed)) !== null;
@@ -1013,7 +1253,11 @@ export class CredentialProxy {
         return;
       }
     }
-    reply(200, { url: `http://${address}/${service}`, token: this.routeToken });
+    const routeUrl = `http://${address}/${service}`;
+    // An AWS client also needs a secret access key to start, and some
+    // services need their own endpoint variable; `env` names those. The
+    // secret it carries is a fixed placeholder, never a stored value.
+    reply(200, { url: routeUrl, token: this.routeToken, ...(serviceDef.authMode === 'sigv4' ? { env: sigV4RouteEnv(routeUrl) } : {}) });
     this.emitRequest({
       id: crypto.randomUUID(),
       service,

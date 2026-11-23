@@ -301,6 +301,16 @@ program
           const target = await broker.route(parsed);
           env[envName] = target.token;
           env[route.url_env] = target.url + (route.base_path ?? '');
+          // Variables the proxy says the program also needs, such as the
+          // placeholder secret an AWS client will not start without. A name
+          // the project binds itself is left to that binding, and one that
+          // changes how programs are loaded is never set from here.
+          for (const [name, value] of Object.entries(target.env)) {
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || isLoaderEnvName(name)) continue;
+            if (Object.hasOwn(match.config.env, name)) continue;
+            if (Object.values(match.config.routes ?? {}).some((r) => r.url_env === name)) continue;
+            env[name] = value;
+          }
           injectedValues.push(target.token);
           continue;
         }
