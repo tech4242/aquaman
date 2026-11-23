@@ -40,7 +40,7 @@ function send(address: string, opts: { method?: string; path: string; headers?: 
   });
 }
 
-describe('AWS path: a copy source is checked as a read', () => {
+describe('AWS path: the bucket part of a copy source', () => {
   let proxy: CredentialProxy;
   let aws: AwsStandIn;
   let store: CountingStore;
@@ -84,7 +84,7 @@ describe('AWS path: a copy source is checked as a read', () => {
     cleanupSocket(socketPath);
   });
 
-  describe('review probes', () => {
+  describe('spellings that are not a plain bucket name', () => {
     const DENY_BUCKET: PolicyConfig = { aws: { defaultAction: 'allow', rules: [{ method: '*', path: '/protected-bucket/**', action: 'deny' }] } };
     it.each([
       ['control: the ARN row the repo has', 'arn%3Aaws%3As3:us-east-1:123456789012:accesspoint/ap/object/secret.txt'],
