@@ -665,6 +665,7 @@ program
           // daemon holds its own; whether that one works is reported below.
           console.log(`    \u2022 ${loadConfig().credentials.backend} backend: locked in this shell, so credentials are not listed here`);
           console.log('      The daemon keeps its own session (see the proxy lines below). For commands in this shell: export BW_SESSION=$(bw unlock --raw)');
+          console.log('      and then `aquaman unlock` in the same shell: a new `bw unlock` ends the session the daemon holds.');
         } else {
           console.log(`    \u2717 Backend not accessible: ${(err as Error).message}`);
           console.log('      \u2192 Run: aquaman setup');

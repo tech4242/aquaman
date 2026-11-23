@@ -321,7 +321,7 @@ describe('a vault a person unlocks', () => {
     });
 
     it.each([
-      ['a number', { session: 12345678901234567890 }],
+      ['a number', { session: 1234567890123456 }],
       ['a list', { session: [SESSION] }],
       ['an object', { session: { toString: SESSION } }],
       ['no session and no check', {}],
