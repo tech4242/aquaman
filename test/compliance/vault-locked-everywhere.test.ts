@@ -4,10 +4,9 @@
  * has unlocked it.
  *
  * `vault-unlock.test.ts` covers the hand-over of the session. This file is
- * about the paths that read the vault for a reason of their own before, or
- * in place of, the credential: the ask-first marks, which are an item in the
- * vault, and the AWS path, which reads two or three keys to sign a request.
- * A caller told "backend error, run doctor" or "Proxy error" for a locked
+ * about the paths that read the vault to hand a value out or to say whether
+ * one is there, and the AWS path, which reads two or three keys to sign a
+ * request. A caller told "backend error, run doctor" or "Proxy error" for a locked
  * vault has no way to know that one command by a person ends it.
  *
  * A real proxy on a temporary socket and a loopback port over a store that
@@ -23,7 +22,6 @@ import {
   createCredentialProxy,
   createBrokerScope,
   type CredentialProxy,
-  type CredentialPrompter,
   type RequestInfo,
 } from 'aquaman-proxy';
 import { MemoryStore } from 'aquaman-core';
@@ -50,14 +48,7 @@ describe('a locked vault is reported as locked on every path that reads it', () 
   let store: LockableStore;
   let proxy: CredentialProxy;
   let socketPath = '';
-  let asked: number;
   let log: RequestInfo[];
-
-  const prompter: CredentialPrompter = {
-    async askValue() { return { outcome: 'declined' }; },
-    async askApproval() { asked++; return { outcome: 'approved' }; },
-    async askLoginItem() { return { outcome: 'declined' }; },
-  };
 
   const post = async (pathname: string, body: unknown) => {
     const res = await udsFetch(socketPath, pathname, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -75,7 +66,6 @@ describe('a locked vault is reported as locked on every path that reads it', () 
       store,
       allowedServices: ['aws'],
       broker: createBrokerScope({ configPath: path.join(dir, 'config.yaml'), projectsPath: path.join(dir, 'projects.yaml') }),
-      credentialRequests: { prompter, declare: () => {} },
       loopback: { port, token: TOKEN },
       onRequest: (info) => { log.push(info); },
     });
@@ -90,7 +80,6 @@ describe('a locked vault is reported as locked on every path that reads it', () 
     await store.set('github', 'token', SECRET);
     await store.set('aws', 'access_key_id', 'AKIDEXAMPLE');
     await store.set('aws', 'secret_access_key', 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY');
-    asked = 0;
     log = [];
     await startProxy();
   });
@@ -101,12 +90,11 @@ describe('a locked vault is reported as locked on every path that reads it', () 
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('resolve: the marks cannot be read, and the answer is vault_locked, not a backend error', async () => {
+  it('resolve: the answer is vault_locked, not a backend error and not a missing credential', async () => {
     store.locked = true;
     const res = await post('/broker/resolve', { service: 'github', key: 'token' });
     expect(res.status).toBe(503);
     expect(res.json).toMatchObject(LOCKED);
-    expect(asked).toBe(0);
     expect(log.at(-1)).toMatchObject({ statusCode: 503, error: 'vault_locked: github/token' });
   });
 
@@ -115,18 +103,6 @@ describe('a locked vault is reported as locked on every path that reads it', () 
     const res = await post('/broker/available', { refs: [{ service: 'github', key: 'token' }] });
     expect(res.status).toBe(200);
     expect(res.json).toMatchObject({ available: [false], locked: true, ...LOCKED });
-  });
-
-  it.each([
-    ['listing the marks', { list: true }],
-    ['setting a mark', { service: 'github', key: 'token', ask: true }],
-    ['removing a mark', { service: 'github', key: 'token', ask: false }],
-  ])('ask-first endpoint, %s: vault_locked with the unlock fix', async (_name, body) => {
-    store.locked = true;
-    const res = await post('/broker/ask-first', body);
-    expect(res.status).toBe(503);
-    expect(res.json).toMatchObject(LOCKED);
-    expect(asked).toBe(0);
   });
 
   it('an AWS request: vault_locked as JSON, nothing signed and nothing sent', async () => {
@@ -145,8 +121,7 @@ describe('a locked vault is reported as locked on every path that reads it', () 
     expect(log.at(-1)).toMatchObject({ statusCode: 503, error: 'vault_locked: aws/access_key_id' });
   });
 
-  it('after the unlock a marked reference is asked about: a locked spell does not leave the marks read as "none"', async () => {
-    expect((await post('/broker/ask-first', { service: 'github', key: 'token', ask: true })).status).toBe(200);
+  it('after the unlock the same requests are served: a proxy started over a locked vault reads it once it is open', async () => {
     // A proxy started over a locked vault is what a login is: nothing remembered, nothing readable.
     await proxy.stop();
     cleanupSocket(socketPath);
@@ -159,6 +134,7 @@ describe('a locked vault is reported as locked on every path that reads it', () 
     const res = await post('/broker/resolve', { service: 'github', key: 'token' });
     expect(res.status).toBe(200);
     expect(res.json.value).toBe(SECRET);
-    expect(asked).toBe(1);
+    const available = await post('/broker/available', { refs: [{ service: 'github', key: 'token' }] });
+    expect(available.json).toEqual({ available: [true] });
   });
 });

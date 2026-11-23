@@ -12,7 +12,7 @@ pip install -U aquaman-hermes                     # Hermes users
 
 ## 0.21.0
 
-Four things that kept aquaman from being the answer in cases people asked about: a stdio MCP server can now run under `aquaman-coder exec`, a credential can be marked so that a person is asked before its value is handed out, the Bitwarden backend works with the login item, and the proxy signs AWS requests.
+Three things that kept aquaman from being the answer in cases people asked about: a stdio MCP server can now run under `aquaman-coder exec`, the Bitwarden backend works with the login item, and the proxy signs AWS requests.
 
 ### A stdio MCP server under `aquaman-coder exec`
 
@@ -22,25 +22,6 @@ Four things that kept aquaman from being the answer in cases people asked about:
 - A token bound with `--via-proxy` gives the server a local token and the proxy's address in place of the key, so the key is never in the server's process.
 - `exec` passes SIGTERM, SIGINT and SIGHUP on to the command, so a server stops when its host stops the wrapper.
 - What was run, in Claude Code 2.1.330 with a stand-in server and a stand-in API: the server connected, the tool that calls the API was answered with the real key added by the proxy, the tool that returns its own token came back redacted, and no server was left running after the session. Guide: [Credentials for MCP servers](https://aquaman.sh/docs/mcp/).
-
-### Ask first: a dialog before a credential is handed out
-
-A declared reference is handed to any program running as you that asks the daemon for it. A reference can now be marked "ask first": the daemon shows its dialog the first time the value is requested and remembers a yes for a while. Nothing changes for references that are not marked.
-
-- **Marking:** `aquaman broker ask <ref>`, `aquaman broker allow <ref> --ask`, or `aquaman request <ref> --ask`. Marking asks nobody.
-- **The first read waits for you.** `aquaman get`, `aquaman-coder exec`, `POST /broker/resolve` and the OpenShell driver's Resolve all go through the same check, before the vault is read. The dialog says that aquaman cannot tell which program is asking, and that a yes lets any program running as you read that value until the window ends.
-- **The loopback listener never raises a dialog.** A request there for a marked reference nobody has allowed is answered `ask_first_required`, with the command to run on the machine to be asked (`aquaman get <ref> > /dev/null`).
-- **The window** is 8 hours, or `broker.askFirstWindowSeconds` in `config.yaml` (60 to 86400). A yes covers one reference and is gone when the daemon stops or its vault is locked (`aquaman lock`). While the vault is locked nobody is asked: the answer is `vault_locked`.
-- **The mark is in your vault**, not in `config.yaml` or `projects.yaml`, so editing those files does not remove it. A record that cannot be read marks every reference. The record holds 256 references.
-- **One item, two names.** On the `1password` and `systemd-creds` backends two references can name the same item. The mark, a yes and a no hold for the item under either name, and the tier that is never handed out over the loopback listener does too.
-- **Removing a mark** (`aquaman broker ask <ref> --off`) is decided in the daemon's dialog. No flag or environment variable answers it. If the record cannot be read, the dialog lists the references that stay marked.
-- **A reference revoked while its dialog is up** is not handed out on a yes.
-- **Refusals** are `404` with a `code`: `ask_first_declined`, `ask_first_unanswered`, `prompt_unavailable`. `aquaman get` exits 2 when you declined and 3 when nobody answered or no dialog could be shown. `aquaman-coder exec` leaves that one variable unset, says why on stderr, and does not run a command for which nothing was handed out.
-- **Hermes:** the secret source never raises the dialog. A marked reference nobody has allowed is a warning that names the command to run (`aquaman get <ref> > /dev/null`).
-- **Forwarding:** a request forwarded for a service defined in `services.yaml` goes through the same check, because that file decides where the credential is sent; the dialog shows the address, and a refusal is `403` with the same `code`. Requests forwarded for a builtin service are not gated, and references bound with `--via-proxy` are never handed out.
-- Every dialog outcome is an entry in the audit log.
-- Limits: a yes is for the reference, not for a program; software that can write to the vault itself can delete the mark; a program can fill the record, since marking asks nobody; with no daemon serving the broker, two commands that write the record at the same moment can lose one mark; where no dialog can be shown, a typed `yes` at a terminal is the only check on removing a mark. The agent contract has the details: [ask first](https://aquaman.sh/docs/agent-setup/#ask-first-a-dialog-before-a-value-is-handed-out).
-- The dialog was exercised with a scripted stand-in for the person; the tests check its exact wording and what the daemon does after each answer.
 
 ### AWS through the proxy
 
@@ -59,7 +40,7 @@ With the `bitwarden` backend the daemon needed a Bitwarden session in the enviro
 
 - **The daemon starts and stays up while the vault is locked.** Requests that need a credential are answered with the code `vault_locked` and the fix `Run: aquaman unlock`. Health checks, status, request policy and everything else that needs no credential keep working.
 - **`aquaman unlock`**, run by a person in a terminal, opens it. Bitwarden's own CLI asks for the master password (`bw unlock --raw`, attached to your terminal), so aquaman never sees it. aquaman takes the session that comes out and hands it to the running daemon over its Unix socket; the daemon checks it with `bw status` and keeps it in memory. It is not printed, not passed as a command argument, and not written to disk, the keychain or the login item.
-- **`aquaman lock`** makes the daemon drop the session, the values it had cached and every yes given in an ask-first dialog. It does not run `bw`; to end the session everywhere, run `bw lock`.
+- **`aquaman lock`** makes the daemon drop the session and the values it had cached. It does not run `bw`; to end the session everywhere, run `bw lock`.
 - **A session that Bitwarden ends** (`bw lock`, `bw logout`, another `bw unlock`) puts the daemon back into `vault_locked` with the same fix. It does not have to be restarted.
 - `aquaman status`, `aquaman doctor` and `aquaman init --agent` report a locked vault, and `aquaman service install` and `aquaman service status` list `aquaman unlock` as the step after each login.
 - A coding agent's commands are not blocked while the vault is locked: they run without the project's credentials and the agent is told that a person has to unlock. `aquaman request` answers `vault_locked` without showing a dialog.
@@ -68,6 +49,10 @@ With the `bitwarden` backend the daemon needed a Bitwarden session in the enviro
 - Starting the daemon from a shell with `export BW_SESSION=$(bw unlock --raw)` works as before.
 
 How to use it: [Bitwarden: unlock after you log in](https://aquaman.sh/docs/autostart/#bitwarden-unlock-after-you-log-in).
+
+### Fixed: a provider key under a second name on the loopback listener
+
+- On the `1password` and `systemd-creds` backends two references can name the same vault item: `openai-org/id` and `openai/org-id` are both the 1Password item `aquaman-openai-org-id`. The provider keys that are never handed out over the loopback listener are now refused there under every name of their items, with the code `broker_ref_isolated`. A line in `credentials.links` does not change which item a name stands for.
 
 ## 0.20.0
 

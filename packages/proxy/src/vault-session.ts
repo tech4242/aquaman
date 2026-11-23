@@ -52,8 +52,6 @@ export interface VaultSessionContext {
   audit(error?: string): void;
   /** Told once the vault is open, so work that waited for it can go on. */
   onUnlocked?(): void;
-  /** Told once the session was dropped, so what a person allowed while the vault was open goes with it. */
-  onLocked?(): void;
 }
 
 const NOT_A_SESSION_BACKEND = {
@@ -193,7 +191,6 @@ export async function handleVaultLock(req: IncomingMessage, res: ServerResponse,
   }
   const was = store.vaultState();
   store.forgetSession();
-  ctx.onLocked?.();
   if (was === 'unlocked') ctx.audit();
   reply(200, { status: 'locked' });
 }

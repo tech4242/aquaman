@@ -77,15 +77,6 @@ export class LinkApprovals {
     return (await this.load()).get(name) === locator;
   }
 
-  /**
-   * The locator a person approved for this reference, or `undefined`.
-   * Answered from the copy in memory while there is one; the copy is dropped
-   * whenever config.yaml changes, which every new link does.
-   */
-  async locatorFor(name: string): Promise<string | undefined> {
-    return (this.cached ?? await this.load()).get(name);
-  }
-
   async approve(name: string, locator: string): Promise<void> {
     const map = await this.load();
     map.set(name, locator);
@@ -155,21 +146,6 @@ export class LinkedStore implements CredentialStore {
   /** The backend's own item name, passed through. Links play no part in it. */
   get itemIdentity(): CredentialStore['itemIdentity'] {
     return this.inner.itemIdentity ? (service, key) => this.inner.itemIdentity!(service, key) : undefined;
-  }
-
-  /**
-   * A reference linked in config.yaml and approved in the vault is read from
-   * the item its link names, so two references linked to one locator are one
-   * item. A line nobody approved reads nothing and makes the reference into
-   * nothing else: config.yaml can be written by any program, and what a
-   * reference is must not follow from that file alone. `approved` comes from
-   * the vault only, so it stands when the line is taken out of the file.
-   */
-  async linkIdentities(service: string, key: string): Promise<{ reads: string; approved: string }> {
-    const name = `${service}/${key}`;
-    const linked = this.locatorOf(service, key);
-    const approved = (await this.approvals.locatorFor(name)) ?? '';
-    return { reads: linked !== '' && linked === approved ? linked : '', approved };
   }
 
   async readLinked(locator: ParsedLocator): Promise<string | null> {

@@ -47,41 +47,7 @@ export interface PromptRequest {
    * injected by the proxy and not handed to commands. Picks the wording.
    */
   linkOnly?: boolean;
-  /**
-   * A program is asking for the value of a reference marked ask-first
-   * (ask-first.ts). An approval: nothing is typed. `windowSeconds` is how
-   * long a yes lasts, and the dialog says so.
-   */
-  read?: {
-    windowSeconds: number;
-    via: ReadVia;
-    /** With `via: 'forward'`: the address the value would be sent to, as services.yaml gives it. Shown as such. */
-    upstream?: string;
-  };
-  /** A command is asking to remove the ask-first mark from the reference. An approval. */
-  unmark?: boolean;
-  /**
-   * With `unmark`, when the record of marks cannot be read: the references
-   * that stay marked if the person agrees. Every other one loses its mark,
-   * so the dialog names them. The names come from the declaring files.
-   */
-  keepMarked?: readonly string[];
-  /**
-   * With `read` or `unmark`: marked references that are read from the same
-   * vault item as this one, so the person sees which mark the question is
-   * about when the name asked for is not the name they marked.
-   */
-  sameItemAs?: readonly string[];
 }
-
-/**
- * How a request that needs a value reached the daemon: a program asking for
- * it on the Unix socket, the OpenShell driver, or a request to be forwarded
- * to a service that services.yaml defines. This is all aquaman knows about
- * who is asking, so it is all the dialog says about them. There is no entry
- * for the loopback listener: a request there never raises a dialog.
- */
-export type ReadVia = 'socket' | 'openshell' | 'forward';
 
 export type PromptResult =
   | { outcome: 'entered'; value: string }
@@ -182,96 +148,12 @@ const CONSEQUENCE = {
 } as const;
 
 /**
- * A window in the words a person would use: "8 hours", "90 minutes",
- * "45 seconds". Whole units only, so the dialog never states a longer time
- * than the daemon keeps.
- */
-export function windowText(seconds: number): string {
-  const unit = (n: number, name: string) => `${n} ${name}${n === 1 ? '' : 's'}`;
-  if (seconds % 3600 === 0) return unit(seconds / 3600, 'hour');
-  if (seconds % 60 === 0) return unit(seconds / 60, 'minute');
-  return unit(seconds, 'second');
-}
-
-/**
- * Who is asking, as far as aquaman can say: the listener the request came in
- * on. It cannot name the program, and the sentence after it says so.
- */
-const READ_OPENING: Record<ReadVia, string> = {
-  socket: 'A program running as you is asking aquaman for the value of a credential that is marked "ask first".',
-  openshell: 'A program connected to aquaman\'s OpenShell driver is asking aquaman for the value of a credential that is marked "ask first".',
-  forward: 'A program running as you is asking aquaman to send a request that carries a credential marked "ask first" to a service that is not built into aquaman.',
-};
-
-/**
- * What a yes to a read means, for the window the daemon will keep. True for
- * every caller: the approval is for the reference, not for a program. For a
- * forwarded request the value goes to the address services.yaml gives, which
- * a program running as the user can have written, so the dialog says where.
- */
-export function readConsequence(windowSeconds: number, via: ReadVia = 'socket'): string {
-  const window = `for the next ${windowText(windowSeconds)} (or until aquaman is restarted or its vault is locked)`;
-  if (via === 'forward') {
-    return `aquaman cannot tell which program is asking. Allow sends the value to the address this service is defined with in services.yaml, shown below, and ${window} any program running as you can have it sent there, or read it from aquaman, without another dialog. Deny if you did not expect this, or if the address below is not one this value should go to.`;
-  }
-  return `aquaman cannot tell which program is asking. Allow hands it the value, and ${window} any program running as you can read this value from aquaman without another dialog. Deny if you did not expect this.`;
-}
-
-/** At most this many names of a list are written out in a dialog; the rest are counted. */
-export const DIALOG_LIST_MAX = 8;
-
-/** A list of reference names as one bounded line: the first few, then how many more. */
-function listText(names: readonly string[]): string {
-  const shown = names.slice(0, DIALOG_LIST_MAX).map((n) => displayText(n, 140));
-  const more = names.length - shown.length;
-  return more > 0 ? `${shown.join(', ')} and ${more} more` : shown.join(', ');
-}
-
-/** What a yes to removing the mark means. */
-export const UNMARK_CONSEQUENCE = 'Allow removes the "ask first" mark. aquaman then hands this value out without asking, to any program running as you, whenever the credential is declared for handing out. Deny if you did not expect this.';
-
-function askFirstMessage(request: PromptRequest): string {
-  const lines = [
-    request.read
-      ? READ_OPENING[request.read.via]
-      : 'A command is asking aquaman to stop asking you before it hands out the credential below.',
-    '',
-    `Credential: ${displayText(`${request.service}/${request.key}`, 140)}`,
-    '',
-    request.read ? readConsequence(request.read.windowSeconds, request.read.via) : UNMARK_CONSEQUENCE,
-    '',
-    'aquaman never asks for your login, Apple ID or password-manager password.',
-  ];
-  // Last, one line each: everything above is aquaman's own wording, and
-  // every name, address and path below was chosen by something else.
-  const reported: string[] = [];
-  if (request.read?.via === 'forward') {
-    reported.push(`Sent to (as services.yaml says): ${displayText(request.read.upstream ?? 'not given', 200)}`);
-  }
-  if (request.sameItemAs && request.sameItemAs.length > 0) {
-    reported.push(request.unmark === true
-      ? `This is the same vault item as the marked credential, whose mark is removed too: ${listText(request.sameItemAs)}`
-      : `This is the same vault item as the marked credential: ${listText(request.sameItemAs)}`);
-  }
-  if (request.unmark === true && request.keepMarked !== undefined) {
-    const n = request.keepMarked.length;
-    reported.push(n === 0
-      ? 'The record of marks cannot be read, so every credential counts as marked. After Allow none is marked.'
-      : `The record of marks cannot be read, so every credential counts as marked. After Allow only ${n === 1 ? 'this one stays' : `these ${n} stay`} marked: ${listText(request.keepMarked)}`);
-  }
-  if (request.project) reported.push(`Requested from (as the caller reports it): ${displayText(request.project)}`);
-  if (reported.length > 0) lines.push('', ...reported);
-  return lines.join('\n');
-}
-
-/**
  * Room for a whole locator (links.ts caps one at 200 characters), so the
  * person sees all of what they are agreeing to and never a shortened form.
  */
 const LOCATOR_DISPLAY_MAX = 220;
 
 export function promptMessage(request: PromptRequest, kind: 'value' | 'approval'): string {
-  if (kind === 'approval' && (request.read !== undefined || request.unmark === true)) return askFirstMessage(request);
   // An approval that names a vault item is a different decision from one
   // about a stored credential, and is worded as such.
   const what = kind === 'approval' && request.from !== undefined ? 'link' : kind;

@@ -99,7 +99,6 @@ Output fields:
 | `fix` | On `pending`, and on `error` | A command that gets past the problem. For `pending` it is one for the user to run in their own terminal. Never present on `declined` |
 | `error`, `code` | On `error` | What went wrong, and the daemon's machine-readable code when it has one |
 | `via_proxy` | With `--via-proxy`, on success | `url_env` and `base_path`: the variable that holds the proxy URL |
-| `ask_first` | With `--ask` | `true`: the reference is marked [ask first](#ask-first-a-dialog-before-a-value-is-handed-out) |
 | `env_error` | When the credential is usable but the binding failed | Why; `fix` then holds the `aquaman coder bind` command |
 
 ```json
@@ -189,51 +188,6 @@ Only where the daemon reports that it cannot show a dialog at all (a machine wit
 A `pending` answer carries the command for the user: `aquaman credentials link <service>/<key> '<locator>'`, followed by `aquaman broker allow` when the request would have declared the reference. It is for the user to run, not you: it opens a dialog of its own, so running it yourself only asks the user a second time. When the daemon could not show a dialog at all, the answer also carries `"code": "prompt_unavailable"`. `aquaman credentials list` shows a linked reference with its locator, and `aquaman doctor` reports a link whose scheme does not fit the configured backend.
 
 Links are kept in `credentials.links` in `~/.aquaman/config.yaml`, as `<service>/<key>: <locator>`, and each one counts only together with its approval in the vault. A running daemon picks up a new link and its approval; nothing needs restarting. `aquaman credentials unlink <ref>` removes the link and its approval, so putting the same line back into the file does not bring the reading back.
-
-### Ask first: a dialog before a value is handed out
-
-A declared reference is handed to any program running as the user that asks the daemon for it. For a credential where the user wants to be asked, mark the reference "ask first":
-
-```bash
-aquaman request aquaman://github/token --env GITHUB_TOKEN --ask --json   # ask for it and mark it
-aquaman broker ask aquaman://github/token                                # mark one that is already there
-aquaman broker allow aquaman://github/token --ask                        # declare and mark
-```
-
-Use `--ask` when the user asks for it, or offer it for a credential that can do damage, such as a publish token or a production key. Marking asks nobody: it only tightens. `--ask` adds `"ask_first": true` to the output of `aquaman request`.
-
-**What changes.** The first time the value of a marked reference is requested, the daemon shows a dialog and the request waits for the answer. A yes is remembered for that one reference for 8 hours (`broker.askFirstWindowSeconds` in `config.yaml`, between 60 and 86400, read when the daemon starts), until the daemon stops, or until its vault is locked (`aquaman lock`), whichever comes first. During that time the value is handed out without another dialog. A reference that is not marked behaves as before.
-
-The dialog names the credential and says what a yes means:
-
-> aquaman cannot tell which program is asking. Allow hands it the value, and for the next 8 hours (or until aquaman is restarted or its vault is locked) any program running as you can read this value from aquaman without another dialog. Deny if you did not expect this.
-
-**Where the dialog is raised.** For a request on the Unix socket (`aquaman get`, `aquaman-coder exec`), for the OpenShell driver, and for a request the proxy is asked to forward to a service defined in `services.yaml`. That last dialog also shows the address the value would be sent to, because the file decides it. Requests forwarded for a builtin service are not gated: their upstream is part of aquaman. A request on the loopback listener never raises a dialog: it is answered `ask_first_required` until the user has allowed the reference with `aquaman get <ref> > /dev/null` on the machine.
-
-**One item, two names.** On the `1password` and `systemd-creds` backends two references can name the same item (`cloudflare-ai/api_key` and `cloudflare/ai-api_key`). The mark, a yes and a no hold for the item under either name.
-
-**The mark is kept in the vault**, as one item of aquaman's own (`aquaman_internal/ask_first`), not in `config.yaml` or `projects.yaml`. Revoking a reference and allowing it again, or moving its binding between the two files, leaves it marked. `aquaman broker list` shows which references ask first while the daemon is running. The record holds 256 references; marking one more fails with `ask_first_full` and a `fix`.
-
-**What a command sees.** `aquaman-coder exec` (and the hook, which runs it) prints `aquaman: <ref> is marked ask-first. Waiting up to 90 seconds for an answer in aquaman's dialog on this machine.` on stderr and waits. Tell the user to look for the dialog. After a yes the command runs with the variable set. Otherwise that variable is left unset, with a line on stderr that says why, and the command runs with the project's other credentials; if none was handed out, the command is not run. `aquaman get` waits the same way (`--ask-timeout <seconds>`, 10 to 600, default 90).
-
-| Daemon `code` | `aquaman get` exit | Meaning | What to do |
-|---|---|---|---|
-| `ask_first_declined` | 2 | The user said no in the dialog, or did so in the last ten minutes. No `fix` is returned | Do not retry and do not work around it; ask how to proceed |
-| `ask_first_unanswered` | 3 | Nobody answered, another aquaman dialog was open, or six dialogs were shown in ten minutes | Ask the user to look for the dialog, then run the command again |
-| `prompt_unavailable` | 3 | The daemon cannot show a dialog on this machine | Show the user the `fix`: `aquaman broker ask <ref> --off`, run in their own terminal |
-| `ask_first_required` | (not seen) | The request said not to raise a dialog (`"ask": false` in the body of `POST /broker/resolve`) or came in on the loopback listener, and nobody has allowed the reference in the current window. `aquaman get` and `exec` send this first and then ask again with the dialog; `aquaman coder doctor` and the Hermes secret source send only this | For Hermes: the user runs `aquaman get <ref> > /dev/null` and allows it, then starts Hermes again |
-
-All four are HTTP 404 from `POST /broker/resolve`, like its other refusals, and HTTP 403 from a request the proxy refuses to forward to a `services.yaml` service. While the vault is locked the answer is 503 `vault_locked` and no dialog is shown. A reference revoked while its dialog is up is refused as not declared even after a yes. Every dialog outcome is an entry in `aquaman audit tail`; the read that follows a yes is one as before.
-
-**Removing the mark is the user's decision, in the same dialog.** Never run this yourself to get past a dialog:
-
-```bash
-aquaman broker ask aquaman://github/token --off
-```
-
-Exit 0 when the mark is removed or there was none, 2 when the user said no, 3 when nobody answered (run it again), 1 when the daemon is not running, refused, or the command was wrong. There is no flag and no environment variable that answers for the user. Only where the daemon reports that it cannot show a dialog does the command ask for a typed `yes`, and only at a terminal.
-
-**What is not gated.** A reference bound with `--via-proxy` is never handed to a program, so there is no read to ask about: `aquaman broker ask` refuses one that is bound that way only, and `--ask` with `--via-proxy` is refused. Requests the proxy forwards for a service get the credential added as before, mark or no mark.
 
 ## 3. Use it
 
@@ -349,14 +303,7 @@ Then delete the skill directory and the marked block. Stored credentials stay in
 - The wrapped command receives the real value, so a command can misuse it. Redaction catches accidental exposure, not a command that deliberately transforms the value.
 - `aquaman request` is a convenience and a consent step, not a boundary against other software running as the same user.
 - A link is read only with an approval recorded in the vault, so software that can only edit `~/.aquaman/config.yaml` cannot make aquaman read an item. Software that can write to the vault itself, through the vault's own CLI or API, can write the approval record too.
-- On a machine where no dialog can be shown, the word `yes` typed at a terminal is the only check on `aquaman credentials link` and on `aquaman broker ask --off`, and a program can give itself a terminal.
-- A yes to an ask-first dialog is for the reference, not for a program: until the window ends, any program running as the user reads the value without a dialog. The daemon cannot tell programs apart, and the dialog says so.
-- The ask-first mark is an item in the vault, so software that can only edit `~/.aquaman/config.yaml` or `projects.yaml` cannot remove it. Software that can write to the vault itself, through the vault's own CLI or API, can delete it.
-- Marking asks nobody, so a program running as the user can fill the ask-first record (256 references). Marking another is then refused until marks are removed, one dialog each.
-- With no daemon serving the broker, `aquaman broker ask` writes the record itself. Two such commands at the same moment can lose one of the two marks, and a daemon that is running without the socket (an OpenClaw-hosted proxy took it) keeps answering on its other listeners from the record it read until it is restarted.
-- If the ask-first record cannot be read, every reference counts as marked. Removing one mark then writes the record again with the references that are declared at that moment; the dialog lists them. A reference that is declared nowhere at that moment is not in the list and is no longer marked afterwards.
-- Two names for one vault item are recognised on the `1password` and `systemd-creds` backends, by the item name aquaman itself writes, and for two references that a person linked to the same locator. A link line in `config.yaml` that nobody approved reads nothing and does not make two references one item. Two different locators for one item are not recognised as the same.
-- The ask-first dialog was exercised with a scripted stand-in for the person: the tests check its exact wording and what the daemon does after each answer.
+- On a machine where no dialog can be shown, the word `yes` typed at a terminal is the only check on `aquaman credentials link`, and a program can give itself a terminal.
 - A daemon that caches values (1Password, Bitwarden, HashiCorp Vault and Keeper, 15 minutes by default) can serve a value it already read for up to that long if a link is removed and written back by hand before the reference is next used. The item itself is not read again.
 - A locator in plain ASCII can still carry words meant to persuade. The dialog shows it on a line of its own, marked as the caller's text, below aquaman's wording.
 - A linked item is read with whatever access the configured vault session has. The link names one field of one item, and aquaman reads only that.

@@ -17,8 +17,7 @@ import { matchPolicy, type PolicyConfig } from './request-policy.js';
 import { parseRequestTarget, policyPathInterpretations, policyMethods, policyPathOverrides } from './request-target.js';
 import { clampPromptTimeout, type CredentialPrompter, type PromptResult } from './credential-prompt.js';
 import { handleServiceConsent, SERVICE_CONSENT_PATH, type PromptLimiter } from './service-consent.js';
-import { isReservedService, reservedServiceRefusal, parseAquamanRef, type BrokerScope } from './broker-scope.js';
-import { AskFirstGate, handleAskFirst, ASK_FIRST_PATH } from './ask-first.js';
+import { isReservedService, reservedServiceRefusal, type BrokerScope } from './broker-scope.js';
 import { routableKeys, routeRequiredKeys, routeKeyMismatch, basicTokenCandidates, basicValueCarries } from './route-auth.js';
 import {
   AWS_DNS_SUFFIX,
@@ -191,12 +190,6 @@ export interface CredentialProxyOptions {
      */
     links?: CredentialLinker;
   };
-  /**
-   * Ask first (ask-first.ts): how long a person's yes to a marked reference
-   * lasts, already clamped. The marks themselves are in the vault. `now` is
-   * the clock approvals and cooldowns are measured on.
-   */
-  askFirst?: { windowSeconds?: number; now?: () => number };
   /** Bounds on AWS request bodies held in memory to be hashed. Defaults: `SIGV4_MAX_BUFFERED_BODIES`, `SIGV4_BODY_READ_TIMEOUT_MS`. */
   sigv4?: { maxBufferedBodies?: number; bodyReadTimeoutMs?: number };
   /**
@@ -229,8 +222,6 @@ export interface RequestInfo {
   authenticated: boolean;
   statusCode?: number;
   error?: string;
-  /** Free text for an outcome that is not a request for a service, such as a person's answer in a dialog. Never a value. */
-  note?: string;
 }
 
 interface ServiceConfig {
@@ -259,89 +250,6 @@ export class CredentialProxy {
     this.options = options;
     this.serviceRegistry = options.serviceRegistry || createServiceRegistry();
     this.oauthCache = createOAuthTokenCache();
-    // Wherever values are handed out there is a gate, so a marked reference
-    // is never served unasked: a daemon without a prompter refuses it.
-    this.askFirstGate = options.broker
-      ? new AskFirstGate({
-          store: options.store,
-          prompter: options.credentialRequests?.prompter,
-          limiter: this.promptLimiter,
-          windowSeconds: options.askFirst?.windowSeconds,
-          now: options.askFirst?.now,
-          audit: (event) => this.emitRequest({
-            id: crypto.randomUUID(), service: event.service, method: 'BROKER_ASK', path: ASK_FIRST_PATH,
-            timestamp: new Date(), authenticated: false, statusCode: 200, error: event.error, note: event.note,
-          }),
-        })
-      : undefined;
-    // A proxy that hands no values out still forwards, and can be given a
-    // service definition of someone's choosing. It has nobody to ask, so a
-    // marked reference is refused there.
-    this.forwardGate = this.askFirstGate ?? new AskFirstGate({
-      store: options.store,
-      limiter: this.promptLimiter,
-      windowSeconds: options.askFirst?.windowSeconds,
-      now: options.askFirst?.now,
-    });
-  }
-
-  /**
-   * The ask-first gate of this proxy, for the other path that returns values
-   * (the OpenShell driver): one set of approvals and one dialog budget.
-   * Absent without a broker scope.
-   */
-  readonly askFirstGate: AskFirstGate | undefined;
-
-  /** The gate forwarding goes through: `askFirstGate`, or one that can only refuse. */
-  private readonly forwardGate: AskFirstGate;
-
-  /**
-   * Ask first, for a request about to be forwarded. A builtin service sends
-   * its credential to an upstream nobody can change, which is the use the
-   * person stored it for. A service that services.yaml defines sends it
-   * wherever that file says, and the file can be written by any program
-   * running as the user: forwarding for it would hand a marked value to a
-   * host of that program's choosing. So each key the proxy would read for
-   * such a service goes through the gate first, as a resolve does.
-   * Returns the refusal, or `undefined` when the request may go on. Throws
-   * what the gate throws (a locked vault, marks that cannot be read).
-   */
-  private async authorizeForward(
-    service: string,
-    serviceDef: ServiceDefinition,
-    fromLoopback: boolean,
-  ): Promise<{ key: string; code: string; error: string; fix?: string } | undefined> {
-    if (ServiceRegistry.isBuiltinService(service)) return undefined;
-    const oauth = serviceDef.oauthConfig;
-    const keys = new Set<string>([
-      serviceDef.credentialKey,
-      ...(serviceDef.additionalCredentialKeys ?? []),
-      ...Object.values(serviceDef.additionalHeaders ?? {}).map((h) => h.credentialKey),
-      // The client credentials go to the token URL, and so does every
-      // credential the URL names in braces.
-      ...(oauth ? [oauth.clientIdKey, oauth.clientSecretKey, ...(oauth.tokenUrl.match(/\{(\w+)\}/g) ?? []).map((t) => t.slice(1, -1))] : []),
-    ]);
-    for (const key of keys) {
-      if (typeof key !== 'string' || key === '') continue;
-      const asked = await this.forwardGate.authorize(service, key, {
-        via: fromLoopback ? 'loopback' : 'forward',
-        upstream: oauth ? `${oauth.tokenUrl} and ${serviceDef.upstream}` : serviceDef.upstream,
-      });
-      if (!asked.ok) {
-        const ref = `aquaman://${service}/${key}`;
-        return {
-          key,
-          code: asked.code,
-          error: asked.error,
-          // The dialog is raised for a request on the Unix socket. Reading
-          // the value there is the short way, where the reference is declared.
-          fix: asked.code === 'ask_first_required'
-            ? `A person allows it in aquaman's dialog, on the machine itself. If the reference is declared, run: aquaman get ${ref} > /dev/null. If it is not, send this request over the Unix socket once, or remove the mark: aquaman broker ask ${ref} --off`
-            : asked.fix,
-        };
-      }
-    }
-    return undefined;
   }
 
   /** AWS request bodies being read into memory right now. */
@@ -606,18 +514,6 @@ export class CredentialProxy {
       return;
     }
 
-    if ((url === ASK_FIRST_PATH || url === `${ASK_FIRST_PATH}/`) && req.method === 'POST') {
-      await handleAskFirst(req, res, {
-        fromLoopback,
-        gate: this.askFirstGate,
-        declared: () => (this.options.broker?.declared() ?? []).flatMap(({ ref }) => {
-          const parsed = parseAquamanRef(ref);
-          return parsed ? [`${parsed.service}/${parsed.key}`] : [];
-        }),
-      });
-      return;
-    }
-
     if ((url === SERVICE_CONSENT_PATH || url === `${SERVICE_CONSENT_PATH}/`) && req.method === 'POST') {
       await handleServiceConsent(req, res, {
         fromLoopback,
@@ -639,12 +535,7 @@ export class CredentialProxy {
         fromLoopback,
         store: this.options.store,
         refusals: this.unlockRefusals,
-        // A yes given before the vault was locked does not outlast the lock.
-        onUnlocked: () => {
-          this.forwardGate.dropApprovals();
-          this.options.onVaultUnlocked?.();
-        },
-        onLocked: () => this.forwardGate.dropApprovals(),
+        onUnlocked: () => this.options.onVaultUnlocked?.(),
         audit: (error) => this.emitRequest({
           id: requestId, service: 'aquaman-vault', method: unlock ? 'VAULT_UNLOCK' : 'VAULT_LOCK', path: vaultPath,
           timestamp: new Date(), authenticated: false, statusCode: error ? 403 : 200, error,
@@ -780,17 +671,6 @@ export class CredentialProxy {
     }
 
     try {
-      const refused = await this.authorizeForward(service, serviceDef, fromLoopback);
-      if (refused) {
-        requestInfo.error = `${refused.code}: ${service}/${refused.key}`;
-        requestInfo.statusCode = 403;
-        this.emitRequest(requestInfo);
-        res.setHeader('Content-Type', 'application/json');
-        res.statusCode = 403;
-        res.end(JSON.stringify({ error: refused.error, ...(refused.fix ? { fix: refused.fix } : {}), code: refused.code }));
-        return;
-      }
-
       // Get primary credential from store
       const credential = await this.options.store.get(service, config.credentialKey);
 
@@ -1594,14 +1474,7 @@ export class CredentialProxy {
           (!fromLoopback && scope.routedRefs?.().has(`aquaman://${service}/${key}`) === true))
       ) {
         try {
-          // A routed reference is never handed out, so a mark on it gates
-          // nothing. For the rest, a marked reference counts while a person
-          // could still say yes: the hook wraps, the resolve raises the
-          // dialog, and a command for which nothing then resolves is not run.
-          // After a no it does not count until the cooldown ends.
-          const handedOut = scope.check(service, key, fromLoopback ? 'loopback' : 'uds').allowed;
-          ok = (!handedOut || await this.askFirstGate!.wouldServe(service, key)) &&
-            (await this.options.store.get(service, key)) !== null;
+          ok = (await this.options.store.get(service, key)) !== null;
         } catch (err) {
           if (isVaultLocked(err)) locked = err;
           ok = false;
@@ -1882,7 +1755,7 @@ export class CredentialProxy {
       }
     }
 
-    let body: { service?: unknown; key?: unknown; ttl_seconds?: unknown; ask?: unknown; ask_timeout_seconds?: unknown; project?: unknown };
+    let body: { service?: unknown; key?: unknown; ttl_seconds?: unknown };
     try {
       body = JSON.parse(bodyBuf);
     } catch {
@@ -1961,56 +1834,6 @@ export class CredentialProxy {
         statusCode: 404,
         error: `${decision.code}: ${service}/${key}`,
       });
-      return;
-    }
-
-    // Ask first, after the scope and before the vault read: a reference a
-    // person marked leaves this process only once a person allowed it in the
-    // dialog, on either listener. The request waits while the dialog is up.
-    // A refusal is a 404 with a `code`, like the scope's.
-    const refuseRead = (statusCode: number, payload: { error: string; fix?: string; code?: string }, logged: string) => {
-      res.statusCode = statusCode;
-      res.end(JSON.stringify(payload));
-      this.emitRequest({
-        id: requestId,
-        service,
-        method: 'BROKER',
-        path: '/broker/resolve',
-        timestamp: new Date(),
-        authenticated: false,
-        statusCode,
-        error: logged,
-      });
-    };
-    try {
-      const asked = await this.askFirstGate!.authorize(service, key, {
-        via: fromLoopback ? 'loopback' : 'socket',
-        project: typeof body.project === 'string' ? body.project : undefined,
-        timeoutSeconds: clampPromptTimeout(body.ask_timeout_seconds),
-        ask: body.ask !== false,
-      });
-      if (!asked.ok) {
-        refuseRead(404, { error: asked.error, ...(asked.fix ? { fix: asked.fix } : {}), code: asked.code }, `${asked.code}: ${service}/${key}`);
-        return;
-      }
-      // The request may have waited for a dialog. A reference revoked in
-      // that time is not handed out on the strength of the yes.
-      const still = scope!.check(service, key, fromLoopback ? 'loopback' : 'uds');
-      if (!still.allowed) {
-        refuseRead(404, { error: still.reason, fix: still.fix, code: still.code }, `${still.code}: ${service}/${key}`);
-        return;
-      }
-    } catch (err) {
-      // The marks could not be read, so it is not known whether a person has to be asked.
-      if (isVaultLocked(err)) {
-        refuseRead(503, vaultLockedBody(err), `${VAULT_LOCKED_CODE}: ${service}/${key}`);
-        return;
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      refuseRead(500, {
-        error: `Vault backend error resolving ${service}/${key}: ${message}`,
-        fix: 'Check that the configured backend (keychain, 1password, vault, etc.) is accessible. Run: aquaman doctor',
-      }, message);
       return;
     }
 
