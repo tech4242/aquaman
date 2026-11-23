@@ -10,6 +10,16 @@ openclaw plugins install clawhub:aquaman-plugin   # OpenClaw users
 pip install -U aquaman-hermes                     # Hermes users
 ```
 
+## 0.21.0
+
+- **AWS through the proxy.** A new built-in service, `aws`, and a new auth mode in which the proxy signs each request with AWS Signature Version 4. `aquaman-coder bind AWS_ACCESS_KEY_ID=aquaman://aws/access_key_id --via-proxy AWS_ENDPOINT_URL` gives a command a local token as its access key id, a fixed placeholder as its secret access key and the proxy as its AWS endpoint. The access key id, secret access key and optional session token stay in the vault. Guide: [Call AWS without giving the app your AWS keys](https://aquaman.sh/docs/aws/).
+- The proxy builds the AWS host itself, always under `amazonaws.com`, from the region and service the client signed for. `/aws/_host/<prefix>` reaches an endpoint whose name is not its signing name and `/aws/_global` a service with one endpoint for all regions; `exec` sets `AWS_ENDPOINT_URL_IAM` and `AWS_ENDPOINT_URL_BEDROCK_RUNTIME` to those forms.
+- Refused with an error, a code and a fix, and never forwarded half-signed: bodies sent as signed chunks, presigned URLs, SigV4A, and bodies over 16 MiB other than S3 uploads with an unsigned payload.
+- Request policy applies to the method and the path AWS receives. It does not see an action named in `X-Amz-Target` or in the body, or which AWS service a request is for.
+- What was run: the signer against ten cases of AWS's published Signature Version 4 test suite, and an app using the AWS SDK for JavaScript v3 (S3, DynamoDB, IAM, Bedrock Runtime) started by `aquaman-coder exec`, against a local server that checks every signature with the stored secret using the SDK's own signer.
+- `POST /broker/route` can name further variables for the program in `env` (for `aws`, the placeholder secret and the two endpoint variables). `exec` sets them, except names that change how programs are loaded and names the project binds itself.
+- Built-in services: 27.
+
 ## 0.20.0
 
 The guides now show the cases people asked about: an item that is already in your vault on every host page, Bitwarden with Docker Sandboxes, OpenAI and Linux for Hermes, the model provider step for OpenClaw, and a new page for MCP servers.

@@ -21,7 +21,7 @@ By default a command gets the key in its environment. Any app that reads its API
 
 The commands are under "Your app/agent" in the Start section above.
 
-The app then sees `OPENAI_BASE_URL=http://127.0.0.1:8585/openai/v1` and `OPENAI_API_KEY=aqm_rt_...`, a token that only forwards requests on this machine. Definitions for 26 APIs are built in (OpenAI, Anthropic, GitHub, Stripe and others) and any other HTTP API is a few lines in `services.yaml`. Guide: [Keep an API key out of the app a coding agent builds](/docs/app-through-proxy/).
+The app then sees `OPENAI_BASE_URL=http://127.0.0.1:8585/openai/v1` and `OPENAI_API_KEY=aqm_rt_...`, a token that only forwards requests on this machine. Definitions for 27 APIs are built in (OpenAI, Anthropic, GitHub, Stripe, AWS and others) and any other HTTP API is a few lines in `services.yaml`. Guide: [Keep an API key out of the app a coding agent builds](/docs/app-through-proxy/).
 
 ## For AI agents
 
