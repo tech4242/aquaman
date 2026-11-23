@@ -18,8 +18,8 @@ jobs:
     outputs:
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
       - id: check
@@ -59,8 +59,8 @@ jobs:
       contents: read
       id-token: write            # npm Trusted Publishing (OIDC) + provenance
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -92,9 +92,9 @@ jobs:
     permissions:
       id-token: write            # PyPI Trusted Publishing (no token needed)
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
       - name: Test before publish
@@ -105,7 +105,7 @@ jobs:
       - name: Build sdist + wheel
         working-directory: packages/hermes
         run: uv build
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           packages-dir: packages/hermes/dist
 
@@ -114,8 +114,8 @@ jobs:
     needs: [validate-version, npm-publish]   # plugin's aquaman-proxy dep must be on npm first
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: 24 }
       - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
       - run: |
@@ -231,10 +231,10 @@ jobs:
       pull-requests: write      # open the PR (no PAT needed — creating a PR
                                 # doesn't bypass branch protection; merging does)
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main             # base the bump on current main, not the tag
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
       - name: Stamp versions from the release tag
@@ -278,3 +278,42 @@ jobs:
           fi
           curl --fail --silent --show-error -X POST "$VERCEL_DEPLOY_HOOK_URL" > /dev/null
           echo "Site redeploy requested."
+
+
+  # The three npm tarballs, as the registry serves them, attached to the GitHub
+  # release with a signed provenance file. Nothing depends on this job: the
+  # packages are already published when it runs, and a failure here blocks
+  # nothing. The attestation is made by this workflow run, the one that built
+  # and published the tarballs, over their digests as downloaded.
+  # Check one:  gh attestation verify aquaman-proxy-<version>.tgz --repo tech4242/aquaman
+  release-assets:
+    name: Attach signed tarballs to the release
+    needs: [validate-version, npm-publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write            # upload assets to the release
+      id-token: write            # sign the attestation (Sigstore, OIDC)
+      attestations: write        # store it with the repository
+    env:
+      VERSION: ${{ needs.validate-version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download the published tarballs
+        run: |
+          mkdir assets
+          for pkg in aquaman-proxy aquaman-plugin aquaman-coder; do
+            curl --fail --silent --show-error --location --retry 10 --retry-delay 15 --retry-all-errors \
+              -o "assets/$pkg-$VERSION.tgz" "https://registry.npmjs.org/$pkg/-/$pkg-$VERSION.tgz"
+          done
+          (cd assets && sha256sum ./*.tgz)
+      - name: Attest
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: assets/*.tgz
+      - name: Upload to the release
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          cp "$BUNDLE" "assets/aquaman-$VERSION.intoto.jsonl"
+          gh release upload "v$VERSION" assets/* --repo "$GITHUB_REPOSITORY" --clobber

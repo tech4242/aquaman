@@ -3,6 +3,7 @@
 <img src="docs/assets/banner.svg" width="880" alt="Pixel art: an AI agent, drawn as a small robot on a raft, floats at the surface and lowers a line. Far below, an octopus guards a treasure chest and a key. The agent gets a tag on its line, never the key.">
 
 [![CI](https://github.com/tech4242/aquaman/actions/workflows/ci.yml/badge.svg)](https://github.com/tech4242/aquaman/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/tech4242/aquaman/badge)](https://scorecard.dev/viewer/?uri=github.com/tech4242/aquaman)
 [![codecov](https://codecov.io/gh/tech4242/aquaman/branch/main/graph/badge.svg)](https://codecov.io/gh/tech4242/aquaman)
 [![npm version](https://img.shields.io/npm/v/aquaman-proxy?label=aquaman-proxy)](https://www.npmjs.com/package/aquaman-proxy)
 [![npm downloads](https://img.shields.io/npm/dt/aquaman-proxy)](https://www.npmjs.com/package/aquaman-proxy)
