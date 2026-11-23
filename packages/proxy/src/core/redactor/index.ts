@@ -210,11 +210,74 @@ export function redact(
 /** How much trailing text a stream redactor keeps back while waiting for a line to finish. */
 const STREAM_LINE_HOLDBACK = 4096;
 
+/**
+ * How far back a stream redactor holds a private key block whose END line has
+ * not arrived. Larger than any PEM key; a BEGIN line that is never closed is
+ * let go after this much, so it cannot hold a stream back for good.
+ */
+const STREAM_KEY_BLOCK_HOLDBACK = 64 * 1024;
+
+/**
+ * The longest match a stream redactor keeps whole across pushes. A match that
+ * is still growing at the end of the text is held until it ends; one that has
+ * grown past this is no credential, and is written as a marker for the part
+ * seen so far instead of being held without bound.
+ */
+const STREAM_MATCH_HOLDBACK = 1024 * 1024;
+
+const PRIVATE_KEY_BEGIN = /-----BEGIN (?:RSA |OPENSSH |EC |DSA |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----/g;
+
 export interface StreamRedactor {
   /** Feed the next chunk; returns the text that is now safe to write. */
   push(chunk: string): string;
   /** The stream ended; returns whatever was still held back, redacted. */
   end(): string;
+}
+
+/**
+ * `redact()`, with each character of the result tied to the place in the
+ * input it stands for: `from[i]` and `to[i]` are the input offsets where the
+ * source of output character `i` begins and ends. A character that was not
+ * redacted covers itself; every character of a marker covers the whole match
+ * the marker replaced. The patterns are applied one after another to the
+ * running result, exactly as `redact()` applies them.
+ */
+function redactTracked(
+  input: string,
+  patterns: readonly SecretPattern[],
+): { output: string; from: number[]; to: number[] } {
+  let output = input;
+  let from = Array.from({ length: input.length }, (_, i) => i);
+  let to = Array.from({ length: input.length }, (_, i) => i + 1);
+  for (const pattern of patterns) {
+    pattern.regex.lastIndex = 0;
+    let text = '';
+    let nextFrom: number[] | undefined;
+    let nextTo: number[] | undefined;
+    let done = 0;
+    for (const match of output.matchAll(pattern.regex)) {
+      if (match[0].length === 0) continue;
+      nextFrom ??= [];
+      nextTo ??= [];
+      const start = match.index;
+      const end = start + match[0].length;
+      text += output.slice(done, start);
+      for (let i = done; i < start; i++) { nextFrom.push(from[i]); nextTo.push(to[i]); }
+      const marker = `[REDACTED:${pattern.kind}]`;
+      text += marker;
+      for (let i = 0; i < marker.length; i++) { nextFrom.push(from[start]); nextTo.push(to[end - 1]); }
+      done = end;
+    }
+    pattern.regex.lastIndex = 0;
+    if (nextFrom && nextTo) {
+      text += output.slice(done);
+      for (let i = done; i < output.length; i++) { nextFrom.push(from[i]); nextTo.push(to[i]); }
+      output = text;
+      from = nextFrom;
+      to = nextTo;
+    }
+  }
+  return { output, from, to };
 }
 
 /**
@@ -225,8 +288,23 @@ export interface StreamRedactor {
  * chunk on its own would let both halves through. This keeps back the end of
  * what it has seen until more arrives: the part that could be the beginning of
  * a literal value, so a value split anywhere is whole again before it is
- * written, and the unfinished last line (up to STREAM_LINE_HOLDBACK), so
- * shape-based patterns see whole lines.
+ * written, the unfinished last line (up to STREAM_LINE_HOLDBACK), so
+ * shape-based patterns see whole lines, and a private key block that has
+ * begun and not ended.
+ *
+ * What is kept back is kept as it arrived, not redacted. The beginning of a
+ * literal value can have the shape of a builtin pattern on its own (the first
+ * half of an API key is still key-shaped); redacting it early would replace
+ * it with a marker, the text would no longer end like the beginning of the
+ * value, and the rest of the value would be written when it arrived. So each
+ * push redacts everything held plus the new chunk with the whole of it in
+ * view, writes the redacted form of the part before the cut, and keeps the
+ * part after the cut untouched for the next push.
+ *
+ * The cut is never inside a match: one that begins before it and reaches past
+ * it (a token still growing at the end of a long line) moves the cut back to
+ * where the match begins, so the match stays whole in the held part, up to
+ * STREAM_MATCH_HOLDBACK.
  *
  * With the literal `values` given, the part kept back for them is exactly the
  * end of the text that is also the beginning of one of them, which for a
@@ -234,9 +312,6 @@ export interface StreamRedactor {
  * time and then waits (a stdio MCP server, a REPL) therefore has each reply
  * written when it is produced. Without `values` the length alone is known, and
  * one character less than `longestValue` is kept back whatever the text is.
- *
- * Text is redacted before it is cut, so a match is never split by the cut
- * itself; only a redaction marker can be, and that is harmless.
  */
 export function createStreamRedactor(
   patterns: readonly SecretPattern[] = BUILTIN_PATTERNS,
@@ -247,16 +322,36 @@ export function createStreamRedactor(
   const literals = values?.filter((v) => v && v.trim().length > 0);
   return {
     push(chunk: string): string {
-      pending = redact(pending + chunk, patterns).output;
-      const unfinishedLine = pending.length - (pending.lastIndexOf('\n') + 1);
-      const forValues = literals ? valuePrefixAtEnd(pending, literals) : longestValue - 1;
+      const raw = pending + chunk;
+      const unfinishedLine = raw.length - (raw.lastIndexOf('\n') + 1);
+      const forValues = literals ? valuePrefixAtEnd(raw, literals) : Math.max(0, longestValue - 1);
       const hold = Math.min(
-        pending.length,
+        raw.length,
         Math.max(forValues, Math.min(unfinishedLine, STREAM_LINE_HOLDBACK)),
       );
-      const out = pending.slice(0, pending.length - hold);
-      pending = pending.slice(pending.length - hold);
-      return out;
+      let cut = raw.length - hold;
+      const { output, from, to } = redactTracked(raw, patterns);
+
+      // A key block that has begun and whose END line is still to come: a
+      // BEGIN line that survived redaction is one that no END followed.
+      PRIVATE_KEY_BEGIN.lastIndex = 0;
+      let open = -1;
+      for (const match of output.matchAll(PRIVATE_KEY_BEGIN)) open = from[match.index];
+      PRIVATE_KEY_BEGIN.lastIndex = 0;
+      if (open >= 0 && open < cut && raw.length - open <= STREAM_KEY_BLOCK_HOLDBACK) cut = open;
+
+      // Never inside a match. Markers are in input order, so one pass from
+      // the end settles it: moving the cut back can only meet earlier ones.
+      for (let i = output.length - 1; i >= 0; i--) {
+        if (from[i] < cut && cut < to[i] && raw.length - from[i] <= STREAM_MATCH_HOLDBACK) cut = from[i];
+      }
+
+      // The redacted form of everything before the cut. A match too long to
+      // hold is still cut through: its marker is written, never its text.
+      let written = 0;
+      while (written < output.length && from[written] < cut) written++;
+      pending = raw.slice(cut);
+      return output.slice(0, written);
     },
     end(): string {
       const out = redact(pending, patterns).output;
