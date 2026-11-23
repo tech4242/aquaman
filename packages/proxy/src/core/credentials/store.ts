@@ -48,15 +48,25 @@ export interface CredentialStore {
   revokeLink?(service: string, key: string): Promise<boolean>;
   linkApproved?(name: string, locator: string): Promise<boolean>;
   /**
-   * The name of the item a reference is read from, on a backend where two
-   * references can be one item: one that joins service and key into a single
-   * name (`a-b` + `c` and `a` + `b-c`), and a store that honours links, where
-   * a linked reference is read from the item its link names. Whatever decides
-   * by `<service>/<key>` who may be handed a value compares this as well, so
-   * a rule set on one name holds for every name of the same item. Answered
-   * from memory. Absent where each reference is its own item.
+   * The backend's own name for the item it keeps a reference in, on a backend
+   * where two references can be one item because service and key are joined
+   * into a single name (`a-b` + `c` and `a` + `b-c`). Whatever decides by
+   * `<service>/<key>` who may be handed a value compares this as well, so a
+   * rule set on one name holds for every name of the same item. Answered
+   * from memory, and never from `credentials.links`: a line in config.yaml
+   * does not change what the backend calls its item. Absent where each
+   * reference is its own item.
    */
   itemIdentity?(service: string, key: string): string;
+  /**
+   * On a store that honours links, the locators a reference has to do with:
+   * `reads` is the item it is read from right now (linked in config.yaml and
+   * approved in the vault; `''` when it is read from the backend's own item),
+   * and `approved` is the locator a person approved for this reference,
+   * whatever config.yaml says at the moment. An unapproved line is neither:
+   * it reads nothing, so it does not make a reference into another item.
+   */
+  linkIdentities?(service: string, key: string): Promise<{ reads: string; approved: string }>;
   /**
    * On a backend that a person's session opens (`bitwarden`), and on
    * wrappers around one; see vault-lock.ts. Absent everywhere else.

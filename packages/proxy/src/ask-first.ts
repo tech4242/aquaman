@@ -11,8 +11,10 @@
  * Three pieces:
  *
  *   - `AskFirstMarks`: which references are marked. One record in the vault,
- *     under the reserved service, so editing config.yaml or projects.yaml
- *     cannot remove a mark.
+ *     under the reserved service. config.yaml and projects.yaml hold no part
+ *     of it, so a mark is removed only by writing that record: through a
+ *     person's yes in the dialog, which removes the names the dialog showed
+ *     and no others, or by software that can write to the vault itself.
  *   - `AskFirstGate`: the check every path that returns a value goes through
  *     before the vault read (`/broker/resolve` on both listeners, the
  *     OpenShell driver's Resolve), and forwarding for a service that
@@ -31,7 +33,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { CredentialStore } from './core/credentials/store.js';
 import { RESERVED_SERVICE, ASK_FIRST_KEY, isReservedService } from './core/credentials/reserved.js';
-import { clampPromptTimeout, type CredentialPrompter, type PromptResult, type ReadVia } from './credential-prompt.js';
+import { clampPromptTimeout, DIALOG_LIST_MAX, type CredentialPrompter, type PromptResult, type ReadVia } from './credential-prompt.js';
 import type { PromptLimiter } from './service-consent.js';
 import { isVaultLocked, VaultLockedError, VAULT_LOCKED_CODE, VAULT_UNLOCK_FIX } from './core/credentials/vault-lock.js';
 
@@ -159,31 +161,67 @@ export class AskFirstMarks {
     if (generation === this.generation) this.cached = set;
   }
 
-  /**
-   * What a name is compared on: the item the store reads it from, where two
-   * names can be one item, and the name itself everywhere else.
-   */
-  identity(name: string): string {
-    if (!this.store.itemIdentity) return name;
-    const slash = name.indexOf('/');
-    return this.store.itemIdentity(name.slice(0, slash), name.slice(slash + 1));
+  /** Whether the store can have two names for one item at all. */
+  private get byItem(): boolean {
+    return this.store.itemIdentity !== undefined || this.store.linkIdentities !== undefined;
   }
 
-  /** The marked names that are read from the same item as `name`, `name` itself left out. */
-  private sameItemIn(marked: Set<string>, name: string): string[] {
-    if (!this.store.itemIdentity) return [];
-    const identity = this.identity(name);
-    return [...marked].filter((other) => other !== name && this.identity(other) === identity).sort();
+  private parts(name: string): [string, string] {
+    const slash = name.indexOf('/');
+    return [name.slice(0, slash), name.slice(slash + 1)];
+  }
+
+  /** The backend's own item for a name. Links play no part in it. */
+  private ownItem(name: string): string {
+    const [service, key] = this.parts(name);
+    return `item:${this.store.itemIdentity?.(service, key) ?? name}`;
+  }
+
+  /**
+   * What a read of this name would give right now, which is what approvals,
+   * cooldowns and open dialogs are kept under: the item an approved link
+   * names, or the backend's own item, or the name itself on a store where
+   * each reference is its own item. The two kinds are prefixed apart, so a
+   * locator can never read as an item name.
+   */
+  async identity(name: string): Promise<string> {
+    if (!this.byItem) return name;
+    const [service, key] = this.parts(name);
+    const link = await this.store.linkIdentities?.(service, key);
+    return link?.reads ? `link:${link.reads}` : this.ownItem(name);
+  }
+
+  /**
+   * Every item a marked name stands for: the backend's own, and the one a
+   * person approved a link to for that name. The second is taken from the
+   * approval in the vault, not from config.yaml, so taking the link line out
+   * of the file does not lift the mark from the item.
+   */
+  private async itemsOf(marked: string): Promise<string[]> {
+    const [service, key] = this.parts(marked);
+    const link = await this.store.linkIdentities?.(service, key);
+    return link?.approved ? [this.ownItem(marked), `link:${link.approved}`] : [this.ownItem(marked)];
+  }
+
+  /** The marked names that stand for the item `name` is read from, `name` itself left out. */
+  private async sameItemIn(marked: Set<string>, name: string): Promise<string[]> {
+    if (!this.byItem) return [];
+    const identity = await this.identity(name);
+    const same: string[] = [];
+    for (const other of marked) {
+      if (other !== name && (await this.itemsOf(other)).includes(identity)) same.push(other);
+    }
+    return same.sort();
   }
 
   /**
    * Whether `<service>/<key>` is marked: by its own name, or because a
-   * marked name is read from the same item. Throws when the vault cannot be
-   * read: the caller hands nothing out.
+   * marked name stands for the item it is read from. Throws when the vault
+   * cannot be read: the caller hands nothing out.
    */
   async has(name: string): Promise<boolean> {
     const marked = await this.current();
-    return marked === 'all' || marked.has(name) || this.sameItemIn(marked, name).length > 0;
+    return marked === 'all' || marked.has(name) || (await this.sameItemIn(marked, name)).length > 0;
   }
 
   /** The marked names, other than `name`, that are the same item as `name`. For the dialog. */
@@ -215,16 +253,18 @@ export class AskFirstMarks {
   }
 
   /**
-   * Remove a mark, after a person agreed. Returns whether there was one. A
-   * marked name that is read from the same item goes with it: the item is
-   * what the person was asked about, and it would stay gated otherwise.
+   * Remove a mark, after a person agreed. Returns whether there was one.
+   * `alsoRemove` are the marked names for the same item that the person was
+   * shown, settled before they were asked. Nothing else is removed: which
+   * names are one item can be made to change while a dialog is up, and a yes
+   * is for what the dialog said.
    *
    * On a record that cannot be read as one, every reference counts as marked
    * and the person agreed about this one only. `keep` is the list the person
    * was shown, fixed before they were asked; the record is written again
    * with exactly those names marked.
    */
-  unmark(name: string, keep?: readonly string[]): Promise<boolean> {
+  unmark(name: string, keep?: readonly string[], alsoRemove: readonly string[] = []): Promise<boolean> {
     return this.queued(async () => {
       const marked = await this.read();
       if (marked === 'all') {
@@ -235,7 +275,7 @@ export class AskFirstMarks {
         await this.save(new Set(keepable(keep, name)));
         return true;
       }
-      const gone = [name, ...this.sameItemIn(marked, name)].filter((n) => marked.has(n));
+      const gone = [name, ...alsoRemove].filter((n) => marked.has(n));
       if (gone.length === 0) return false;
       const next = new Set(marked);
       for (const n of gone) next.delete(n);
@@ -388,7 +428,7 @@ export class AskFirstGate {
       if (isVaultLocked(err)) throw err;
       return false;
     }
-    const id = this.marks.identity(name);
+    const id = await this.marks.identity(name);
     return this.approved(id) || !this.declinedRecently(readKey(id));
   }
 
@@ -405,7 +445,9 @@ export class AskFirstGate {
     // Before anything else: a person is not asked about a value that cannot be read.
     this.refuseWhileLocked();
     if (!(await this.marks.has(name))) return { ok: true };
-    const id = this.marks.identity(name);
+    // Settled here, once: the yes, the no and the open dialog are all kept
+    // under what the name stood for when the person was asked.
+    const id = await this.marks.identity(name);
     if (this.approved(id)) return { ok: true };
     const ref = `aquaman://${name}`;
     if (request.ask === false || request.via === 'loopback') {
@@ -418,14 +460,13 @@ export class AskFirstGate {
     }
     const open = this.asking.get(id);
     if (open) return open;
-    const asked = this.ask(service, key, { ...request, via: request.via }).finally(() => this.asking.delete(id));
+    const asked = this.ask(service, key, id, { ...request, via: request.via }).finally(() => this.asking.delete(id));
     this.asking.set(id, asked);
     return asked;
   }
 
-  private async ask(service: string, key: string, request: AskFirstRequest & { via: ReadVia }): Promise<AskFirstDecision> {
+  private async ask(service: string, key: string, id: string, request: AskFirstRequest & { via: ReadVia }): Promise<AskFirstDecision> {
     const name = `${service}/${key}`;
-    const id = this.marks.identity(name);
     const ref = `aquaman://${name}`;
     const { limiter, prompter } = this.opts;
     const audit = (error?: string, note?: string) => this.opts.audit?.({ service, error, note });
@@ -456,7 +497,7 @@ export class AskFirstGate {
     limiter.times().push(now);
     let result: PromptResult;
     try {
-      const sameItemAs = await this.marks.sameItemAs(name);
+      const sameItemAs = (await this.marks.sameItemAs(name)).slice(0, DIALOG_LIST_MAX);
       result = await prompter.askApproval({
         service,
         key,
@@ -504,7 +545,7 @@ export class AskFirstGate {
     const name = `${service}/${key}`;
     const added = await this.marks.mark(name);
     if (added) {
-      this.approvedUntil.delete(this.marks.identity(name));
+      this.approvedUntil.delete(await this.marks.identity(name));
       this.opts.audit?.({ service, note: `ask-first: ${name} marked` });
     }
     return added;
@@ -517,7 +558,8 @@ export class AskFirstGate {
    * again with the others. Which others is settled here, before the dialog
    * is shown, and the dialog names them, so the list the person agreed to is
    * the list that is written whatever happens to the declaring files while
-   * the dialog is up.
+   * the dialog is up. The same goes for the marked names that are the same
+   * item: the ones the dialog names are the ones that are removed with it.
    */
   async unmark(
     service: string,
@@ -526,7 +568,6 @@ export class AskFirstGate {
     declared: () => string[],
   ): Promise<{ status: 'ready' | 'unmarked' | 'declined' | 'pending'; reason?: string; code?: string; fix?: string }> {
     const name = `${service}/${key}`;
-    const id = this.marks.identity(name);
     const { limiter, prompter } = this.opts;
     const audit = (error?: string, note?: string) => this.opts.audit?.({ service, error, note });
     // Read from the vault, not from memory: the answer decides whether anyone is asked.
@@ -534,6 +575,7 @@ export class AskFirstGate {
     if (!(await this.marks.has(name))) return { status: 'ready' };
     if (!prompter) return { status: 'pending', code: 'prompt_unavailable', reason: 'this daemon was started without a dialog' };
 
+    const id = await this.marks.identity(name);
     if (this.declinedRecently(unmarkKey(id))) {
       return { status: 'declined', reason: 'declined a few minutes ago; not asking again yet' };
     }
@@ -551,7 +593,9 @@ export class AskFirstGate {
         };
       }
     }
-    const sameItemAs = await this.marks.sameItemAs(name);
+    // No more than the dialog writes out by name: a mark is not removed on
+    // the strength of "and 3 more".
+    const sameItemAs = (await this.marks.sameItemAs(name)).slice(0, DIALOG_LIST_MAX);
     const now = this.now();
     limiter.setTimes(limiter.times().filter((t) => now - t < limiter.windowMs));
     if (limiter.isOpen() || limiter.times().length >= limiter.maxPerWindow) {
@@ -577,7 +621,7 @@ export class AskFirstGate {
     }
 
     if (result.outcome === 'approved') {
-      await this.marks.unmark(name, keepMarked);
+      await this.marks.unmark(name, keepMarked, sameItemAs);
       this.approvedUntil.delete(id);
       audit(undefined, `ask-first: a person removed the mark from ${name}`);
       return { status: 'unmarked' };

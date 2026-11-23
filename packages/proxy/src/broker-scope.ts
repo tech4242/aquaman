@@ -216,10 +216,10 @@ export interface BrokerScopeOptions {
   /** Services never materialized over the loopback listener (the Hermes LLM-provider tier). */
   loopbackDeniedServices?: readonly string[];
   /**
-   * The credential store's `itemIdentity`, where it has one: the name of the
-   * item a reference is read from. On such a store two references can be one
-   * item, so a rule about a service has to hold for every name its items can
-   * be asked for under.
+   * The credential store's `itemIdentity`, where it has one: the backend's
+   * own name for the item a reference is kept in, which links play no part
+   * in. On such a store two references can be one item, so a rule about a
+   * service has to hold for every name its items can be asked for under.
    */
   itemIdentity?: (service: string, key: string) => string | undefined;
 }

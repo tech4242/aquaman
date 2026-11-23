@@ -218,7 +218,7 @@ export function readConsequence(windowSeconds: number, via: ReadVia = 'socket'):
 }
 
 /** At most this many names of a list are written out in a dialog; the rest are counted. */
-const DIALOG_LIST_MAX = 8;
+export const DIALOG_LIST_MAX = 8;
 
 /** A list of reference names as one bounded line: the first few, then how many more. */
 function listText(names: readonly string[]): string {
@@ -249,7 +249,9 @@ function askFirstMessage(request: PromptRequest): string {
     reported.push(`Sent to (as services.yaml says): ${displayText(request.read.upstream ?? 'not given', 200)}`);
   }
   if (request.sameItemAs && request.sameItemAs.length > 0) {
-    reported.push(`This is the same vault item as the marked credential: ${listText(request.sameItemAs)}`);
+    reported.push(request.unmark === true
+      ? `This is the same vault item as the marked credential, whose mark is removed too: ${listText(request.sameItemAs)}`
+      : `This is the same vault item as the marked credential: ${listText(request.sameItemAs)}`);
   }
   if (request.unmark === true && request.keepMarked !== undefined) {
     const n = request.keepMarked.length;

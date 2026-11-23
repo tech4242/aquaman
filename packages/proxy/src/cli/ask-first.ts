@@ -18,7 +18,7 @@ import * as readline from 'node:readline';
 import type { CredentialStore } from '../core/index.js';
 import { parseAquamanRef, isReservedService, RESERVED_SERVICE_REASON } from '../broker-scope.js';
 import { AskFirstMarks, AskFirstFullError, keepable, ASK_FIRST_PATH } from '../ask-first.js';
-import { windowText, PROMPT_TIMEOUT_SECONDS, PROMPT_TIMEOUT_MIN_SECONDS, PROMPT_TIMEOUT_MAX_SECONDS, clampPromptTimeout } from '../credential-prompt.js';
+import { windowText, DIALOG_LIST_MAX, PROMPT_TIMEOUT_SECONDS, PROMPT_TIMEOUT_MIN_SECONDS, PROMPT_TIMEOUT_MAX_SECONDS, clampPromptTimeout } from '../credential-prompt.js';
 
 type ProxyPost = (
   socketPath: string,
@@ -222,8 +222,15 @@ Examples:
       // is what gets written.
       let marks: AskFirstMarks;
       let keep: string[] | undefined;
+      let sameItem: string[] = [];
       try {
         marks = new AskFirstMarks(await deps.openStore());
+        // Settled and shown before the question, like the list below: these
+        // marks are removed with it, and no others.
+        sameItem = (await marks.sameItemAs(`${service}/${key}`)).slice(0, DIALOG_LIST_MAX);
+        if (sameItem.length > 0) {
+          console.error(`It is the same vault item as the marked ${sameItem.map((n) => `aquaman://${n}`).join(', ')}, and ${sameItem.length === 1 ? 'that mark is' : 'those marks are'} removed with it.`);
+        }
         if ((await marks.list()) === 'all') {
           keep = keepable(deps.declared(), `${service}/${key}`);
           console.error('The record of marks in the vault cannot be read, so every reference counts as marked.');
@@ -239,7 +246,7 @@ Examples:
         process.exit(2);
       }
       try {
-        await marks.unmark(`${service}/${key}`, keep);
+        await marks.unmark(`${service}/${key}`, keep, sameItem);
       } catch (err) {
         fail(`Could not change the ask-first record in the vault: ${err instanceof Error ? err.message : String(err)}`, 'aquaman doctor');
       }

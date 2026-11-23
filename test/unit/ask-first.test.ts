@@ -190,8 +190,11 @@ describe('AskFirstMarks: the record in the vault', () => {
     expect(await m.sameItemAs('cloudflare-ai/api_key')).toEqual([]);
     // The list is what was marked, by name.
     expect(await m.list()).toEqual(['cloudflare-ai/api_key']);
-    // Removing the mark under the other name removes it: the item is what was asked about.
-    expect(await m.unmark('cloudflare/ai-api_key')).toBe(true);
+    // Removing the mark under the other name removes the names it is given
+    // (the ones the person was shown), and nothing on its own reckoning.
+    expect(await m.unmark('cloudflare/ai-api_key')).toBe(false);
+    expect(await m.list()).toEqual(['cloudflare-ai/api_key']);
+    expect(await m.unmark('cloudflare/ai-api_key', undefined, await m.sameItemAs('cloudflare/ai-api_key'))).toBe(true);
     expect(await m.list()).toEqual([]);
     expect(await m.has('cloudflare-ai/api_key')).toBe(false);
   });
