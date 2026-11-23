@@ -52,6 +52,8 @@ const inDocs = Astro.url.pathname.startsWith('/docs') && !['/docs/agent-setup/',
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="aquaman: an agent asks for a credential by reference and sees it redacted, while a dialog asks you to store the value in your vault" />
     <meta name="twitter:card" content="summary_large_image" />
+    {/* Vercel Web Analytics: page views only, no cookies. The script and the endpoint it reports to are on this origin, which is what the Content-Security-Policy in vercel.json allows. */}
+    <script is:inline defer src="/_vercel/insights/script.js"></script>
     {jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd).replace(/</g, '\\u003c')} />}
   </head>
   <body class={look}>
