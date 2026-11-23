@@ -248,7 +248,11 @@ def _broker_resolve_http(
     set. Module-level so tests can monkeypatch it. Never raises for HTTP-level
     failures; lets URLError/timeout propagate for the caller to classify.
     """
-    payload = json.dumps({"service": service, "key": key}).encode("utf-8")
+    # "ask": False — a source never prompts. For a ref the user marked
+    # ask-first, the daemon answers at once (404 ask_first_required, with the
+    # command that raises its dialog) instead of opening a dialog and holding
+    # this request while startup waits.
+    payload = json.dumps({"service": service, "key": key, "ask": False}).encode("utf-8")
     req = urllib.request.Request(
         f"{origin}/broker/resolve",
         data=payload,
