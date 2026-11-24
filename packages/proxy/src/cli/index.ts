@@ -52,8 +52,8 @@ import {
   channelRoutingStatus,
   type ChannelSkipReason
 } from '../openclaw/channel-routing.js';
-import { createHermesIntegration, detectHermes } from '../hermes/integration.js';
-import { managedScopeShadowedKeys, hermesManagedEnvPath, HERMES_SUPPORTED_SERVICES, hermesSecretSourceRefs } from '../hermes/config-writer.js';
+import { createHermesIntegration, detectHermes, type HermesIntegration, type HermesApplyResult } from '../hermes/integration.js';
+import { managedScopeShadowedKeys, hermesManagedEnvPath, HERMES_SUPPORTED_SERVICES, hermesSecretSourceRefs, hermesEnvWiring, hermesEnvOpenToOthers, isHermesProfileName, HERMES_CONFIG_SET_ENV_MIN } from '../hermes/config-writer.js';
 import { createBrokerScope, parseAquamanRef, formatAquamanRef, defaultProjectsPath, isReservedService, RESERVED_SERVICE_REASON, type BrokerScope } from '../broker-scope.js';
 import { startAuditAnchor } from '../audit-anchor.js';
 import { auditVerifyCommand, auditAcceptCommand } from './audit-commands.js';
@@ -1385,14 +1385,88 @@ function maskToken(token: string): string {
   return `${token.slice(0, 7)}…${token.slice(-4)}`;
 }
 
-// hermes setup — enable loopback listener, generate token, wire ~/.hermes/.env
+/** The `--profile` value, lower-cased as Hermes reads it; exits on a name Hermes would not accept. */
+function hermesProfileOption(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const name = raw.trim().toLowerCase();
+  if (!isHermesProfileName(name)) {
+    console.error(`Invalid --profile: ${raw}`);
+    console.error('A Hermes profile name is lower-case letters, digits, "-" and "_" (list them with: hermes profile list).');
+    process.exit(1);
+  }
+  return name;
+}
+
+/** `aquaman hermes <command>` with the profile flag it was run with, for a fix line. */
+function hermesCommand(command: string, profile: string | undefined): string {
+  return `aquaman hermes ${command}${profile ? ` --profile ${profile}` : ''}`;
+}
+
+/**
+ * Say what became of storing the settings in Hermes. Returns the exit code.
+ * No setting's value is printed: the commands a person runs by hand come from
+ * `aquaman hermes configure`.
+ */
+function reportHermesApply(result: HermesApplyResult, profile: string | undefined): number {
+  const configure = hermesCommand('configure', profile);
+  switch (result.status) {
+    case 'applied':
+      console.log(`✓ Stored ${result.set.length} settings with \`hermes config set\` (${result.envPath})`);
+      if (hermesEnvOpenToOthers(result.envPath)) {
+        console.log(`⚠ ${result.envPath} can be read by other users of this machine, and it now holds the loopback token.`);
+        console.log(`  Hermes keeps the mode the file had. Run: ${aqua(`chmod 600 ${result.envPath}`)}`);
+      }
+      return 0;
+    case 'manual':
+      if (result.reason === 'not_installed') {
+        console.log('• Hermes CLI not found on PATH, so nothing was stored in Hermes.');
+        console.log(`  Run this command again once it is installed, or print the commands with: ${aqua(configure)}`);
+      } else {
+        console.log(`• Hermes ${result.version ?? '(version not recognised)'}: \`hermes config set\` stores every setting in .env from ${HERMES_CONFIG_SET_ENV_MIN} on.`);
+        console.log('  On this version some of them would land in config.yaml, so nothing was run.');
+        console.log(`  Add the lines that ${aqua(configure)} prints to ${result.envPath}`);
+      }
+      return 0;
+    case 'refused':
+      console.log(`✗ ${result.envPath} holds a key in ${result.realKeys.join(', ')}, and \`hermes config set\` would replace it.`);
+      console.log('  Nothing was stored in Hermes. Put the key in the vault first:');
+      for (const name of result.realKeys) {
+        const svc = name.replace(/_API_KEY$/, '').toLowerCase();
+        console.log(`    ${aqua(`aquaman credentials add ${svc} api_key`)}`);
+      }
+      console.log(`  then run: ${aqua(`${hermesCommand('setup', profile)} --replace-keys`)}`);
+      return 1;
+    case 'failed':
+      if (result.key) console.log(`✗ \`hermes config set ${result.key}\` failed: ${result.detail}`);
+      else console.log(`✗ ${result.detail}`);
+      if (result.set.length > 0) console.log(`  Stored before that: ${result.set.join(', ')}`);
+      console.log(`  The settings are not complete in ${result.envPath}. Print the commands with: ${aqua(configure)}`);
+      return 1;
+  }
+}
+
+/** Whether the profile's `.env` holds the settings that point Hermes at the proxy. */
+async function hermesWiringOf(
+  integration: HermesIntegration,
+  profile: string | undefined,
+): Promise<{ envPath: string; readable: boolean; exists: boolean; absent: string[] }> {
+  const envPath = await integration.resolveEnvPath(profile);
+  const exists = fs.existsSync(envPath);
+  const wiring = hermesEnvWiring(envPath, integration.configureHermes());
+  return { envPath, exists, readable: wiring.readable, absent: [...wiring.missing, ...wiring.differing] };
+}
+
+// hermes setup — enable loopback listener, generate token, store the settings in Hermes
 hermes
   .command('setup')
-  .description('Enable the loopback listener, generate a token, and wire ~/.hermes/.env for Hermes')
+  .description('Enable the loopback listener, generate a token, and point Hermes at it with `hermes config set`')
   .option('--port <port>', 'Loopback listener port')
+  .option('--profile <name>', 'Hermes profile to set up (default: the profile Hermes selects)')
+  .option('--replace-keys', 'Replace a provider key already in the Hermes .env with the placeholder')
   .option('--dry-run', 'Show what would change without writing')
-  .option('--no-write', 'Configure the proxy but do not write ~/.hermes/.env')
+  .option('--no-write', 'Configure the proxy but store nothing in Hermes')
   .action(async (options) => {
+    const profile = hermesProfileOption(options.profile);
     const config = loadConfig();
 
     // Resolve port: flag > existing config > default.
@@ -1428,8 +1502,8 @@ hermes
       console.log(`  Loopback listener: http://${host}:${port}  (enabled)`);
       console.log(`  Token:             ${maskToken(token)}`);
       console.log(`  Wired services:    ${wired.join(', ') || '(none)'}`);
-      console.log(`  ~/.hermes/.env:    ${integration.envPath()}`);
-      console.log('\nEnv vars:');
+      console.log(`  Hermes .env:       ${await integration.resolveEnvPath(profile)}`);
+      console.log('\nSettings, stored with `hermes config set`:');
       console.log(integration.getEnvForDisplay());
       return;
     }
@@ -1442,12 +1516,17 @@ hermes
     saveConfig(stored);
     console.log(`✓ Loopback listener enabled on http://${host}:${port} (saved to ${path.join(getConfigDir(), 'config.yaml')})`);
 
+    let exitCode = 0;
     if (options.write !== false) {
-      const dest = integration.writeConfiguration(env);
-      console.log(`✓ Wrote Hermes env block to ${dest}`);
+      exitCode = reportHermesApply(
+        await integration.applyConfiguration(env, { profile, replaceKeys: options.replaceKeys === true }),
+        profile,
+      );
     } else {
-      console.log('Skipped writing ~/.hermes/.env (--no-write). Env vars:');
+      console.log('Stored nothing in Hermes (--no-write). Settings:');
       console.log(integration.getEnvForDisplay());
+      console.log('\nStore them with:');
+      console.log(integration.commandsForDisplay(env, profile));
     }
 
     const info = await detectHermes(config.hermes?.binaryPath || 'hermes');
@@ -1455,20 +1534,23 @@ hermes
     if (info.installed) {
       console.log(`✓ Hermes detected (v${info.version})`);
     } else {
-      console.log('• Hermes CLI not found on PATH. Install: uv tool install hermes-agent');
+      console.log('• Install Hermes: https://hermes-agent.nousresearch.com/docs/getting-started/installation');
     }
 
     console.log('\nNext steps:');
     console.log(`  1. Add credentials:  ${aqua('aquaman credentials add anthropic api_key')}`);
     console.log(`  2. Start the daemon: ${aqua('aquaman daemon')}`);
-    console.log(`  3. Verify:           ${aqua('aquaman hermes doctor')}`);
+    console.log(`  3. Verify:           ${aqua(hermesCommand('doctor', profile))}`);
+    if (exitCode !== 0) process.exit(exitCode);
   });
 
 // hermes status — loopback config + env file + Hermes detection (overview)
 hermes
   .command('status')
-  .description('Show loopback listener config, ~/.hermes/.env wiring, and Hermes detection')
-  .action(async () => {
+  .description('Show loopback listener config, whether Hermes points at it, and Hermes detection')
+  .option('--profile <name>', 'Hermes profile to look at (default: the profile Hermes selects)')
+  .action(async (options) => {
+    const profile = hermesProfileOption(options.profile);
     const config = loadConfig();
     const lb = config.loopback;
 
@@ -1489,12 +1571,11 @@ hermes
     });
     console.log(`  Wired services:    ${integration.wiredServices().join(', ') || '(none)'}`);
 
-    const envPath = integration.envPath();
-    let envWired = false;
-    try {
-      envWired = fs.existsSync(envPath) && fs.readFileSync(envPath, 'utf-8').includes('aquaman managed');
-    } catch { /* unreadable */ }
-    console.log(`  ~/.hermes/.env:    ${envWired ? aqua('wired') : 'not wired'}  (${envPath})`);
+    const wiring = await hermesWiringOf(integration, profile);
+    const wiringText = wiring.absent.length === 0 ? aqua('wired')
+      : wiring.absent.length === Object.keys(integration.configureHermes()).length ? 'not wired'
+      : `incomplete: ${wiring.absent.join(', ')} not set to the proxy`;
+    console.log(`  Hermes .env:       ${wiringText}  (${wiring.envPath})`);
 
     const shadowed = managedScopeShadowedKeys(integration.configureHermes());
     if (shadowed.length > 0) {
@@ -1515,7 +1596,9 @@ hermes
 hermes
   .command('doctor')
   .description('Deep diagnostic — loopback config, listener reachability, env wiring, per-service vault credentials')
-  .action(async () => {
+  .option('--profile <name>', 'Hermes profile to check (default: the profile Hermes selects)')
+  .action(async (options) => {
+    const profile = hermesProfileOption(options.profile);
     const config = loadConfig();
     const lb = config.loopback;
     let ok = true;
@@ -1540,7 +1623,7 @@ hermes
       else fail('Loopback listener not responding — start the daemon: aquaman daemon');
     }
 
-    // 3. ~/.hermes/.env wired
+    // 3. The profile's .env holds the settings that point Hermes at the proxy
     const integration = createHermesIntegration({
       port: lb?.port || DEFAULT_LOOPBACK_PORT,
       token: lb?.token || '',
@@ -1548,15 +1631,21 @@ hermes
       services: config.credentials.proxiedServices,
       config: config.hermes,
     });
-    const envPath = integration.envPath();
-    try {
-      if (fs.existsSync(envPath) && fs.readFileSync(envPath, 'utf-8').includes('aquaman managed')) {
-        pass(`~/.hermes/.env has the aquaman block (${envPath})`);
+    {
+      const wiring = await hermesWiringOf(integration, profile);
+      const fix = hermesCommand('setup', profile);
+      if (wiring.exists && !wiring.readable) {
+        fail(`Could not read ${wiring.envPath}`);
+      } else if (wiring.absent.length === 0) {
+        pass(`Hermes .env points at the proxy (${wiring.envPath})`);
+        if (hermesEnvOpenToOthers(wiring.envPath)) {
+          fail(`${wiring.envPath} can be read by other users of this machine and holds the loopback token — run: chmod 600 ${wiring.envPath}`);
+        }
+      } else if (!lb?.token) {
+        fail(`Hermes .env not wired (${wiring.envPath}) — run: ${fix}`);
       } else {
-        fail(`~/.hermes/.env not wired — run: aquaman hermes setup`);
+        fail(`Hermes .env does not point at the proxy: ${wiring.absent.join(', ')} missing or set to something else (${wiring.envPath}) — run: ${fix}`);
       }
-    } catch {
-      fail(`Could not read ${envPath}`);
     }
 
     // 3b. Hermes >=0.17 managed scope: /etc/hermes/.env overrides ~/.hermes/.env
@@ -1626,7 +1715,7 @@ hermes
     // 6. Hermes installed
     const info = await detectHermes(config.hermes?.binaryPath || 'hermes');
     if (info.installed) pass(`Hermes CLI installed (v${info.version})`);
-    else console.log('  • Hermes CLI not found on PATH (install: uv tool install hermes-agent)');
+    else console.log('  • Hermes CLI not found on PATH (install: https://hermes-agent.nousresearch.com/docs/getting-started/installation)');
 
     console.log('');
     console.log(ok ? aqua('All checks passed.') : 'Some checks failed — see above.');
@@ -1636,10 +1725,13 @@ hermes
 // hermes configure — emit/write the Hermes env vars without touching daemon config
 hermes
   .command('configure')
-  .description('Generate the Hermes env vars (base URLs + placeholder key) for ~/.hermes/.env')
-  .option('--method <method>', 'Output method: env (display) or dotenv (write ~/.hermes/.env)', 'env')
-  .option('--dry-run', 'Show configuration without writing')
+  .description('Print the Hermes settings (base URLs + placeholder key) and the commands that store them')
+  .option('--method <method>', 'env (print) or dotenv (store in the Hermes .env with `hermes config set`)', 'env')
+  .option('--profile <name>', 'Hermes profile (default: the profile Hermes selects)')
+  .option('--replace-keys', 'Replace a provider key already in the Hermes .env with the placeholder')
+  .option('--dry-run', 'Print without storing')
   .action(async (options) => {
+    const profile = hermesProfileOption(options.profile);
     const config = loadConfig();
     const lb = config.loopback;
     if (!lb?.token) {
@@ -1656,11 +1748,17 @@ hermes
     const env = integration.configureHermes();
 
     if (options.dryRun || options.method !== 'dotenv') {
-      console.log('Hermes env vars (add to ~/.hermes/.env):\n');
+      console.log('Hermes settings:\n');
       for (const [k, v] of Object.entries(env)) console.log(`${k}=${v}`);
+      console.log(`\nStore them with Hermes ${HERMES_CONFIG_SET_ENV_MIN} or later:\n`);
+      console.log(integration.commandsForDisplay(env, profile));
+      console.log(`\nOn an earlier Hermes, add the lines above to ${await integration.resolveEnvPath(profile)}`);
     } else {
-      const dest = integration.writeConfiguration(env);
-      console.log(`Configuration written to: ${dest}`);
+      const code = reportHermesApply(
+        await integration.applyConfiguration(env, { profile, replaceKeys: options.replaceKeys === true }),
+        profile,
+      );
+      if (code !== 0) process.exit(code);
     }
   });
 

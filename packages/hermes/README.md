@@ -71,7 +71,7 @@ aquaman-hermes install            # drops the plugin into ~/.hermes/plugins/aqua
 hermes plugins enable aquaman     # add to plugins.enabled
 
 # 3. Wire Hermes at the proxy + start it
-aquaman hermes setup              # writes ~/.hermes/.env, enables the loopback listener
+aquaman hermes setup              # enables the loopback listener, runs `hermes config set`
 aquaman daemon &                  # start the proxy
 
 # 4. Verify
@@ -86,7 +86,7 @@ relocate its config dir); it defaults to `~/.hermes`.
 
 Hermes reaches the proxy over the token-gated loopback listener `127.0.0.1:<port>`, because Hermes builds its own HTTP client and cannot dial a Unix socket. Since aquaman v0.15.0 OpenClaw's model traffic uses the same listener, for the same reason; coding agents still use the socket `~/.aquaman/proxy.sock` (`0600`).
 
-The token is a capability to reach the local proxy, not a credential: generated per install, stored in `~/.aquaman/config.yaml` (`0600`) and in the managed block of `~/.hermes/.env`, and stripped by the proxy before your real key is injected. Any local process can reach a loopback port, including other users, where the socket's `0600` shuts them out. The token is the gate there, and the listener stays off until you run `aquaman hermes setup`.
+The token is a capability to reach the local proxy, not a credential: generated per install, stored in `~/.aquaman/config.yaml` (`0600`) and, through `hermes config set`, in the Hermes profile's `.env`, and stripped by the proxy before your real key is injected. Any local process can reach a loopback port, including other users, where the socket's `0600` shuts them out. The token is the gate there, and the listener stays off until you run `aquaman hermes setup`.
 
 ## Project secrets (secret source, Hermes ≥ 0.18.1)
 

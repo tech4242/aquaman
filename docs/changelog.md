@@ -10,6 +10,27 @@ openclaw plugins install clawhub:aquaman-plugin   # OpenClaw users
 pip install -U aquaman-hermes                     # Hermes users
 ```
 
+## 0.21.1
+
+Two changes to the Hermes integration, both asked for in the review of aquaman's entry for the Hermes plugin catalog.
+
+### `aquaman hermes setup` stores its settings through Hermes
+
+- Setup no longer edits `~/.hermes/.env`. It runs `hermes config set` once per setting, so Hermes writes its own file, and then reads the file to check that each setting is there.
+- **Profiles.** `aquaman hermes setup --profile <name>` sets up a named profile. Without the flag the settings go to the profile Hermes selects. `status`, `doctor` and `configure` take the same flag, and `doctor` now checks the values in the file, not a marker comment.
+- **A real provider key in the file is not replaced unless you say so.** `hermes config set` replaces the line, so setup stops when `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` holds something other than aquaman's placeholder, and names what to do: store the key in the vault, then `--replace-keys`.
+- **Hermes 0.21.4 or later is needed for this.** An earlier Hermes puts the base URLs in `config.yaml` when asked through `hermes config set`, so setup runs nothing there and tells you which lines to add to the `.env` yourself. The same when Hermes is not installed. An install that an earlier aquaman set up keeps working as it is.
+- Hermes keeps the permissions of a `.env` that already exists. Setup says when other users of the machine can read the file, and `aquaman hermes doctor` fails on it.
+- What was run: setup against Hermes 0.23.1 (default and named profile, settings read back, a real key left alone) and against 0.19.0 (nothing run). CI runs both on every change.
+
+### The Hermes plugin talks to the local proxy only
+
+- The plugin took the proxy's address from `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` without checking it. With a base URL that pointed at a remote gateway, the session-start health probe went to that host. With the secret source turned on and no `AQUAMAN_LOOPBACK_URL` set, the loopback token went there too. The token lets a local process use the proxy; it is not a provider key.
+- Now an address is used only when its host is `127.0.0.1`, `localhost` or `::1`, wherever it comes from: `secrets.aquaman.base_url`, `AQUAMAN_LOOPBACK_URL` or a provider base URL. Anything else gets no probe and no token, and a wrong `base_url` or `AQUAMAN_LOOPBACK_URL` is reported at startup.
+- The plugin follows no redirect and uses no proxy variable from the environment, so neither can carry a request to another host.
+- The status command and the session-start probe read the profile's environment under `gateway.multiplex_profiles`, as the secret source already did.
+- Update the plugin with `pip install -U aquaman-hermes` and `aquaman-hermes install`.
+
 ## 0.21.0
 
 Three things that kept aquaman from being the answer in cases people asked about: a stdio MCP server can now run under `aquaman-coder exec`, the Bitwarden backend works with the login item, and the proxy signs AWS requests.

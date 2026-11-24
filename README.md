@@ -162,12 +162,12 @@ npm install -g aquaman-proxy                       # 1. install daemon
 aquaman setup                                      # 2. vault wizard
 aquaman credentials add anthropic api_key          # 3. store a provider key (prompts, input hidden)
 
-aquaman hermes setup                               # 4. enable loopback + write ~/.hermes/.env
+aquaman hermes setup                               # 4. enable loopback + point Hermes at it
 aquaman daemon &                                   # 5. start the proxy (UDS + loopback)
 aquaman hermes doctor                              # 6. verify - listener + env + vault + Hermes
 ```
 
-`aquaman hermes setup` enables the loopback listener, generates a per-install token, and writes an aquaman-managed block into `~/.hermes/.env` (honoring `HERMES_HOME`): the native `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` plus a placeholder api_key equal to the token. Hermes sends the token as its provider key; the proxy strips it, injects your real vault credential, and forwards upstream. LLM providers only (Anthropic, OpenAI) today.
+`aquaman hermes setup` enables the loopback listener, generates a per-install token, and stores the settings in Hermes by running `hermes config set` (`--profile <name>` for a named profile; Hermes 0.21.4 or later): the native `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` plus a placeholder api_key equal to the token. Hermes sends the token as its provider key; the proxy strips it, injects your real vault credential, and forwards upstream. LLM providers only (Anthropic, OpenAI) today.
 
 **Optional in-session sugar** - the Python plugin adds a `/aquaman-status` command, an `aquaman_status` tool, and a session-start health probe inside Hermes (holds no credentials):
 

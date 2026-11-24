@@ -11,7 +11,14 @@ import {
   generateHermesEnv,
   hermesWiredServices,
   getHermesEnvPath,
-  writeHermesEnv,
+  hermesConfigSetWritesEnv,
+  isHermesProfileName,
+  hermesConfigSetArgs,
+  formatHermesConfigSetCommands,
+  readEnvAssignments,
+  hermesEnvWiring,
+  hermesRealKeysInEnv,
+  hermesEnvOpenToOthers,
   hermesSecretSourceRefs,
   hermesManagedEnvPath,
 } from 'aquaman-proxy';
@@ -82,45 +89,112 @@ describe('getHermesEnvPath', () => {
   });
 });
 
-describe('writeHermesEnv', () => {
+describe('storing the settings through `hermes config set`', () => {
   let dir: string;
-  afterEach(() => {
-    if (dir && fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-hermes-')); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+  const file = () => path.join(dir, '.env');
+  const env = generateHermesEnv({ port: 8585, token: 'aqm_lb_tok', services: ['anthropic', 'openai'] });
+
+  it('sets each base URL before its key: Hermes records the base URL with the key in its credential pool', () => {
+    const keys = hermesConfigSetArgs(env).map((args) => args[2]);
+    expect(keys).toEqual([
+      'AQUAMAN_LOOPBACK_URL', 'AQUAMAN_LOOPBACK_TOKEN',
+      'ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY',
+      'OPENAI_BASE_URL', 'OPENAI_API_KEY',
+    ]);
   });
 
-  function mkTmp(): string {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-hermes-'));
-    return path.join(dir, '.env');
-  }
-
-  it('writes a delimited aquaman block with mode 0o600', () => {
-    const file = mkTmp();
-    writeHermesEnv({ ANTHROPIC_BASE_URL: 'http://x/anthropic', ANTHROPIC_API_KEY: 'tok' }, file);
-    const content = fs.readFileSync(file, 'utf-8');
-    expect(content).toContain('# >>> aquaman managed >>>');
-    expect(content).toContain('ANTHROPIC_BASE_URL=http://x/anthropic');
-    expect(content).toContain('# <<< aquaman managed <<<');
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  it('builds one `config set` per setting, with the profile flag before the subcommand', () => {
+    expect(hermesConfigSetArgs({ A_URL: 'http://127.0.0.1:1', B_KEY: 'x y' })).toEqual([
+      ['config', 'set', 'A_URL', 'http://127.0.0.1:1'],
+      ['config', 'set', 'B_KEY', 'x y'],
+    ]);
+    expect(hermesConfigSetArgs({ A_URL: 'u' }, 'work')).toEqual([['-p', 'work', 'config', 'set', 'A_URL', 'u']]);
   });
 
-  it('preserves pre-existing non-aquaman lines', () => {
-    const file = mkTmp();
-    fs.writeFileSync(file, 'EXISTING_VAR=keepme\n');
-    writeHermesEnv({ ANTHROPIC_API_KEY: 'tok' }, file);
-    const content = fs.readFileSync(file, 'utf-8');
-    expect(content).toContain('EXISTING_VAR=keepme');
-    expect(content).toContain('ANTHROPIC_API_KEY=tok');
+  it('prints the same commands for a shell, quoting a value that needs it', () => {
+    expect(formatHermesConfigSetCommands({ A_URL: 'http://127.0.0.1:8585/openai/v1', B: "it's $HOME" }, 'work')).toBe(
+      "  hermes -p work config set A_URL http://127.0.0.1:8585/openai/v1\n  hermes -p work config set B 'it'\\''s $HOME'",
+    );
   });
 
-  it('is idempotent — re-running replaces the block, not appends', () => {
-    const file = mkTmp();
-    writeHermesEnv({ ANTHROPIC_API_KEY: 'tok1' }, file);
-    writeHermesEnv({ ANTHROPIC_API_KEY: 'tok2' }, file);
-    const content = fs.readFileSync(file, 'utf-8');
-    const blockCount = (content.match(/# >>> aquaman managed >>>/g) || []).length;
-    expect(blockCount).toBe(1);
-    expect(content).toContain('ANTHROPIC_API_KEY=tok2');
-    expect(content).not.toContain('ANTHROPIC_API_KEY=tok1');
+  it.each([
+    ['0.21.4', true], ['0.21.5', true], ['0.22.0', true], ['0.23.1', true], ['1.0.0', true],
+    ['0.21.3', false], ['0.19.0', false], ['0.18.1', false],
+    // A build that does not say which version it is cannot be relied on to store by shape.
+    ['dev build', false], ['', false], [undefined, false],
+  ])('Hermes %s stores every setting in .env: %s', (version, expected) => {
+    expect(hermesConfigSetWritesEnv(version)).toBe(expected);
+  });
+
+  it.each([
+    ['work', true], ['default', true], ['a', true], ['team_2-b', true], ['9lives', true], ['a'.repeat(64), true],
+    ['', false], ['Work', false], ['-p', false], ['_x', false], ['a b', false], ['a/b', false],
+    ['../x', false], ['a.b', false], ['a'.repeat(65), false], ['wörk', false], ['x\n', false],
+  ])('profile name %j is accepted: %s', (name, ok) => {
+    expect(isHermesProfileName(name)).toBe(ok);
+  });
+
+  it('reads assignments as Hermes writes them and as people write them', () => {
+    fs.writeFileSync(file(), [
+      '# a comment', '', 'PLAIN=value', 'export EXPORTED=1', '  INDENTED = spaced  ',
+      'QUOTED="has # and space"', "SINGLE='x'", 'EMPTY=', 'not an assignment', 'TWICE=first', 'TWICE=second',
+      'URL=http://127.0.0.1:8585/openai/v1', '9BAD=x',
+    ].join('\r\n'));
+    expect(readEnvAssignments(file())).toEqual({
+      PLAIN: 'value', EXPORTED: '1', INDENTED: 'spaced', QUOTED: 'has # and space', SINGLE: 'x',
+      EMPTY: '', TWICE: 'second', URL: 'http://127.0.0.1:8585/openai/v1',
+    });
+    expect(readEnvAssignments(path.join(dir, 'absent'))).toBeNull();
+  });
+
+  it('says which settings a file lacks and which it holds with another value', () => {
+    expect(hermesEnvWiring(file(), env)).toEqual({ readable: false, missing: Object.keys(env), differing: [] });
+    fs.writeFileSync(file(), Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n') + '\n');
+    expect(hermesEnvWiring(file(), env)).toEqual({ readable: true, missing: [], differing: [] });
+    fs.writeFileSync(file(), 'ANTHROPIC_BASE_URL=https://gateway.example.com\nAQUAMAN_LOOPBACK_URL=http://127.0.0.1:8585\n');
+    expect(hermesEnvWiring(file(), env)).toEqual({
+      readable: true,
+      missing: ['AQUAMAN_LOOPBACK_TOKEN', 'ANTHROPIC_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_API_KEY'],
+      differing: ['ANTHROPIC_BASE_URL'],
+    });
+  });
+
+  it('finds a provider key that is not an aquaman placeholder, and only that', () => {
+    expect(hermesRealKeysInEnv(file(), env)).toEqual([]);
+    fs.writeFileSync(file(), [
+      'ANTHROPIC_API_KEY=sk-ant-' + 'a'.repeat(20),
+      'OPENAI_API_KEY=aqm_lb_an_older_token',
+      'AQUAMAN_LOOPBACK_TOKEN=something-else',
+      'ANTHROPIC_BASE_URL=https://gateway.example.com',
+    ].join('\n'));
+    expect(hermesRealKeysInEnv(file(), env)).toEqual(['ANTHROPIC_API_KEY']);
+    fs.writeFileSync(file(), 'ANTHROPIC_API_KEY=\nOPENAI_API_KEY=aquaman-proxy-managed\n');
+    expect(hermesRealKeysInEnv(file(), env)).toEqual([]);
+  });
+
+  it('says when the file can be read by others', () => {
+    expect(hermesEnvOpenToOthers(file())).toBe(false);
+    fs.writeFileSync(file(), 'X=1\n', { mode: 0o600 });
+    expect(hermesEnvOpenToOthers(file())).toBe(false);
+    for (const mode of [0o640, 0o604, 0o644]) {
+      fs.chmodSync(file(), mode);
+      expect(hermesEnvOpenToOthers(file())).toBe(true);
+    }
+  });
+
+  it('places a named profile under profiles/<name> when Hermes cannot be asked', () => {
+    const before = process.env['HERMES_HOME'];
+    process.env['HERMES_HOME'] = dir;
+    try {
+      expect(getHermesEnvPath('/nowhere')).toBe(path.join(dir, '.env'));
+      expect(getHermesEnvPath('/nowhere', 'default')).toBe(path.join(dir, '.env'));
+      expect(getHermesEnvPath('/nowhere', 'work')).toBe(path.join(dir, 'profiles', 'work', '.env'));
+    } finally {
+      if (before === undefined) delete process.env['HERMES_HOME'];
+      else process.env['HERMES_HOME'] = before;
+    }
   });
 });
 

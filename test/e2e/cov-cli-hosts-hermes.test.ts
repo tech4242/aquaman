@@ -2,9 +2,9 @@
  * `aquaman hermes setup|status|doctor|configure`, driven as a real process.
  *
  * The real `hermes` program never runs: PATH holds one private directory
- * (test/helpers/cov-cli-hosts.ts) and a fake `hermes` script is put there when
- * a test needs one to be "installed". HERMES_HOME and HERMES_MANAGED_DIR point
- * into the sandbox.
+ * (test/helpers/cov-cli-hosts.ts) and a stand-in `hermes`
+ * (test/helpers/fake-hermes.ts) is put there when a test needs one to be
+ * "installed". HERMES_HOME and HERMES_MANAGED_DIR point into the sandbox.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -13,13 +13,23 @@ import * as http from 'node:http';
 import * as path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { createSandbox, baseConfig, runCli, addCredential, type Sandbox } from '../helpers/cov-cli-hosts.js';
+import { installFakeHermes, fakeHermesCalls, type FakeHermesOptions } from '../helpers/fake-hermes.js';
 
 const T = 120_000;
 const TOKEN = 'aqm_lb_0123456789abcdef0123456789abcdef';
 
-function fakeHermes(sb: Sandbox, version = '0.23.1'): void {
-  sb.fakeBin('hermes', `echo "Hermes Agent v${version} (2026.11.1)"`);
+function fakeHermes(sb: Sandbox, version = '0.23.1', options: FakeHermesOptions = {}): void {
+  installFakeHermes(sb.bin, { version, ...options });
 }
+
+/** The `config set` invocations of the stand-in, as `KEY` names in order. */
+const setKeys = (sb: Sandbox): string[] => fakeHermesCalls(sb.bin).filter((c) => c.includes('set')).map((c) => c[c.length - 2]);
+
+const ALL_KEYS = [
+  'AQUAMAN_LOOPBACK_URL', 'AQUAMAN_LOOPBACK_TOKEN',
+  'ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY',
+  'OPENAI_BASE_URL', 'OPENAI_API_KEY',
+];
 
 /** A stand-in for the loopback listener: answers /_health and nothing else. */
 async function healthServer(status = 200): Promise<{ port: number; close(): Promise<void> }> {
@@ -79,24 +89,27 @@ describe('aquaman hermes (cli-hosts coverage)', () => {
       // prefix + last four, never the whole token
       expect(r.stdout).toContain('Token:             aqm_lb_…cdef');
       expect(r.stdout).toContain('Wired services:    anthropic, openai');
-      expect(r.stdout).toContain(`~/.hermes/.env:    ${envFile()}`);
+      expect(r.stdout).toContain(`Hermes .env:       ${envFile()}`);
+      expect(r.stdout).toContain('Settings, stored with `hermes config set`:');
       expect(r.stdout).toContain('ANTHROPIC_BASE_URL=http://127.0.0.1:9911/anthropic');
       expect(r.stdout).toContain('OPENAI_BASE_URL=http://127.0.0.1:9911/openai/v1');
       expect(sb.readConfig()).toBe(before);
       expect(fs.existsSync(envFile())).toBe(false);
     }, T);
 
-    it('enables the listener, generates a token and writes the managed block into $HERMES_HOME/.env', async () => {
+    it('enables the listener, generates a token and stores the settings through `hermes config set`', async () => {
       sb.writeConfig(baseConfig(sb));
+      fakeHermes(sb);
       fs.mkdirSync(sb.hermesHome, { recursive: true });
-      fs.writeFileSync(envFile(), 'MY_OWN_VAR=keep-me\n');
+      fs.writeFileSync(envFile(), 'MY_OWN_VAR=keep-me\n', { mode: 0o600 });
 
       const r = await runCli(sb, ['hermes', 'setup', '--port', '9912']);
       expect(r.code).toBe(0);
       expect(r.stdout).toContain('✓ Loopback listener enabled on http://127.0.0.1:9912');
-      expect(r.stdout).toContain(`✓ Wrote Hermes env block to ${envFile()}`);
-      expect(r.stdout).toContain('Hermes CLI not found on PATH. Install: uv tool install hermes-agent');
+      expect(r.stdout).toContain(`✓ Stored 6 settings with \`hermes config set\` (${envFile()})`);
+      expect(r.stdout).toContain('✓ Hermes detected (v0.23.1)');
       expect(r.stdout).toContain('aquaman hermes doctor');
+      expect(r.stdout).not.toContain('can be read by other users');
 
       const cfg = sb.readConfig();
       expect(cfg).toMatch(/loopback:\n\s+enabled: true/);
@@ -104,26 +117,162 @@ describe('aquaman hermes (cli-hosts coverage)', () => {
       const token = /token: (aqm_lb_[A-Za-z0-9_-]+)/.exec(cfg)?.[1];
       expect(token).toBeTruthy();
 
-      const dotenv = fs.readFileSync(envFile(), 'utf-8');
-      expect(dotenv).toContain('MY_OWN_VAR=keep-me');
-      expect(dotenv).toContain('# >>> aquaman managed >>>');
-      expect(dotenv).toContain('AQUAMAN_LOOPBACK_URL=http://127.0.0.1:9912');
-      expect(dotenv).toContain(`AQUAMAN_LOOPBACK_TOKEN=${token}`);
-      expect(dotenv).toContain('ANTHROPIC_BASE_URL=http://127.0.0.1:9912/anthropic');
-      expect(dotenv).toContain(`ANTHROPIC_API_KEY=${token}`);
+      // Hermes wrote the file: its own line is kept and nothing of aquaman's but the settings is added.
+      expect(setKeys(sb)).toEqual(ALL_KEYS);
+      expect(fs.readFileSync(envFile(), 'utf-8')).toBe([
+        'MY_OWN_VAR=keep-me',
+        'AQUAMAN_LOOPBACK_URL=http://127.0.0.1:9912',
+        `AQUAMAN_LOOPBACK_TOKEN=${token}`,
+        'ANTHROPIC_BASE_URL=http://127.0.0.1:9912/anthropic',
+        `ANTHROPIC_API_KEY=${token}`,
+        'OPENAI_BASE_URL=http://127.0.0.1:9912/openai/v1',
+        `OPENAI_API_KEY=${token}`,
+        '',
+      ].join('\n'));
       // The token is shown masked only.
       expect(r.all).not.toContain(token!);
     }, T);
 
-    it('--no-write keeps an existing token, prints the env vars and reports a detected Hermes', async () => {
+    it('sets up the named profile, and only that one', async () => {
+      sb.writeConfig(baseConfig(sb, loopback(9914)));
+      fakeHermes(sb);
+      const profileEnv = path.join(sb.hermesHome, 'profiles', 'work', '.env');
+      fs.mkdirSync(path.dirname(profileEnv), { recursive: true });
+
+      const r = await runCli(sb, ['hermes', 'setup', '--profile', 'Work']);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain(`✓ Stored 6 settings with \`hermes config set\` (${profileEnv})`);
+      expect(r.stdout).toContain('aquaman hermes doctor --profile work');
+      expect(fakeHermesCalls(sb.bin).filter((c) => c.includes('set')).every((c) => c[0] === '-p' && c[1] === 'work')).toBe(true);
+      expect(fs.readFileSync(profileEnv, 'utf-8')).toContain(`ANTHROPIC_API_KEY=${TOKEN}`);
+      expect(fs.existsSync(envFile())).toBe(false);
+
+      const status = await runCli(sb, ['hermes', 'status', '--profile', 'work']);
+      expect(status.stdout).toContain(`Hermes .env:       wired  (${profileEnv})`);
+      const other = await runCli(sb, ['hermes', 'status']);
+      expect(other.stdout).toContain(`Hermes .env:       not wired  (${envFile()})`);
+    }, T);
+
+    it('refuses a profile name Hermes would not accept, before anything is written', async () => {
+      sb.writeConfig(baseConfig(sb));
+      fakeHermes(sb);
+      const before = sb.readConfig();
+      for (const bad of ['../x', 'a b', '-p', '']) {
+        for (const command of ['setup', 'status', 'doctor', 'configure']) {
+          const r = await runCli(sb, ['hermes', command, `--profile=${bad}`]);
+          expect(r.code).toBe(1);
+          expect(r.stderr).toContain(`Invalid --profile: ${bad}`);
+        }
+      }
+      expect(sb.readConfig()).toBe(before);
+      expect(fakeHermesCalls(sb.bin)).toEqual([]);
+    }, T);
+
+    it('fails with what Hermes said when the profile does not exist', async () => {
+      sb.writeConfig(baseConfig(sb, loopback(9915)));
+      fakeHermes(sb);
+      const r = await runCli(sb, ['hermes', 'setup', '--profile', 'nosuch']);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toContain("✗ `hermes config set AQUAMAN_LOOPBACK_URL` failed: Error: Profile 'nosuch' does not exist.");
+      expect(r.stdout).toContain('aquaman hermes configure --profile nosuch');
+      expect(r.all).not.toContain(TOKEN);
+    }, T);
+
+    it('stores nothing in Hermes without a Hermes program, and says how to finish', async () => {
+      sb.writeConfig(baseConfig(sb, loopback(9916)));
+      const r = await runCli(sb, ['hermes', 'setup']);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('• Hermes CLI not found on PATH, so nothing was stored in Hermes.');
+      expect(r.stdout).toContain('print the commands with: aquaman hermes configure');
+      expect(r.stdout).toContain('• Install Hermes: https://hermes-agent.nousresearch.com/docs/getting-started/installation');
+      expect(fs.existsSync(sb.hermesHome)).toBe(false);
+      expect(r.all).not.toContain(TOKEN);
+    }, T);
+
+    it('runs no `config set` on a Hermes that would put part of the settings in config.yaml', async () => {
+      sb.writeConfig(baseConfig(sb, loopback(9917)));
+      fakeHermes(sb, '0.19.0');
+      const r = await runCli(sb, ['hermes', 'setup']);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('• Hermes 0.19.0: `hermes config set` stores every setting in .env from 0.21.4 on.');
+      expect(r.stdout).toContain('so nothing was run');
+      expect(r.stdout).toContain(`Add the lines that aquaman hermes configure prints to ${envFile()}`);
+      expect(setKeys(sb)).toEqual([]);
+      expect(fs.existsSync(path.join(sb.hermesHome, 'config.yaml'))).toBe(false);
+      expect(fs.existsSync(envFile())).toBe(false);
+    }, T);
+
+    it('does not replace a real provider key in the file unless --replace-keys is given', async () => {
+      sb.writeConfig(baseConfig(sb, loopback(9918)));
+      fakeHermes(sb);
+      const real = 'sk-ant-' + 'k'.repeat(24);
+      fs.mkdirSync(sb.hermesHome, { recursive: true });
+      fs.writeFileSync(envFile(), `ANTHROPIC_API_KEY=${real}\n`, { mode: 0o600 });
+
+      const refused = await runCli(sb, ['hermes', 'setup']);
+      expect(refused.code).toBe(1);
+      expect(refused.stdout).toContain(`✗ ${envFile()} holds a key in ANTHROPIC_API_KEY, and \`hermes config set\` would replace it.`);
+      expect(refused.stdout).toContain('aquaman credentials add anthropic api_key');
+      expect(refused.stdout).toContain('then run: aquaman hermes setup --replace-keys');
+      expect(refused.all).not.toContain(real);
+      expect(setKeys(sb)).toEqual([]);
+      expect(fs.readFileSync(envFile(), 'utf-8')).toBe(`ANTHROPIC_API_KEY=${real}\n`);
+
+      const replaced = await runCli(sb, ['hermes', 'setup', '--replace-keys']);
+      expect(replaced.code).toBe(0);
+      expect(fs.readFileSync(envFile(), 'utf-8')).toContain(`ANTHROPIC_API_KEY=${TOKEN}`);
+      // A second run finds its own placeholder and needs no flag.
+      expect((await runCli(sb, ['hermes', 'setup'])).code).toBe(0);
+    }, T);
+
+    it('stops at a setting Hermes refuses, names it, and prints no value', async () => {
+      sb.writeConfig(baseConfig(sb, loopback(9919)));
+      fakeHermes(sb, '0.23.1', { refuseKey: 'ANTHROPIC_BASE_URL' });
+      const r = await runCli(sb, ['hermes', 'setup']);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toContain('✗ `hermes config set ANTHROPIC_BASE_URL` failed:');
+      expect(r.stdout).toContain('it is managed by your administrator');
+      expect(r.stdout).toContain('Stored before that: AQUAMAN_LOOPBACK_URL, AQUAMAN_LOOPBACK_TOKEN');
+      expect(setKeys(sb)).toEqual(['AQUAMAN_LOOPBACK_URL', 'AQUAMAN_LOOPBACK_TOKEN', 'ANTHROPIC_BASE_URL']);
+      expect(r.all).not.toContain(TOKEN);
+      expect(r.all).not.toContain('http://127.0.0.1:9919/anthropic');
+    }, T);
+
+    it('fails when Hermes reports success and the settings are not in the file', async () => {
+      sb.writeConfig(baseConfig(sb, loopback(9922)));
+      fakeHermes(sb, '0.23.1', { storeNothing: true });
+      const r = await runCli(sb, ['hermes', 'setup']);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toContain('✗ Hermes reported success, but AQUAMAN_LOOPBACK_URL');
+      expect(r.all).not.toContain(TOKEN);
+    }, T);
+
+    it('says when the file Hermes kept can be read by other users', async () => {
+      sb.writeConfig(baseConfig(sb, loopback(9923)));
+      fakeHermes(sb);
+      fs.mkdirSync(sb.hermesHome, { recursive: true });
+      fs.writeFileSync(envFile(), 'MY_OWN_VAR=1\n');
+      fs.chmodSync(envFile(), 0o644);
+      const r = await runCli(sb, ['hermes', 'setup']);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain(`⚠ ${envFile()} can be read by other users of this machine, and it now holds the loopback token.`);
+      expect(r.stdout).toContain(`chmod 600 ${envFile()}`);
+      const doctor = await runCli(sb, ['hermes', 'doctor']);
+      expect(doctor.code).toBe(1);
+      expect(doctor.stdout).toContain(`✗ ${envFile()} can be read by other users of this machine and holds the loopback token — run: chmod 600 ${envFile()}`);
+    }, T);
+
+    it('--no-write keeps an existing token, prints the settings and the commands, and runs none', async () => {
       sb.writeConfig(baseConfig(sb, loopback(9913)));
       fakeHermes(sb);
-      const r = await runCli(sb, ['hermes', 'setup', '--no-write']);
+      const r = await runCli(sb, ['hermes', 'setup', '--no-write', '--profile', 'work']);
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain('Skipped writing ~/.hermes/.env (--no-write). Env vars:');
+      expect(r.stdout).toContain('Stored nothing in Hermes (--no-write). Settings:');
       expect(r.stdout).toContain(`AQUAMAN_LOOPBACK_TOKEN=${TOKEN}`);
+      expect(r.stdout).toContain('  hermes -p work config set ANTHROPIC_BASE_URL http://127.0.0.1:9913/anthropic');
       expect(r.stdout).toContain('✓ Hermes detected (v0.23.1)');
       expect(sb.readConfig()).toContain(`token: ${TOKEN}`);
+      expect(setKeys(sb)).toEqual([]);
       expect(fs.existsSync(envFile())).toBe(false);
     }, T);
 
@@ -147,7 +296,7 @@ describe('aquaman hermes (cli-hosts coverage)', () => {
       expect(r.code).toBe(0);
       expect(r.stdout).toContain('Loopback listener: disabled  (enable with: aquaman hermes setup)');
       expect(r.stdout).toContain('Wired services:    anthropic, openai');
-      expect(r.stdout).toContain(`~/.hermes/.env:    not wired  (${envFile()})`);
+      expect(r.stdout).toContain(`Hermes .env:       not wired  (${envFile()})`);
       expect(r.stdout).toContain('Hermes CLI:        not found');
       expect(r.stdout).not.toContain('Listener:');
       expect(r.stdout).not.toContain('Managed scope');
@@ -168,7 +317,14 @@ describe('aquaman hermes (cli-hosts coverage)', () => {
         sb.writeConfig(baseConfig(sb, loopback(srv.port)));
         fakeHermes(sb, '0.19.0');
         fs.mkdirSync(sb.hermesHome, { recursive: true });
-        fs.writeFileSync(envFile(), '# >>> aquaman managed >>>\nX=1\n# <<< aquaman managed <<<\n');
+        // A file from an aquaman that wrote its own block: the settings in it still count.
+        fs.writeFileSync(envFile(), [
+          '# >>> aquaman managed >>>',
+          `AQUAMAN_LOOPBACK_URL=http://127.0.0.1:${srv.port}`, `AQUAMAN_LOOPBACK_TOKEN=${TOKEN}`,
+          `ANTHROPIC_BASE_URL=http://127.0.0.1:${srv.port}/anthropic`, `ANTHROPIC_API_KEY=${TOKEN}`,
+          `OPENAI_BASE_URL=http://127.0.0.1:${srv.port}/openai/v1`, `OPENAI_API_KEY=${TOKEN}`,
+          '# <<< aquaman managed <<<', '',
+        ].join('\n'), { mode: 0o600 });
         fs.mkdirSync(sb.managedDir, { recursive: true });
         fs.writeFileSync(path.join(sb.managedDir, '.env'), 'export ANTHROPIC_API_KEY=sk-admin\nOTHER=1\n');
 
@@ -176,7 +332,7 @@ describe('aquaman hermes (cli-hosts coverage)', () => {
         expect(r.code).toBe(0);
         expect(r.stdout).toContain(`Loopback listener: enabled  http://127.0.0.1:${srv.port}`);
         expect(r.stdout).toContain('Token:             aqm_lb_…cdef');
-        expect(r.stdout).toContain(`~/.hermes/.env:    wired  (${envFile()})`);
+        expect(r.stdout).toContain(`Hermes .env:       wired  (${envFile()})`);
         expect(r.stdout).toContain(`Managed scope:     ⚠ ${path.join(sb.managedDir, '.env')} pins ANTHROPIC_API_KEY — proxy bypassed for these keys`);
         expect(r.stdout).toContain('Hermes CLI:        v0.19.0');
         expect(r.stdout).toContain('Listener:          responding');
@@ -193,12 +349,12 @@ describe('aquaman hermes (cli-hosts coverage)', () => {
       const r = await runCli(sb, ['hermes', 'doctor']);
       expect(r.code).toBe(1);
       expect(r.stdout).toContain('✗ Loopback listener is disabled — run: aquaman hermes setup');
-      expect(r.stdout).toContain('✗ ~/.hermes/.env not wired — run: aquaman hermes setup');
+      expect(r.stdout).toContain(`✗ Hermes .env not wired (${envFile()}) — run: aquaman hermes setup`);
       expect(r.stdout).toContain('✓ No managed-scope override of aquaman env vars');
       expect(r.stdout).toContain('✗ No credential for anthropic/api_key — run: aquaman credentials add anthropic api_key');
       expect(r.stdout).toContain('✗ No credential for openai/api_key — run: aquaman credentials add openai api_key');
       expect(r.stdout).toContain(`• No aquaman secret-source bindings in ${path.join(sb.hermesHome, 'config.yaml')} (optional)`);
-      expect(r.stdout).toContain('• Hermes CLI not found on PATH (install: uv tool install hermes-agent)');
+      expect(r.stdout).toContain('• Hermes CLI not found on PATH (install: https://hermes-agent.nousresearch.com/docs/getting-started/installation)');
       expect(r.stdout).toContain('Some checks failed — see above.');
       // The listener is off, so its reachability is not probed.
       expect(r.stdout).not.toContain('/_health');
@@ -213,6 +369,7 @@ describe('aquaman hermes (cli-hosts coverage)', () => {
         ]));
         await addCredential(sb, 'anthropic', 'api_key', 'sk-ant-test-value');
         await addCredential(sb, 'openai', 'api_key', 'sk-openai-test-value');
+        fakeHermes(sb);
         const cfg = await runCli(sb, ['hermes', 'configure', '--method', 'dotenv']);
         expect(cfg.code).toBe(0);
         fs.writeFileSync(path.join(sb.hermesHome, 'config.yaml'), [
@@ -223,13 +380,12 @@ describe('aquaman hermes (cli-hosts coverage)', () => {
           '      NOT_A_REF: plain-value',
           '',
         ].join('\n'));
-        fakeHermes(sb);
 
         const r = await runCli(sb, ['hermes', 'doctor']);
         expect(r.stdout).toContain(`✓ Loopback listener enabled (http://127.0.0.1:${srv.port})`);
         expect(r.stdout).toContain('✓ Loopback token configured');
         expect(r.stdout).toContain('✓ Loopback listener responding to /_health');
-        expect(r.stdout).toContain(`✓ ~/.hermes/.env has the aquaman block (${envFile()})`);
+        expect(r.stdout).toContain(`✓ Hermes .env points at the proxy (${envFile()})`);
         expect(r.stdout).toContain('✓ Vault credential anthropic/api_key resolves');
         expect(r.stdout).toContain('✓ Vault credential openai/api_key resolves');
         expect(r.stdout).toContain('✓ All 1 secret-source binding(s) are declared to the broker');
@@ -311,34 +467,46 @@ describe('aquaman hermes (cli-hosts coverage)', () => {
       expect(r.stderr).toContain('No loopback token configured. Run `aquaman hermes setup` first.');
     }, T);
 
-    it('prints the env vars by default and with --dry-run, writing nothing', async () => {
+    it('prints the settings and the commands by default and with --dry-run, storing nothing', async () => {
       sb.writeConfig(baseConfig(sb, loopback(9920)));
+      fakeHermes(sb);
       for (const args of [['hermes', 'configure'], ['hermes', 'configure', '--method', 'dotenv', '--dry-run']]) {
         const r = await runCli(sb, args);
         expect(r.code).toBe(0);
-        expect(r.stdout).toContain('Hermes env vars (add to ~/.hermes/.env):');
+        expect(r.stdout).toContain('Hermes settings:');
         expect(r.stdout).toContain('AQUAMAN_LOOPBACK_URL=http://127.0.0.1:9920');
         expect(r.stdout).toContain(`OPENAI_API_KEY=${TOKEN}`);
-        expect(r.stdout).toContain('OPENAI_BASE_URL=http://127.0.0.1:9920/openai/v1');
+        expect(r.stdout).toContain('Store them with Hermes 0.21.4 or later:');
+        expect(r.stdout).toContain('  hermes config set OPENAI_BASE_URL http://127.0.0.1:9920/openai/v1');
+        expect(r.stdout).toContain(`On an earlier Hermes, add the lines above to ${envFile()}`);
       }
+      const named = await runCli(sb, ['hermes', 'configure', '--profile', 'work']);
+      expect(named.stdout).toContain(`  hermes -p work config set AQUAMAN_LOOPBACK_TOKEN ${TOKEN}`);
+      expect(setKeys(sb)).toEqual([]);
       expect(fs.existsSync(envFile())).toBe(false);
     }, T);
 
-    it('--method dotenv writes the block and is idempotent', async () => {
+    it('--method dotenv stores through Hermes and is the same on a second run', async () => {
       sb.writeConfig(baseConfig(sb, loopback(9921)));
+      fakeHermes(sb);
       const first = await runCli(sb, ['hermes', 'configure', '--method', 'dotenv']);
       expect(first.code).toBe(0);
-      expect(first.stdout).toContain(`Configuration written to: ${envFile()}`);
+      expect(first.stdout).toContain(`✓ Stored 6 settings with \`hermes config set\` (${envFile()})`);
       const once = fs.readFileSync(envFile(), 'utf-8');
       expect(once).toContain(`ANTHROPIC_API_KEY=${TOKEN}`);
-      // It holds the loopback token, so a file aquaman creates is owner-only.
       expect(fs.statSync(envFile()).mode & 0o777).toBe(0o600);
 
       const second = await runCli(sb, ['hermes', 'configure', '--method', 'dotenv']);
       expect(second.code).toBe(0);
-      const twice = fs.readFileSync(envFile(), 'utf-8');
-      expect(twice.match(/# >>> aquaman managed >>>/g)).toHaveLength(1);
-      expect(twice).toBe(once);
+      expect(fs.readFileSync(envFile(), 'utf-8')).toBe(once);
+    }, T);
+
+    it('--method dotenv exits 1 when Hermes refuses a setting', async () => {
+      sb.writeConfig(baseConfig(sb, loopback(9924)));
+      fakeHermes(sb, '0.23.1', { refuseKey: 'AQUAMAN_LOOPBACK_URL' });
+      const r = await runCli(sb, ['hermes', 'configure', '--method', 'dotenv']);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toContain('✗ `hermes config set AQUAMAN_LOOPBACK_URL` failed:');
     }, T);
   });
 });

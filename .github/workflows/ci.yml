@@ -305,3 +305,25 @@ jobs:
             HOST=(--with "hermes-agent==${{ env.HERMES_PYPI_VERSION }}")
           fi
           uv run --with pytest "${HOST[@]}" python -m pytest tests/test_conformance.py -q
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Build aquaman
+        run: |
+          npm ci --legacy-peer-deps --ignore-scripts
+          npm run build
+      - name: Run `aquaman hermes setup` against the real Hermes program
+        # The setup command stores its settings by running `hermes config set`.
+        # On the pinned tag that has to put all of them in the profile's .env;
+        # on the last PyPI build, where part of them would land in
+        # config.yaml, setup has to run nothing.
+        run: |
+          if [ "${{ matrix.hermes }}" = "tag" ]; then
+            uv sync --project hermes-agent-src --frozen
+            scripts/e2e-hermes-setup.sh "$PWD/hermes-agent-src/.venv/bin/hermes" stored
+          else
+            uv venv "$RUNNER_TEMP/hermes-pypi"
+            uv pip install --python "$RUNNER_TEMP/hermes-pypi/bin/python" "hermes-agent==${{ env.HERMES_PYPI_VERSION }}"
+            scripts/e2e-hermes-setup.sh "$RUNNER_TEMP/hermes-pypi/bin/hermes" manual
+          fi

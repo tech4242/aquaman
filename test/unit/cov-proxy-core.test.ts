@@ -34,7 +34,7 @@ import { ServiceRegistry, createServiceRegistry } from '../../packages/proxy/src
 import { OAuthTokenCache } from '../../packages/proxy/src/oauth-token-cache.js';
 import { createOpenShellDriverCore, DriverError, type DriverAccessEvent } from '../../packages/proxy/src/openshell/credential-driver.js';
 import { loadProjectRefs, loadConfigAllowedRefs, createBrokerScope } from '../../packages/proxy/src/broker-scope.js';
-import { hermesSecretSourceRefs, writeHermesEnv } from '../../packages/proxy/src/hermes/config-writer.js';
+import { hermesSecretSourceRefs } from '../../packages/proxy/src/hermes/config-writer.js';
 import { channelRoutingStatus, wireChannelRouting, loopbackChannelBaseUrl } from '../../packages/proxy/src/openclaw/channel-routing.js';
 import { VaultStore, createVaultStore } from '../../packages/proxy/src/core/credentials/backends/vault.js';
 import { KeePassXCStore, createKeePassXCStore } from '../../packages/proxy/src/core/credentials/backends/keepassxc.js';
@@ -770,14 +770,6 @@ describe('declared-ref files that cannot be read', () => {
     const result = hermesSecretSourceRefs(dir);
     expect(result.refs).toEqual([]);
     expect(result.error).toContain(`cannot read ${path.join(dir, '.hermes', 'config.yaml')}: `);
-  });
-
-  it('writeHermesEnv creates the Hermes directory owner-only when it does not exist', () => {
-    const file = path.join(dir, 'fresh', '.hermes', '.env');
-    writeHermesEnv({ AQUAMAN_LOOPBACK_URL: 'http://127.0.0.1:8585' }, file);
-    expect(fs.statSync(path.dirname(file)).mode & 0o777).toBe(0o700);
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
-    expect(fs.readFileSync(file, 'utf-8')).toBe('# >>> aquaman managed >>>\nAQUAMAN_LOOPBACK_URL=http://127.0.0.1:8585\n# <<< aquaman managed <<<\n');
   });
 });
 

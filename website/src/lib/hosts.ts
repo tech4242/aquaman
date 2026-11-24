@@ -55,7 +55,7 @@ openclaw                                    # the proxy starts with the gateway`
     commands: `npm install -g aquaman-proxy
 aquaman setup                              # pick your vault
 aquaman credentials add anthropic api_key  # store a provider key
-aquaman hermes setup                       # enable the local listener, write ~/.hermes/.env
+aquaman hermes setup                       # enable the local listener, point Hermes at it
 aquaman daemon &                           # start the proxy
 aquaman hermes doctor                      # verify`,
     guide: 'hermes',

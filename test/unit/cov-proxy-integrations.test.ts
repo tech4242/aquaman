@@ -24,6 +24,8 @@ import {
   createHermesIntegration,
   detectHermes,
 } from '../../packages/proxy/src/hermes/integration.js';
+import { readEnvAssignments } from '../../packages/proxy/src/hermes/config-writer.js';
+import { installFakeHermes, fakeHermesCalls } from '../helpers/fake-hermes.js';
 
 const svc = (name: string): ServiceConfig => ({ name, upstream: `https://${name}.example.com`, authHeader: 'Authorization', credentialKey: 'api_key' });
 
@@ -248,24 +250,132 @@ describe('host integrations', () => {
       expect(integration.envPath()).toBe(path.join(dir, 'elsewhere', '.env'));
     });
 
-    it('writes the dotenv file by default and returns its path', () => {
-      const integration = createHermesIntegration(options);
-      const env = integration.configureHermes();
-      const dest = integration.writeConfiguration(env);
-      expect(dest).toBe(path.join(dir, '.hermes', '.env'));
-      const content = fs.readFileSync(dest, 'utf-8');
-      expect(content).toContain(`AQUAMAN_LOOPBACK_TOKEN=${TOKEN}`);
-      expect(content).toContain('ANTHROPIC_BASE_URL=http://127.0.0.1:8585/anthropic');
-      expect(fs.statSync(dest).mode & 0o777).toBe(0o600);
+    it('places a named profile under profiles/<name>', () => {
+      expect(createHermesIntegration(options).envPath('work')).toBe(path.join(dir, '.hermes', 'profiles', 'work', '.env'));
     });
 
-    it('writes nothing for the env method and returns the block to export', () => {
-      const integration = createHermesIntegration({ ...options, config: { configMethod: 'env' } });
-      const env = integration.configureHermes();
-      const shown = integration.writeConfiguration(env);
-      expect(shown).toBe(Object.entries(env).map(([k, v]) => `  ${k}=${v}`).join('\n'));
-      expect(shown).toBe(integration.getEnvForDisplay());
-      expect(fs.existsSync(path.join(dir, '.hermes'))).toBe(false);
+    describe('applyConfiguration', () => {
+      const hermesHome = () => path.join(dir, '.hermes');
+      const setCalls = () => fakeHermesCalls(dir).filter((c) => c.includes('set'));
+      const withHermes = (opts: Parameters<typeof installFakeHermes>[1] = {}) => createHermesIntegration({
+        ...options,
+        config: { configMethod: 'dotenv', binaryPath: installFakeHermes(dir, opts) },
+      });
+
+      it('runs one `hermes config set` per setting, in order, and reads the file back', async () => {
+        const integration = withHermes();
+        const env = integration.configureHermes();
+        const result = await integration.applyConfiguration(env);
+        expect(result).toEqual({ status: 'applied', envPath: path.join(hermesHome(), '.env'), set: Object.keys(env) });
+        expect(setCalls()).toEqual(Object.entries(env).map(([k, v]) => ['config', 'set', k, v]));
+        expect(readEnvAssignments(path.join(hermesHome(), '.env'))).toEqual(env);
+        expect(fs.statSync(path.join(hermesHome(), '.env')).mode & 0o777).toBe(0o600);
+      });
+
+      it('leaves the rest of the file to Hermes and is the same on a second run', async () => {
+        fs.mkdirSync(hermesHome(), { recursive: true });
+        fs.writeFileSync(path.join(hermesHome(), '.env'), '# mine\nMY_OWN_VAR=keep-me\nANTHROPIC_BASE_URL=https://old.example\n');
+        const integration = withHermes();
+        const env = integration.configureHermes();
+        expect((await integration.applyConfiguration(env)).status).toBe('applied');
+        const once = fs.readFileSync(path.join(hermesHome(), '.env'), 'utf-8');
+        expect(once.startsWith('# mine\nMY_OWN_VAR=keep-me\nANTHROPIC_BASE_URL=http://127.0.0.1:8585/anthropic\n')).toBe(true);
+        expect((await integration.applyConfiguration(env)).status).toBe('applied');
+        expect(fs.readFileSync(path.join(hermesHome(), '.env'), 'utf-8')).toBe(once);
+      });
+
+      it('stores into the named profile and nowhere else', async () => {
+        fs.mkdirSync(path.join(hermesHome(), 'profiles', 'work'), { recursive: true });
+        const integration = withHermes();
+        const env = integration.configureHermes();
+        const result = await integration.applyConfiguration(env, { profile: 'work' });
+        expect(result).toMatchObject({ status: 'applied', envPath: path.join(hermesHome(), 'profiles', 'work', '.env') });
+        expect(setCalls().every((c) => c[0] === '-p' && c[1] === 'work')).toBe(true);
+        expect(fs.existsSync(path.join(hermesHome(), '.env'))).toBe(false);
+      });
+
+      it('follows the profile Hermes has active when none is named', async () => {
+        fs.mkdirSync(path.join(hermesHome(), 'profiles', 'coder'), { recursive: true });
+        fs.writeFileSync(path.join(hermesHome(), 'active_profile'), 'coder\n');
+        const integration = withHermes();
+        const result = await integration.applyConfiguration(integration.configureHermes());
+        expect(result).toMatchObject({ status: 'applied', envPath: path.join(hermesHome(), 'profiles', 'coder', '.env') });
+        expect(setCalls().every((c) => c[0] === 'config')).toBe(true);
+      });
+
+      it('runs nothing without a Hermes program', async () => {
+        const integration = createHermesIntegration({ ...options, config: { configMethod: 'dotenv', binaryPath: path.join(dir, 'nope') } });
+        expect(await integration.applyConfiguration(integration.configureHermes(), { profile: 'work' })).toEqual({
+          status: 'manual', reason: 'not_installed', envPath: path.join(hermesHome(), 'profiles', 'work', '.env'),
+        });
+        expect(fs.existsSync(hermesHome())).toBe(false);
+      });
+
+      it.each(['0.19.0', '0.21.3'])('runs no `config set` on Hermes %s, where part of the settings would go to config.yaml', async (version) => {
+        const integration = withHermes({ version });
+        expect(await integration.applyConfiguration(integration.configureHermes())).toEqual({
+          status: 'manual', reason: 'old_hermes', envPath: path.join(hermesHome(), '.env'), version,
+        });
+        expect(setCalls()).toEqual([]);
+        expect(fs.existsSync(path.join(hermesHome(), 'config.yaml'))).toBe(false);
+      });
+
+      it('does not replace a real provider key unless told to', async () => {
+        fs.mkdirSync(hermesHome(), { recursive: true });
+        const real = 'sk-ant-' + 'r'.repeat(24);
+        fs.writeFileSync(path.join(hermesHome(), '.env'), `export ANTHROPIC_API_KEY="${real}"\n`);
+        const integration = withHermes();
+        const env = integration.configureHermes();
+        expect(await integration.applyConfiguration(env)).toEqual({
+          status: 'refused', envPath: path.join(hermesHome(), '.env'), realKeys: ['ANTHROPIC_API_KEY'],
+        });
+        expect(setCalls()).toEqual([]);
+        expect(fs.readFileSync(path.join(hermesHome(), '.env'), 'utf-8')).toContain(real);
+
+        expect((await integration.applyConfiguration(env, { replaceKeys: true })).status).toBe('applied');
+        expect(fs.readFileSync(path.join(hermesHome(), '.env'), 'utf-8')).not.toContain(real);
+      });
+
+      it('stops at the setting Hermes refuses, says which, and repeats no value', async () => {
+        const integration = withHermes({ refuseKey: 'ANTHROPIC_API_KEY' });
+        const env = integration.configureHermes();
+        const result = await integration.applyConfiguration(env);
+        expect(result).toMatchObject({
+          status: 'failed', key: 'ANTHROPIC_API_KEY',
+          set: ['AQUAMAN_LOOPBACK_URL', 'AQUAMAN_LOOPBACK_TOKEN', 'ANTHROPIC_BASE_URL'],
+        });
+        expect((result as { detail: string }).detail).toContain('it is managed by your administrator');
+        expect(JSON.stringify(result)).not.toContain(TOKEN);
+        expect(setCalls().map((c) => c[2])).not.toContain('OPENAI_BASE_URL');
+      });
+
+      it('does not take Hermes at its word: a setting that is not in the file is a failure', async () => {
+        const integration = withHermes({ storeNothing: true });
+        const result = await integration.applyConfiguration(integration.configureHermes());
+        expect(result.status).toBe('failed');
+        expect((result as { detail: string }).detail).toContain('Hermes reported success, but AQUAMAN_LOOPBACK_URL');
+        expect(JSON.stringify(result)).not.toContain(TOKEN);
+      });
+
+      it('reports a missing profile as Hermes does', async () => {
+        const integration = withHermes();
+        const result = await integration.applyConfiguration(integration.configureHermes(), { profile: 'nosuch' });
+        expect(result).toMatchObject({ status: 'failed', key: 'AQUAMAN_LOOPBACK_URL', set: [] });
+        expect((result as { detail: string }).detail).toContain("Profile 'nosuch' does not exist");
+      });
+
+      it('assumes the layout when Hermes does not give a path', async () => {
+        const integration = withHermes({ noEnvPath: true });
+        expect(await integration.resolveEnvPath('work')).toBe(path.join(hermesHome(), 'profiles', 'work', '.env'));
+        expect((await integration.applyConfiguration(integration.configureHermes())).status).toBe('applied');
+      });
+
+      it('prints the commands a person can run', () => {
+        const integration = createHermesIntegration(options);
+        const shown = integration.commandsForDisplay({ AQUAMAN_LOOPBACK_URL: 'http://127.0.0.1:8585' }, 'work');
+        expect(shown).toBe('  hermes -p work config set AQUAMAN_LOOPBACK_URL http://127.0.0.1:8585');
+        expect(integration.getEnvForDisplay()).toContain('  ANTHROPIC_BASE_URL=http://127.0.0.1:8585/anthropic');
+      });
     });
 
     it('detects the configured binary and reads its version', async () => {
