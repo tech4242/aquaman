@@ -19,7 +19,7 @@ Install the proxy and point Hermes at it. These commands are yours to run: one a
 npm install -g aquaman-proxy
 aquaman setup                              # pick your vault
 aquaman credentials add anthropic api_key  # or: openai api_key
-aquaman hermes setup                       # turns on the local listener, writes ~/.hermes/.env
+aquaman hermes setup                       # turns on the local listener, runs `hermes config set`
 aquaman daemon &                           # start the proxy
 aquaman hermes doctor                      # verify
 ```
@@ -54,7 +54,8 @@ aquaman broker allow aquaman://github/token
 
 ## What the plugin does and does not do
 
-- It makes HTTP requests to the aquaman proxy on `127.0.0.1` and nowhere else. The address and a per-install token come from `AQUAMAN_LOOPBACK_URL` and `AQUAMAN_LOOPBACK_TOKEN`, which `aquaman hermes setup` writes.
+- It makes HTTP requests to the aquaman proxy on `127.0.0.1` and nowhere else. An address whose host is not `127.0.0.1`, `localhost` or `::1` is refused, whether it comes from `secrets.aquaman.base_url`, `AQUAMAN_LOOPBACK_URL` or a provider base URL: no health probe and no token is sent there. No redirect is followed and proxy variables are not used.
+- The address and a per-install token come from `AQUAMAN_LOOPBACK_URL` and `AQUAMAN_LOOPBACK_TOKEN`, which `aquaman hermes setup` stores by running `hermes config set`. It needs Hermes 0.21.4 or later for that; on an earlier Hermes it prints the lines for you to add.
 - It reads no credential store, no `.env` file and no other tool's login. The proxy reads the vault.
 - It runs no shell commands, starts no process, stores nothing and sends no telemetry.
 - It never prompts. If the proxy is not running, Hermes starts as usual and the plugin says what is missing.
@@ -64,7 +65,7 @@ aquaman broker allow aquaman://github/token
 - **Provider keys and project secrets are treated differently.** Anthropic and OpenAI keys are never in the Hermes process, and the secret source refuses to hand them out. A project secret bound through the secret source is in Hermes' environment, as with any secret source.
 - **The proxy has to be running.** `aquaman daemon` is gone after a reboot or logout; `aquaman service install` makes it start at login.
 - **A managed `/etc/hermes/.env`** overrides `~/.hermes/.env` and bypasses the proxy. `aquaman hermes doctor` detects it.
-- **With `gateway.multiplex_profiles`** each profile needs the aquaman block that `aquaman hermes setup` writes.
-- Keys that were already in `~/.hermes/.env` are not removed by setup. Delete those lines yourself, and rotate the keys if anything you do not trust could have read the file.
+- **Profiles:** `aquaman hermes setup --profile <name>` sets up a named profile (`hermes -p <name> config set ...`). With `gateway.multiplex_profiles`, set up each profile.
+- Setup does not replace a real key that is already in Hermes' `.env`: it stops and names the variable. Store the key in the vault, run `aquaman hermes setup --replace-keys`, and rotate the key if anything you do not trust could have read the file.
 
 Full guide: [aquaman.sh/docs/hermes](https://aquaman.sh/docs/hermes/). Source, security policy and advisories: [github.com/tech4242/aquaman](https://github.com/tech4242/aquaman). Apache-2.0.

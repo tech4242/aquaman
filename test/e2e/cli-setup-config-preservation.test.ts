@@ -209,22 +209,6 @@ describe('setup commands and config.yaml', () => {
     }, T);
   });
 
-  describe('files that hold the loopback token', () => {
-    it('hermes setup leaves an existing .env readable by its owner only', async () => {
-      sb.writeConfig(baseConfig(sb));
-      fs.mkdirSync(sb.hermesHome, { recursive: true });
-      const envFile = path.join(sb.hermesHome, '.env');
-      fs.writeFileSync(envFile, 'MY_OWN_VAR=keep-me\n', { mode: 0o644 });
-      fs.chmodSync(envFile, 0o644);
-
-      const r = await runCli(sb, ['hermes', 'setup', '--port', '9933']);
-      expect(r.code).toBe(0);
-      expect(fs.readFileSync(envFile, 'utf-8')).toContain('AQUAMAN_LOOPBACK_TOKEN=aqm_lb_');
-      expect(fs.readFileSync(envFile, 'utf-8')).toContain('MY_OWN_VAR=keep-me');
-      expect(fs.statSync(envFile).mode & 0o777).toBe(0o600);
-    }, T);
-  });
-
   describe('doctor', () => {
     it('the fix printed for a missing audit directory creates it, at the configured place', async () => {
       const auditDir = path.join(sb.root, 'custom-audit');

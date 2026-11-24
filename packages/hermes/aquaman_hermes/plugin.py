@@ -73,34 +73,81 @@ def _source_env() -> "MutableMapping[str, str]":
         return os.environ
 
 
+# The only hosts this plugin sends a request to. The proxy's listener binds a
+# loopback address and nothing else, so a URL naming any other host is not
+# aquaman's, whatever variable or config key it came from.
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _checked_origin(url: Any) -> Optional[str]:
+    """``scheme://host[:port]`` of ``url`` when its host is loopback, else None.
+
+    The result is built from the parsed scheme, host and port and from nothing
+    else in the text: user info, path, query and fragment are dropped, so the
+    request goes to exactly the host that was checked. Anything that does not
+    parse to an http(s) URL with a loopback host and a valid port is refused.
+    """
+    if not isinstance(url, str) or not url.strip():
+        return None
+    try:
+        parsed = urlparse(url.strip())
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https") or host not in _LOOPBACK_HOSTS:
+        return None
+    # A backslash, white space or control character in the authority is read
+    # differently by different URL parsers. None belongs in a loopback origin.
+    if re.search(r"[\\\s\x00-\x1f\x7f]", parsed.netloc):
+        return None
+    shown = f"[{host}]" if ":" in host else host
+    return f"{parsed.scheme}://{shown}:{port}" if port else f"{parsed.scheme}://{shown}"
+
+
 def _loopback_origin(env: "Optional[MutableMapping[str, str]]" = None) -> Optional[str]:
     """Return ``http://host:port`` of the aquaman loopback listener, or None.
 
-    Derived from whichever provider base-URL env var aquaman set. We only keep
-    scheme+host+port — the per-service path (``/anthropic`` etc.) is dropped so
-    we can hit ``/_health``.
+    Derived from whichever provider base-URL env var points at a loopback
+    host. A base URL that names any other host (a remote gateway, a hosted
+    provider) is not aquaman's and yields None: nothing is sent there.
     """
-    env = env if env is not None else os.environ
+    env = env if env is not None else _source_env()
     for var in _BASE_URL_ENV_VARS:
-        val = env.get(var)
-        if not val:
-            continue
-        parsed = urlparse(val)
-        if parsed.scheme and parsed.hostname:
-            port = f":{parsed.port}" if parsed.port else ""
-            return f"{parsed.scheme}://{parsed.hostname}{port}"
+        origin = _checked_origin(env.get(var))
+        if origin:
+            return origin
     return None
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: a 3xx comes back as an HTTPError."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        return None
+
+
+def _open(req: urllib.request.Request, timeout: float):
+    """Send ``req`` to the loopback listener and to nowhere else.
+
+    No redirect is followed, so an answer cannot move the request (and the
+    token header on it) to another host. No proxy is used either: a proxy
+    variable in the environment would otherwise receive a request meant for
+    127.0.0.1.
+    """
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+    return opener.open(req, timeout=timeout)
 
 
 def _probe_health(timeout: float = 1.5) -> Tuple[bool, Dict[str, Any]]:
     """Probe the proxy's /_health. Returns (reachable, info)."""
     origin = _loopback_origin()
     if not origin:
-        return False, {"reason": "no aquaman base-URL env vars set (run: aquaman hermes setup)"}
+        return False, {"reason": "no provider base URL points at the aquaman loopback listener (run: aquaman hermes setup)"}
     url = f"{origin}/_health"
     try:
         req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (loopback only)
+        with _open(req, timeout) as resp:
             if resp.status != 200:
                 return False, {"origin": origin, "reason": f"HTTP {resp.status}"}
             body = json.loads(resp.read().decode("utf-8"))
@@ -113,15 +160,23 @@ def _probe_health(timeout: float = 1.5) -> Tuple[bool, Dict[str, Any]]:
 
 def _status_text() -> str:
     """Render a human-readable status block."""
-    origin = _loopback_origin()
-    wired = [v for v in _BASE_URL_ENV_VARS if os.environ.get(v)]
-    reachable, info = _probe_health()
+    env = _source_env()
+    origin = _loopback_origin(env)
+    wired = [v for v in _BASE_URL_ENV_VARS if _checked_origin(env.get(v))]
+    elsewhere = [v for v in _BASE_URL_ENV_VARS if env.get(v) and v not in wired]
 
     lines = ["aquaman — credential isolation for Hermes"]
     if not origin:
-        lines.append("  ✗ Not wired. No ANTHROPIC_BASE_URL / OPENAI_BASE_URL set.")
+        if elsewhere:
+            lines.append(
+                f"  ✗ Not wired. {' / '.join(elsewhere)} is set, but not to the aquaman "
+                "loopback listener. Nothing is sent to that host."
+            )
+        else:
+            lines.append("  ✗ Not wired. No ANTHROPIC_BASE_URL / OPENAI_BASE_URL set.")
         lines.append("    Fix: aquaman hermes setup  (then restart Hermes)")
         return "\n".join(lines)
+    reachable, info = _probe_health()
 
     lines.append(f"  Loopback proxy: {origin}")
     lines.append(f"  Wired vars:     {', '.join(wired)}")
@@ -156,7 +211,9 @@ def _on_session_start(**_: Any) -> None:
     """One-shot reachability probe; warn (don't block) if the proxy is down."""
     origin = _loopback_origin()
     if not origin:
-        return  # aquaman isn't configured for this Hermes install — stay silent.
+        # No base URL points at the loopback listener: either aquaman is not
+        # set up here or the provider URL is someone else's host. No probe.
+        return
     reachable, info = _probe_health()
     if reachable:
         logger.info("aquaman: loopback proxy reachable at %s (keys isolated)", origin)
@@ -189,7 +246,6 @@ _PROXY_ISOLATED_VARS: Dict[str, str] = {
     "ANTHROPIC_API_KEY": "ANTHROPIC_BASE_URL",
     "OPENAI_API_KEY": "OPENAI_BASE_URL",
 }
-_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 
 def _wired_placeholder_vars(
@@ -206,8 +262,7 @@ def _wired_placeholder_vars(
     env = env if env is not None else os.environ
     wired = set()
     for key_var, url_var in _PROXY_ISOLATED_VARS.items():
-        parsed = urlparse(env.get(url_var) or "")
-        if parsed.hostname in _LOOPBACK_HOSTS:
+        if _checked_origin(env.get(url_var)):
             wired.add(key_var)
     return frozenset(wired)
 
@@ -244,19 +299,25 @@ def _broker_resolve_http(
 ) -> Tuple[Optional[str], Optional[str], Optional[int]]:
     """POST /broker/resolve on the loopback listener.
 
+    ``origin`` is checked again here, so no caller can send the token to a
+    host that is not loopback.
+
     Returns ``(value, error, http_status)`` — exactly one of value/error is
     set. Module-level so tests can monkeypatch it. Never raises for HTTP-level
     failures; lets URLError/timeout propagate for the caller to classify.
     """
+    checked = _checked_origin(origin)
+    if checked is None:
+        return None, "refused: the aquaman proxy address is not a loopback address", None
     payload = json.dumps({"service": service, "key": key}).encode("utf-8")
     req = urllib.request.Request(
-        f"{origin}/broker/resolve",
+        f"{checked}/broker/resolve",
         data=payload,
         headers={"content-type": "application/json", "x-aquaman-token": token},
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (loopback only)
+        with _open(req, timeout) as resp:
             body = json.loads(resp.read().decode("utf-8"))
             return body.get("value"), None, resp.status
     except urllib.error.HTTPError as exc:
@@ -341,7 +402,8 @@ def build_secret_source():
                 "base_url": {
                     "description": (
                         "Origin of the aquaman loopback listener. Defaults to "
-                        "AQUAMAN_LOOPBACK_URL, then the wired provider base URL."
+                        "AQUAMAN_LOOPBACK_URL, then the wired provider base URL. "
+                        "Must be a loopback address; any other host is refused."
                     ),
                     "default": _DEFAULT_LOOPBACK_URL,
                 },
@@ -379,7 +441,7 @@ def build_secret_source():
                 ),
                 ErrorKind.AUTH_FAILED: (
                     "Loopback token rejected — re-run `aquaman hermes setup` "
-                    "to rewrite it into ~/.hermes/.env."
+                    "to set it again for this profile."
                 ),
                 ErrorKind.AUTH_EXPIRED: (
                     "Loopback token no longer valid — re-run "
@@ -433,16 +495,27 @@ def build_secret_source():
             if not token:
                 return FetchResult(
                     error=f"{token_env} is not set — run: aquaman hermes setup "
-                          "(writes the loopback token into ~/.hermes/.env)",
+                          "(sets the loopback token for this Hermes profile)",
                     error_kind=ErrorKind.NOT_CONFIGURED,
                 )
 
-            origin = str(
-                cfg.get("base_url")
-                or env.get("AQUAMAN_LOOPBACK_URL")
-                or _loopback_origin(env)
-                or _DEFAULT_LOOPBACK_URL
-            ).rstrip("/")
+            # The first address that is set decides, and it has to be a
+            # loopback one: a remote host named in config.yaml or in
+            # AQUAMAN_LOOPBACK_URL is refused, not skipped in favour of the
+            # next, so a wrong setting is reported and the token stays here.
+            named = cfg.get("base_url") or env.get("AQUAMAN_LOOPBACK_URL")
+            if named:
+                origin = _checked_origin(named)
+                if origin is None:
+                    where = "secrets.aquaman.base_url" if cfg.get("base_url") else "AQUAMAN_LOOPBACK_URL"
+                    return FetchResult(
+                        error=f"{where} is not a loopback address (http://127.0.0.1:<port>) — "
+                              "the aquaman source only talks to the local proxy, so nothing "
+                              "was sent. Fix it with: aquaman hermes setup",
+                        error_kind=ErrorKind.NOT_CONFIGURED,
+                    )
+            else:
+                origin = _loopback_origin(env) or _DEFAULT_LOOPBACK_URL
             timeout = float(cfg.get("request_timeout_seconds") or _DEFAULT_REQUEST_TIMEOUT)
 
             secrets: Dict[str, str] = {}

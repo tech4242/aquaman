@@ -28,6 +28,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { parseAquamanRef } from '../broker-scope.js';
+import { isAquamanPlaceholder } from '../core/utils/config.js';
 
 /** Matches the SAFE_SERVICE_NAME pattern from daemon.ts. */
 const SAFE_SERVICE_NAME = /^[a-z0-9][a-z0-9._-]*$/;
@@ -92,14 +93,15 @@ export function hermesWiredServices(services: string[]): string[] {
 }
 
 /**
- * Default path to the Hermes dotenv file (`~/.hermes/.env`). Honors the
- * `HERMES_HOME` override — the same var the Hermes CLI itself uses to relocate
- * its config dir (verified against `hermes config env-path`) — else falls back
- * to `~/.hermes`.
+ * Where the Hermes dotenv file is when Hermes itself cannot be asked
+ * (`hermes config env-path`): `~/.hermes/.env`, under `HERMES_HOME` when that
+ * is set, and under `profiles/<name>` for a named profile.
  */
-export function getHermesEnvPath(homeDir: string): string {
+export function getHermesEnvPath(homeDir: string, profile?: string): string {
   const stateDir = process.env['HERMES_HOME'] || path.join(homeDir, '.hermes');
-  return path.join(stateDir, '.env');
+  return profile && profile !== 'default'
+    ? path.join(stateDir, 'profiles', profile, '.env')
+    : path.join(stateDir, '.env');
 }
 
 /**
@@ -136,43 +138,122 @@ export function hermesSecretSourceRefs(homeDir: string = os.homedir()): { path: 
 }
 
 /**
- * Write/merge the aquaman-managed block into `~/.hermes/.env`. Existing
- * non-aquaman lines are preserved; the managed block is delimited by markers
- * and rewritten in place on re-run (idempotent). File mode 0o600.
+ * The first Hermes whose `hermes config set` stores every UPPER_SNAKE name in
+ * the profile's `.env`. An earlier one stores only names it lists or that end
+ * in `_API_KEY`, `_TOKEN` or `_SECRET` there and puts the rest at the top of
+ * `config.yaml` (run on 0.19.0: `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` and
+ * `AQUAMAN_LOOPBACK_URL` land in `config.yaml`), so for those versions the
+ * settings are shown for a person to add and no command is run.
  */
-export function writeHermesEnv(env: Record<string, string>, filePath: string): void {
-  const marker = '# >>> aquaman managed >>>';
-  const endMarker = '# <<< aquaman managed <<<';
+export const HERMES_CONFIG_SET_ENV_MIN = '0.21.4';
 
-  let content = '';
-  if (fs.existsSync(filePath)) {
-    content = fs.readFileSync(filePath, 'utf-8');
+/** Whether `hermes config set` of this Hermes version stores our settings in `.env`. */
+export function hermesConfigSetWritesEnv(version: string | undefined): boolean {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(version ?? '');
+  if (!m) return false;
+  const have = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const need = HERMES_CONFIG_SET_ENV_MIN.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (have[i] !== need[i]) return have[i] > need[i];
   }
+  return true;
+}
 
-  // Strip any prior aquaman block.
-  const start = content.indexOf(marker);
-  const end = content.indexOf(endMarker);
-  if (start !== -1 && end !== -1 && end > start) {
-    content = content.slice(0, start).replace(/\n+$/, '') + content.slice(end + endMarker.length);
-  }
+/** A Hermes profile name, as Hermes itself accepts one (`PROFILE_ID_RE`), or `default`. */
+export function isHermesProfileName(name: string): boolean {
+  return /^[a-z0-9][a-z0-9_-]{0,63}$/.test(name);
+}
 
-  const body = Object.entries(env)
-    .map(([k, v]) => `${k}=${v}`)
+/** Arguments that select a profile, placed before the subcommand. None for the profile Hermes would use anyway. */
+export function hermesProfileArgs(profile: string | undefined): string[] {
+  return profile ? ['-p', profile] : [];
+}
+
+/**
+ * The `hermes config set` invocations that store `env`, one argument list
+ * each. Hermes owns its `.env`: it writes the profile's file under its own
+ * lock, keeps the file's mode and registers a provider key with its
+ * credential pool, none of which an edit of the file from outside does.
+ */
+export function hermesConfigSetArgs(env: Record<string, string>, profile?: string): string[][] {
+  return Object.entries(env).map(([k, v]) => [...hermesProfileArgs(profile), 'config', 'set', k, v]);
+}
+
+/** The same invocations as lines a person can paste into a shell. */
+export function formatHermesConfigSetCommands(env: Record<string, string>, profile?: string): string {
+  const quote = (v: string) => (/^[A-Za-z0-9_./:@%+=-]+$/.test(v) ? v : `'${v.replace(/'/g, `'\\''`)}'`);
+  return hermesConfigSetArgs(env, profile)
+    .map((args) => `  hermes ${args.map(quote).join(' ')}`)
     .join('\n');
-  const block = `${marker}\n${body}\n${endMarker}\n`;
+}
 
-  const merged = content.trim().length > 0
-    ? content.replace(/\n+$/, '') + '\n\n' + block
-    : block;
-
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+/**
+ * The assignments in a dotenv file, last one winning: `KEY=value`,
+ * `export KEY=value`, `KEY = value`, with one pair of surrounding quotes
+ * removed. `null` when the file cannot be read.
+ */
+export function readEnvAssignments(filePath: string): Record<string, string> | null {
+  let content: string;
+  try {
+    content = fs.readFileSync(filePath, 'utf-8');
+  } catch {
+    return null;
   }
-  fs.writeFileSync(filePath, merged, { mode: 0o600 });
-  // `mode` only applies when the file is created. An existing file keeps the
-  // mode it had, and it now holds the loopback token, so set it explicitly.
-  fs.chmodSync(filePath, 0o600);
+  const out: Record<string, string> = {};
+  for (const line of content.split(/\r?\n/)) {
+    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
+    if (!m) continue;
+    let value = m[2];
+    if (value.length >= 2 && (value[0] === '"' || value[0] === "'") && value[value.length - 1] === value[0]) {
+      value = value.slice(1, -1);
+    }
+    out[m[1]] = value;
+  }
+  return out;
+}
+
+/** Which of the settings in `expected` the dotenv file lacks, and which it holds with another value. */
+export function hermesEnvWiring(
+  filePath: string,
+  expected: Record<string, string>,
+): { readable: boolean; missing: string[]; differing: string[] } {
+  const have = readEnvAssignments(filePath);
+  if (have === null) return { readable: false, missing: Object.keys(expected), differing: [] };
+  const missing: string[] = [];
+  const differing: string[] = [];
+  for (const [k, v] of Object.entries(expected)) {
+    if (!(k in have)) missing.push(k);
+    else if (have[k] !== v) differing.push(k);
+  }
+  return { readable: true, missing, differing };
+}
+
+/**
+ * Whether anyone but the owner can read the dotenv file. Hermes creates the
+ * file owner-only and keeps the mode of one that already exists, and the file
+ * holds the loopback token once setup has run.
+ */
+export function hermesEnvOpenToOthers(filePath: string): boolean {
+  try {
+    return (fs.statSync(filePath).mode & 0o077) !== 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Provider key variables in the dotenv file that hold something other than an
+ * aquaman placeholder. `hermes config set` replaces the line, so a real key
+ * there would be gone from the file: setup stops and says so unless told to
+ * replace it.
+ */
+export function hermesRealKeysInEnv(filePath: string, env: Record<string, string>): string[] {
+  const have = readEnvAssignments(filePath) ?? {};
+  return Object.keys(env).filter((k) => {
+    if (!k.endsWith('_API_KEY')) return false;
+    const current = have[k];
+    return typeof current === 'string' && current !== '' && !isAquamanPlaceholder(current);
+  });
 }
 
 /**
