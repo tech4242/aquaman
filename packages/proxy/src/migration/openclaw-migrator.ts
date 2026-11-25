@@ -13,6 +13,7 @@ import type { CredentialStore } from '../core/index.js';
 import { isAquamanPlaceholder } from '../core/index.js';
 import { isReservedService } from '../core/credentials/reserved.js';
 import { RESERVED_SERVICE_REASON } from '../broker-scope.js';
+import { openclawPaths, type OpenClawWriteResult } from '../openclaw/config-file.js';
 
 export interface CredentialMapping {
   /** JSON path segments within openclaw.json to find the credential */
@@ -572,12 +573,17 @@ function setNestedValue(obj: any, jsonPath: string[], value: any): boolean {
  *
  * - Credential files (from ~/.openclaw/credentials/): deleted entirely
  * - Config tokens (from openclaw.json): replaced with "aquaman-proxy-managed" placeholder
+ *
+ * The config is OpenClaw's file, so it is not written here: the config as
+ * read and as it should be go to `writeConfig`, which hands the difference to
+ * OpenClaw. A replacement is reported as done only when that was accepted.
  */
-export function cleanupSources(
+export async function cleanupSources(
   configPath: string,
   credentialsDir: string,
-  migrated: MigrationResult['migrated']
-): CleanupResult {
+  migrated: MigrationResult['migrated'],
+  writeConfig: (before: unknown, after: unknown) => Promise<OpenClawWriteResult>,
+): Promise<CleanupResult> {
   const result: CleanupResult = { deleted: [], errors: [] };
 
   // 1. Delete credential files
@@ -608,9 +614,10 @@ export function cleanupSources(
     try {
       const content = fs.readFileSync(configPath, 'utf-8');
       const config = JSON.parse(content);
+      const before = structuredClone(config);
 
-      // Reported only once the file is written: until then nothing on disk
-      // has been replaced.
+      // Reported only once OpenClaw has taken the change: until then nothing
+      // on disk has been replaced.
       const replaced: CleanupResult['deleted'] = [];
       for (const m of configMigrations) {
         const jsonPath = m.source.split('.');
@@ -622,8 +629,20 @@ export function cleanupSources(
         }
       }
 
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
-      result.deleted.push(...replaced);
+      const write = await writeConfig(before, config);
+      if (write.status === 'applied' || write.status === 'unchanged') {
+        result.deleted.push(...replaced);
+      } else if (write.status === 'manual') {
+        result.errors.push({
+          source: 'openclaw.json',
+          error: `not changed (aquaman does not edit OpenClaw's config itself). The replacement is saved as a patch: ${write.command}`,
+        });
+      } else {
+        result.errors.push({
+          source: 'openclaw.json',
+          error: `OpenClaw refused the change: ${write.detail}. The patch: ${write.command}`,
+        });
+      }
     } catch (err) {
       result.errors.push({
         source: 'openclaw.json',
@@ -771,8 +790,8 @@ export interface AutoMigrateResult {
  * Returns count of migrated credentials.
  */
 export async function autoMigrateOpenClaw(options: AutoMigrateOptions): Promise<AutoMigrateResult> {
-  const openclawStateDir = process.env['OPENCLAW_STATE_DIR'] || path.join(os.homedir(), '.openclaw');
-  const openclawConfigPath = options.configPath || path.join(openclawStateDir, 'openclaw.json');
+  const openclawStateDir = openclawPaths().stateDir;
+  const openclawConfigPath = options.configPath || openclawPaths().configPath;
   const credentialsDir = path.join(openclawStateDir, 'credentials');
 
   const allCredentials: Array<{ service: string; key: string; value: string; source: string }> = [];

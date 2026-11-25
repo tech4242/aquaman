@@ -73,6 +73,11 @@ export function buildProviderRef(service: string): SecretRefRef {
   return { source: 'exec', provider: SECRETREF_PROVIDER_ALIAS, id: `${service}/api_key` };
 }
 
+/** The reference for a channel's token: `telegram` reads `telegram/bot_token`. */
+export function buildChannelTokenRef(channel: string): SecretRefRef {
+  return { source: 'exec', provider: SECRETREF_PROVIDER_ALIAS, id: `${channel}/bot_token` };
+}
+
 /**
  * The URL OpenClaw should call for a provider, given the proxy's loopback
  * origin (`http://127.0.0.1:<port>`). Path shapes match what each provider
@@ -90,16 +95,22 @@ export function loopbackProviderBaseUrl(service: string, origin: string): string
   return null;
 }
 
-/** A baseUrl aquaman owns: our loopback shape, or the retired sentinel host. */
-function isAquamanBaseUrl(value: unknown): boolean {
-  if (typeof value !== 'string') return false;
-  return (
-    /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d+\/(anthropic|openai)(\/v1)?\/?$/.test(value) ||
-    value.startsWith('http://aquaman.local/')
-  );
+/** A baseUrl that reaches the proxy's loopback listener. */
+function isLoopbackProxyBaseUrl(value: unknown): boolean {
+  return typeof value === 'string'
+    && /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d+\/(anthropic|openai)(\/v1)?\/?$/.test(value);
 }
 
-function isAquamanRef(value: unknown): boolean {
+/**
+ * A baseUrl aquaman wrote and may replace: the loopback shape, or the retired
+ * `aquaman.local` host, which reaches nothing on a current OpenClaw and so
+ * counts as ours to replace but never as routed.
+ */
+function isAquamanBaseUrl(value: unknown): boolean {
+  return isLoopbackProxyBaseUrl(value) || (typeof value === 'string' && value.startsWith('http://aquaman.local/'));
+}
+
+export function isAquamanRef(value: unknown): boolean {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -118,6 +129,12 @@ export interface SecretRefWiringResult {
   baseUrlProviders: string[];
   /** Providers left alone because the user set their own baseUrl. */
   keptUserBaseUrl: string[];
+  /**
+   * Providers whose aquaman key reference was taken out, because their
+   * baseUrl is the user's own: the reference is answered with the loopback
+   * token, and OpenClaw would send it to that host.
+   */
+  removedRefs: string[];
 }
 
 export interface SecretRefWiringOptions {
@@ -130,6 +147,12 @@ export interface SecretRefWiringOptions {
  * Mutates `config` in place (mirrors the CLI's existing merge style),
  * idempotent, and never overwrites a provider apiKey the user set to
  * something other than an aquaman ref or the legacy placeholder.
+ *
+ * A provider is wired whole or not at all. The key reference is answered
+ * with the loopback token, and OpenClaw sends a provider's key to whatever
+ * `baseUrl` the provider has, so the reference is written only together with
+ * a `baseUrl` that is the proxy. Where the user set another `baseUrl`, no
+ * reference is written and one an earlier setup left there is removed.
  */
 export function wireSecretRefProviders(
   config: Record<string, any>,
@@ -141,6 +164,7 @@ export function wireSecretRefProviders(
   const skippedProviders: string[] = [];
   const baseUrlProviders: string[] = [];
   const keptUserBaseUrl: string[] = [];
+  const removedRefs: string[] = [];
 
   if (!config.secrets) config.secrets = {};
   if (!config.secrets.providers) config.secrets.providers = {};
@@ -162,13 +186,10 @@ export function wireSecretRefProviders(
       skippedProviders.push(service);
       continue;
     }
-    if (!config.models) config.models = {};
-    if (!config.models.providers) config.models.providers = {};
-    if (!config.models.providers[service]) config.models.providers[service] = {};
-
-    const providerEntry = config.models.providers[service];
+    const existing = config.models?.providers?.[service];
+    const existingEntry = existing && typeof existing === 'object' ? existing : undefined;
     const desiredRef = buildProviderRef(service);
-    const current = providerEntry.apiKey;
+    const current = existingEntry?.apiKey;
 
     const isLegacyPlaceholder = current === 'aquaman-proxy-managed';
     const isUserValue =
@@ -179,32 +200,50 @@ export function wireSecretRefProviders(
       skippedProviders.push(service);
       continue;
     }
-    if (JSON.stringify(current) !== JSON.stringify(desiredRef)) {
-      providerEntry.apiKey = desiredRef;
-      changed = true;
-    }
-    wiredProviders.push(service);
 
     // Route the provider at the loopback listener. Without this, OpenClaw's
     // transport calls the real upstream directly and the proxy never sees it.
     const desiredBase = options.loopbackOrigin
       ? loopbackProviderBaseUrl(service, options.loopbackOrigin)
       : null;
-    if (desiredBase) {
-      const currentBase = providerEntry.baseUrl;
-      if (currentBase !== undefined && !isAquamanBaseUrl(currentBase)) {
-        keptUserBaseUrl.push(service);
-      } else {
-        if (currentBase !== desiredBase) {
-          providerEntry.baseUrl = desiredBase;
-          changed = true;
-        }
-        baseUrlProviders.push(service);
+    const currentBase = existingEntry?.baseUrl;
+    // Which baseUrl is aquaman's to replace: the one it would write, the
+    // retired host, or a loopback one that stands beside aquaman's own key
+    // reference (the listener's port was changed). A loopback URL with the
+    // right path but no reference of ours is someone's local gateway.
+    const baseIsOurs = currentBase === desiredBase
+      || (isAquamanBaseUrl(currentBase) && (!isLoopbackProxyBaseUrl(currentBase) || current !== undefined));
+    if (desiredBase && currentBase !== undefined && !baseIsOurs) {
+      keptUserBaseUrl.push(service);
+      if (existingEntry && current !== undefined) {
+        delete existingEntry.apiKey;
+        changed = true;
+        removedRefs.push(service);
       }
+      continue;
+    }
+
+    if (!config.models) config.models = {};
+    if (!config.models.providers) config.models.providers = {};
+    if (!existingEntry) config.models.providers[service] = {};
+    const providerEntry = config.models.providers[service];
+
+    if (JSON.stringify(current) !== JSON.stringify(desiredRef)) {
+      providerEntry.apiKey = desiredRef;
+      changed = true;
+    }
+    wiredProviders.push(service);
+
+    if (desiredBase) {
+      if (currentBase !== desiredBase) {
+        providerEntry.baseUrl = desiredBase;
+        changed = true;
+      }
+      baseUrlProviders.push(service);
     }
   }
 
-  return { changed, wiredProviders, skippedProviders, baseUrlProviders, keptUserBaseUrl };
+  return { changed, wiredProviders, skippedProviders, baseUrlProviders, keptUserBaseUrl, removedRefs };
 }
 
 export interface SecretRefWiringStatus {
@@ -216,7 +255,11 @@ export interface SecretRefWiringStatus {
   missingProviders: string[];
   /** Providers whose baseUrl points at a loopback aquaman listener. */
   baseUrlProviders: string[];
-  /** Wired providers still calling the upstream directly (proxy bypassed). */
+  /**
+   * Providers with aquaman's key reference and a baseUrl that is not the
+   * proxy: the proxy is bypassed, and the loopback token is sent as the key
+   * to whatever host that baseUrl (or the provider's default) names.
+   */
   missingBaseUrl: string[];
 }
 
@@ -241,7 +284,7 @@ export function secretRefWiringStatus(
       wiredProviders.push(service);
       // A wired apiKey with no loopback baseUrl means OpenClaw's transport
       // still calls the upstream directly and the proxy is bypassed.
-      if (isAquamanBaseUrl(config?.models?.providers?.[service]?.baseUrl)) {
+      if (isLoopbackProxyBaseUrl(config?.models?.providers?.[service]?.baseUrl)) {
         baseUrlProviders.push(service);
       } else {
         missingBaseUrl.push(service);

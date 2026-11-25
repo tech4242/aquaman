@@ -116,7 +116,7 @@ The token is a capability to reach the local proxy, not a credential: generated 
 
 **Credential wiring: SecretRef (v0.14.0+, OpenClaw ≥ 2026.6.5)**
 
-- On current OpenClaw, `aquaman openclaw setup` wires the plugin through OpenClaw's canonical **SecretRef** credential surface: the manifest declares an exec resolver (`secretProviderIntegrations.aquaman` → `dist/secrets-resolver.mjs`) and `openclaw.json` gets `models.providers.<svc>.apiKey` refs pointing at it. The resolver returns the loopback token, or the `aquaman-proxy-managed` placeholder when no listener is configured. Either way it's a marker: real keys stay in your vault, and the proxy strips the marker and injects the real credential per request.
+- On current OpenClaw, `aquaman openclaw setup` wires the plugin through OpenClaw's canonical **SecretRef** credential surface: the manifest declares an exec resolver (`secretProviderIntegrations.aquaman` → `dist/secrets-resolver.mjs`) and `openclaw.json` gets `models.providers.<svc>.apiKey` refs pointing at it (and `channels.telegram.botToken`, when Telegram is routed). The resolver returns the loopback token only for a reference whose endpoint in `openclaw.json` (`baseUrl`, `apiRoot`) is the proxy, and the `aquaman-proxy-managed` placeholder otherwise or when no listener is configured. Either way it's a marker: real keys stay in your vault, and the proxy strips the marker and injects the real credential per request.
 - No `openclaw doctor --fix` import step, and the wiring survives OpenClaw's plaintext-scrub flows (`openclaw secrets configure --apply`). `aquaman openclaw doctor` reports the wiring state and suggests the upgrade on legacy installs.
 
 **Auth profiles (legacy path, OpenClaw < 2026.6.5)**
@@ -170,7 +170,7 @@ Slash commands in chat: `/aquaman-status`, `/aquaman list`, `/aquaman doctor`.
 
 ## Config options
 
-`aquaman openclaw setup` writes these to `~/.openclaw/openclaw.json` automatically:
+`aquaman openclaw setup` sets these in `~/.openclaw/openclaw.json` through `openclaw config patch` (aquaman does not write the file itself):
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|

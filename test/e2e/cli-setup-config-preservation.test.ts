@@ -19,6 +19,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { createSandbox, baseConfig, runCli, TEST_PASSWORD, type Sandbox } from '../helpers/cov-cli-hosts.js';
+import { installFakeOpenClaw } from '../helpers/fake-openclaw.js';
 
 const T = 120_000;
 
@@ -161,6 +162,7 @@ describe('setup commands and config.yaml', () => {
     it('aquaman openclaw setup keeps the loopback token and port, broker refs, policies and proxied services', async () => {
       sb.writeConfig(userConfig());
       sb.writeOpenClawJson({});
+      installFakeOpenClaw(sb.bin, { version: '2026.9.37' });
       const r = await runCli(sb, ['openclaw', 'setup', '--backend', 'encrypted-file', '--non-interactive'], {
         env: { ANTHROPIC_API_KEY: 'sk-ant-setup-key', OPENAI_API_KEY: 'sk-oai-setup-key', AQUAMAN_OPENCLAW_VERSION: '2026.9.37' },
       });
@@ -190,6 +192,7 @@ describe('setup commands and config.yaml', () => {
 
     it('a first run on a machine with no config writes the defaults plus the backend', async () => {
       sb.writeOpenClawJson({});
+      installFakeOpenClaw(sb.bin, { version: '2026.9.37' });
       const r = await runCli(sb, ['openclaw', 'setup', '--backend', 'encrypted-file', '--non-interactive'], {
         env: { ANTHROPIC_API_KEY: 'sk-ant-setup-key', AQUAMAN_OPENCLAW_VERSION: '2026.9.37' },
       });

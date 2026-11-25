@@ -10,8 +10,11 @@
  *   stdout: {"protocolVersion":1,"values":{"<id>":"<value>",...},"errors":{...}}
  *
  * It NEVER returns a real credential. It returns the aquaman loopback token
- * when one is configured, else the static placeholder. Both are markers the
- * proxy strips before injecting the real key from the vault:
+ * for a reference whose endpoint in openclaw.json is the proxy's listener,
+ * else the static placeholder: OpenClaw sends a resolved credential to
+ * whatever endpoint the config names, and the token is for the proxy only.
+ * Both are markers the proxy strips before injecting the real key from the
+ * vault:
  *   - loopback token: OpenClaw's model transport calls the proxy's loopback
  *     listener (models.providers.<svc>.baseUrl), which is token-gated, so the
  *     token has to travel as the provider api key — exactly as on the Hermes
@@ -28,6 +31,8 @@
  * plugin root with a near-empty child env, entrypoint permission-checked —
  * so the config path is resolved from AQUAMAN_CONFIG_DIR when passed through,
  * else from the OS home directory (os.homedir() works without $HOME).
+ * OpenClaw's own config is found the same way, from OPENCLAW_CONFIG_PATH and
+ * OPENCLAW_STATE_DIR, which the manifest also passes through.
  */
 
 import * as fs from 'node:fs';
@@ -36,19 +41,22 @@ import * as path from 'node:path';
 
 const PLACEHOLDER = 'aquaman-proxy-managed';
 const PROTOCOL_VERSION = 1;
+const DEFAULT_LOOPBACK_PORT = 8585;
 
 /**
- * `loopback.token` from aquaman's config.yaml, or null. Deliberately a
- * line scanner, not a YAML dependency: only the top-level `loopback:` block
- * is considered, and only when the listener is enabled.
+ * The enabled loopback listener from aquaman's config.yaml: its token and
+ * port, or null. Deliberately a line scanner, not a YAML dependency: only the
+ * top-level `loopback:` block is considered, and only when the listener is
+ * enabled.
  */
-function readLoopbackToken() {
+function readLoopback() {
   try {
     const dir = process.env.AQUAMAN_CONFIG_DIR || path.join(os.homedir(), '.aquaman');
     const text = fs.readFileSync(path.join(dir, 'config.yaml'), 'utf-8');
     let inBlock = false;
     let enabled = false;
     let token = null;
+    let port = DEFAULT_LOOPBACK_PORT;
     for (const rawLine of text.split('\n')) {
       const line = rawLine.replace(/\r$/, '');
       if (/^[A-Za-z_][\w-]*\s*:/.test(line)) {
@@ -60,11 +68,70 @@ function readLoopbackToken() {
       if (enabledMatch) enabled = enabledMatch[1] === 'true';
       const tokenMatch = line.match(/^\s+token\s*:\s*["']?([A-Za-z0-9._-]+)["']?\s*$/);
       if (tokenMatch) token = tokenMatch[1];
+      const portMatch = line.match(/^\s+port\s*:\s*["']?(\d{1,5})["']?\s*$/);
+      if (portMatch) port = Number(portMatch[1]);
     }
-    return enabled && token ? token : null;
+    return enabled && token ? { token, port } : null;
   } catch {
     return null; // absent/unreadable/malformed — fall back to the placeholder
   }
+}
+
+/** True when the document, at any depth, pulls settings in from another file. */
+function hasIncludes(value) {
+  if (Array.isArray(value)) return value.some(hasIncludes);
+  if (value === null || typeof value !== 'object') return false;
+  return Object.entries(value).some(([k, v]) => k === '$include' || hasIncludes(v));
+}
+
+/**
+ * OpenClaw's config as this process can see all of it, or null. Null when
+ * the file is missing, is not strict JSON (OpenClaw also reads JSON5), or
+ * uses `$include`: then where a credential is sent cannot be told from here.
+ */
+function readOpenClawConfig() {
+  try {
+    const stateDir = process.env.OPENCLAW_STATE_DIR || path.join(os.homedir(), '.openclaw');
+    const file = process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir, 'openclaw.json');
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return hasIncludes(parsed) ? null : parsed;
+  } catch {
+    return null;
+  }
+}
+
+/** The URL OpenClaw sends the credential behind `id` to, as configured: a string, or undefined. */
+function destinationOf(config, id) {
+  const slash = id.indexOf('/');
+  if (slash <= 0) return undefined;
+  const service = id.slice(0, slash);
+  const key = id.slice(slash + 1);
+  if (key === 'api_key') return config.models?.providers?.[service]?.baseUrl;
+  if (key === 'bot_token') return config.channels?.[service]?.apiRoot;
+  return undefined;
+}
+
+/** Whether `url` is the proxy's loopback listener: plain http, a loopback host, the listener's port. */
+function isProxyUrl(url, port) {
+  if (typeof url !== 'string') return false;
+  const m = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})(\/|$)/.exec(url);
+  return m !== null && Number(m[2]) === port;
+}
+
+/**
+ * What a reference resolves to. The loopback token is a capability for the
+ * local proxy, and OpenClaw sends a resolved credential to whatever endpoint
+ * the config names, so the token is handed out only for a reference whose
+ * endpoint is the proxy. When the config shows another endpoint, or none
+ * (the provider's own host), the answer is the inert placeholder. When the
+ * config cannot be read in full the token is still returned: refusing there
+ * would stop a correctly wired install whose file this script cannot parse.
+ */
+function valueFor(id, loopback, config) {
+  if (!loopback) return PLACEHOLDER;
+  if (config === null) return loopback.token;
+  return isProxyUrl(destinationOf(config, id), loopback.port) ? loopback.token : PLACEHOLDER;
 }
 
 function fail(message) {
@@ -91,12 +158,13 @@ async function main() {
   }
 
   const ids = Array.isArray(request.ids) ? request.ids : [];
-  const marker = readLoopbackToken() || PLACEHOLDER;
+  const loopback = readLoopback();
+  const config = loopback ? readOpenClawConfig() : null;
   const values = {};
   const errors = {};
   for (const id of ids) {
     if (typeof id === 'string' && id.length > 0) {
-      values[id] = marker;
+      values[id] = valueFor(id, loopback, config);
     } else {
       errors[String(id)] = { message: 'invalid ref id (expected a non-empty string like "anthropic/api_key")' };
     }

@@ -19,6 +19,8 @@ import {
   extractPluginUpstreamUrls,
   autoMigrateOpenClaw,
 } from '../../packages/proxy/src/migration/openclaw-migrator.js';
+import { applyMergePatch } from '../helpers/fake-openclaw.js';
+import { configMergePatch, type OpenClawWriteResult } from '../../packages/proxy/src/openclaw/config-file.js';
 
 describe('OpenClaw migrator: failure and edge paths', () => {
   let dir: string;
@@ -95,15 +97,24 @@ describe('OpenClaw migrator: failure and edge paths', () => {
   });
 
   describe('cleanupSources', () => {
-    it('reports a credential file it cannot delete and carries on with the rest', () => {
+    /** Does to the file what `openclaw config patch` does with the difference it is handed. */
+    const viaOpenClaw = (file: string) => async (before: unknown, after: unknown): Promise<OpenClawWriteResult> => {
+      const patch = configMergePatch(before, after);
+      if (!patch) return { status: 'unchanged' };
+      const current = JSON.parse(fs.readFileSync(file, 'utf-8'));
+      fs.writeFileSync(file, JSON.stringify(applyMergePatch(current, patch), null, 2));
+      return { status: 'applied', note: '' };
+    };
+
+    it('reports a credential file it cannot delete and carries on with the rest', async () => {
       fs.mkdirSync(credentialsDir);
       // A directory where the file should be: unlink fails.
       fs.mkdirSync(path.join(credentialsDir, 'anthropic.json'));
       fs.writeFileSync(path.join(credentialsDir, 'openai.json'), JSON.stringify({ api_key: 'sk-openai' }));
-      const result = cleanupSources(configPath, credentialsDir, [
+      const result = await cleanupSources(configPath, credentialsDir, [
         { service: 'anthropic', key: 'api_key', source: 'credentials-dir.anthropic.json' },
         { service: 'openai', key: 'api_key', source: 'credentials-dir.openai.json' },
-      ]);
+      ], viaOpenClaw(configPath));
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0]!.source).toBe('credentials/anthropic.json');
       expect(result.errors[0]!.error).toMatch(/^Failed to delete: /);
@@ -113,11 +124,11 @@ describe('OpenClaw migrator: failure and edge paths', () => {
       expect(fs.existsSync(path.join(credentialsDir, 'openai.json'))).toBe(false);
     });
 
-    it('reports a config it cannot parse and leaves the file as it was', () => {
+    it('reports a config it cannot parse and leaves the file as it was', async () => {
       fs.writeFileSync(configPath, '{ "channels": ');
-      const result = cleanupSources(configPath, credentialsDir, [
+      const result = await cleanupSources(configPath, credentialsDir, [
         { service: 'slack', key: 'bot_token', source: 'channels.slack.botToken' },
-      ]);
+      ], viaOpenClaw(configPath));
       expect(result.deleted).toEqual([]);
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0]!.source).toBe('openclaw.json');
@@ -125,31 +136,47 @@ describe('OpenClaw migrator: failure and edge paths', () => {
       expect(fs.readFileSync(configPath, 'utf-8')).toBe('{ "channels": ');
     });
 
-    it('claims no replacement when openclaw.json cannot be written', () => {
+    it('claims no replacement when OpenClaw refuses the change, and says where the patch is', async () => {
       writeConfig({ channels: { slack: { botToken: 'xoxb-real' } } });
       const before = fs.readFileSync(configPath, 'utf-8');
-      fs.chmodSync(configPath, 0o444);
-      try {
-        const result = cleanupSources(configPath, credentialsDir, [
-          { service: 'slack', key: 'bot_token', source: 'channels.slack.botToken' },
-        ]);
-        expect(result.deleted).toEqual([]);
-        expect(result.errors).toHaveLength(1);
-        expect(result.errors[0]!.source).toBe('openclaw.json');
-        expect(result.errors[0]!.error).toMatch(/^Failed to update config: /);
-        expect(fs.readFileSync(configPath, 'utf-8')).toBe(before);
-      } finally {
-        fs.chmodSync(configPath, 0o644);
-      }
+      const result = await cleanupSources(configPath, credentialsDir, [
+        { service: 'slack', key: 'bot_token', source: 'channels.slack.botToken' },
+      ], async () => ({ status: 'failed', detail: 'Config validation failed', patchPath: '/p', command: 'openclaw config patch --file /p' }));
+      expect(result.deleted).toEqual([]);
+      expect(result.errors).toEqual([{
+        source: 'openclaw.json',
+        error: 'OpenClaw refused the change: Config validation failed. The patch: openclaw config patch --file /p',
+      }]);
+      expect(fs.readFileSync(configPath, 'utf-8')).toBe(before);
     });
 
-    it('replaces only the paths that exist with the placeholder', () => {
+    it('claims no replacement when the change could only be saved as a patch', async () => {
+      writeConfig({ channels: { slack: { botToken: 'xoxb-real' } } });
+      const result = await cleanupSources(configPath, credentialsDir, [
+        { service: 'slack', key: 'bot_token', source: 'channels.slack.botToken' },
+      ], async () => ({ status: 'manual', reason: 'no_cli', patchPath: '/p', command: 'openclaw config patch --file /p' }));
+      expect(result.deleted).toEqual([]);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]!.error).toContain("aquaman does not edit OpenClaw's config itself");
+      expect(result.errors[0]!.error).toContain('openclaw config patch --file /p');
+    });
+
+    it('hands the writer the config as read and as it should be', async () => {
+      writeConfig({ channels: { slack: { botToken: 'xoxb-real', keep: 1 } } });
+      const seen: unknown[] = [];
+      await cleanupSources(configPath, credentialsDir, [
+        { service: 'slack', key: 'bot_token', source: 'channels.slack.botToken' },
+      ], async (before, after) => { seen.push(configMergePatch(before, after)); return { status: 'applied', note: '' }; });
+      expect(seen).toEqual([{ channels: { slack: { botToken: 'aquaman-proxy-managed' } } }]);
+    });
+
+    it('replaces only the paths that exist with the placeholder', async () => {
       writeConfig({ channels: { slack: { botToken: 'xoxb-real' } }, plugins: 'not-an-object' });
-      const result = cleanupSources(configPath, credentialsDir, [
+      const result = await cleanupSources(configPath, credentialsDir, [
         { service: 'slack', key: 'bot_token', source: 'channels.slack.botToken' },
         { service: 'slack', key: 'app_token', source: 'channels.slack.appToken' },
         { service: 'x', key: 'api_key', source: 'plugins.entries.x.config.apiKey' },
-      ]);
+      ], viaOpenClaw(configPath));
       expect(result.errors).toEqual([]);
       expect(result.deleted).toEqual([
         { source: 'openclaw.json → channels.slack.botToken', description: 'Replaced slack/bot_token with placeholder' },

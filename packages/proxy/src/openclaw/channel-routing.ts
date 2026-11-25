@@ -18,9 +18,19 @@
  * `aquaman openclaw doctor` says so instead of implying coverage.
  *
  * The Bot API has no auth header: the token IS the `/bot<TOKEN>` path segment.
- * So the placeholder we write as `botToken` is the loopback token, and the
+ * So what OpenClaw has to present as `botToken` is the loopback token, and the
  * daemon accepts it from that segment (see findUrlPathCredentialSlot).
+ *
+ * The token is not written into openclaw.json. `botToken` is set to a
+ * reference to aquaman's secrets provider (`telegram/bot_token`), which the
+ * resolver answers with the loopback token while `apiRoot` is the proxy. Run
+ * on gateways 2026.6.10 and 2026.11.10 against a stand-in Bot API: `getMe`,
+ * `getUpdates`, `setMyCommands` and `deleteWebhook` arrived at the configured
+ * root with the loopback token in the path. An OpenClaw without the secrets
+ * provider gets the token itself, as before.
  */
+
+import { buildChannelTokenRef } from './secretref.js';
 
 /** Channels whose endpoint the host lets us override. */
 export const CHANNEL_ROUTING_SUPPORTED = ['telegram'] as const;
@@ -81,8 +91,14 @@ export interface ChannelRoutingResult {
 export interface ChannelRoutingOptions {
   /** `http://127.0.0.1:<port>` — the loopback listener's origin. */
   loopbackOrigin: string;
-  /** The loopback token, written as the channel's placeholder credential. */
+  /** The loopback token: what the channel presents to the proxy. */
   loopbackToken: string;
+  /**
+   * Write `botToken` as a reference to aquaman's secrets provider and keep
+   * the token out of the file. Needs an OpenClaw with secrets provider
+   * integrations and `secrets.providers.aquaman` in the same config.
+   */
+  tokenRef?: boolean;
   /** Whether the vault holds the real credential for a service. */
   hasVaultCredential: (service: string) => boolean;
 }
@@ -154,8 +170,9 @@ export function wireChannelRouting(
       entry.apiRoot = desiredBase;
       changed = true;
     }
-    if (entry.botToken !== options.loopbackToken) {
-      entry.botToken = options.loopbackToken;
+    const desiredToken = options.tokenRef ? buildChannelTokenRef(channel) : options.loopbackToken;
+    if (JSON.stringify(entry.botToken) !== JSON.stringify(desiredToken)) {
+      entry.botToken = desiredToken;
       changed = true;
     }
     routedChannels.push(channel);

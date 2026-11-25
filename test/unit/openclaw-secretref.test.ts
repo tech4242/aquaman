@@ -162,8 +162,32 @@ describe('wireSecretRefProviders', () => {
       expect(config.models.providers.anthropic.baseUrl).toBe('https://my-gateway.internal/anthropic');
       expect(result.keptUserBaseUrl).toEqual(['anthropic']);
       expect(result.baseUrlProviders).toEqual([]);
-      // The apiKey ref is still wired — only the route is the user's.
-      expect(result.wiredProviders).toEqual(['anthropic']);
+      // No key reference either: its answer is the loopback token, and
+      // OpenClaw would send that to the user's host.
+      expect(result.wiredProviders).toEqual([]);
+      expect(result.removedRefs).toEqual([]);
+      expect(config.models.providers.anthropic).toEqual({ baseUrl: 'https://my-gateway.internal/anthropic' });
+    });
+
+    it('takes back a key reference an earlier setup left beside a user-set baseUrl', () => {
+      const config: Record<string, any> = {
+        models: { providers: { anthropic: {
+          baseUrl: 'https://my-gateway.internal/anthropic',
+          apiKey: { source: 'exec', provider: 'aquaman', id: 'anthropic/api_key' },
+          models: [],
+        } } },
+      };
+      const result = wireSecretRefProviders(config, ['anthropic'], { loopbackOrigin: ORIGIN });
+      expect(result.changed).toBe(true);
+      expect(result.removedRefs).toEqual(['anthropic']);
+      expect(result.wiredProviders).toEqual([]);
+      expect(config.models.providers.anthropic).toEqual({ baseUrl: 'https://my-gateway.internal/anthropic', models: [] });
+    });
+
+    it('creates no provider entry for a service it does not wire', () => {
+      const config: Record<string, any> = { models: { providers: { openai: { apiKey: 'sk-user' } } } };
+      wireSecretRefProviders(config, ['openai'], { loopbackOrigin: ORIGIN });
+      expect(config.models.providers).toEqual({ openai: { apiKey: 'sk-user' } });
     });
   });
 
@@ -192,12 +216,30 @@ describe('secretRefWiringStatus — model routing', () => {
     expect(after.missingBaseUrl).toEqual([]);
   });
 
-  it('counts a user-set baseUrl as unrouted (the proxy is not in that path)', () => {
+  it('counts a key reference beside a user-set baseUrl as unrouted (the proxy is not in that path)', () => {
     const config: Record<string, any> = {
-      models: { providers: { anthropic: { baseUrl: 'https://my-gateway.internal/anthropic' } } },
+      secrets: { providers: { aquaman: { source: 'exec', pluginIntegration: { pluginId: 'aquaman-plugin', integrationId: 'aquaman' } } } },
+      models: { providers: { anthropic: {
+        baseUrl: 'https://my-gateway.internal/anthropic',
+        apiKey: { source: 'exec', provider: 'aquaman', id: 'anthropic/api_key' },
+      } } },
     };
-    wireSecretRefProviders(config, ['anthropic'], { loopbackOrigin: 'http://127.0.0.1:8585' });
     expect(secretRefWiringStatus(config, ['anthropic']).missingBaseUrl).toEqual(['anthropic']);
+  });
+
+  it('does not count the retired aquaman.local host as routed', () => {
+    const config: Record<string, any> = {
+      models: { providers: { anthropic: {
+        baseUrl: 'http://aquaman.local/anthropic',
+        apiKey: { source: 'exec', provider: 'aquaman', id: 'anthropic/api_key' },
+      } } },
+    };
+    const status = secretRefWiringStatus(config, ['anthropic']);
+    expect(status.baseUrlProviders).toEqual([]);
+    expect(status.missingBaseUrl).toEqual(['anthropic']);
+    // Setup still treats it as its own and replaces it.
+    wireSecretRefProviders(config, ['anthropic'], { loopbackOrigin: 'http://127.0.0.1:8585' });
+    expect(config.models.providers.anthropic.baseUrl).toBe('http://127.0.0.1:8585/anthropic');
   });
 });
 
@@ -229,8 +271,9 @@ describe('secretRefWiringStatus', () => {
 /**
  * Exec resolver protocol tests. Spawn conditions mirror the gateway's
  * `runExecResolver` (openclaw 2026.6.10): request JSON on stdin, stdin
- * closed, response JSON on stdout, empty child env (the manifest declares
- * no passEnv), cwd = script dir.
+ * closed, response JSON on stdout, a child env of what the manifest passes
+ * (HOME, AQUAMAN_CONFIG_DIR, OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH),
+ * cwd = script dir.
  */
 describe('secrets-resolver.mjs (exec protocol v1)', () => {
   let cfgDir: string;
@@ -249,8 +292,9 @@ describe('secrets-resolver.mjs (exec protocol v1)', () => {
         // The gateway passes ONLY manifest env + passEnv; the manifest
         // declares HOME + AQUAMAN_CONFIG_DIR so the resolver can find
         // aquaman's config. Point it at a temp dir so these tests never read
-        // the developer's real ~/.aquaman/config.yaml.
-        env: { AQUAMAN_CONFIG_DIR: cfgDir, ...env },
+        // the developer's real ~/.aquaman/config.yaml, and never OpenClaw's
+        // own config under the real home.
+        env: { AQUAMAN_CONFIG_DIR: cfgDir, OPENCLAW_STATE_DIR: path.join(cfgDir, 'openclaw-state'), ...env },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       let stdout = '';
@@ -296,8 +340,11 @@ describe('secrets-resolver.mjs (exec protocol v1)', () => {
     expect(value).not.toMatch(/^sk-/);
   });
 
-  // v0.15.0: OpenClaw's model transport calls the proxy's token-gated
-  // loopback listener, so the api key it presents must BE that token.
+  // OpenClaw's model transport calls the proxy's token-gated loopback
+  // listener, so the api key it presents must BE that token. With no
+  // OpenClaw config to read, where the key goes cannot be told and the token
+  // is returned; what happens when the config can be read is in
+  // test/compliance/openclaw-token-destination.test.ts.
   it('returns the loopback token when the listener is configured', async () => {
     writeConfig([
       'credentials:',
