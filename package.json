@@ -86,7 +86,8 @@
       "fast-uri": "^4.1.4"
     },
     "c8": {
-      "minimatch": "^11.0.1"
+      "minimatch": "^11.0.1",
+      "glob": "^14.0.2"
     }
   },
   "engines": {
