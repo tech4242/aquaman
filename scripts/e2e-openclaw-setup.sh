@@ -71,7 +71,9 @@ pass "a provider with the user's own baseUrl got no key reference"
 
 grep -q "aqm_lb_" "$OC_JSON" && fail "the loopback token is in openclaw.json"
 echo "$out" | grep -qF "$TOKEN" && fail "setup printed the loopback token"
-[ "$(stat -f '%Lp' "$OC_JSON" 2>/dev/null || stat -c '%a' "$OC_JSON")" = "600" ] || fail "openclaw.json is not owner-only"
+# Through node: `stat` takes different flags on Linux and macOS.
+mode="$(node -e 'console.log((require("fs").statSync(process.argv[1]).mode & 0o777).toString(8))' "$OC_JSON")"
+[ "$mode" = "600" ] || fail "openclaw.json is not owner-only (mode $mode)"
 pass "no token in openclaw.json or in the output; the file is owner-only"
 
 openclaw config validate > /dev/null 2>&1 || fail "OpenClaw does not accept the resulting config"
