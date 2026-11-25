@@ -115,7 +115,7 @@ function destinationOf(config, id) {
 /** Whether `url` is the proxy's loopback listener: plain http, a loopback host, the listener's port. */
 function isProxyUrl(url, port) {
   if (typeof url !== 'string') return false;
-  const m = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})(\/|$)/.exec(url);
+  const m = url.match(/^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})(\/|$)/);
   return m !== null && Number(m[2]) === port;
 }
 
