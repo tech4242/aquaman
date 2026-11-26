@@ -192,6 +192,14 @@ jobs:
         env:
           OPENCLAW_BIN: openclaw
 
+      - name: Run `aquaman openclaw setup` against the real openclaw program
+        # Setup does not write openclaw.json: it hands OpenClaw one patch
+        # (`openclaw config patch --stdin`). This runs that against the lane's
+        # OpenClaw in a throwaway home; no gateway is started.
+        run: |
+          npm run build
+          scripts/e2e-openclaw-setup.sh "$(command -v openclaw)"
+
       - name: Install plugin for security audit
         run: |
           # Build the plugin (manifest now points at ./dist/index.js)

@@ -15,6 +15,7 @@ import * as path from 'node:path';
 import {
   createSandbox, baseConfig, runCli, startCli, addCredential, waitForOutput, waitForExit, type Sandbox,
 } from '../helpers/cov-cli-hosts.js';
+import { installFakeOpenClaw, fakeOpenClawCalls } from '../helpers/fake-openclaw.js';
 
 const T = 120_000;
 
@@ -357,17 +358,49 @@ describe('aquaman openclaw start / configure / status / migrate (cli-hosts cover
       sb.writeConfig(baseConfig(sb));
       const cfg = sb.writeOpenClawJson({ channels: { telegram: { accounts: { a: { botToken: '123456:PLAIN-TELEGRAM-TOKEN' } } } } });
       const before = fs.readFileSync(cfg, 'utf-8');
-      fs.chmodSync(cfg, 0o444);
+      installFakeOpenClaw(sb.bin, { refusePatch: 'Config validation failed: channels.telegram: nope' });
       const r = await runCli(sb, ['openclaw', 'migrate', '--auto', '--cleanup']);
       // The plaintext is still on disk, so the run does not claim otherwise and does not exit 0.
       expect(r.code).toBe(1);
       expect(r.stdout).toContain('Migrated 1 credential');
-      expect(r.stdout).toContain('✗ openclaw.json: Failed to update config:');
+      expect(r.stdout).toContain('✗ openclaw.json: OpenClaw refused the change: Config change declined. No settings were saved. Config validation failed: channels.telegram: nope.');
       expect(r.stdout).not.toContain('Replaced');
       expect(r.stdout).toContain('Plaintext originals remain where removal failed.');
       expect(fs.readFileSync(cfg, 'utf-8')).toBe(before);
       const status = await runCli(sb, ['openclaw', 'status']);
       expect(status.stdout).toContain('Stored credentials: 1');
+    }, T);
+
+    it('--cleanup hands the replacement to OpenClaw as a patch for the file it read', async () => {
+      sb.writeConfig(baseConfig(sb));
+      const cfg = sb.writeOpenClawJson({ gateway: { port: 18789 }, channels: { telegram: { accounts: { a: { botToken: '123456:PLAIN-TELEGRAM-TOKEN' } } } } });
+      installFakeOpenClaw(sb.bin);
+      const r = await runCli(sb, ['openclaw', 'migrate', '--auto', '--cleanup']);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('✓ Replaced telegram/bot_token with placeholder');
+      const call = fakeOpenClawCalls(sb.bin).find((c) => c.stdin !== undefined)!;
+      expect(call.argv).toEqual(['config', 'patch', '--stdin']);
+      expect(JSON.parse(call.stdin!)).toEqual({ channels: { telegram: { accounts: { a: { botToken: 'aquaman-proxy-managed' } } } } });
+      expect(call.env!.OPENCLAW_CONFIG_PATH).toBe(cfg);
+      expect(JSON.parse(fs.readFileSync(cfg, 'utf-8'))).toEqual({
+        gateway: { port: 18789 },
+        channels: { telegram: { accounts: { a: { botToken: 'aquaman-proxy-managed' } } } },
+      });
+    }, T);
+
+    it('--cleanup without an openclaw program leaves the plaintext, says so, and exits 1', async () => {
+      sb.writeConfig(baseConfig(sb));
+      const cfg = sb.writeOpenClawJson({ channels: { telegram: { accounts: { a: { botToken: '123456:PLAIN-TELEGRAM-TOKEN' } } } } });
+      const before = fs.readFileSync(cfg, 'utf-8');
+      const r = await runCli(sb, ['openclaw', 'migrate', '--auto', '--cleanup']);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toContain("✗ openclaw.json: not changed (aquaman does not edit OpenClaw's config itself). The replacement is saved as a patch: openclaw config patch --file");
+      expect(r.stdout).not.toContain('Replaced');
+      expect(fs.readFileSync(cfg, 'utf-8')).toBe(before);
+      // The patch names the path and the placeholder, never the token.
+      const patch = fs.readFileSync(path.join(sb.configDir, 'openclaw-setup.patch.json'), 'utf-8');
+      expect(patch).toContain('aquaman-proxy-managed');
+      expect(patch).not.toContain('PLAIN-TELEGRAM-TOKEN');
     }, T);
 
     it('adds a migrated plugin service to an existing services.yaml without dropping what is there', async () => {

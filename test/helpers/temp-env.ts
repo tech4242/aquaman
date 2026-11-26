@@ -8,6 +8,7 @@
 import { mkdtempSync, mkdirSync, cpSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
+import { installFakeOpenClaw } from './fake-openclaw.js';
 
 export interface TempEnv {
   aquamanDir: string;
@@ -17,6 +18,12 @@ export interface TempEnv {
 }
 
 export interface TempEnvOptions {
+  /**
+   * The version the stand-in `openclaw` reports. The default is one from
+   * before secrets provider integrations, which is also what a machine with
+   * no OpenClaw program is treated as.
+   */
+  openclawVersion?: string;
   withOpenClaw?: boolean;
   withConfig?: boolean;
   withPlugin?: boolean;
@@ -139,7 +146,14 @@ export function createTempEnv(options: TempEnvOptions = {}): TempEnv {
     }
   }
 
+  // The stand-in `openclaw` comes first on PATH, so a command under test that
+  // runs `openclaw` (setup and migrate hand it a config patch) never reaches a
+  // real one installed on the machine, and behaves the same where none is.
+  const binDir = mkdtempSync(path.join(tmpdir(), 'aquaman-test-bin-'));
+  installFakeOpenClaw(binDir, { version: options.openclawVersion ?? '2026.5.12' });
+
   const env: Record<string, string> = {
+    PATH: `${binDir}${path.delimiter}${process.env['PATH'] ?? ''}`,
     AQUAMAN_CONFIG_DIR: aquamanDir,
     OPENCLAW_STATE_DIR: openclawDir,
     // Fallback for encrypted-file backend on Linux CI (no keyring daemon)
@@ -153,6 +167,7 @@ export function createTempEnv(options: TempEnvOptions = {}): TempEnv {
     cleanup() {
       rmSync(aquamanDir, { recursive: true, force: true });
       rmSync(openclawDir, { recursive: true, force: true });
+      rmSync(binDir, { recursive: true, force: true });
     },
   };
 }

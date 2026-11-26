@@ -10,6 +10,27 @@ openclaw plugins install clawhub:aquaman-plugin   # OpenClaw users
 pip install -U aquaman-hermes                     # Hermes users
 ```
 
+## 0.21.2
+
+The two things the Hermes review found in 0.21.1 had counterparts on the OpenClaw side. This release fixes them there.
+
+### The local token goes to the proxy only
+
+- `aquaman openclaw setup` wrote its key reference for a provider even when that provider had a `baseUrl` of your own, such as a gateway. The reference is answered with the local loopback token, and OpenClaw sends a provider's key to whatever `baseUrl` it has, so that token went to your host as the API key and the call failed there. The token lets a local process use the proxy; it is not a provider key.
+- Setup now wires a provider whole or not at all: the reference is written only together with the proxy as `baseUrl`. A provider with another `baseUrl` is left as it is, and a reference an earlier version wrote there is removed on the next run.
+- The plugin's resolver checks as well. It answers with the token only for a reference whose endpoint in `openclaw.json` is the proxy's listener, on its port, and with an inert placeholder for anything else. Where it cannot read the whole config (JSON5 comments, `$include`) it answers as before.
+- `aquaman openclaw doctor` no longer counts the retired `aquaman.local` address as routed.
+- A local gateway on `127.0.0.1` with the same path as the proxy's is no longer taken for aquaman's and replaced.
+
+### OpenClaw writes its own config
+
+- Setup no longer writes `~/.openclaw/openclaw.json`. It hands OpenClaw one patch (`openclaw config patch --stdin`), then reads the file to check the change is there. OpenClaw validates the result, keeps its backups, and applies it itself when a Gateway is running. The same for the cleanup step of `aquaman openclaw migrate`.
+- Without an `openclaw` program, with `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`, or with a config that uses `$include`, nothing is changed: the patch is saved as `~/.aquaman/openclaw-setup.patch.json` and the command that applies it is printed. The patch holds references and no secret.
+- **Profiles.** `--profile <name>` on `aquaman openclaw setup` and `doctor`, and `OPENCLAW_CONFIG_PATH` is honoured.
+- **The Telegram token is no longer in `openclaw.json`.** `channels.telegram.botToken` becomes a reference, as the provider keys already were. Run setup again to move an existing install over.
+- What was run: setup against the `openclaw` program in 2026.6.10, 2026.10.33 and 2026.11.10, and gateways 2026.6.10 and 2026.11.10 with the Telegram reference against a stand-in Bot API. CI runs the setup check on both OpenClaw lanes.
+- Update the plugin too (`openclaw plugins install clawhub:aquaman-plugin`): the resolver change is in the plugin.
+
 ## 0.21.1
 
 Two changes to the Hermes integration, both asked for in the review of aquaman's entry for the Hermes plugin catalog.

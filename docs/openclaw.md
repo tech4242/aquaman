@@ -14,11 +14,13 @@ Using npm directly: `npm install -g aquaman-proxy && aquaman openclaw setup`.
 
 - `models.providers.<service>.baseUrl` points at a token-gated listener on `127.0.0.1`.
 - `models.providers.<service>.apiKey` becomes a SecretRef resolved by the plugin to a local access token. That token only lets a local process use the proxy; it is not your API key.
-- For Telegram, `channels.telegram.apiRoot` points at the proxy and the bot token is injected the same way.
+- For Telegram, `channels.telegram.apiRoot` points at the proxy and `botToken` becomes a SecretRef too, so neither your bot token nor the local token is written in `openclaw.json`.
+
+aquaman does not write `openclaw.json`. It works out these changes and hands them to OpenClaw as one patch (`openclaw config patch --stdin`), so OpenClaw validates the result, keeps its backups and, when a Gateway is running, applies the change itself.
 
 ## Model providers, step by step
 
-Two model providers are routed: **Anthropic and OpenAI**. Setup asks for each key with hidden input (press Enter to skip one), stores it in your vault as `anthropic/api_key` or `openai/api_key`, and on OpenClaw 2026.6.5 or later writes this into `~/.openclaw/openclaw.json`, for the providers whose key you entered (for both when you entered none in this run):
+Two model providers are routed: **Anthropic and OpenAI**. Setup asks for each key with hidden input (press Enter to skip one), stores it in your vault as `anthropic/api_key` or `openai/api_key`, and on OpenClaw 2026.6.5 or later has OpenClaw set this in `~/.openclaw/openclaw.json`, for the providers whose key you entered (for both when you entered none in this run):
 
 ```json
 {
@@ -42,11 +44,25 @@ Two model providers are routed: **Anthropic and OpenAI**. Setup asks for each ke
 }
 ```
 
-The rest of the file is kept. The port is 8585 unless `loopback.port` in `~/.aquaman/config.yaml` says otherwise. Setup reads `openclaw.json` as strict JSON, writes it back with these changes and makes no backup copy. If the file does not parse as strict JSON (comments, trailing commas), setup stops, says so and leaves the file as it is: remove the comments and trailing commas, then run it again.
+The rest of the file is OpenClaw's to keep. The port is 8585 unless `loopback.port` in `~/.aquaman/config.yaml` says otherwise.
+
+**When setup does not change the config.** In each of these cases nothing in `openclaw.json` is touched, the change is saved as `~/.aquaman/openclaw-setup.patch.json` (it holds references, no secret), and setup prints the command that applies it, `openclaw config patch --file <path>`:
+
+- the `openclaw` program is not on the PATH;
+- `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1` is set (put the patch into the source your deployment builds the config from);
+- the config uses `$include`: setup reads only the root file, so check the patch against the included files first.
+
+If OpenClaw refuses the patch, setup exits 1 with what OpenClaw said. To decide what to change, setup reads `openclaw.json` as strict JSON. A file with comments or trailing commas stops it, and the file is left as it is.
+
+**Profiles.** `aquaman openclaw setup --profile <name>` sets up the OpenClaw profile under `~/.openclaw-<name>` and runs `openclaw --profile <name>`; `aquaman openclaw doctor --profile <name>` checks it. Without the flag, `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` are honoured.
+
+**A provider with your own `baseUrl` is left alone.** OpenClaw sends a provider's key to whatever `baseUrl` the provider has, and aquaman's key reference is answered with the local token. So setup writes the reference only together with the proxy as `baseUrl`. Where you set another `baseUrl` (a gateway of your own, a regional endpoint), setup changes nothing for that provider, says so, and removes a reference an earlier version wrote there. The plugin's resolver holds to the same rule: it answers with the token only for a reference whose endpoint in `openclaw.json` is the proxy, and with an inert placeholder otherwise.
+
+What was run: setup against the `openclaw` program in versions 2026.6.10, 2026.10.33 and 2026.11.10 (the patch accepted, the file written by OpenClaw and owner-only, a second run changing nothing, a named profile, a read-only config left alone), and gateways 2026.6.10 and 2026.11.10 with the Telegram token as a reference against a stand-in Bot API, where the calls arrived at the configured root with the local token.
 
 **A key that is already written in `openclaw.json` stays there, and that provider is not routed.** If `models.providers.anthropic.apiKey` holds a key as plain text, setup leaves the entry as it is and prints `Left existing user-set apiKey untouched for: anthropic`. It does not copy that key into the vault and does not remove it. To route the provider:
 
-1. Delete the `apiKey` line for that provider from `openclaw.json` (and its `baseUrl`, if you set one: setup also keeps a `baseUrl` it did not write).
+1. Remove the key for that provider (`openclaw config unset models.providers.anthropic.apiKey`), and its `baseUrl` if you set one: setup keeps a `baseUrl` it did not write and does not route that provider.
 2. Run `openclaw aquaman setup` again and enter the key when asked. Running it again is safe: it keeps your other settings.
 3. Run `aquaman openclaw doctor`. It fails with "providers not wired" or "still call the provider directly" while a provider is not going through the proxy.
 

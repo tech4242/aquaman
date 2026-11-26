@@ -46,6 +46,7 @@ import { createCredentialProxy } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
 import { createOpenClawIntegration, authProfilesAreSqliteOnly, legacyAuthProfilesBlockProviders, pluginInstallNeedsCapabilityConsent, pluginProvenanceIsReported } from '../openclaw/integration.js';
 import { supportsSecretRefIntegrations, wireSecretRefProviders, secretRefWiringStatus } from '../openclaw/secretref.js';
+import { openclawPaths, openclawProfileArgs, isOpenClawProfileName, configMergePatch, applyOpenClawPatch, type OpenClawWriteResult } from '../openclaw/config-file.js';
 import {
   CHANNEL_ROUTING_SUPPORTED,
   wireChannelRouting,
@@ -641,7 +642,7 @@ program
     const os = await import('node:os');
     const configDir = getConfigDir();
     const configPath = path.join(configDir, 'config.yaml');
-    const openclawStateDir = process.env['OPENCLAW_STATE_DIR'] || path.join(os.homedir(), '.openclaw');
+    const openclawStateDir = openclawPaths().stateDir;
     let issues = 0;
 
     console.log('');
@@ -2115,6 +2116,56 @@ settings and no permission prompt changes. Credentials are added later, by a per
     }
   });
 
+/** The `--profile` value for OpenClaw; exits on a name that cannot be a profile. */
+function openclawProfileOption(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  if (!isOpenClawProfileName(raw)) {
+    console.error(`Invalid --profile: ${raw}`);
+    console.error('An OpenClaw profile name is letters, digits, "-" and "_".');
+    process.exit(1);
+  }
+  return raw;
+}
+
+/** How a change to OpenClaw's config ended, for the person. Returns false when it was refused. */
+function reportOpenClawWrite(write: OpenClawWriteResult, configFile: string, planned: string[]): boolean {
+  const list = (mark: string) => { for (const line of planned) console.log(`  ${mark} ${line}`); };
+  switch (write.status) {
+    case 'unchanged':
+      list('\u2713');
+      console.log(`  \u2713 OpenClaw config already holds these settings (${configFile})`);
+      return true;
+    case 'applied':
+      list('\u2713');
+      console.log(`  \u2713 OpenClaw config changed through \`openclaw config patch\` (${configFile})`);
+      if (write.note) console.log(`    ${write.note}`);
+      return true;
+    case 'manual': {
+      const why = write.reason === 'no_cli'
+        ? 'the `openclaw` program is not on PATH, and aquaman does not edit openclaw.json itself'
+        : write.reason === 'read_only'
+          ? `${write.variable}=1 marks the config as managed elsewhere`
+          : 'the config uses $include, and aquaman sees only the root file';
+      console.log(`  \u2717 OpenClaw config not changed: ${why}.`);
+      console.log(`    The change is saved as a patch, with no secret in it: ${write.patchPath}`);
+      if (planned.length > 0) {
+        console.log('    It would set:');
+        for (const line of planned) console.log(`      \u2022 ${line}`);
+      }
+      console.log(write.reason === 'includes'
+        ? `    Check it against the included files, then apply it: ${aqua(write.command)}`
+        : write.reason === 'read_only'
+          ? '    Put its contents into the source your deployment builds the config from.'
+          : `    Apply it once OpenClaw is installed: ${aqua(write.command)}`);
+      return true;
+    }
+    case 'failed':
+      console.log(`  \u2717 OpenClaw config not changed: ${write.detail}`);
+      console.log(`    The patch is in ${write.patchPath}. After fixing the cause: ${aqua(write.command)}`);
+      return false;
+  }
+}
+
 // Setup command - all-in-one guided onboarding
 // openclaw setup — full OpenClaw bundle: vault wizard + plugin install +
 // openclaw.json wiring + auth-profiles.json + optional auto-migration.
@@ -2124,13 +2175,17 @@ openclaw
   .option('--backend <backend>', 'Credential backend (keychain, encrypted-file, keepassxc, 1password, vault, systemd-creds, bitwarden, keeper)')
   .option('--no-openclaw', 'Skip OpenClaw plugin installation step (run vault setup only)')
   .option('--no-policy', 'Skip request policy preset configuration')
+  .option('--profile <name>', 'OpenClaw profile to set up (as in `openclaw --profile <name>`)')
   .option('--non-interactive', 'Use environment variables instead of prompts (for CI)')
   .action(async (options) => {
     const os = await import('node:os');
     const configDir = getConfigDir();
     const configPath = path.join(configDir, 'config.yaml');
     const isNonInteractive = options.nonInteractive || false;
-    const openclawStateDir = process.env['OPENCLAW_STATE_DIR'] || path.join(os.homedir(), '.openclaw');
+    const openclawProfile = openclawProfileOption(options.profile);
+    const ocPaths = openclawPaths(openclawProfile);
+    const openclawStateDir = ocPaths.stateDir;
+    const ocProfileArgs = openclawProfileArgs(openclawProfile);
 
     console.log('\n  \u{1F419} aquaman setup\n');
 
@@ -2438,7 +2493,7 @@ openclaw
           if (!ocVersion) {
             try {
               const { execSync } = await import('node:child_process');
-              ocVersion = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8', timeout: 5000 }).trim();
+              ocVersion = execSync('openclaw --version', { stdio: 'pipe', encoding: 'utf-8', timeout: 5000 }).trim().split('\n').pop()!.trim();
             } catch { /* CLI not on PATH */ }
           }
 
@@ -2464,18 +2519,20 @@ openclaw
               : ['plugins', 'install', 'aquaman-plugin'];
             try {
               const { execFileSync: execFileSyncFallback } = await import('node:child_process');
-              execFileSyncFallback('openclaw', args, { stdio: consent && !isNonInteractive ? 'inherit' : 'pipe' });
+              execFileSyncFallback('openclaw', [...ocProfileArgs, ...args], { stdio: consent && !isNonInteractive ? 'inherit' : 'pipe' });
               console.log('  \u2713 Plugin installed via openclaw');
               if (consent && isNonInteractive) {
                 console.log('  \u2192 Accepted the plugin\u2019s OpenClaw capabilities on your behalf (--non-interactive)');
               }
             } catch {
-              console.log(`  \u2717 Could not install plugin. Run: openclaw ${args.join(' ')}${consent && isNonInteractive ? '' : consent ? '  (then approve its capabilities)' : ''}`);
+              console.log(`  \u2717 Could not install plugin. Run: openclaw ${[...ocProfileArgs, ...args].join(' ')}${consent && isNonInteractive ? '' : consent ? '  (then approve its capabilities)' : ''}`);
             }
           }
 
-          // b. Write/merge openclaw.json
-          const openclawJsonPath = path.join(openclawStateDir, 'openclaw.json');
+          // b. Work out the change to OpenClaw's config. Nothing is written
+          // here: the difference goes to `openclaw config patch` below.
+          const openclawJsonPath = ocPaths.configPath;
+          const planned: string[] = [];
           let openclawConfig: any = {};
           if (fs.existsSync(openclawJsonPath)) {
             const existing = fs.readFileSync(openclawJsonPath, 'utf-8');
@@ -2489,8 +2546,8 @@ openclaw
                 parsed = JSON.parse(existing);
               } catch (err) {
                 console.error(`\n  \u2717 ${openclawJsonPath} is not strict JSON (${err instanceof Error ? err.message : String(err)}).`);
-                console.error('    aquaman left it unchanged, so the plugin entry and the provider wiring were not written.');
-                console.error('    Remove comments and trailing commas from the file (keep a copy), then run: aquaman openclaw setup');
+                console.error('    aquaman left it unchanged: it reads the file to decide what to change and cannot read comments or trailing commas.');
+                console.error('    OpenClaw rewrites the file as standard JSON on its next config write. Or remove them yourself (keep a copy), then run: aquaman openclaw setup');
                 process.exit(1);
               }
               if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -2501,6 +2558,7 @@ openclaw
               openclawConfig = parsed;
             }
           }
+          const openclawConfigBefore = structuredClone(openclawConfig);
 
           if (!openclawConfig.plugins) openclawConfig.plugins = {};
           if (!openclawConfig.plugins.entries) openclawConfig.plugins.entries = {};
@@ -2522,12 +2580,15 @@ openclaw
 
           const configuredServices = storedServices.length > 0 ? storedServices : ['anthropic', 'openai'];
           openclawConfig.plugins.entries['aquaman-plugin'] = {
+            ...(openclawConfig.plugins.entries['aquaman-plugin'] && typeof openclawConfig.plugins.entries['aquaman-plugin'] === 'object'
+              ? openclawConfig.plugins.entries['aquaman-plugin'] : {}),
             enabled: true,
             config: {
               backend,
               services: configuredServices,
             }
           };
+          planned.push(`Plugin entry for aquaman-plugin (backend ${backend}; services ${configuredServices.join(', ')})`);
 
           // b2. SecretRef provider wiring (v0.14.0+, OpenClaw >= 2026.6.5).
           // Config-level refs in openclaw.json are runtime-read on every
@@ -2577,13 +2638,16 @@ openclaw
           if (secretRefSupported && loopbackOrigin) {
             const wiring = wireSecretRefProviders(openclawConfig, configuredServices, { loopbackOrigin });
             if (wiring.wiredProviders.length > 0) {
-              console.log(`  \u2713 SecretRef wiring for ${wiring.wiredProviders.join(', ')} (canonical credential surface)`);
+              planned.push(`SecretRef wiring for ${wiring.wiredProviders.join(', ')} (canonical credential surface)`);
             }
             if (wiring.baseUrlProviders.length > 0) {
-              console.log(`  \u2713 Model traffic routed through the proxy for ${wiring.baseUrlProviders.join(', ')}`);
+              planned.push(`Model traffic routed through the proxy for ${wiring.baseUrlProviders.join(', ')}`);
             }
             if (wiring.keptUserBaseUrl.length > 0) {
-              console.log(`  \u2192 Left existing user-set baseUrl untouched for: ${wiring.keptUserBaseUrl.join(', ')} (proxy NOT in the path for those)`);
+              console.log(`  \u2192 Left ${wiring.keptUserBaseUrl.join(', ')} as configured: the baseUrl there is your own, so the proxy is not in the path and no key reference is written (its answer is the local token, which would go to that host)`);
+            }
+            if (wiring.removedRefs.length > 0) {
+              planned.push(`Key reference removed from ${wiring.removedRefs.join(', ')}: the baseUrl there is not the proxy, and the local token was being sent to it`);
             }
             const userKept = wiring.skippedProviders.filter(s => s === 'anthropic' || s === 'openai');
             if (userKept.length > 0) {
@@ -2600,6 +2664,7 @@ openclaw
             const routing = wireChannelRouting(openclawConfig, {
               loopbackOrigin,
               loopbackToken,
+              tokenRef: secretRefSupported,
               hasVaultCredential: (svc) => channelsWithVaultCredential.has(svc)
             });
             if (routing.routedChannels.length > 0) {
@@ -2612,15 +2677,21 @@ openclaw
                 config.credentials.proxiedServices = [...proxied, ...added];
                 saveConfig(config);
               }
-              console.log(`  \u2713 Channel traffic routed through the proxy for ${routing.routedChannels.join(', ')}`);
+              planned.push(`Channel traffic routed through the proxy for ${routing.routedChannels.join(', ')}${secretRefSupported ? ' (token by reference, not in the file)' : ''}`);
             }
             for (const skip of routing.skipped) {
               console.log(`  \u2192 ${skip.channel} left as-is: ${describeChannelSkip(skip.reason, skip.channel)}`);
             }
           }
 
-          fs.writeFileSync(openclawJsonPath, JSON.stringify(openclawConfig, null, 2), 'utf-8');
-          console.log('  \u2713 Plugin config written to ' + openclawJsonPath);
+          const openclawWrite = await applyOpenClawPatch(configMergePatch(openclawConfigBefore, openclawConfig), {
+            patchDir: configDir,
+            profile: openclawProfile,
+            binary: cliDetected ? 'openclaw' : null,
+            current: openclawConfigBefore,
+            configPath: openclawJsonPath,
+          });
+          if (!reportOpenClawWrite(openclawWrite, openclawJsonPath, planned)) process.exitCode = 1;
 
           // c. Generate auth-profiles.json (only if missing). With SecretRef
           // wiring active this is a redundant legacy surface \u2014 skip it so
@@ -2716,11 +2787,12 @@ openclaw
 openclaw
   .command('doctor')
   .description('Deep diagnostic for the OpenClaw integration (vault + plugin + auth profiles)')
-  .action(async () => {
-    const os = await import('node:os');
+  .option('--profile <name>', 'OpenClaw profile to check (as in `openclaw --profile <name>`)')
+  .action(async (doctorOptions: { profile?: string }) => {
     const configDir = getConfigDir();
     const configPath = path.join(configDir, 'config.yaml');
-    const openclawStateDir = process.env['OPENCLAW_STATE_DIR'] || path.join(os.homedir(), '.openclaw');
+    const ocPaths = openclawPaths(openclawProfileOption(doctorOptions.profile));
+    const openclawStateDir = ocPaths.stateDir;
     let issues = 0;
 
     console.log('');
@@ -2969,7 +3041,7 @@ openclaw
       }
 
       // 7. openclaw.json has plugin entry
-      const openclawJsonPath = path.join(openclawStateDir, 'openclaw.json');
+      const openclawJsonPath = ocPaths.configPath;
       if (fs.existsSync(openclawJsonPath)) {
         try {
           const openclawConfig = JSON.parse(fs.readFileSync(openclawJsonPath, 'utf-8'));
@@ -3038,8 +3110,8 @@ openclaw
             // a loopback baseUrl OpenClaw's transport calls the upstream
             // directly and the placeholder fails there (v0.15.0).
             if (status.missingBaseUrl.length > 0) {
-              console.log(`  ✗ ${aqua('Model routing')} ${status.missingBaseUrl.join(', ')} still call the provider directly — the proxy is bypassed`);
-              console.log('    → Run: aquaman openclaw setup   (points models.providers.<svc>.baseUrl at the loopback listener)');
+              console.log(`  ✗ ${aqua('Model routing')} ${status.missingBaseUrl.join(', ')}: aquaman's key reference is set but the baseUrl is not the proxy, so the proxy is bypassed and that host is sent a key it cannot use`);
+              console.log('    → Run: aquaman openclaw setup   (routes the provider through the proxy, or removes the reference where the baseUrl is your own)');
               issues++;
             } else if (status.baseUrlProviders.length > 0) {
               console.log(`  ✓ ${aqua('Model routing')} through the proxy for ${status.baseUrlProviders.join(', ')}`);
@@ -3163,7 +3235,7 @@ openclaw
     if (openclawDetected) {
       try {
         const { extractCredentials, extractPluginCredentials, scanCredentialsDir } = await import('../migration/openclaw-migrator.js');
-        const openclawJsonPath = path.join(openclawStateDir, 'openclaw.json');
+        const openclawJsonPath = ocPaths.configPath;
         const credentialsDir = path.join(openclawStateDir, 'credentials');
 
         let plaintext: { source: string; service: string; key: string }[] = [];
@@ -4078,8 +4150,8 @@ openclaw
       console.log(`\n  \u{1F419} aquaman ${aqua(VERSION)} \u2014 Time to put your secrets somewhere safe.\n`);
       console.log('  Scanning for plaintext credentials...\n');
 
-      const openclawStateDir = process.env['OPENCLAW_STATE_DIR'] || path.join(os.homedir(), '.openclaw');
-      const openclawConfigPath = findOpenClawConfig(opts.config || path.join(openclawStateDir, 'openclaw.json'));
+      const openclawStateDir = openclawPaths().stateDir;
+      const openclawConfigPath = findOpenClawConfig(opts.config || openclawPaths().configPath);
       const credentialsDir = path.join(openclawStateDir, 'credentials');
 
       // Scan all sources
@@ -4406,7 +4478,21 @@ openclaw
       }
 
       if (shouldCleanup) {
-        const cleanupResult = cleanupSources(openclawConfigPath, credentialsDir, migratedResults);
+        let openclawOnPath = false;
+        try {
+          const { execSync } = await import('node:child_process');
+          execSync('which openclaw', { stdio: 'pipe' });
+          openclawOnPath = true;
+        } catch { /* not installed */ }
+        const cleanupResult = await cleanupSources(openclawConfigPath, credentialsDir, migratedResults, (before, after) =>
+          applyOpenClawPatch(configMergePatch(before, after), {
+            patchDir: getConfigDir(),
+            binary: openclawOnPath ? 'openclaw' : null,
+            current: before,
+            configPath: openclawConfigPath,
+            // The file that was read is the file to change, also when it was named with --config.
+            env: { ...process.env, OPENCLAW_CONFIG_PATH: openclawConfigPath },
+          }));
         for (const d of cleanupResult.deleted) {
           console.log(`  ${green('\u2713')} ${d.description}`);
         }

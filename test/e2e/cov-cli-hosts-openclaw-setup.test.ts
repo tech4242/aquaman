@@ -4,8 +4,9 @@
  * cli-setup tests leave out.
  *
  * No real vendor program runs. PATH holds one private directory
- * (test/helpers/cov-cli-hosts.ts) with fake `op`, `bw`, `keeper` or `openclaw`
- * scripts where a test needs one. Vault is a local HTTP server.
+ * (test/helpers/cov-cli-hosts.ts) with fake `op`, `bw` or `keeper` scripts
+ * and the stand-in `openclaw` (test/helpers/fake-openclaw.ts) where a test
+ * needs one. Vault is a local HTTP server.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -14,6 +15,7 @@ import * as http from 'node:http';
 import * as path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { createSandbox, baseConfig, runCli, addCredential, type Sandbox, type RunOptions } from '../helpers/cov-cli-hosts.js';
+import { installFakeOpenClaw, fakeOpenClawCalls, fakeOpenClawPatches } from '../helpers/fake-openclaw.js';
 
 const T = 120_000;
 const FAKE_KEEPER = path.resolve('test/helpers/fake-keeper.mjs');
@@ -276,6 +278,7 @@ describe('aquaman openclaw setup (cli-hosts coverage)', () => {
 
     it('declining policies writes none; accepting the plugin installs and configures it', async () => {
       fs.mkdirSync(sb.openclawDir);
+      installFakeOpenClaw(sb.bin, { version: '2026.5.12' });
       const r = await runCli(sb, ['openclaw', 'setup', '--backend', 'encrypted-file'], {
         env: { AQUAMAN_OPENCLAW_VERSION: '2026.5.12' },
         answers: [
@@ -312,7 +315,7 @@ describe('aquaman openclaw setup (cli-hosts coverage)', () => {
     }, T);
 
     it('takes the gateway version from `openclaw --version` and wires SecretRef for it', async () => {
-      sb.fakeBin('openclaw', 'echo "OpenClaw 2026.9.37 (abc1234)"');
+      installFakeOpenClaw(sb.bin, { version: '2026.9.37' });
       const r = await setup(['--backend', 'encrypted-file'], { env: { ANTHROPIC_API_KEY: 'sk-ant-env-value' } });
       expect(r.code).toBe(0);
       expect(r.stdout).toContain('✓ Loopback listener enabled on http://127.0.0.1:8585 (token-gated, loopback-bound)');
@@ -332,6 +335,14 @@ describe('aquaman openclaw setup (cli-hosts coverage)', () => {
       expect(cfg).toMatch(/loopback:\n\s+enabled: true/);
       expect(cfg).toMatch(/token: aqm_lb_/);
       expect(JSON.stringify(oc)).not.toContain('sk-ant-env-value');
+
+      // OpenClaw wrote the file: aquaman handed it one patch on stdin, with no token in it.
+      expect(r.stdout).toContain(`✓ OpenClaw config changed through \`openclaw config patch\` (${path.join(sb.openclawDir, 'openclaw.json')})`);
+      const patches = fakeOpenClawCalls(sb.bin).filter((c) => c.stdin !== undefined);
+      expect(patches).toHaveLength(1);
+      expect(patches[0]!.argv).toEqual(['config', 'patch', '--stdin']);
+      expect(patches[0]!.stdin).not.toMatch(/aqm_lb_/);
+      expect(fs.statSync(path.join(sb.openclawDir, 'openclaw.json')).mode & 0o777).toBe(0o600);
     }, T);
   });
 
@@ -356,32 +367,172 @@ describe('aquaman openclaw setup (cli-hosts coverage)', () => {
       fs.mkdirSync(sb.openclawDir, { recursive: true });
       const file = path.join(sb.openclawDir, 'openclaw.json');
       fs.writeFileSync(file, '\n');
+      installFakeOpenClaw(sb.bin, { version: '2026.9.37' });
       const r = await setup(['--backend', 'encrypted-file'], { env: { AQUAMAN_OPENCLAW_VERSION: '2026.9.37' } });
       expect(r.code).toBe(0);
       expect(sb.readOpenClawJson().plugins.entries['aquaman-plugin']).toBeTruthy();
     }, T);
 
-    it('never replaces a user-set baseUrl or apiKey, and says the proxy is not in that path', async () => {
-      sb.writeOpenClawJson({
-        models: {
-          providers: {
-            anthropic: { baseUrl: 'https://llm-gateway.corp.example/anthropic' },
-            openai: { apiKey: 'sk-user-own-openai-key' },
-          },
-        },
-      });
+    it('never replaces a user-set baseUrl or apiKey, and writes no key reference beside a baseUrl that is not the proxy', async () => {
+      const mine = {
+        anthropic: { baseUrl: 'https://llm-gateway.corp.example/anthropic' },
+        openai: { apiKey: 'sk-user-own-openai-key' },
+      };
+      sb.writeOpenClawJson({ models: { providers: mine } });
+      installFakeOpenClaw(sb.bin, { version: '2026.9.37' });
       const r = await setup(['--backend', 'encrypted-file'], { env: { AQUAMAN_OPENCLAW_VERSION: '2026.9.37' } });
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain('→ Left existing user-set baseUrl untouched for: anthropic (proxy NOT in the path for those)');
+      expect(r.stdout).toContain('→ Left anthropic as configured: the baseUrl there is your own, so the proxy is not in the path and no key reference is written');
       expect(r.stdout).toContain('→ Left existing user-set apiKey untouched for: openai');
-      expect(r.stdout).toContain('✓ SecretRef wiring for anthropic ');
+      expect(r.stdout).not.toContain('SecretRef wiring for');
       expect(r.stdout).not.toContain('Model traffic routed through the proxy');
-
-      const oc = sb.readOpenClawJson();
-      expect(oc.models.providers.anthropic.baseUrl).toBe('https://llm-gateway.corp.example/anthropic');
-      expect(oc.models.providers.openai).toEqual({ apiKey: 'sk-user-own-openai-key' });
+      expect(sb.readOpenClawJson().models.providers).toEqual(mine);
+      expect(JSON.stringify(fakeOpenClawPatches(sb.bin))).not.toContain('anthropic/api_key');
     }, T);
 
+    it('takes back a key reference an earlier setup left beside a user-set baseUrl', async () => {
+      sb.writeOpenClawJson({
+        models: { providers: { anthropic: {
+          baseUrl: 'https://llm-gateway.corp.example/anthropic',
+          apiKey: { source: 'exec', provider: 'aquaman', id: 'anthropic/api_key' },
+        } } },
+      });
+      installFakeOpenClaw(sb.bin, { version: '2026.9.37' });
+      const r = await setup(['--backend', 'encrypted-file'], { env: { AQUAMAN_OPENCLAW_VERSION: '2026.9.37' } });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('✓ Key reference removed from anthropic: the baseUrl there is not the proxy, and the local token was being sent to it');
+      expect(sb.readOpenClawJson().models.providers.anthropic).toEqual({ baseUrl: 'https://llm-gateway.corp.example/anthropic' });
+      expect(fakeOpenClawPatches(sb.bin)[0]!.models.providers.anthropic).toEqual({ apiKey: null });
+    }, T);
+
+    it('routes telegram with the token as a reference: no token is written into openclaw.json', async () => {
+      sb.writeConfig(baseConfig(sb));
+      await addCredential(sb, 'telegram', 'bot_token', '123456:REAL-BOT-TOKEN');
+      sb.writeOpenClawJson({ channels: { telegram: { enabled: true, botToken: 'aquaman-proxy-managed' } } });
+      installFakeOpenClaw(sb.bin, { version: '2026.9.37' });
+      const r = await setup(['--backend', 'encrypted-file'], { env: { AQUAMAN_OPENCLAW_VERSION: '2026.9.37' } });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('✓ Channel traffic routed through the proxy for telegram (token by reference, not in the file)');
+      expect(sb.readOpenClawJson().channels.telegram).toEqual({
+        enabled: true,
+        apiRoot: 'http://127.0.0.1:8585/telegram',
+        botToken: { source: 'exec', provider: 'aquaman', id: 'telegram/bot_token' },
+      });
+      expect(fs.readFileSync(path.join(sb.openclawDir, 'openclaw.json'), 'utf-8')).not.toMatch(/aqm_lb_/);
+
+      // A file an earlier version wrote, with the token in it, is moved to the reference.
+      const token = /token: (aqm_lb_[A-Za-z0-9_-]+)/.exec(sb.readConfig())![1];
+      const withToken = sb.readOpenClawJson();
+      withToken.channels.telegram.botToken = token;
+      sb.writeOpenClawJson(withToken);
+      expect((await setup(['--backend', 'encrypted-file'], { env: { AQUAMAN_OPENCLAW_VERSION: '2026.9.37' } })).code).toBe(0);
+      expect(fs.readFileSync(path.join(sb.openclawDir, 'openclaw.json'), 'utf-8')).not.toMatch(/aqm_lb_/);
+    }, T);
+
+    it('a second run hands OpenClaw nothing and says the settings are there', async () => {
+      installFakeOpenClaw(sb.bin, { version: '2026.9.37' });
+      const env = { AQUAMAN_OPENCLAW_VERSION: '2026.9.37', ANTHROPIC_API_KEY: 'sk-ant-env-value' };
+      expect((await setup(['--backend', 'encrypted-file'], { env })).code).toBe(0);
+      const once = fs.readFileSync(path.join(sb.openclawDir, 'openclaw.json'), 'utf-8');
+      const second = await setup(['--backend', 'encrypted-file'], { env });
+      expect(second.code).toBe(0);
+      expect(second.stdout).toContain('✓ OpenClaw config already holds these settings');
+      expect(fakeOpenClawCalls(sb.bin).filter((c) => c.stdin !== undefined)).toHaveLength(1);
+      expect(fs.readFileSync(path.join(sb.openclawDir, 'openclaw.json'), 'utf-8')).toBe(once);
+    }, T);
+  });
+
+  describe('aquaman does not write openclaw.json itself', () => {
+    const patchFile = () => path.join(sb.configDir, 'openclaw-setup.patch.json');
+    const env = { AQUAMAN_OPENCLAW_VERSION: '2026.9.37', ANTHROPIC_API_KEY: 'sk-ant-env-value' };
+
+    it('without an openclaw program: saves the patch, says how to apply it, and leaves the config alone', async () => {
+      fs.mkdirSync(sb.openclawDir, { recursive: true });
+      const file = path.join(sb.openclawDir, 'openclaw.json');
+      fs.writeFileSync(file, '{"gateway":{"port":18789}}');
+      const r = await setup(['--backend', 'encrypted-file'], { env });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('✗ OpenClaw config not changed: the `openclaw` program is not on PATH, and aquaman does not edit openclaw.json itself.');
+      expect(r.stdout).toContain(`The change is saved as a patch, with no secret in it: ${patchFile()}`);
+      expect(r.stdout).toContain('• SecretRef wiring for anthropic (canonical credential surface)');
+      expect(r.stdout).toContain(`openclaw config patch --file ${patchFile()}`);
+      expect(r.stdout).not.toContain('✓ SecretRef wiring');
+      expect(fs.readFileSync(file, 'utf-8')).toBe('{"gateway":{"port":18789}}');
+
+      const patch = JSON.parse(fs.readFileSync(patchFile(), 'utf-8'));
+      expect(patch.models.providers.anthropic).toEqual({
+        apiKey: { source: 'exec', provider: 'aquaman', id: 'anthropic/api_key' },
+        baseUrl: 'http://127.0.0.1:8585/anthropic',
+      });
+      expect(patch.gateway).toBeUndefined();
+      expect(fs.readFileSync(patchFile(), 'utf-8')).not.toMatch(/aqm_lb_|sk-ant/);
+      expect(fs.statSync(patchFile()).mode & 0o777).toBe(0o600);
+    }, T);
+
+    it.each([
+      ['OPENCLAW_CONFIG_READONLY', 'OPENCLAW_CONFIG_READONLY=1 marks the config as managed elsewhere'],
+      ['OPENCLAW_NIX_MODE', 'OPENCLAW_NIX_MODE=1 marks the config as managed elsewhere'],
+    ])('with %s=1: runs no config command and saves the patch', async (variable, reason) => {
+      installFakeOpenClaw(sb.bin, { version: '2026.6.10' });
+      const r = await setup(['--backend', 'encrypted-file'], { env: { ...env, [variable]: '1' } });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain(`✗ OpenClaw config not changed: ${reason}.`);
+      expect(r.stdout).toContain('Put its contents into the source your deployment builds the config from.');
+      expect(fakeOpenClawCalls(sb.bin).filter((c) => c.argv.includes('patch'))).toEqual([]);
+      expect(fs.existsSync(path.join(sb.openclawDir, 'openclaw.json'))).toBe(false);
+      expect(fs.existsSync(patchFile())).toBe(true);
+    }, T);
+
+    it('with $include in the config: saves the patch and applies nothing, because included settings are not visible', async () => {
+      const original = { models: { $include: './models.json5' }, gateway: { port: 18789 } };
+      sb.writeOpenClawJson(original);
+      installFakeOpenClaw(sb.bin, { version: '2026.9.37' });
+      const r = await setup(['--backend', 'encrypted-file'], { env });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('✗ OpenClaw config not changed: the config uses $include, and aquaman sees only the root file.');
+      expect(r.stdout).toContain('Check it against the included files, then apply it:');
+      expect(sb.readOpenClawJson()).toEqual(original);
+      expect(fakeOpenClawCalls(sb.bin).filter((c) => c.argv.includes('patch'))).toEqual([]);
+    }, T);
+
+    it('when OpenClaw refuses the patch: exits 1 with what it said, and the config is as it was', async () => {
+      sb.writeOpenClawJson({ gateway: { port: 18789 } });
+      installFakeOpenClaw(sb.bin, { version: '2026.9.37', refusePatch: 'Config validation failed: models.providers.anthropic: nope' });
+      const r = await setup(['--backend', 'encrypted-file'], { env });
+      expect(r.code).toBe(1);
+      expect(r.stdout).toContain('✗ OpenClaw config not changed: Config change declined. No settings were saved. Config validation failed: models.providers.anthropic: nope');
+      expect(r.stdout).toContain(`openclaw config patch --file ${patchFile()}`);
+      expect(r.stdout).not.toContain('✓ SecretRef wiring');
+      expect(sb.readOpenClawJson()).toEqual({ gateway: { port: 18789 } });
+    }, T);
+
+    it('does not take OpenClaw at its word: success without the settings in the file is a failure', async () => {
+      // A program that answers every command with success and writes nothing.
+      sb.fakeBin('openclaw', 'cat > /dev/null 2>&1 || true; echo "OpenClaw 2026.9.37 (abc1234)"');
+      const r = await setup(['--backend', 'encrypted-file'], { env });
+      expect(r.code).toBe(1);
+      expect(r.stdout).toContain(`✗ OpenClaw config not changed: OpenClaw reported success, but ${path.join(sb.openclawDir, 'openclaw.json')} does not hold the change`);
+    }, T);
+
+    it('--profile sets up that profile: its state directory, and `openclaw --profile` for the patch', async () => {
+      installFakeOpenClaw(sb.bin, { version: '2026.9.37' });
+      const r = await setup(['--backend', 'encrypted-file', '--profile', 'work'], { env });
+      const state = path.join(sb.home, '.openclaw-work');
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain(`✓ Plugin installed to ${path.join(state, 'extensions', 'aquaman-plugin')}`);
+      expect(r.stdout).toContain(`(${path.join(state, 'openclaw.json')})`);
+      expect(fakeOpenClawCalls(sb.bin).find((c) => c.stdin !== undefined)!.argv).toEqual(['--profile', 'work', 'config', 'patch', '--stdin']);
+      expect(JSON.parse(fs.readFileSync(path.join(state, 'openclaw.json'), 'utf-8')).plugins.entries['aquaman-plugin'].enabled).toBe(true);
+      // The default profile, which the environment points at, is not touched.
+      expect(fs.existsSync(path.join(sb.openclawDir, 'openclaw.json'))).toBe(false);
+
+      const bad = await setup(['--backend', 'encrypted-file', '--profile', '../x'], { env });
+      expect(bad.code).toBe(1);
+      expect(bad.stderr).toContain('Invalid --profile: ../x');
+    }, T);
+  });
+
+  describe('openclaw.json wiring, older installs', () => {
     it('2026.8.1+: flags a legacy auth-profiles.json that locks providers out, and leaves it in place', async () => {
       const profiles = path.join(sb.openclawDir, 'agents', 'main', 'agent', 'auth-profiles.json');
       fs.mkdirSync(path.dirname(profiles), { recursive: true });

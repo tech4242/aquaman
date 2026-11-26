@@ -330,8 +330,8 @@ describe('aquaman openclaw doctor (cli-hosts coverage)', () => {
       const r = await doctor({ AQUAMAN_OPENCLAW_VERSION: '2026.9.37' });
       expect(r.code).toBe(1);
       expect(r.stdout).toContain('✓ SecretRef wiring active (anthropic, openai)');
-      expect(r.stdout).toContain('✗ Model routing openai still call the provider directly — the proxy is bypassed');
-      expect(r.stdout).toContain('→ Run: aquaman openclaw setup   (points models.providers.<svc>.baseUrl at the loopback listener)');
+      expect(r.stdout).toContain("✗ Model routing openai: aquaman's key reference is set but the baseUrl is not the proxy, so the proxy is bypassed and that host is sent a key it cannot use");
+      expect(r.stdout).toContain('→ Run: aquaman openclaw setup   (routes the provider through the proxy, or removes the reference where the baseUrl is your own)');
     }, T);
 
     it('notes a provider key exported in the shell, in the singular and the plural', async () => {

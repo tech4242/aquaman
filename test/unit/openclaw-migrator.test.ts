@@ -18,6 +18,8 @@ import {
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { applyMergePatch } from '../helpers/fake-openclaw.js';
+import { configMergePatch, type OpenClawWriteResult } from '../../packages/proxy/src/openclaw/config-file.js';
 
 describe('OpenClaw Migrator', () => {
   describe('extractCredentials', () => {
@@ -611,6 +613,15 @@ describe('OpenClaw Migrator', () => {
   });
 
   describe('cleanupSources', () => {
+    /** Does to the file what `openclaw config patch` does with the difference it is handed. */
+    const viaOpenClaw = (file: string) => async (before: unknown, after: unknown): Promise<OpenClawWriteResult> => {
+      const patch = configMergePatch(before, after);
+      if (!patch) return { status: 'unchanged' };
+      const current = JSON.parse(fs.readFileSync(file, 'utf-8'));
+      fs.writeFileSync(file, JSON.stringify(applyMergePatch(current, patch), null, 2));
+      return { status: 'applied', note: '' };
+    };
+
     let tempDir: string;
     let configPath: string;
     let credDir: string;
@@ -622,14 +633,14 @@ describe('OpenClaw Migrator', () => {
       fs.mkdirSync(credDir, { recursive: true });
     });
 
-    it('deletes credential files from credentials dir', () => {
+    it('deletes credential files from credentials dir', async () => {
       fs.writeFileSync(path.join(credDir, 'anthropic.json'), '{"api_key":"sk-test"}');
       fs.writeFileSync(path.join(credDir, 'xai.json'), '{"api_key":"xai-test"}');
 
-      const result = cleanupSources(configPath, credDir, [
+      const result = await cleanupSources(configPath, credDir, [
         { service: 'anthropic', key: 'api_key', source: 'credentials-dir.anthropic.json' },
         { service: 'xai', key: 'api_key', source: 'credentials-dir.xai.json' },
-      ]);
+      ], viaOpenClaw(configPath));
 
       expect(result.deleted).toHaveLength(2);
       expect(result.errors).toHaveLength(0);
@@ -637,7 +648,7 @@ describe('OpenClaw Migrator', () => {
       expect(fs.existsSync(path.join(credDir, 'xai.json'))).toBe(false);
     });
 
-    it('replaces config tokens with placeholder in openclaw.json', () => {
+    it('replaces config tokens with placeholder in openclaw.json', async () => {
       const config = {
         plugins: { entries: { 'aquaman-plugin': { enabled: true } } },
         channels: {
@@ -647,11 +658,11 @@ describe('OpenClaw Migrator', () => {
       };
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 
-      const result = cleanupSources(configPath, credDir, [
+      const result = await cleanupSources(configPath, credDir, [
         { service: 'telegram', key: 'bot_token', source: 'channels.telegram.accounts.mybot.botToken' },
         { service: 'slack', key: 'bot_token', source: 'channels.slack.accounts.ws1.botToken' },
         { service: 'slack', key: 'app_token', source: 'channels.slack.accounts.ws1.appToken' },
-      ]);
+      ], viaOpenClaw(configPath));
 
       expect(result.deleted).toHaveLength(3);
       expect(result.errors).toHaveLength(0);
@@ -664,7 +675,7 @@ describe('OpenClaw Migrator', () => {
       expect(updated.plugins.entries['aquaman-plugin'].enabled).toBe(true);
     });
 
-    it('handles mixed credential files and config tokens', () => {
+    it('handles mixed credential files and config tokens', async () => {
       fs.writeFileSync(path.join(credDir, 'xai.json'), '{"api_key":"xai-test"}');
       const config = {
         channels: {
@@ -673,10 +684,10 @@ describe('OpenClaw Migrator', () => {
       };
       fs.writeFileSync(configPath, JSON.stringify(config));
 
-      const result = cleanupSources(configPath, credDir, [
+      const result = await cleanupSources(configPath, credDir, [
         { service: 'xai', key: 'api_key', source: 'credentials-dir.xai.json' },
         { service: 'telegram', key: 'bot_token', source: 'channels.telegram.accounts.bot.botToken' },
-      ]);
+      ], viaOpenClaw(configPath));
 
       expect(result.deleted).toHaveLength(2);
       expect(result.errors).toHaveLength(0);
@@ -685,7 +696,7 @@ describe('OpenClaw Migrator', () => {
       expect(updated.channels.telegram.accounts.bot.botToken).toBe('aquaman-proxy-managed');
     });
 
-    it('replaces plugin config tokens with placeholder in openclaw.json', () => {
+    it('replaces plugin config tokens with placeholder in openclaw.json', async () => {
       const config = {
         plugins: {
           entries: {
@@ -698,9 +709,9 @@ describe('OpenClaw Migrator', () => {
       };
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 
-      const result = cleanupSources(configPath, credDir, [
+      const result = await cleanupSources(configPath, credDir, [
         { service: 'notion-skill', key: 'api_token', source: 'plugins.entries.notion-skill.config.apiToken' },
-      ]);
+      ], viaOpenClaw(configPath));
 
       expect(result.deleted).toHaveLength(1);
       expect(result.errors).toHaveLength(0);
@@ -711,17 +722,17 @@ describe('OpenClaw Migrator', () => {
       expect(updated.plugins.entries['aquaman-plugin'].enabled).toBe(true);
     });
 
-    it('returns empty result for no migrations', () => {
-      const result = cleanupSources(configPath, credDir, []);
+    it('returns empty result for no migrations', async () => {
+      const result = await cleanupSources(configPath, credDir, [], viaOpenClaw(configPath));
       expect(result.deleted).toHaveLength(0);
       expect(result.errors).toHaveLength(0);
     });
 
-    it('reports error when file deletion fails (already deleted)', () => {
+    it('reports error when file deletion fails (already deleted)', async () => {
       // File doesn't exist — cleanup should handle gracefully
-      const result = cleanupSources(configPath, credDir, [
+      const result = await cleanupSources(configPath, credDir, [
         { service: 'anthropic', key: 'api_key', source: 'credentials-dir.anthropic.json' },
-      ]);
+      ], viaOpenClaw(configPath));
 
       // Non-existent file is not an error (nothing to delete)
       expect(result.deleted).toHaveLength(0);

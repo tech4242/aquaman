@@ -1,6 +1,6 @@
 {
   "name": "aquaman",
-  "version": "0.21.1",
+  "version": "0.21.2",
   "private": true,
   "description": "aquaman: credential proxy for AI agents. No account, bring your own vault, runs locally.",
   "type": "module",
@@ -86,7 +86,8 @@
       "fast-uri": "^4.1.4"
     },
     "c8": {
-      "minimatch": "^11.0.1"
+      "minimatch": "^11.0.1",
+      "glob": "^14.0.2"
     }
   },
   "engines": {

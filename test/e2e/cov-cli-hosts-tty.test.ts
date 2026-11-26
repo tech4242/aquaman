@@ -15,6 +15,7 @@ import {
   createSandbox, baseConfig, runCli, runCliOnTty, findPython3, TEST_PASSWORD, type Sandbox,
 } from '../helpers/cov-cli-hosts.js';
 import { EncryptedFileStore } from '../../packages/proxy/src/core/credentials/store.js';
+import { installFakeOpenClaw } from '../helpers/fake-openclaw.js';
 
 const T = 120_000;
 const ENTER = '\r';
@@ -140,6 +141,7 @@ describe.skipIf(!findPython3())('aquaman prompts on a terminal (cli-hosts covera
 
     it('migrates on y, then removes the plaintext only when that is confirmed too', async () => {
       seed();
+      installFakeOpenClaw(sb.bin);
       const kept = await runCliOnTty(sb, ['openclaw', 'migrate', '--auto'], [
         ['Migrate these 1 credentials? (y/N): ', `y${ENTER}`],
         ['Remove plaintext originals? (y/N): ', `n${ENTER}`],
