@@ -301,8 +301,13 @@ jobs:
       - name: Download the published tarballs
         run: |
           mkdir assets
+          # A tarball URL asked for right after `npm publish` answers 404, and
+          # went on answering 404 for the following two and a half minutes
+          # (v0.21.1 and v0.21.2), while the same URL was fine ten minutes
+          # later. So the first request waits, and the retries cover ten minutes.
+          sleep 120
           for pkg in aquaman-proxy aquaman-plugin aquaman-coder; do
-            curl --fail --silent --show-error --location --retry 10 --retry-delay 15 --retry-all-errors \
+            curl --fail --silent --show-error --location --retry 40 --retry-delay 15 --retry-all-errors \
               -o "assets/$pkg-$VERSION.tgz" "https://registry.npmjs.org/$pkg/-/$pkg-$VERSION.tgz"
           done
           (cd assets && sha256sum ./*.tgz)
