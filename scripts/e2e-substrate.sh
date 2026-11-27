@@ -165,7 +165,10 @@ step "drive an actor through the gateway (this takes about five minutes)"
 mkdir -p internal/e2e/suites/aquamanprovider
 cp "$REPO_ROOT"/scripts/e2e-substrate/*.go internal/e2e/suites/aquamanprovider/
 driver=0
-AQM_VALUE="$VALUE" AQM_LATE_VALUE="$LATE_VALUE" AQM_ROTATED="$ROTATED_VALUE" AQM_NAMESPACE="$NS" \
+# Without CI in the environment: Substrate's runner then insists on a JUnit file and
+# switches to another test runner, for its own pipeline's bookkeeping. This script
+# counts the driver's checks itself, below.
+env -u CI AQM_VALUE="$VALUE" AQM_LATE_VALUE="$LATE_VALUE" AQM_ROTATED="$ROTATED_VALUE" AQM_NAMESPACE="$NS" \
   hack/run-e2e-kind.sh ./internal/e2e/suites/aquamanprovider -v -count=1 -timeout 30m -args --no-color >"$WORK/driver.log" 2>&1 || driver=$?
 grep -o 'AQM CHECK .*' "$WORK/driver.log" | sed -e 's/^AQM CHECK \([^:]*\): PASS: /PASS: \1: /' -e 's/^AQM CHECK \([^:]*\): FAIL: /FAIL: \1: /' || true
 [ "$driver" = "0" ] || fail "the driver failed (exit $driver)"
