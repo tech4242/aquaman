@@ -3976,7 +3976,7 @@ substrate
 
     const backend = config.credentials.backend;
     if (backend === 'bitwarden' || backend === 'keychain' || backend === 'keepassxc' || backend === 'keeper') {
-      note(`Backend ${backend} needs a person or a desktop session; in a cluster use vault, 1password with a service account, or encrypted-file`);
+      note(`Backend ${backend} needs a person or a desktop session; in a cluster use vault or encrypted-file`);
     }
 
     console.log('');
