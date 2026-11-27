@@ -2140,7 +2140,7 @@ settings and no permission prompt changes. Credentials are added later, by a per
     if (!configExists || options.force) {
       console.log('\nNext steps:');
       console.log('1. Add your API keys: aquaman credentials add anthropic api_key');
-      console.log('2. Start the proxy:   aquaman start');
+      console.log('2. Start the proxy:   aquaman daemon');
     }
   });
 
@@ -4168,7 +4168,7 @@ Example:
       }
       const routeKeys = routableKeys(def!);
       if (routeKeys.length === 0) {
-        out({ status: 'error', ref, error: `"${parsedRef.service}" does not take its credential in a request header or as HTTP basic auth, so a program cannot be routed to it`, fix: 'Drop --via-proxy' }, 1);
+        out({ status: 'error', ref, error: `"${parsedRef.service}" does not take its credential in a request header or as HTTP basic auth, and is not AWS (which the proxy signs), so a program cannot be routed to it`, fix: 'Drop --via-proxy' }, 1);
       }
       if (!routeKeys.includes(parsedRef.key)) {
         out({ status: 'error', ref, ...routeKeyMismatch(parsedRef.service, routeKeys, parsedRef.key, def!.authMode) }, 1);

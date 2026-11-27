@@ -2,7 +2,7 @@
 import Base from '../layouts/Base.astro';
 import '../styles/home.css';
 import Sprite from '../components/Sprite.astro';
-import { HOSTS, AGENT_PROMPT, shellHtml } from '../lib/hosts';
+import { HOSTS, HOST_GROUPS, AGENT_PROMPT, shellHtml } from '../lib/hosts';
 import { docUrl } from '../lib/links.mjs';
 import { SUMMARY, HOME_TITLE, packageVersion } from '../lib/site';
 
@@ -97,8 +97,15 @@ const scorecard = await scorecardScore();
         <fieldset class="hosts">
           <legend>Pick your host</legend>
           {HOSTS.map((h, i) => <input type="radio" name="host" id={`host-${h.id}`} checked={i === 0} />)}
-          <div class="tabs">
-            {HOSTS.map((h) => <label for={`host-${h.id}`}>{h.name}</label>)}
+          <div class="groups">
+            {HOST_GROUPS.map((g) => (
+              <div class="group">
+                <p class="cap">{g.name}</p>
+                <div class="tabs">
+                  {HOSTS.filter((h) => h.group === g.id).map((h) => <label for={`host-${h.id}`}>{h.name}</label>)}
+                </div>
+              </div>
+            ))}
           </div>
           {HOSTS.map((h) => (
             <div class="panel box" data-host={h.id}>
@@ -120,9 +127,9 @@ const scorecard = await scorecardScore();
         <p class="all-hosts">Every host's guide: {HOSTS.map((h, i) => <>{i > 0 && ', '}<a href={docUrl(h.guide)}>{h.name}</a></>)}. All of them in one file: <a href="/index.md">/index.md</a>. How the hosts differ: <a href={docUrl('how-it-fits')}>how it fits together</a>.</p>
         <style set:html={HOSTS.map((h) =>
           `#host-${h.id}:checked ~ .panel[data-host="${h.id}"]{display:block}` +
-          `#host-${h.id}:checked ~ .tabs label[for="host-${h.id}"]{background:var(--y);color:var(--ink)}` +
-          `#host-${h.id}:checked ~ .tabs label[for="host-${h.id}"]::before{content:"\\25B6  "}` +
-          `#host-${h.id}:focus-visible ~ .tabs label[for="host-${h.id}"]{outline:4px solid var(--c)}`).join('')} />
+          `#host-${h.id}:checked ~ .groups label[for="host-${h.id}"]{background:var(--y);color:var(--ink)}` +
+          `#host-${h.id}:checked ~ .groups label[for="host-${h.id}"]::before{content:"\\25B6  "}` +
+          `#host-${h.id}:focus-visible ~ .groups label[for="host-${h.id}"]{outline:4px solid var(--c)}`).join('')} />
       </div>
       <div class="dither" aria-hidden="true"></div>
     </section>
@@ -238,7 +245,7 @@ const openai = new OpenAI();</code></pre>
           <figure class="box dialog s2">
             <figcaption>You</figcaption>
             <div role="img" aria-label="A system dialog titled aquaman asking you to type the value for github/token, with Cancel and Store in vault choices">
-              <p>An agent is asking for a credential that is not in your vault.</p>
+              <p>An agent is asking aquaman for a credential that is not in your vault.</p>
               <p class="cred">github/token</p>
               <div class="field"><span class="dots">********************</span></div>
               <ul class="menu"><li class="go">Store in vault</li><li>Cancel</li></ul>

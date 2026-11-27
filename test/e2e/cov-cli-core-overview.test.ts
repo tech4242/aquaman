@@ -159,7 +159,7 @@ describe('cli-core: doctor, status, init, setup and the coder shim', () => {
       expect(r.stdout).toContain(`Created ${configFile()}`);
       expect(r.stdout).toContain(`Created ${path.join(sb.config, 'audit')}`);
       expect(r.stdout).toContain('1. Add your API keys: aquaman credentials add anthropic api_key');
-      expect(r.stdout).toContain('2. Start the proxy:   aquaman start');
+      expect(r.stdout).toContain('2. Start the proxy:   aquaman daemon');
       expect(fs.statSync(configFile()).mode & 0o777).toBe(0o600);
       expect(fs.statSync(path.join(sb.config, 'audit')).isDirectory()).toBe(true);
       const written = parseYaml(fs.readFileSync(configFile(), 'utf-8'));

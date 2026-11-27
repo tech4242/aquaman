@@ -111,7 +111,10 @@
 /* The sea floor */
 .floor { background: var(--ink); color: var(--foam); padding-bottom: 14rem; }
 .hosts > input { position: absolute; opacity: 0; pointer-events: none; }
-.hosts .tabs { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 0 0 2rem; }
+/* The picker: one row of tabs, in groups with a caption over each. */
+.hosts .groups { display: flex; flex-wrap: wrap; gap: 1.6rem 2.2rem; margin: 0 0 2rem; }
+.hosts .cap { font-family: var(--soft); font-weight: 700; font-size: 0.95rem; margin: 0 0 0.5rem; }
+.hosts .tabs { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 0; }
 .hosts .tabs label { font-family: var(--pixel); font-size: 0.66rem; border: var(--px) solid var(--foam); padding: 0.75rem 0.9rem; cursor: pointer; }
 .hosts .tabs label:hover { background: var(--deep); }
 .hosts .panel { display: none; max-width: 56rem; }

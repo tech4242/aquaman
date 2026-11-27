@@ -1446,7 +1446,7 @@ export class CredentialProxy {
     }
     const keys = routableKeys(serviceDef);
     if (keys.length === 0) {
-      refuse('route_unsupported', `"${service}" does not take its credential in a request header or as HTTP basic auth, so a program cannot be routed to it this way`, 'Bind the reference without --via-proxy');
+      refuse('route_unsupported', `"${service}" does not take its credential in a request header or as HTTP basic auth, and is not AWS (which the proxy signs), so a program cannot be routed to it this way`, 'Bind the reference without --via-proxy');
       return;
     }
     if (!keys.includes(key)) {
