@@ -20,7 +20,7 @@ The other packages are adapters that connect one kind of host to the daemon.
 | | Forward and inject | Resolve | Hand to the host |
 |---|---|---|---|
 | What happens | aquaman adds the key to the outgoing request | one command, or a host at startup, gets the key in its environment | the host asks for the key and injects it at its own egress |
-| Used by | [OpenClaw](https://aquaman.sh/docs/openclaw/) model providers and Telegram, [Hermes](https://aquaman.sh/docs/hermes/) (Anthropic and OpenAI keys), [your own app](https://aquaman.sh/docs/app-through-proxy/) | [Claude Code](https://aquaman.sh/docs/claude-code/) and [Codex](https://aquaman.sh/docs/codex/), Hermes project secrets | [NVIDIA OpenShell](https://aquaman.sh/docs/openshell/), [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/), [Agent Substrate](https://aquaman.sh/docs/agent-substrate/) |
+| Used by | [OpenClaw](https://aquaman.sh/docs/openclaw/) model keys and Telegram, [Hermes](https://aquaman.sh/docs/hermes/) model keys (Anthropic and OpenAI providers), [your own app](https://aquaman.sh/docs/app-through-proxy/) | [Claude Code](https://aquaman.sh/docs/claude-code/) and [Codex](https://aquaman.sh/docs/codex/), Hermes project secrets | [NVIDIA OpenShell](https://aquaman.sh/docs/openshell/), [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/), [Agent Substrate](https://aquaman.sh/docs/agent-substrate/) |
 | Who holds the key | aquaman only | that one process | the host, outside its sandbox |
 | Your vault as the source | yes | yes | yes |
 | Only what you set up for it | services on the proxied list | declared references | declared references, or grants for Agent Substrate |

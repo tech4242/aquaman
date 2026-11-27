@@ -245,14 +245,14 @@ Grants live in the ConfigMap (`substrate.provider.grants`: an atespace or one ac
 
 ## How It Works
 
-<img src="docs/assets/how-it-fits.svg" width="880" alt="Your vault at the top. Below it the aquaman-proxy daemon with four parts: vault backends and links, approval dialog, declared scope, audit log. It hands a key off in three ways. Forward and inject, used by OpenClaw model providers and Telegram, Hermes and your own app. Resolve, used by Claude Code, Codex and Hermes project secrets. Hand to the host, used by NVIDIA OpenShell, Docker Sandboxes and Agent Substrate.">
+<img src="docs/assets/how-it-fits.svg" width="880" alt="Your vault at the top. Below it the aquaman-proxy daemon with four parts: vault backends and links, approval dialog, declared scope, audit log. It hands a key off in three ways. Forward and inject, used by OpenClaw for model keys and Telegram, Hermes for model keys, and your own app. Resolve, used by Claude Code, Codex and Hermes project secrets. Hand to the host, used by NVIDIA OpenShell, Docker Sandboxes and Agent Substrate.">
 
 One daemon, `aquaman-proxy`, reads your vault and hands a key off in one of three ways. Which one applies depends on what the host lets aquaman do.
 
 | | Forward and inject | Resolve | Hand to the host |
 |---|---|---|---|
 | What happens | aquaman adds the key to the outgoing request | one command, or a host at startup, gets the key in its environment | the host asks for the key and injects it at its own egress |
-| Used by | OpenClaw model providers and Telegram (`aquaman-plugin`), Hermes (Anthropic and OpenAI keys), [your own app](https://aquaman.sh/docs/app-through-proxy/) | Claude Code and Codex (`aquaman-coder`), Hermes project secrets (`aquaman-hermes`) | NVIDIA OpenShell, Docker Sandboxes, Agent Substrate |
+| Used by | OpenClaw model keys and Telegram (`aquaman-plugin`), Hermes model keys (Anthropic and OpenAI providers), [your own app](https://aquaman.sh/docs/app-through-proxy/) | Claude Code and Codex (`aquaman-coder`), Hermes project secrets (`aquaman-hermes`) | NVIDIA OpenShell, Docker Sandboxes, Agent Substrate |
 | Who holds the key | aquaman only | that one process | the host, outside its sandbox |
 | Your vault as the source | yes | yes | yes |
 | Only what you set up for it | proxied services | declared references | declared references, or grants for Agent Substrate |

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" role="img" aria-labelledby="hf-t hf-d" shape-rendering="crispEdges">
 <title id="hf-t">How aquaman fits together</title>
-<desc id="hf-d">Your vault is at the top. The aquaman-proxy daemon reads your keys from it, and has four parts: vault backends and links, the approval dialog, the declared scope and the audit log. It hands a key off in three ways. Forward and inject: aquaman adds the key to the request and checks your method and path rules; used by OpenClaw model providers and Telegram through aquaman-plugin, by Hermes for Anthropic and OpenAI keys, and by your own app through aquaman-coder bind --via-proxy. Resolve: one command, or a host at startup, gets the key in its environment; used by Claude Code and Codex through aquaman-coder and by Hermes project secrets through aquaman-hermes. Hand to the host: the host asks aquaman for the key and injects it itself; used by NVIDIA OpenShell, Docker Sandboxes and Agent Substrate.</desc>
+<desc id="hf-d">Your vault is at the top. The aquaman-proxy daemon reads your keys from it, and has four parts: vault backends and links, the approval dialog, the declared scope and the audit log. It hands a key off in three ways. Forward and inject: aquaman adds the key to the request and checks your method and path rules; used by OpenClaw for model keys and Telegram through aquaman-plugin, by Hermes for model keys, and by your own app through aquaman-coder bind --via-proxy. Resolve: one command, or a host at startup, gets the key in its environment; used by Claude Code and Codex through aquaman-coder and by Hermes project secrets through aquaman-hermes. Hand to the host: the host asks aquaman for the key and injects it itself; used by NVIDIA OpenShell, Docker Sandboxes and Agent Substrate.</desc>
 <style>
 .s{font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;fill:#0b2a3a}
 .m{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;fill:#0b2a3a}
@@ -57,9 +57,9 @@ text{shape-rendering:auto}
 <text class="s b f" x="76" y="433" font-size="15">Forward and inject</text>
 <text class="s" x="76" y="470" font-size="13">aquaman adds the key to the request</text>
 <text class="s" x="76" y="488" font-size="13">and checks your method and path rules.</text>
-<text class="s b" x="76" y="518" font-size="13.5">OpenClaw models and Telegram</text>
+<text class="s b" x="76" y="518" font-size="13.5">OpenClaw: model keys and Telegram</text>
 <text class="m" x="76" y="535" font-size="12">aquaman-plugin</text>
-<text class="s b" x="76" y="562" font-size="13.5">Hermes: Anthropic, OpenAI</text>
+<text class="s b" x="76" y="562" font-size="13.5">Hermes: model keys</text>
 <text class="m" x="76" y="579" font-size="12">aquaman hermes setup</text>
 <text class="s b" x="76" y="606" font-size="13.5">Your own app or SDK</text>
 <text class="m" x="76" y="623" font-size="12">aquaman-coder bind --via-proxy</text>

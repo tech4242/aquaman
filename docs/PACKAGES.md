@@ -4,13 +4,13 @@ Aquaman is a monorepo with four packages. Each has a sharp, named role. We keep 
 
 ## How the packages fit together
 
-<img src="assets/how-it-fits.svg" width="880" alt="Your vault at the top. Below it the aquaman-proxy daemon with four parts: vault backends and links, approval dialog, declared scope, audit log. It hands a key off in three ways. Forward and inject, used by OpenClaw model providers and Telegram, Hermes and your own app. Resolve, used by Claude Code, Codex and Hermes project secrets. Hand to the host, used by NVIDIA OpenShell, Docker Sandboxes and Agent Substrate.">
+<img src="assets/how-it-fits.svg" width="880" alt="Your vault at the top. Below it the aquaman-proxy daemon with four parts: vault backends and links, approval dialog, declared scope, audit log. It hands a key off in three ways. Forward and inject, used by OpenClaw for model keys and Telegram, Hermes for model keys, and your own app. Resolve, used by Claude Code, Codex and Hermes project secrets. Hand to the host, used by NVIDIA OpenShell, Docker Sandboxes and Agent Substrate.">
 
 `aquaman-proxy` is the core: it is the only package that reads the vault, shows the approval dialog, checks the declared scope and writes the audit log. The other packages are adapters that connect one kind of host to it. A key leaves the daemon in one of three ways, and every integration is one of them:
 
 | Hand-off | In the daemon | Who uses it | Who holds the key |
 |---|---|---|---|
-| **Forward and inject** | the two listeners in `daemon.ts`; request policy applies | `aquaman-plugin` (OpenClaw model providers and Telegram), `aquaman hermes setup` (Hermes, Anthropic and OpenAI keys), `aquaman-coder bind --via-proxy` (an app through `/broker/route`) | the daemon only |
+| **Forward and inject** | the two listeners in `daemon.ts`; request policy applies | `aquaman-plugin` (OpenClaw model keys and Telegram), `aquaman hermes setup` (Hermes model keys, Anthropic and OpenAI providers), `aquaman-coder bind --via-proxy` (an app through `/broker/route`) | the daemon only |
 | **Resolve** | `POST /broker/resolve`, limited by `broker-scope.ts` | `aquaman-coder exec` and its hooks, the `aquaman-hermes` secret source, `aquaman get` behind a host's helper command | the process that asked |
 | **Hand to the host** | the OpenShell credential driver (`src/openshell/`), the Agent Substrate credential provider (`src/substrate/`), and `aquaman get` behind `sbx secret set --command` | NVIDIA OpenShell, Agent Substrate, Docker Sandboxes | the host's injector, outside its sandbox |
 

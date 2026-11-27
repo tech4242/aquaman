@@ -40,7 +40,7 @@ const software = {
 const jsonLd = [software, { '@context': 'https://schema.org', '@type': 'WebSite', name: 'aquaman', url: Astro.site!.href }];
 const description =
   'Give Claude Code, Codex and other AI agents an API key without handing it over. Open source, runs on your machine, keeps keys in the vault you already use.';
-import { routeDiagramHtml, overviewDiagramHtml } from '../lib/diagram.mjs';
+import { routeDiagramHtml } from '../lib/diagram.mjs';
 import { scorecardScore, SCORECARD_URL } from '../lib/scorecard';
 
 const scorecard = await scorecardScore();
@@ -117,7 +117,7 @@ const scorecard = await scorecardScore();
             </div>
           ))}
         </fieldset>
-        <p class="all-hosts">Every host's guide: {HOSTS.map((h, i) => <>{i > 0 && ', '}<a href={docUrl(h.guide)}>{h.name}</a></>)}. All of them in one file: <a href="/index.md">/index.md</a>.</p>
+        <p class="all-hosts">Every host's guide: {HOSTS.map((h, i) => <>{i > 0 && ', '}<a href={docUrl(h.guide)}>{h.name}</a></>)}. All of them in one file: <a href="/index.md">/index.md</a>. How the hosts differ: <a href={docUrl('how-it-fits')}>how it fits together</a>.</p>
         <style set:html={HOSTS.map((h) =>
           `#host-${h.id}:checked ~ .panel[data-host="${h.id}"]{display:block}` +
           `#host-${h.id}:checked ~ .tabs label[for="host-${h.id}"]{background:var(--y);color:var(--ink)}` +
@@ -186,11 +186,6 @@ const scorecard = await scorecardScore();
 <span class="prompt">[CREDENTIAL_ACCESS] </span>github read OK
 <span class="prompt">&gt; </span>aquaman audit verify</code></pre>
           </article>
-        </div>
-        <div class="fits" id="how-it-fits">
-          <h3>One daemon, three ways to hand a key off</h3>
-          <p class="big">Which way applies depends on what your agent host lets aquaman do. Where a request passes through aquaman, your policy rules apply to it. Where the host injects the key itself, aquaman decides who gets it and records it.</p>
-          <div set:html={overviewDiagramHtml()} />
         </div>
       </div>
       <div class="dither" aria-hidden="true"></div>

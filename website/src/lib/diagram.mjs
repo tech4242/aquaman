@@ -29,7 +29,7 @@ const HANDOFFS = [
   {
     name: 'Forward and inject',
     what: 'aquaman adds the key to the request and checks your method and path rules.',
-    users: [['OpenClaw models and Telegram', 'aquaman-plugin'], ['Hermes: Anthropic, OpenAI', 'aquaman hermes setup'], ['Your own app or SDK', 'aquaman-coder bind --via-proxy']],
+    users: [['OpenClaw: model keys and Telegram', 'aquaman-plugin'], ['Hermes: model keys', 'aquaman hermes setup'], ['Your own app or SDK', 'aquaman-coder bind --via-proxy']],
     holds: 'The agent or app never holds the key.',
   },
   {
@@ -51,7 +51,8 @@ const HANDOFFS = [
  * leaves it. The same picture as docs/assets/how-it-fits.svg, which GitHub
  * shows in the README; here it is HTML, so the text is real text and the
  * columns stack on a narrow screen. A guide places it with
- * `<!-- diagram: overview -->`.
+ * `<!-- diagram: overview -->`. It is not on the home page, which tells the
+ * same in its own sections.
  */
 export function overviewDiagramHtml() {
   const parts = [['Vault backends, links', 'eight stores, existing items'], ['Approval dialog', 'a person decides'], ['Declared scope', 'only named references'], ['Audit log', 'hash-chained, every use']];
