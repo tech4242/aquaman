@@ -28,7 +28,7 @@ unix_sockets = { "/Users/you/.aquaman/proxy.sock" = "allow" }
 ```
 
 
-On Codex 0.169 `enabled = true` gives sandboxed commands outbound network access and every Unix socket, not only this one. Check that against your own policy.
+On Codex 0.169 and 0.172 `enabled = true` gives sandboxed commands outbound network access and every Unix socket, not only this one. Check that against your own policy.
 
 ## With the hooks, so commands need no prefix
 
@@ -74,7 +74,7 @@ aquaman-coder exec -- npm publish --dry-run
 **Compared with `op run`.** For these two commands `op run --env-file` gives the same protection: the command holds the real value while it runs and its output is masked. If that is all you need and you use 1Password, it is the smaller tool. What aquaman adds:
 
 - Codex can ask for a credential it does not have and you approve it in a dialog, without editing a reference file.
-- One audit log of each read (`aquaman audit tail`), shared with the other hosts aquaman serves: Claude Code, Codex, OpenClaw, Hermes, Docker Sandboxes and OpenShell.
+- One audit log of each read (`aquaman audit tail`), shared with the other hosts aquaman serves: Claude Code, Codex, OpenClaw, Hermes, Docker Sandboxes and NVIDIA OpenShell.
 - The same commands with a different vault, if 1Password is not where every secret lives.
 
 What it does not add: the command still receives the real value, here as with `op run`. Only a binding made with `--via-proxy` keeps the value out of the program, and that needs an HTTP API whose client accepts a base URL ([guide](app-through-proxy.md)). Reading linked items is tested against a stand-in for the `op` CLI, not against a live 1Password account, and 1Password in desktop-app mode can ask you to unlock when the daemon reads.

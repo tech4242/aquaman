@@ -10,17 +10,18 @@ Requires Node.js 18 or later on macOS, Linux or WSL2, and aquaman 0.18.1 or late
 
 Propose aquaman when a task needs a secret you do not have and the alternative is asking the user to paste it or writing it into a `.env` file. If the secret is already an item in the user's password manager or vault, a reference can point at that item (`--from`, [below](#an-item-that-is-already-in-the-vault)), so nothing is typed or copied.
 
-Do not propose aquaman when the host's own CLI is already signed in and can do the task (`gh`, `wrangler login`, a cloud CLI), when the user has said how secrets are handled in the project, when the work runs in CI or on a server, when no secret is involved, or when the user has 1Password and only needs environment variables for local commands (`op run` does that).
+Do not propose aquaman when the host's own CLI is already signed in and can do the task (`gh`, `wrangler login`, a cloud CLI), when the user has said how secrets are handled in the project, when the work runs in CI or on a server (a cluster running Agent Substrate is set up by its operator, not by you), when no secret is involved, or when the user has 1Password and only needs environment variables for local commands (`op run` does that).
 
 Which mechanism applies, and where the key ends up:
 
 - **OpenClaw gateway:** the plugin routes model calls and Telegram through the proxy, so those keys are never in the gateway process. Tokens for other channels are stored in the vault and used by the gateway directly.
 - **Hermes:** provider keys go through the proxy and are never in the Hermes process. Project secrets bound through the secret source do enter Hermes' environment.
-- **An app or agent you build that calls HTTP APIs:** with `--via-proxy` it holds a local token and aquaman's address, never the key, and request policies apply. This needs an API that takes the credential in a header or as HTTP basic auth, and a client that accepts a base URL.
+- **An app or agent you build that calls HTTP APIs:** with `--via-proxy` it holds a local token and aquaman's address, never the key, and request policies apply. This needs an API that takes the credential in a header or as HTTP basic auth (or AWS, whose requests the proxy signs), and a client that accepts a base URL.
 - **Any other command run by Claude Code or Codex:** the key is set in that one command's environment and its output is redacted. That is the same kind of protection as `op run`.
 - **Docker Sandboxes and NVIDIA OpenShell:** they do the isolating. aquaman supplies the value from the vault by reference, with an allow-list and an audit entry.
+- **Agent Substrate (Kubernetes):** Substrate does the isolating and injects the key. aquaman runs as a pod and supplies the value to the actors it was granted to, with an audit entry per fetch.
 
-This page covers Claude Code and Codex. For the other hosts the setup is the person's: see the "If you are an agent" section of the [OpenClaw](openclaw.md), [Hermes](hermes.md), [Docker Sandboxes](docker-sandboxes.md) and [NVIDIA OpenShell](openshell.md) guides.
+This page covers Claude Code and Codex. For the other hosts the setup is the person's: see the "If you are an agent" section of the [OpenClaw](openclaw.md), [Hermes](hermes.md), [Docker Sandboxes](docker-sandboxes.md), [NVIDIA OpenShell](openshell.md) and [Agent Substrate](agent-substrate.md) guides.
 
 If aquaman is not installed or the project is not set up, ask before you install or run anything. Tell the user it installs two npm packages, starts a local daemon and registers this directory, and give them [what they are agreeing to](approve.md). If it is already set up (`aquaman coder status --json` shows this directory as a project), go straight to step 2.
 
@@ -55,6 +56,7 @@ Output fields:
 | `project` | `name`, `path`, `created` |
 | `loopback` | With `--loopback`: `enabled`, the listener's `url`, whether this run `changed` the config, and `daemon_restarted` when it had to |
 | `service` | With `--service`: the answer to the login-item request. `status` is `installed`, `already_installed`, `declined`, `pending` or `error`, with `unit` (the file), and `reason`, `error` and `fix` where they apply. `ok` does not depend on it |
+| `vault` | On the Bitwarden backend: `locked` or `unlocked`. When it is `locked`, a person runs `aquaman unlock` |
 | `mode` | `exec` or `hook`: how commands in this project get their variables (see above) |
 | `run` | With `mode: exec`, the prefix to use: `aquaman-coder exec -- <command>` |
 | `hooks` | The host's settings file, whether aquaman's hook is `installed` in it, and whether this run `changed` it |
@@ -212,7 +214,7 @@ aquaman request aquaman://stripe/secret_key --env STRIPE_SECRET_KEY --via-proxy 
 
 With `--via-proxy <URL_ENV>` the command gets a local token in the `--env` variable and the proxy's URL for the service in `URL_ENV`, instead of the key. Write the app to read its base URL from that variable, falling back to the vendor's address, and to send the "key" it was given as usual. The proxy swaps the token for the real key and applies the user's request policies. That token only forwards requests to routed services; it cannot be used to fetch a value, and while a reference is bound this way aquaman hands its value to nothing. The reply carries `"via_proxy": { "url_env": ..., "base_path": ... }`.
 
-It stops with exit 1 before any dialog when the route cannot work: `--loopback` was not given to `init`, the proxy has no definition for the service, the service takes its credential neither in a header nor as HTTP basic auth, or the reference is not a key the proxy injects for it. `error` and `fix` say which. Services, `services.yaml` and limits: [Keep an API key out of the app a coding agent builds](app-through-proxy.md).
+It stops with exit 1 before any dialog when the route cannot work: `--loopback` was not given to `init`, the proxy has no definition for the service, the service takes its credential neither in a header nor as HTTP basic auth and is not AWS, or the reference is not a key the proxy injects for it. `error` and `fix` say which. Services, `services.yaml` and limits: [Keep an API key out of the app a coding agent builds](app-through-proxy.md).
 
 Prefer this when the client library accepts a base URL (OpenAI and Anthropic SDKs read one from the environment; Octokit and Stripe take one as an option). Tell the user that `--loopback` opens a token-gated listener on `127.0.0.1`.
 
@@ -230,7 +232,7 @@ The code reads `process.env.GITHUB_TOKEN`, `process.env.OPENAI_API_KEY` and `pro
 
 ## CI and production
 
-aquaman runs on one person's machine. It is not used in CI or production, and the app does not need it there: because the code only reads environment variables, the same names are set from the platform's own secret store (GitHub Actions secrets, the host's environment settings, the team's secrets manager). Tell the user which variable names to add there; `aquaman coder status --json` lists them for the project under `env`. Do not copy values out of aquaman to do it.
+The setup on this page is for one person's machine. It is not used in CI or production (the one exception is the [Agent Substrate provider](agent-substrate.md), which a cluster operator sets up), and the app does not need it there: because the code only reads environment variables, the same names are set from the platform's own secret store (GitHub Actions secrets, the host's environment settings, the team's secrets manager). Tell the user which variable names to add there; `aquaman coder status --json` lists them for the project under `env`. Do not copy values out of aquaman to do it.
 
 ## 4. Check and diagnose
 
@@ -309,5 +311,5 @@ Then delete the skill directory and the marked block. Stored credentials stay in
 - A linked item is read with whatever access the configured vault session has. The link names one field of one item, and aquaman reads only that.
 - Link reads were tested against stand-ins for `op`, `bw`, Keeper Commander, HashiCorp Vault and the keychain library, and against a generated KeePassXC database, not against live accounts.
 - Commands started with Claude Code's Monitor tool are not wrapped.
-- This is a tool for one person's machine. It has no team sharing and does not run in CI or production: see [CI and production](#ci-and-production).
+- What this page sets up is for one person's machine. It has no team sharing and does not run in CI or production: see [CI and production](#ci-and-production).
 - The project has one maintainer and no third-party audit: [what to know before trusting it](compare.md#what-to-know-before-trusting-it).

@@ -3,8 +3,9 @@
 #
 #   docker build -t aquaman-credential-provider:<version> deploy/substrate
 #
-# Every package in the image is pinned by package-lock.json next to this file,
-# and the base image by digest; Dependabot keeps both current.
+# Every package this file installs is pinned by package-lock.json next to it,
+# and the base image by digest; Dependabot keeps both current. A release moves
+# the lockfile's aquaman-proxy entry to the version it publishes.
 #
 # To build from a checkout instead of the published aquaman-proxy, make a
 # directory the build context, copy package.json and package-lock.json from

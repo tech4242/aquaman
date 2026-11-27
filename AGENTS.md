@@ -2,20 +2,19 @@
 
 ## What this is
 
-Credential isolation for AI agents. API keys, channel tokens and `.env`-grade secrets never enter the agent's process. They live in a vault backend (Keychain, 1Password, HashiCorp Vault, Bitwarden, Keeper, KeePassXC, encrypted-file, systemd-creds) and a separate proxy injects them at egress. A compromised agent holds a marker, not a key.
+Credential isolation for AI agents. API keys, channel tokens and `.env`-grade secrets stay out of the agent's process. They live in a vault backend (Keychain, 1Password, HashiCorp Vault, Bitwarden, Keeper, KeePassXC, encrypted-file, systemd-creds) and a separate daemon injects them at egress, sets them for one command, or hands them to a sandbox host that injects them. On the proxy path a compromised agent holds a marker, not a key.
 
 A key leaves the daemon in one of three ways, and every integration is one of them (diagram: `docs/assets/how-it-fits.svg`): **forward and inject** (the request passes through the proxy, the only way with method and path policy), **resolve** (`/broker/resolve` hands the value to one process), **hand to the host** (a sandbox host asks for the value and injects it itself). Public text calls aquaman a credential broker; "credential proxy" stays for the proxy itself.
 
-Five integration paths:
+Five integration paths with code of their own (the public pages list seven hosts: Claude Code and Codex share the coder path, and Docker Sandboxes needs no code, it runs `aquaman get`; an app routed with `--via-proxy` is part of the coder path):
 
 1. **OpenClaw Gateway** (`aquaman-plugin`, npm + ClawHub). LLM providers and channel credentials, 27 builtin services across 6 auth modes.
 2. **Coding agents** (`aquaman-coder`, v0.12.0+, npm). Claude Code, and Codex since v0.16.0. Per-tool-call materialization through `/broker/resolve`.
 3. **Hermes** (`aquaman-hermes`, v0.13.0+, PyPI). A Python host with no transport hook, so isolation is proxy-side: a token-gated loopback listener plus (v0.14.0+) an `aquaman` secret source for project secrets.
 4. **OpenShell** (v0.17.0+, no extra package; the project moved from NVIDIA to `ai-openshell/openshell`). `aquaman daemon` serves OpenShell's external credential driver protocol; OpenShell isolates, aquaman sources, scopes and audits.
-
 5. **Agent Substrate** (v0.22.0+, no extra package, runs as a pod). `aquaman daemon` serves Substrate's credential provider API over mutual TLS; Substrate isolates and injects, aquaman sources, decides per actor and audits.
 
-Target platform: Unix-like (Linux, macOS, WSL2).
+Target platform: Unix-like (Linux, macOS, WSL2), and a Linux container for the Agent Substrate provider.
 
 We chose process isolation over detection. Detection-based tools redact after the credential is already in agent memory; here it never arrives.
 
@@ -24,11 +23,13 @@ We chose process isolation over detection. Detection-based tools redact after th
 ```
 packages/
 ├── proxy/    # aquaman-proxy: daemon, broker, vault, audit, policy, CLI.
-│             #   The canonical core. Hermes loopback listener lives here too.
+│             #   The canonical core. The loopback listener, the OpenShell
+│             #   driver and the Agent Substrate provider live here too.
 ├── plugin/   # aquaman-plugin: OpenClaw adapter (frozen scope)
 ├── coder/    # aquaman-coder: coding-agent adapter
 └── hermes/   # aquaman-hermes: Python plugin (PyPI). Sugar only; the
               #   isolation is proxy-side. Do NOT put isolation logic here.
+deploy/substrate/   # image recipe, lockfile and manifest for the Substrate provider
 ```
 
 Import rules (`docs/PACKAGES.md`): plugin → proxy ✓, coder → proxy ✓, plugin ↔ coder ✗, proxy → plugin/coder ✗. Hermes talks to the proxy only over the loopback wire contract, no code import either way.
@@ -40,7 +41,7 @@ Coder's CLI is spawned from source in tests, so anything it imports at runtime m
 | Path | Transport | Access control |
 |---|---|---|
 | Coding agents, any client that can dial a socket | Unix socket `~/.aquaman/proxy.sock` | File permissions (`0600`) |
-| Hermes (v0.13.0+), OpenClaw model traffic (v0.15.0+) | Loopback TCP `127.0.0.1:<port>` | Per-install token, constant-time check, loopback bind |
+| Hermes (v0.13.0+), OpenClaw model and Telegram traffic (v0.15.0+) | Loopback TCP `127.0.0.1:<port>` | Per-install token, constant-time check, loopback bind |
 | Agent Substrate egress gateway (v0.22.0+) | TCP, gRPC over TLS 1.3 | Client certificate from one authority, and exactly the gateway's SPIFFE identity |
 
 Hermes and OpenClaw each build their own HTTP client and cannot dial a socket. The token is a capability to reach the local proxy, not a credential: generated per install, stored in `~/.aquaman/config.yaml` (`0600`), stripped by the proxy before the real key is injected. Any local process can reach a loopback port, including other users, where the socket's `0600` shuts them out, so the listener stays off until `aquaman hermes setup` or `aquaman openclaw setup` turns it on.
@@ -51,7 +52,7 @@ Hermes and OpenClaw each build their own HTTP client and cannot dial a socket. T
 2. Policy check on method + remaining path. Denied returns 403 before any credential lookup.
 3. Vault lookup for `<service>/<credentialKey>`.
 4. Strip any inbound auth header or token, inject the real credential per the service's `authMode`:
-   - `header`: providers (Anthropic, OpenAI, GitHub, xAI, Cloudflare AI, Mistral, Hugging Face, ElevenLabs) and channels (Slack, Discord, Matrix, Mattermost, LINE, Twitch, Telnyx, Zalo)
+   - `header`: providers (Anthropic, OpenAI, GitHub, xAI, Cloudflare AI, Mistral, Hugging Face, ElevenLabs, Stripe) and channels (Slack, Discord, Matrix, Mattermost, LINE, Twitch, Telnyx, Zalo)
    - `url-path`: `/bot<TOKEN>/method` (Telegram)
    - `basic`: Twilio, BlueBubbles, Nextcloud Talk
    - `oauth`: client-credentials exchange (MS Teams, Feishu, Google Chat)
@@ -59,7 +60,7 @@ Hermes and OpenClaw each build their own HTTP client and cannot dial a socket. T
    - `none`: at-rest storage only, traffic rejected (Nostr, Tlon)
 5. Forward upstream, append a hash-chained audit entry, pipe the response back.
 
-The audit entry gates what is handed out. `/broker/resolve` (so `aquaman get` and `aquaman-coder exec`) and the OpenShell driver's Resolve write the entry first and refuse with `audit_unavailable` and a fix if the write fails. A forwarded request has already gone upstream by the time its outcome is known, so there the response is withheld (500 `audit_unavailable`) rather than the request. Refusals and errors hand nothing out and stand even when their own entry cannot be written. An audit failure is printed as `AUDIT FAILURE: ...` on stderr and never takes the daemon down: `onRequest` must return the logger's promise, and `recordRequest()` in `daemon.ts` is the only caller. Conformance: `test/compliance/audit-fail-closed.test.ts`.
+The audit entry gates what is handed out. `/broker/resolve` (so `aquaman get` and `aquaman-coder exec`) and the OpenShell driver's Resolve write the entry first and refuse with `audit_unavailable` and a fix if the write fails; the Agent Substrate provider's FetchSecret does the same and answers `Unavailable`. A forwarded request has already gone upstream by the time its outcome is known, so there the response is withheld (500 `audit_unavailable`) rather than the request. Refusals and errors hand nothing out and stand even when their own entry cannot be written. An audit failure is printed as `AUDIT FAILURE: ...` on stderr and never takes the daemon down: `onRequest` must return the logger's promise, and `recordRequest()` in `daemon.ts` is the only caller. Conformance: `test/compliance/audit-fail-closed.test.ts`.
 
 The request target is read once, by `parseRequestTarget()` in `packages/proxy/src/request-target.ts`, and that one reading supplies the service name, the path policy sees and the path sent upstream. It refuses (400) anything two parsers could read differently: backslashes, `.`/`..` segments in any encoding, encoded backslashes and control characters, double-encoded separators, malformed escapes, fragments. The query is split off and never part of policy matching. Rules for anyone touching this path:
 
@@ -259,7 +260,7 @@ Two commands exist so an agent can set aquaman up and obtain credentials without
   - `url_env` and new binding names cannot be loader variables (`PATH`, `LD_*`, `DYLD_*`, `NODE_OPTIONS`, proxies: `isLoaderEnvName()`); `ROUTE_BASE_PATH` refuses dot segments.
   - Conformance: `test/compliance/app-route.test.ts`. Stripe is a builtin since this change; the plugin's own host list is not extended.
 - **`aquaman-coder exec --raw` needs a terminal on stdout.** With `--no-hooks` the agent composes the `exec` command itself, and unredacted output captured by a shell tool is the value in the transcript. In exec mode the user's deny and ask rules also do not see the command behind the prefix (there is no hook to add the permission tail); the docs and the skill say so and tell the agent not to use the prefix around a rule.
-- `aquaman request <ref> [--env NAME]` posts to `POST /broker/request` on the daemon. The daemon, not the CLI, shows the dialog (`packages/proxy/src/credential-prompt.ts`: `/usr/bin/osascript` on macOS, `zenity` on Linux with a desktop session, both by absolute path with a fixed environment and the message passed as an argument, never as script text). The value goes from the dialog into the vault and the ref is added to `broker.allowedRefs`. Statuses: `ready`, `stored`, `approved`, `declined`, `pending`; exit codes 0, 0, 0, 2, 3, 4 when the daemon cannot take the request, and 1 for a wrong command. The dialog waits 90 seconds by default (`--timeout`, clamped to 10-600 by the daemon), which is under the two minutes Claude Code allows a Bash call.
+- `aquaman request <ref> [--env NAME]` posts to `POST /broker/request` on the daemon. The daemon, not the CLI, shows the dialog (`packages/proxy/src/credential-prompt.ts`: `/usr/bin/osascript` on macOS, `zenity` on Linux with a desktop session, both by absolute path with a fixed environment and the message passed as an argument, never as script text). The value goes from the dialog into the vault and the ref is added to `broker.allowedRefs`. Statuses: `ready`, `stored`, `approved`, `linked`, `declined`, `pending`; exit codes 0, 0, 0, 0, 2, 3, 4 when the daemon cannot take the request, and 1 for a wrong command. The dialog waits 90 seconds by default (`--timeout`, clamped to 10-600 by the daemon), which is under the two minutes Claude Code allows a Bash call.
 - Rules for the endpoint: it never returns a value and never replaces a stored one (checked again after the dialog closes); Unix socket only; off without a broker scope, so OpenClaw-hosted proxies answer `broker_disabled`; one dialog at a time, at most six per ten minutes, and a declined ref is not asked about again for ten minutes; every dialog outcome is audited (`rotate`; a `ready` answer and 4xx refusals are not). A `declined` reply carries no `fix`: a command that completes what the person refused must not be handed back.
 - The dialog says what a caller can obtain once the person agrees, and it differs by request (`CONSEQUENCE` in `credential-prompt.ts`): an ordinary request ends with the ref declared, so the dialog says commands in the project are given the value and other software running as the user can ask for it; a `routed: true` request ends with the value stored and not declared, so it says the app gets a local token and the proxy adds the key. Never write a sentence there that is false for the case it is shown in. Conformance: `test/compliance/owasp-agentic/asi09-human-in-the-loop.test.ts` compares each dialog with what `/broker/resolve` then does.
 - The dialog is where a person decides, and the caller chooses the ref and the `project` string. `displayText()` reduces caller text to one bounded line (control and format characters, bidi overrides, U+2028/2029 and backslashes removed), service and key are capped at 64 characters, and the reported lines come last, after aquaman's own wording (the vault item of a link request, shown whole, then the project). Do not move caller text above the fixed sentences. zenity 3.44 (checked in a container): `--entry` swallows a single `_` and turns `\n` into a newline, so entry text doubles underscores; `--question --no-markup` shows both literally.
@@ -331,7 +332,7 @@ A process that writes the audit log (`daemon`, `openclaw start`, `openclaw plugi
 - The anchor is written at most once per `audit.anchorIntervalSeconds` while entries arrive (default 60; 900 for `1password`, `bitwarden`, `keeper`, where a write can prompt; `0` is off), at once after pruning raised `from`, never while idle, and once more at SIGINT/SIGTERM, where `stop()` waits 5 seconds at most and prints `AUDIT FAILURE:` if the store did not answer. It only moves forward: each write first reads the stored anchor from the backend (`CachingStore.getFresh()`, past the daemon's cache), skips when the stored sequence is not lower, and keeps the higher `from`. A failed write prints `AUDIT FAILURE:` and is retried; it never fails a request.
 - At start, a log that is behind its anchor, differs from it or begins later than its `from` prints `AUDIT FAILURE:` and anchoring pauses, so the finding is not overwritten. `aquaman audit accept` (terminal, typed yes, no proxy running) sets the anchor to the log as it is, with `from` at the first entry on disk, and records the reset.
 - `aquaman audit verify` reads the vault: a vault it cannot read fails the check unless `--chain-only`. A log with no anchor yet passes as "not anchored yet".
-- The reserved service holds the anchor and the link approvals (`aquaman_internal/link_approvals`). It is one check, `isReservedService()` in `core/credentials/reserved.ts` (re-exported by `broker-scope.ts`), called by the scope loaders and `check()`, the four `/broker/*` handlers, forwarding, the OpenShell driver, `credentials add|delete`, `broker allow|revoke`, link names, `listCredentials()` (which hides both) and the OpenClaw migration (`unstorableServiceReason()` in `migration/openclaw-migrator.ts`: a plugin id from `openclaw.json` that is reserved or is not a service name is skipped and reported, by `openclaw migrate --auto` and by the migration `openclaw setup` runs). A new entry point that takes a service name must call it. Conformance: `test/compliance/audit-anchor-reserved.test.ts`.
+- The reserved service holds the anchor and the link approvals (`aquaman_internal/link_approvals`). It is one check, `isReservedService()` in `core/credentials/reserved.ts` (re-exported by `broker-scope.ts`), called by the scope loaders and `check()`, the four `/broker/*` handlers, forwarding, the OpenShell driver, the Agent Substrate provider, `credentials add|delete`, `broker allow|revoke`, link names, `listCredentials()` (which hides both) and the OpenClaw migration (`unstorableServiceReason()` in `migration/openclaw-migrator.ts`: a plugin id from `openclaw.json` that is reserved or is not a service name is skipped and reported, by `openclaw migrate --auto` and by the migration `openclaw setup` runs). A new entry point that takes a service name must call it. Conformance: `test/compliance/audit-anchor-reserved.test.ts`.
 - Tests: `test/unit/audit-log-shared.test.ts` (two loggers on one directory, readers, the lock, what is not followed, the cost of a write), `test/e2e/audit-log-processes.test.ts` (two real writer processes and a reader), `test/unit/audit-anchor-from.test.ts`. Not covered by a test: two processes that find the same abandoned lock in the same instant can both take it.
 
 ## Hermes integration
@@ -411,15 +412,15 @@ Agent Substrate (agent-substrate/substrate, a Kubernetes runtime for sandboxed a
 
 ## CLI shape
 
-Run `aquaman --help` (and `aquaman <namespace> --help`) rather than duplicating the surface here. The shape: vault-level commands at the top, then `openclaw`, `coder` and `hermes` namespaces, with `setup`/`doctor`/`status` at every level (top-level is an overview, namespaced goes deep). Doctor exits 1 if any check fails.
+Run `aquaman --help` (and `aquaman <namespace> --help`) rather than duplicating the surface here. The shape: vault-level commands at the top, then `openclaw`, `coder` and `hermes` namespaces, with `setup`/`doctor`/`status` at every level, and `openshell` (`setup`, `doctor`) and `substrate` (`doctor`) (top-level is an overview, namespaced goes deep). Doctor exits 1 if any check fails.
 
 Gotchas the help text doesn't tell you:
 
-- `aquaman openclaw plugin-mode` and `aquaman coder hook` are hidden. They are spawned by the plugin and by Claude Code, never run by hand.
+- `aquaman openclaw plugin-mode` is hidden, and `coder hook` is left out of the top-level help (`aquaman coder --help` lists it). They are spawned by the plugin and by Claude Code or Codex, never run by hand.
 - `aquaman coder *` delegates to the separate `aquaman-coder` binary, so it can be missing while the rest of the CLI works.
 - `aquaman get <ref>` (v0.16.0) prints a declared credential for host credential-helper slots (`sbx secret set --command`, Claude Code `apiKeyHelper`, the `auth` command of a custom Codex provider, Hermes `key_cmd`, an OpenClaw exec secrets provider; each run live on 2026-11-27 against a stand-in API, forms and failure behaviour in `docs/helper-commands.md`. Codex 0.172 refuses `auth` on its built-in `openai` id; OpenClaw 2026.11.10 refuses a symlinked `command` and needs `jsonOnly: false` and `passEnv`; Hermes `secrets.command` wants `KEY=VALUE` and starts without the key on failure). It only talks to the running daemon, never the vault, so it is scope-checked and audited as `operation: read`; it refuses a TTY without `--show` and prints no trailing newline when piped. It hands the value to the calling process, so it is not isolation, and with the OpenClaw plugin's proxy on the socket it gets `broker_disabled`.
 - A config directory deep enough that `<configDir>/proxy.sock` is over the Unix socket path limit (104 bytes on macOS, 108 on Linux) stops `daemon`, `openclaw start` and `plugin-mode` with the reason and the fix (`SocketPathError` in `daemon.ts`), not a `listen EINVAL` stack trace.
-- `--non-interactive` reads `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AQUAMAN_ENCRYPTION_PASSWORD`, `AQUAMAN_KEEPASS_PASSWORD`, `VAULT_ADDR`, `VAULT_TOKEN`, `BW_SESSION`.
+- `--non-interactive` reads `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AQUAMAN_ENCRYPTION_PASSWORD`, `AQUAMAN_KEEPASS_PASSWORD`, `VAULT_ADDR`, `VAULT_TOKEN`, `BW_SESSION`, `AQUAMAN_KEEPER_FOLDER_UID`, `AQUAMAN_KEEPER_CONFIG`.
 - `aquaman openclaw setup` does far more than the vault wizard: plugin install, a patch for openclaw.json handed to OpenClaw (SecretRef plus loopback wiring), optional credential migration.
 - A command that writes `config.yaml` starts from `loadStoredConfig()` (the file merged with the defaults), never from `loadConfig()`. `loadConfig()` adds values that exist only in the environment (the encryption password, a Vault token, a loopback token, the cache TTL, the broker switch, Bitwarden and Keeper settings), and saving its result would write them to disk. `test/e2e/cli-setup-config-preservation.test.ts` sets every override and checks the file.
 - Re-running `aquaman setup` or `aquaman openclaw setup` changes only what setup decides: the backend, a policy preset for a newly stored service that has no policy, the loopback listener being on, and routed channels in `proxiedServices`. The loopback token and port, `broker.allowedRefs`, existing policies and the rest of `proxiedServices` are kept. Doctor recommends these commands, so they must be safe to repeat.
@@ -497,7 +498,7 @@ Manual smoke recipes (install paths, all auth modes, policy denials, real-gatewa
 | `packages/proxy/src/broker-scope.ts` | Declared-ref scope for the broker |
 | `packages/proxy/src/request-policy.ts` | Method + path policy, presets, `lintPolicyConfig` |
 | `packages/proxy/src/service-registry.ts` | 27 builtin services, host map |
-| `packages/proxy/src/cli/index.ts` | The whole CLI |
+| `packages/proxy/src/cli/index.ts` | Most of the CLI; the audit, links, service and unlock commands are beside it in `cli/` |
 | `packages/proxy/src/core/credentials/` | Backends, `store.ts`, `caching-store.ts` |
 | `packages/proxy/src/core/audit/logger.ts` | Hash-chained audit log, sequence numbers, `verifyChain()` |
 | `packages/proxy/src/audit-anchor.ts` | The anchor in the vault: writer, comparison, verify, accept |
@@ -508,11 +509,12 @@ Manual smoke recipes (install paths, all auth modes, policy denials, real-gatewa
 | `packages/proxy/src/core/credentials/vault-lock.ts`, `vault-session.ts`, `vault-unlock.ts` | The locked-vault state, the endpoints that take and drop a Bitwarden session, `aquaman unlock` / `lock` |
 | `packages/proxy/src/openclaw/secretref.ts` | SecretRef + loopback baseUrl wiring |
 | `packages/proxy/src/openclaw/integration.ts` | Version gates, detection, launch |
-| `packages/proxy/src/hermes/config-writer.ts` | `~/.hermes/.env` block, managed-scope detection |
+| `packages/proxy/src/hermes/config-writer.ts` | The Hermes settings, the `hermes config set` argument lists, reading the profile's `.env` back, managed-scope detection |
 | `packages/proxy/src/openshell/credential-driver.ts` | OpenShell credential driver core (reference/copy modes) |
 | `scripts/e2e-openshell.sh` | Live OpenShell gateway end-to-end (CI: `openshell-compat.yml`) |
 | `packages/proxy/src/substrate/credential-provider.ts`, `grants.ts`, `grpc-server.ts` | Agent Substrate credential provider: the checks, the grants, the mutual-TLS listener |
 | `deploy/substrate/` | Container recipe and Kubernetes manifest for the provider |
+| `scripts/e2e-substrate.sh`, `scripts/check-image-lock.mjs` | Live Substrate gateway end-to-end (CI: `substrate-compat.yml`); the check that the image's lockfile only moves to reviewed packages |
 | `packages/plugin/index.ts` | Plugin entry the Gateway loads |
 | `packages/plugin/openclaw.plugin.json` | Manifest (allowlisted keys) |
 | `packages/plugin/secrets-resolver.mjs` | SecretRef exec resolver |
@@ -525,7 +527,7 @@ Tests mirror these names under `test/unit`, `test/e2e` and `test/compliance`.
 
 ## Design principles
 
-Credentials never in agent memory. A hash-chained audit entry for every use. Bring your own vault. Follow each host's native patterns rather than fighting them.
+Credentials out of agent memory wherever the host lets a request be routed, and said plainly where it does not. A hash-chained audit entry for every use. Bring your own vault. Follow each host's native patterns rather than fighting them.
 
 ## Maintainer resources
 

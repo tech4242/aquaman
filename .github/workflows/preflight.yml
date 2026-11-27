@@ -3,7 +3,8 @@ name: Release Preflight
 # Validates every publishing credential WITHOUT publishing anything.
 #
 # Run this before cutting a release. CD publishes to four places in sequence
-# (npm x3 -> PyPI -> ClawHub) and a credential that expired since the last
+# (npm x3 -> PyPI -> ClawHub; the container image goes to ghcr.io with the
+# workflow's own token, so there is nothing to check for it here) and a credential that expired since the last
 # release fails partway through, after npm has already accepted some of the
 # packages. Unpublishing npm packages is heavily restricted, so a half-done
 # release is expensive. Checking first is cheap.

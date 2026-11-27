@@ -11,11 +11,11 @@ This package is the adapter for the [OpenClaw Gateway](https://openclaw.ai). It 
 | **`aquaman-plugin`** (this package) | OpenClaw | `openclaw plugins install aquaman-plugin` |
 | [`aquaman-hermes`](https://github.com/tech4242/aquaman/tree/main/packages/hermes) | Hermes | `pip install aquaman-hermes` |
 
-**Guides:** [Claude Code](https://aquaman.sh/docs/claude-code/) · [Codex](https://aquaman.sh/docs/codex/) · [OpenClaw](https://aquaman.sh/docs/openclaw/) · [Hermes](https://aquaman.sh/docs/hermes/) · [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/) · [NVIDIA OpenShell](https://aquaman.sh/docs/openshell/) · [for agents](https://aquaman.sh/docs/agent-setup/) · [compared with alternatives](https://aquaman.sh/docs/compare/)
+**Guides:** [Claude Code](https://aquaman.sh/docs/claude-code/) · [Codex](https://aquaman.sh/docs/codex/) · [OpenClaw](https://aquaman.sh/docs/openclaw/) · [Hermes](https://aquaman.sh/docs/hermes/) · [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/) · [NVIDIA OpenShell](https://aquaman.sh/docs/openshell/) · [Agent Substrate](https://aquaman.sh/docs/agent-substrate/) · [how it fits together](https://aquaman.sh/docs/how-it-fits/) · [for agents](https://aquaman.sh/docs/agent-setup/) · [compared with alternatives](https://aquaman.sh/docs/compare/)
 
 **Security:** [policy and how to report](https://aquaman.sh/docs/security/) · [published advisories](https://github.com/tech4242/aquaman/security/advisories) (latest: [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v), fixed in 0.17.2) · [what to know before trusting it](https://aquaman.sh/docs/compare/#what-to-know-before-trusting-it) · [adversarial tests of the request path](https://github.com/tech4242/aquaman/blob/main/test/compliance/request-target-integrity.test.ts) · [what aquaman does not protect against](https://aquaman.sh/docs/compare/#what-aquaman-does-not-do)
 
-**Requires:** Node.js 18 or later on macOS, Linux or WSL2.
+**Requires:** Node.js 18 or later for the proxy, on macOS, Linux or WSL2. OpenClaw itself needs the Node version it declares (24.16 or later on current lines).
 
 Inside OpenClaw the gateway is wired by `aquaman openclaw setup`, below. The agent-run setup and credential-request commands in the other packages are for coding agents (Claude Code, Codex) and are not part of this plugin: the proxy it starts never shows a dialog, never accepts a credential request and never hands out a credential value.
 
@@ -46,10 +46,10 @@ Agent / OpenClaw Gateway              Aquaman Proxy
 
 ## What it does
 
-1. **Bring your own vault**: aquaman has no house vault; secrets stay in the store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, Keeper, KeePassXC, systemd-creds, or encrypted-file.
+1. **Bring your own vault**: aquaman runs no vault service; secrets stay in the store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, Keeper, KeePassXC or systemd-creds, or in an encrypted file if you have none.
 2. **Agent gets a proxy URL**: requests route through `~/.aquaman/proxy.sock` (UDS, `chmod 0o600`); the proxy injects auth headers on the fly.
 3. **Dangerous endpoints blocked**: request policies deny admin APIs, prevent deletions, block sends - *before* credentials are even injected.
-4. **Tamper-evident audit log**: every credential use logged with SHA-256 hash chains.
+4. **Hash-chained audit log**: every credential use logged with SHA-256 hash chains.
 
 ## Quick Start
 
@@ -75,14 +75,14 @@ Aquaman keeps API credentials out of the agent process by running them in a sepa
 - The SecretRef resolver hands the gateway the **loopback token** as the provider api key. The listener is token-gated, the token only grants access to 127.0.0.1, and the proxy strips it before injecting your real key from the vault.
 - Why not the Unix socket: OpenClaw's model transport builds its own HTTP client. It never calls `globalThis.fetch` and resolves hostnames itself, so the older `aquaman.local` sentinel could not work for model traffic on 2026.7.33+. `aquaman openclaw doctor` fails if a provider is credential-wired but not routed.
 
-**Channel credentials on 2026.7.33+: Telegram routed, the rest at rest only**
+**Channel credentials on current OpenClaw (2026.7.33 and later): Telegram routed, the rest at rest only**
 
 Each channel builds its own HTTP client per request, so this plugin's interceptor no longer sees channel traffic. Model-provider isolation is unaffected, since it no longer depends on the interceptor either.
 
-Telegram is the one bundled channel with an endpoint override. `aquaman openclaw setup` writes:
+Telegram is the one bundled channel with an endpoint override. `aquaman openclaw setup` sets, through `openclaw config patch`:
 
 ```json5
-{ channels: { telegram: { apiRoot: "http://127.0.0.1:8585/telegram", botToken: "<loopback token>" } } }
+{ channels: { telegram: { apiRoot: "http://127.0.0.1:8585/telegram", botToken: { source: "exec", provider: "aquaman", id: "telegram/bot_token" } } } }
 ```
 
 The Bot API carries its token in the URL path rather than a header, so the loopback token travels in the `/bot<TOKEN>` segment. The proxy accepts it there, strips it, and injects your real bot token from the vault. Setup leaves a channel untouched and says why when it uses a self-hosted `apiRoot`, a `tokenFile`, multiple accounts, or has no vault credential yet.
@@ -166,7 +166,7 @@ All commands work via OpenClaw CLI or your terminal:
 | `openclaw aquaman services-list` | `aquaman services list` | List configured services |
 | `openclaw aquaman status` | `aquaman openclaw status` | Plugin lifecycle + sentinel env vars |
 
-Slash commands in chat: `/aquaman-status`, `/aquaman list`, `/aquaman doctor`.
+Slash command in chat: `/aquaman-status`. The other commands run in a terminal as `openclaw aquaman <command>`.
 
 ## Config options
 

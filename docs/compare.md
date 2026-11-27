@@ -9,12 +9,12 @@ Every tool on this page does one of two things, and the difference matters more 
 - **Injected at egress.** The agent and the programs it runs hold a placeholder. A proxy outside them swaps in the real value on the way to the API. The secret is never in the process that could leak it.
 - **Injected into the environment.** The program is started with the real value in an environment variable. The agent's conversation does not see it, and output can be masked, but the program holds the secret and can do anything with it.
 
-aquaman does both, depending on the path:
+aquaman does either, or supplies the value to a host that injects it, depending on the path ([the three hand-offs](how-it-fits.md)):
 
 | aquaman path | Mechanism |
 |---|---|
-| OpenClaw, Hermes model calls, any client you point at the proxy (`/<service>/...`) | At egress. Request policies apply here |
-| NVIDIA OpenShell driver, Docker Sandboxes credential helper | aquaman supplies the value to the host; the host injects at egress |
+| OpenClaw model calls and Telegram, Hermes model calls, any client you point at the proxy (`/<service>/...`) | At egress. Request policies apply here |
+| NVIDIA OpenShell driver, Docker Sandboxes credential helper, Agent Substrate credential provider | aquaman supplies the value to the host; the host injects at egress |
 | Claude Code and Codex (`aquaman-coder`), default | Into the environment of each command, with output redaction. Request policies do not apply |
 | Claude Code and Codex, a binding made with `--via-proxy` | At egress: the app holds a local token and the proxy's URL. Request policies apply. Needs an app that takes a base URL ([guide](app-through-proxy.md)) |
 
@@ -44,7 +44,7 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 - Your secrets already live in a password manager or vault and you do not want a second copy or a new account. A reference can point at the item you already have, and you approve that in a dialog.
 - You want the agent to set things up and ask for credentials itself, without ever handling one: `aquaman init --agent` and `aquaman request` are built for that, with no prompts, JSON output, and a native dialog where a person supplies each value. (fnox has a comparable request flow through its MCP server, off by default, where the person enters the value on a local web page.)
 - You use more than one agent host (say Claude Code, OpenClaw and an OpenShell sandbox) and want one place that holds the keys and one record of their use.
-- You want evidence: every use is written to a log whose entries are numbered and chained by SHA-256, and the log's last position is kept in your vault, so an altered or inserted entry and a truncated or replaced log are detectable (`aquaman audit verify`). The limits are under "What aquaman does not do".
+- You want evidence: every use is written to a log (unless you switch the log off) whose entries are numbered and chained by SHA-256, and the log's last position is kept in your vault, so an altered or inserted entry and a truncated or replaced log are detectable (`aquaman audit verify`). The limits are under "What aquaman does not do".
 - You route OpenClaw, Hermes or your own client through the proxy and want to limit what a key can do there, per endpoint (`aquaman policy`).
 
 ## Choose something else when
@@ -54,7 +54,7 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 - **You want the agent itself boxed in, not only its keys.** nono runs the agent in a kernel sandbox and injects credentials at a local proxy from your keychain, 1Password or Bitwarden. It also injects into query strings, which aquaman does not do. Both sign AWS requests at the proxy; aquaman does it for an AWS client that takes its endpoint from the environment ([guide](aws.md)). aquaman has no sandbox: it works with the one your agent host provides.
 - **You only use Claude Code, with its sandbox on.** Its credential masking is built in and needs no separate tool.
 - **You only use Docker Sandboxes and the OS keychain is enough.** It does the injection itself; aquaman only adds other vaults and a log entry per read.
-- **Your team already runs Doppler or Infisical.** Secrets shared across a team, CI and production belong there. aquaman is a local tool for one person's machine and has no team sync.
+- **Your team already runs Doppler or Infisical.** Secrets shared across a team, CI and production belong there. aquaman is a tool for one person's machine and has no team sync; its one cluster integration, the Agent Substrate provider, supplies keys to sandboxed agents and is not a team secrets store.
 - **You need per-user OAuth consent to SaaS APIs across an organisation.** That is an identity-provider problem.
 - **You need a process-level boundary between the agent and everything else running as you.** aquaman does not provide one: see the limits below.
 - **You want the most widely used option.** aquaman is not that; what it is and how to check it are in the next section.
@@ -63,9 +63,9 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 
 What you can check yourself:
 
-- **It was one of the first tools to inject credentials at egress for AI agents.** The first release, on 6 February 2026, was the proxy and the OpenClaw plugin. By the public history of the other projects on this page, nono's proxy gained credential injection on 23 February 2026, the OpenShell repository was created on 24 February, OneCLI's on 8 March and Infisical Agent Vault's on 27 March. Claude Code followed in 0.12.0, Hermes in 0.13.0, Codex in 0.16.0 and NVIDIA OpenShell in 0.17.0. There were 40 releases up to 0.21.0, each on npm with its date (`npm view aquaman-proxy time`) and described in the [changelog](changelog.md).
+- **It was one of the first tools to inject credentials at egress for AI agents.** The first release, on 6 February 2026, was the proxy and the OpenClaw plugin. By the public history of the other projects on this page, nono's proxy gained credential injection on 23 February 2026, the OpenShell repository was created on 24 February, OneCLI's on 8 March and Infisical Agent Vault's on 27 March. Claude Code followed in 0.12.0, Hermes in 0.13.0, Codex in 0.16.0, NVIDIA OpenShell in 0.17.0 and Agent Substrate in 0.22.0. There were 42 releases up to 0.21.2, each on npm with its date (`npm view aquaman-proxy time`) and described in the [changelog](changelog.md).
 - **Releases are verifiable.** npm packages are published from GitHub Actions with provenance, shown on each version's npm page; `npm audit signatures` checks it in a project that installs them. No install scripts.
-- **It is local and inspectable.** No account, no telemetry, no network service of its own. Config and logs are plain files under `~/.aquaman`.
+- **It is local and inspectable.** No account, no telemetry, no hosted service. The only listener that another machine can reach is the Agent Substrate provider, which is off unless you deploy it. Config and logs are plain files under `~/.aquaman`.
 - **The tests are in the repository, and CI holds a coverage floor.** More than 3,200 tests (`npx vitest list` counts them). Line coverage is measured over everything that ships, including both command-line tools and the processes the tests start, and CI fails below 95% overall and for each package. Five files have higher floors: the request-target parser 100%, the broker scope, the request policy and the credential dialog 98%, the daemon 97% (`scripts/coverage-floors.json`).
 - **The security tests attack each control, and the limits are pinned.** The tests under `test/compliance/` are written one table row per attack: respelling a request to get past a deny rule, sending raw bytes at the request parser, tampering with the audit log, comparing each dialog's wording with what a caller can then obtain. An attack the code does not stop stays in the table as a row that is expected to fail and says so in its name (`grep -rn "it.fails" test/compliance` lists them), and the [mapping pages](compliance/nist-800-53.md) state the same limits. The day one is fixed, its row fails and has to be updated.
 - **What a review found is in the changelog.** Before 0.18.2 the code was assessed against OWASP ASVS 5.0, the OWASP Top 10 lists for agentic and LLM applications, the OWASP API Security Top 10, NIST SP 800-53, NIST SSDF and BSI TR-02102-1. The findings were fixed in that release, each with a test that fails without the fix, and are listed with what to check on your own machine: [0.18.2](changelog.md#0182). That was the project's own work, not an outside audit.
@@ -81,6 +81,6 @@ It is maintained by one person, and the reviews described above are the project'
 - The audit log is anchored in your vault at most once a minute (every 15 minutes with 1Password, Bitwarden or Keeper), not per entry. `aquaman audit verify` detects an entry altered, inserted or deleted inside the log, and a log cut short, emptied, deleted or rebuilt; it does not detect the removal of entries written since the last anchor, or a change made by software that can also write to the vault.
 - On the coding-agent path the wrapped command receives the real value for its lifetime. Output redaction catches accidental exposure, not a command that deliberately transforms the value.
 - The proxy only sees traffic from clients that can be pointed at it, for services it has a definition for (27 are built in; others are added in `services.yaml`).
-- No Windows support outside WSL2. No team sharing, and it does not run in CI or production. An app that reads its keys from the environment needs nothing from aquaman there: the same variable names are filled from that platform's secrets.
+- No Windows support outside WSL2. No team sharing, and it does not run in CI or production (the Agent Substrate provider, for sandboxed agents on a cluster, is the one exception). An app that reads its keys from the environment needs nothing from aquaman there: the same variable names are filled from that platform's secrets.
 
 Security policy and past advisories: [SECURITY.md](../SECURITY.md), [advisories](https://github.com/tech4242/aquaman/security/advisories).

@@ -22,7 +22,7 @@ openshell provider create --name claude --type anthropic \
 - **Hand the setup to the person.** `aquaman setup` asks questions and `aquaman daemon` stays running, and the gateway config is theirs to change. Give them the commands above; never ask for a key in the conversation.
 - **You may run `aquaman openshell doctor --gateway-config <file>`** and report what it says. It checks and changes nothing.
 - **Where the credential ends up:** OpenShell's supervisor receives the value when a sandbox starts and injects it on the way out; the sandbox sees a placeholder. aquaman records one read per sandbox start, not one per request.
-- **When OpenShell's own drivers fit better:** OpenShell also ships credential drivers of its own. aquaman is for one person's machine: it lets the same references work across the vaults it supports, and `aquaman broker revoke` stops a reference resolving.
+- **When OpenShell's own drivers fit better:** OpenShell also ships credential drivers of its own. aquaman's OpenShell driver is for one person's machine: it lets the same references work across the vaults it supports, and `aquaman broker revoke` stops a reference resolving.
 - **The daemon does not come back by itself.** `aquaman daemon` is gone after a reboot or logout, and new sandboxes cannot resolve their credentials until the person starts it again. Tell them. `aquaman service install` makes it start at every login: [autostart](autostart.md).
 
 ## Good to know

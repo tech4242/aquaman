@@ -64,7 +64,7 @@ What was run: setup against the `openclaw` program in versions 2026.6.10, 2026.1
 
 1. Remove the key for that provider (`openclaw config unset models.providers.anthropic.apiKey`), and its `baseUrl` if you set one: setup keeps a `baseUrl` it did not write and does not route that provider.
 2. Run `openclaw aquaman setup` again and enter the key when asked. Running it again is safe: it keeps your other settings.
-3. Run `aquaman openclaw doctor`. It fails with "providers not wired" or "still call the provider directly" while a provider is not going through the proxy.
+3. Run `aquaman openclaw doctor`. It fails with "providers not wired" or "the proxy is bypassed" while a provider is not going through the proxy.
 
 A key that sat in `openclaw.json` was readable by everything in the gateway, so rotate it at the provider if you are unsure what ran there.
 

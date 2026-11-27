@@ -27,18 +27,18 @@ Method and path rules exist only in the first row, because only there does the r
 - Service registry (builtin service definitions) — `src/service-registry.ts`
 - Request policy engine — `src/request-policy.ts`
 - Broker endpoints (`POST /broker/resolve` and the other `/broker/*` paths): `src/daemon.ts`, scope in `src/broker-scope.ts`
-- The two host integrations that have no package of their own, because the host asks the daemon directly: the OpenShell credential driver (`src/openshell/`) and the Agent Substrate credential provider (`src/substrate/`)
-- Base CLI: `init`, `daemon`, `status`, `doctor`, `credentials`, `audit`, `policy`, `migrate` — `src/cli/`
+- The two host integrations that are code here and have no package of their own, because the host asks the daemon directly (Docker Sandboxes, the third without a package, needs no code: it runs `aquaman get`): the OpenShell credential driver (`src/openshell/`) and the Agent Substrate credential provider (`src/substrate/`)
+- Base CLI: `setup`, `init`, `daemon`, `stop`, `status`, `doctor`, `credentials`, `broker`, `request`, `get`, `audit`, `policy`, `services`, `service`, `unlock`, `lock`: `src/cli/`
 
 **Does not import** the plugin or the coder package. Code for one agent host belongs in that host's adapter, with the exceptions named here: the transitional OpenClaw helpers below, the Hermes setup command (the Python package cannot run it), and the two sandbox-host integrations above.
 
-**Transitional exception (v0.12.0):** OpenClaw-aware helpers in `src/openclaw/` and the OpenClaw-aware branches in the proxy CLI (the `aquaman openclaw` namespace — `setup`, `doctor`, `status`, `start`, `configure`, `migrate`, `plugin-mode`) are inherited from the v0.11.x architecture. The carve-out into `packages/plugin` is a v0.13.0+ refactor. The `aquaman coder` namespace is a **shim** that execs the `aquaman-coder` binary, not an import — so the boundary holds. **No new agent-aware code is imported into proxy under any circumstances.**
+**Transitional exception (v0.12.0):** OpenClaw-aware helpers in `src/openclaw/` and the OpenClaw-aware branches in the proxy CLI (the `aquaman openclaw` namespace — `setup`, `doctor`, `status`, `start`, `configure`, `migrate`, `plugin-mode`) are inherited from the v0.11.x architecture. The `aquaman coder` namespace is a **shim** that execs the `aquaman-coder` binary, not an import — so the boundary holds. **Nothing from `plugin` or `coder` is imported into proxy under any circumstances.**
 
 ## packages/plugin — `aquaman-plugin` on npm + ClawHub
 
 **Role:** the OpenClaw adapter.
 
-**Owns:** everything OpenClaw-aware — plugin manifest, plugin entry (`index.ts`), `openclaw.plugin.json`, OpenClaw env-writer, OpenClaw integration helpers, OpenClaw CLI command registration. After the v0.12.0 carve-out, also owns the OpenClaw setup logic (moved out of proxy CLI).
+**Owns:** the plugin manifest (`openclaw.plugin.json`) and entry (`index.ts`), the fetch interceptor, the SecretRef resolver, proxy spawn and health, and the `openclaw aquaman ...` command registration. Setup, config wiring and migration live in `packages/proxy/src/openclaw/` and the proxy CLI.
 
 **Scope is frozen.** Code added here only for:
 - OpenClaw compat fixes
@@ -55,10 +55,9 @@ Method and path rules exist only in the first row, because only there does the r
 **Owns:**
 - Per-agent hook handlers (`src/adapters/<agent>/hook.ts`)
 - Per-agent setup writers (`src/adapters/<agent>/setup.ts`)
-- Project credential map resolver (`~/.aquaman/projects.yaml`) — `src/projects/`
-- Secret-pattern redactor — `src/redactor/`
-- `aquaman-coder exec` helper — `src/exec.ts`
-- `aquaman-coder` CLI: `setup <agent>`, `project <verb>`, `get <key>`, `exec <cmd>`, `hook --target <agent>`, `doctor`
+- Project credential map resolver (`~/.aquaman/projects.yaml`): `src/projects.ts`
+- `aquaman-coder` CLI: `init`, `bind`, `setup <agent>`, `project list|add|remove`, `exec`, `hook --host <agent>`, `doctor`, `status`: `src/cli/index.ts`
+- The secret-pattern redactor it applies to output is the proxy's (`packages/proxy/src/core/redactor/`)
 
 **Does not know about:** OpenClaw.
 
@@ -80,7 +79,7 @@ Method and path rules exist only in the first row, because only there does the r
 | `coder` → `proxy` | ✓ Yes (coder talks to broker endpoint, may import shared types) |
 | `plugin` → `coder` | ✗ No |
 | `coder` → `plugin` | ✗ No |
-| `proxy` → `plugin` or `coder` | ✗ No (proxy is agent-agnostic) |
+| `proxy` → `plugin` or `coder` | ✗ No (proxy never imports an adapter) |
 
 If you find yourself needing a forbidden import direction, the code probably belongs in a different package, or a shared type needs to be promoted into `proxy/src/core/` where both can consume it.
 

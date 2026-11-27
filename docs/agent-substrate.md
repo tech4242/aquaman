@@ -18,7 +18,7 @@ ate-setup deploy atenet \
   --credential-provider='{"name":"aquaman","address":"aquaman-credential-provider.ate-system.svc:50051"}'
 ```
 
-An actor's `EgressPolicy` then names the key as `ate-secret://aquaman/github/token`.
+An actor's `EgressPolicy` then names the key as `ate-secret://aquaman/github/token`. Requires aquaman 0.22.0 or later and Agent Substrate with a credential provider API (run on v1.0.1).
 
 This is the [hand to the host](how-it-fits.md) way of using aquaman: Substrate isolates the actor and injects the key. aquaman supplies it, decides which actor may have it and records it.
 
@@ -48,6 +48,26 @@ substrate:
 - **An edit takes effect without a restart,** once Kubernetes has updated the mounted file. That took between 5 and 89 seconds in our runs.
 - **A grant is for Substrate only.** It does not let anything else in the pod or the cluster read the key from aquaman.
 
+## Settings
+
+All under `substrate.provider` in the ConfigMap's `config.yaml`. The manifest sets the first three; the rest have defaults.
+
+| Setting | Default | What it is |
+|---|---|---|
+| `enabled` | `false` | Serve the provider from `aquaman daemon` |
+| `tls.certFile` | none, required | The serving certificate, as Substrate mounts it |
+| `tls.clientCaFile` | none, required | The authority a caller's certificate must chain to |
+| `tls.keyFile` | the same file as `tls.certFile` | The private key. Substrate writes key and certificate into one file |
+| `grants` | none: every fetch is refused | Which atespace or actor may be given which reference |
+| `listen` | `0.0.0.0:50051` | Address and port the gateway dials |
+| `name` | `aquaman` | The provider's name in `ate-secret://<name>/<service>/<key>`, as registered with the gateway |
+| `callerSpiffeId` | `spiffe://cluster.local/ns/ate-system/sa/atenet-egress` | The one identity that gets an answer |
+| `actorTrustDomain` | `substrate-actor.local` | The trust domain of actor identities. Change it only if your install uses another |
+| `fetchesPerSecond` | `20` (1 to 10000) | Fetches one actor is served per second |
+| `atespaceFetchesPerSecond` | four times `fetchesPerSecond` (up to 100000) | The same for all actors of one atespace together |
+
+The provider does not start without the two certificate files, or with the audit log switched off.
+
 ## Where the keys live
 
 Set `credentials.backend` in the same `config.yaml`, and give the pod what the backend needs through the Secret:
@@ -61,7 +81,7 @@ The other backends need a person or a desktop session and do not fit a pod.
 
 ## Good to know
 
-- **Only the gateway gets an answer.** The connection is TLS 1.3 with certificates Substrate issues to pods. aquaman answers a caller only if its certificate is the egress gateway's identity (`spiffe://cluster.local/ns/ate-system/sa/atenet-egress`) and within its dates. If your install uses another namespace or trust domain, set `substrate.provider.callerSpiffeId`.
+- **Only the gateway gets an answer.** The connection is TLS 1.3 with certificates Substrate issues to pods. aquaman answers a caller only if its certificate is the egress gateway's identity (`spiffe://cluster.local/ns/ate-system/sa/atenet-egress`) and within its dates. If your install puts the gateway in another namespace or trust domain, set `substrate.provider.callerSpiffeId`.
 - **Other pods are kept away by the NetworkPolicy in the manifest.** Any workload with a certificate from the same signer can complete the TLS handshake; aquaman refuses each of its calls as soon as the headers arrive, records the identity it presented (the same identity once a minute, at most twenty different ones, then a count), and limits what one connection can hold. It does not limit how many connections are opened. Your cluster's network plugin has to enforce NetworkPolicy for that.
 - **You create no certificates.** The manifest asks Substrate for them through projected volumes. Substrate renews them, and aquaman picks up a renewed certificate without a restart.
 - **The gateway asks on every request,** so removing a grant stops the next request, and every request that gets a key has its own audit entry: `kubectl exec ... -- aquaman audit tail`. Each entry names the actor and the reference. The provider does not start with the audit log switched off.
