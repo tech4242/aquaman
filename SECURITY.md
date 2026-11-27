@@ -17,7 +17,7 @@ You can expect an acknowledgement within **7 days**. For confirmed vulnerabiliti
 | Latest minor of the 0.x line (all packages) | ✅ |
 | Anything older | ❌ — upgrade first |
 
-The four packages (`aquaman-proxy`, `aquaman-plugin`, `aquaman-coder` on npm; `aquaman-hermes` on PyPI) are released in lockstep, together with the credential provider image; a fix bumps all of them.
+The four packages (`aquaman-proxy`, `aquaman-plugin`, `aquaman-coder` on npm; `aquaman-hermes` on PyPI) are released in lockstep; a fix bumps all of them.
 
 ## Scope
 
@@ -28,13 +28,12 @@ The four packages (`aquaman-proxy`, `aquaman-plugin`, `aquaman-coder` on npm; `a
 - Audit-log tampering that `aquaman audit verify` fails to detect, within what it is documented to detect: an entry altered, inserted or deleted inside the chain, and a log cut short, emptied, deleted or rebuilt behind its anchor. Entries written since the last anchor, a change by software that can write to your vault, and a deleted old archive are [documented limits](docs/compliance/nist-800-53.md)
 - A way to read, move or redirect the audit anchor through aquaman, or to link a vault item or install the login item without the person's approval
 - A credential value handed out without an audit entry
-- For the Agent Substrate credential provider: a caller other than the configured gateway identity getting an answer, or an actor being given a reference that was not granted to its atespace or to itself
-- Vulnerabilities in the packages' own code or their published artifacts, the container image included (and the release pipeline)
+- Vulnerabilities in the packages' own code or their published artifacts (including the release pipeline)
 
 **Out of scope:**
 
 - Vulnerabilities in the vault backends themselves (1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, OS keychains, systemd) — report those upstream
-- Vulnerabilities in the agent hosts (OpenClaw, Claude Code, Codex, Hermes, Docker Sandboxes, NVIDIA OpenShell, Agent Substrate) — report those upstream
+- Vulnerabilities in the agent hosts (OpenClaw, Claude Code, Codex, Hermes, Docker Sandboxes, NVIDIA OpenShell) — report those upstream
 - Prompt-injection *content* attacks against the agent. Note the design boundary: **aquaman prevents credential exfiltration, not credential use.** A prompt-injected agent running as the same OS user can call the same proxy the legitimate code calls; the request-policy engine is the control that limits what a used credential can do. Reports that reduce to "the agent can use the proxy" are the documented threat model, not a vulnerability — but bypasses *of the policy engine itself* are very much in scope.
 - Redaction misses for secrets aquaman did not inject (the redactor is documented as defense-in-depth, not a guarantee)
 

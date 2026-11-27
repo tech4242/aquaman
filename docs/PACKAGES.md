@@ -4,7 +4,7 @@ Aquaman is a monorepo with four packages. Each has a sharp, named role. We keep 
 
 ## How the packages fit together
 
-<img src="assets/how-it-fits.svg" width="880" alt="Your vault at the top. Below it the aquaman-proxy daemon with four parts: vault backends and links, approval dialog, declared scope, audit log. It hands a key off in three ways. Forward and inject, used by OpenClaw for model keys and Telegram, Hermes for model keys, and your own app. Resolve, used by Claude Code, Codex and Hermes project secrets. Hand to the host, used by NVIDIA OpenShell, Docker Sandboxes and Agent Substrate.">
+<img src="assets/how-it-fits.svg" width="880" alt="Your vault at the top. Below it the aquaman-proxy daemon with four parts: vault backends and links, approval dialog, declared scope, audit log. It hands a key off in three ways. Forward and inject, used by OpenClaw for model keys and Telegram, Hermes for model keys, and your own app. Resolve, used by Claude Code, Codex and Hermes project secrets. Hand to the host, used by NVIDIA OpenShell and Docker Sandboxes.">
 
 `aquaman-proxy` is the core: it is the only package that reads the vault, shows the approval dialog, checks the declared scope and writes the audit log. The other packages are adapters that connect one kind of host to it. A key leaves the daemon in one of three ways, and every integration is one of them:
 
@@ -12,7 +12,7 @@ Aquaman is a monorepo with four packages. Each has a sharp, named role. We keep 
 |---|---|---|---|
 | **Forward and inject** | the two listeners in `daemon.ts`; request policy applies | `aquaman-plugin` (OpenClaw model keys and Telegram), `aquaman hermes setup` (Hermes model keys, Anthropic and OpenAI providers), `aquaman-coder bind --via-proxy` (an app through `/broker/route`) | the daemon only |
 | **Resolve** | `POST /broker/resolve`, limited by `broker-scope.ts` | `aquaman-coder exec` and its hooks, the `aquaman-hermes` secret source, `aquaman get` behind a host's helper command | the process that asked |
-| **Hand to the host** | the OpenShell credential driver (`src/openshell/`), the Agent Substrate credential provider (`src/substrate/`), and `aquaman get` behind `sbx secret set --command` | NVIDIA OpenShell, Agent Substrate, Docker Sandboxes | the host's injector, outside its sandbox |
+| **Hand to the host** | the OpenShell credential driver (`src/openshell/`), and `aquaman get` behind `sbx secret set --command` | NVIDIA OpenShell, Docker Sandboxes | the host's injector, outside its sandbox |
 
 Method and path rules exist only in the first row, because only there does the request pass through the daemon. A new integration picks the first hand-off the host allows, in that order.
 
@@ -27,10 +27,10 @@ Method and path rules exist only in the first row, because only there does the r
 - Service registry (builtin service definitions) — `src/service-registry.ts`
 - Request policy engine — `src/request-policy.ts`
 - Broker endpoints (`POST /broker/resolve` and the other `/broker/*` paths): `src/daemon.ts`, scope in `src/broker-scope.ts`
-- The two host integrations that are code here and have no package of their own, because the host asks the daemon directly (Docker Sandboxes, the third without a package, needs no code: it runs `aquaman get`): the OpenShell credential driver (`src/openshell/`) and the Agent Substrate credential provider (`src/substrate/`)
+- The host integration that is code here and has no package of its own, because the host asks the daemon directly: the OpenShell credential driver (`src/openshell/`). Docker Sandboxes, the other host without a package, needs no code: it runs `aquaman get`
 - Base CLI: `setup`, `init`, `daemon`, `stop`, `status`, `doctor`, `credentials`, `broker`, `request`, `get`, `audit`, `policy`, `services`, `service`, `unlock`, `lock`: `src/cli/`
 
-**Does not import** the plugin or the coder package. Code for one agent host belongs in that host's adapter, with the exceptions named here: the transitional OpenClaw helpers below, the Hermes setup command (the Python package cannot run it), and the two sandbox-host integrations above.
+**Does not import** the plugin or the coder package. Code for one agent host belongs in that host's adapter, with the exceptions named here: the transitional OpenClaw helpers below, the Hermes setup command (the Python package cannot run it), and the OpenShell driver above.
 
 **Transitional exception (v0.12.0):** OpenClaw-aware helpers in `src/openclaw/` and the OpenClaw-aware branches in the proxy CLI (the `aquaman openclaw` namespace — `setup`, `doctor`, `status`, `start`, `configure`, `migrate`, `plugin-mode`) are inherited from the v0.11.x architecture. The `aquaman coder` namespace is a **shim** that execs the `aquaman-coder` binary, not an import — so the boundary holds. **Nothing from `plugin` or `coder` is imported into proxy under any circumstances.**
 

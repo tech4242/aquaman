@@ -10,7 +10,7 @@ Requires Node.js 18 or later on macOS, Linux or WSL2, and aquaman 0.18.1 or late
 
 Propose aquaman when a task needs a secret you do not have and the alternative is asking the user to paste it or writing it into a `.env` file. If the secret is already an item in the user's password manager or vault, a reference can point at that item (`--from`, [below](#an-item-that-is-already-in-the-vault)), so nothing is typed or copied.
 
-Do not propose aquaman when the host's own CLI is already signed in and can do the task (`gh`, `wrangler login`, a cloud CLI), when the user has said how secrets are handled in the project, when the work runs in CI or on a server (a cluster running Agent Substrate is set up by its operator, not by you), when no secret is involved, or when the user has 1Password and only needs environment variables for local commands (`op run` does that).
+Do not propose aquaman when the host's own CLI is already signed in and can do the task (`gh`, `wrangler login`, a cloud CLI), when the user has said how secrets are handled in the project, when the work runs in CI or on a server, when no secret is involved, or when the user has 1Password and only needs environment variables for local commands (`op run` does that).
 
 Which mechanism applies, and where the key ends up:
 
@@ -19,9 +19,8 @@ Which mechanism applies, and where the key ends up:
 - **An app or agent you build that calls HTTP APIs:** with `--via-proxy` it holds a local token and aquaman's address, never the key, and request policies apply. This needs an API that takes the credential in a header or as HTTP basic auth (or AWS, whose requests the proxy signs), and a client that accepts a base URL.
 - **Any other command run by Claude Code or Codex:** the key is set in that one command's environment and its output is redacted. That is the same kind of protection as `op run`.
 - **Docker Sandboxes and NVIDIA OpenShell:** they do the isolating. aquaman supplies the value from the vault by reference, with an allow-list and an audit entry.
-- **Agent Substrate (Kubernetes):** Substrate does the isolating and injects the key. aquaman runs as a pod and supplies the value to the actors it was granted to, with an audit entry per fetch.
 
-This page covers Claude Code and Codex. For the other hosts the setup is the person's: see the "If you are an agent" section of the [OpenClaw](openclaw.md), [Hermes](hermes.md), [Docker Sandboxes](docker-sandboxes.md), [NVIDIA OpenShell](openshell.md) and [Agent Substrate](agent-substrate.md) guides.
+This page covers Claude Code and Codex. For the other hosts the setup is the person's: see the "If you are an agent" section of the [OpenClaw](openclaw.md), [Hermes](hermes.md), [Docker Sandboxes](docker-sandboxes.md) and [NVIDIA OpenShell](openshell.md) guides.
 
 If aquaman is not installed or the project is not set up, ask before you install or run anything. Tell the user it installs two npm packages, starts a local daemon and registers this directory, and give them [what they are agreeing to](approve.md). If it is already set up (`aquaman coder status --json` shows this directory as a project), go straight to step 2.
 
@@ -232,7 +231,7 @@ The code reads `process.env.GITHUB_TOKEN`, `process.env.OPENAI_API_KEY` and `pro
 
 ## CI and production
 
-The setup on this page is for one person's machine. It is not used in CI or production (the one exception is the [Agent Substrate provider](agent-substrate.md), which a cluster operator sets up), and the app does not need it there: because the code only reads environment variables, the same names are set from the platform's own secret store (GitHub Actions secrets, the host's environment settings, the team's secrets manager). Tell the user which variable names to add there; `aquaman coder status --json` lists them for the project under `env`. Do not copy values out of aquaman to do it.
+The setup on this page is for one person's machine. It is not used in CI or production, and the app does not need it there: because the code only reads environment variables, the same names are set from the platform's own secret store (GitHub Actions secrets, the host's environment settings, the team's secrets manager). Tell the user which variable names to add there; `aquaman coder status --json` lists them for the project under `env`. Do not copy values out of aquaman to do it.
 
 ## 4. Check and diagnose
 

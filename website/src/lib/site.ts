@@ -14,7 +14,7 @@ export const SUMMARY =
   'API keys and tokens stay in the vault the user already has (macOS Keychain, 1Password, Bitwarden, HashiCorp Vault, ' +
   'KeePassXC, Keeper, systemd-creds or an encrypted file) and are injected when a request or command needs them, so the ' +
   'agent works with references such as `aquaman://github/token` and never holds the secret. Works with Claude Code, ' +
-  'Codex, OpenClaw, Hermes, Docker Sandboxes, NVIDIA OpenShell and Agent Substrate. Apache-2.0 licensed. Packages: `aquaman-proxy`, ' +
+  'Codex, OpenClaw, Hermes, Docker Sandboxes and NVIDIA OpenShell. Apache-2.0 licensed. Packages: `aquaman-proxy`, ' +
   '`aquaman-coder`, `aquaman-plugin` on npm; `aquaman-hermes` on PyPI.';
 /** Which mechanism applies per host and where the key ends up, and when an agent should not propose aquaman. */
 export const MODES = [
@@ -25,9 +25,8 @@ export const MODES = [
   "- **An app or agent you build that calls HTTP APIs:** with `--via-proxy` it holds a local token and aquaman's address, never the key, and request policies apply. This needs an API that takes the credential in a header or as HTTP basic auth (or AWS, whose requests the proxy signs), and a client that accepts a base URL.",
   "- **Any other command run by Claude Code or Codex:** the key is set in that one command's environment and its output is redacted. That is the same kind of protection as `op run`.",
   '- **Docker Sandboxes and NVIDIA OpenShell:** they do the isolating. aquaman supplies the value from the vault by reference, with an allow-list and an audit entry.',
-  '- **Agent Substrate (Kubernetes):** Substrate does the isolating and injects the key. aquaman runs as a pod and supplies the value to the actors it was granted to, with an audit entry per fetch.',
   '',
-  "Do not propose aquaman when the host's own CLI is already signed in and can do the task (`gh`, `wrangler login`, a cloud CLI), when the user has said how secrets are handled in the project, when the work runs in CI or on a server (a cluster running Agent Substrate is set up by its operator, not by you), when no secret is involved, or when the user has 1Password and only needs environment variables for local commands (`op run` does that).",
+  "Do not propose aquaman when the host's own CLI is already signed in and can do the task (`gh`, `wrangler login`, a cloud CLI), when the user has said how secrets are handled in the project, when the work runs in CI or on a server, when no secret is involved, or when the user has 1Password and only needs environment variables for local commands (`op run` does that).",
 ].join('\n');
 
 export const agentNote = (site: URL) =>
@@ -77,7 +76,7 @@ export const NAV: { heading: string; slugs: string[]; labels?: Record<string, st
   { heading: 'For agents', slugs: ['agent-setup', 'approve'], labels: { 'agent-setup': 'The agent contract', approve: 'If your agent asked to install it' } },
   {
     heading: 'Hosts',
-    slugs: ['claude-code', 'codex', 'mcp', 'app-through-proxy', 'aws', 'openclaw', 'hermes', 'docker-sandboxes', 'openshell', 'agent-substrate', 'helper-commands'],
+    slugs: ['claude-code', 'codex', 'mcp', 'app-through-proxy', 'aws', 'openclaw', 'hermes', 'docker-sandboxes', 'openshell', 'helper-commands'],
     labels: {
       'claude-code': 'Claude Code',
       codex: 'Codex',
@@ -88,7 +87,6 @@ export const NAV: { heading: string; slugs: string[]; labels?: Record<string, st
       hermes: 'Hermes',
       'docker-sandboxes': 'Docker Sandboxes',
       openshell: 'NVIDIA OpenShell',
-      'agent-substrate': 'Agent Substrate',
       'helper-commands': 'Helper commands (aquaman get)',
     },
   },
@@ -126,7 +124,6 @@ const META: Record<string, { title?: string; description: string }> = {
   'hermes': { description: "Point Hermes at aquaman's local proxy so provider API keys stay in your vault and are never in the Hermes agent process." },
   'docker-sandboxes': { title: 'Docker Sandboxes secrets from your own vault', description: 'Source Docker Sandboxes (sbx) secrets from 1Password, Bitwarden or any vault aquaman supports, with an allow-list and an audit entry per read.' },
   'openshell': { title: 'NVIDIA OpenShell credential driver for your vault', description: 'Make aquaman the credential driver for NVIDIA OpenShell, so sandboxes take keys from your own vault by reference, with an audit trail.' },
-  'agent-substrate': { title: 'Agent Substrate credential provider for your vault', description: "Make aquaman a credential provider for Agent Substrate's egress gateway on Kubernetes: keys from your own vault, granted per actor, with an audit entry per fetch." },
   'helper-commands': { title: 'aquaman get as a helper command', description: "Use aquaman get behind Claude Code's apiKeyHelper, a Codex provider's auth command, Hermes key_cmd or an OpenClaw exec provider: the working form for each and how it fails." },
   'how-it-fits': { description: 'How aquaman fits together: one daemon reading your vault, and the three ways it hands a key off, with what each gives you.' },
   'autostart': { description: 'Keep the aquaman daemon running across logins and reboots with a launchd agent or systemd user unit that a person approves, and how to remove it.' },

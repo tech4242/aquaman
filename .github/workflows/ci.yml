@@ -48,23 +48,6 @@ jobs:
       # never shows up in these audits.
       - name: npm audit — block on high+ in shipped deps
         run: npm audit --omit=dev --audit-level=high
-
-      - name: npm audit, block on high+ in the credential provider image
-        # deploy/substrate has its own lockfile: it is what the image installs.
-        run: npm audit --omit=dev --omit=optional --audit-level=high
-        working-directory: deploy/substrate
-
-      - name: The image lockfile covers this checkout's aquaman-proxy
-        # At release the image is locked to the aquaman-proxy just published.
-        # If that would pull in a package or a version nobody reviewed, the
-        # release's image job stops. This finds out before the tag exists.
-        run: |
-          set -euo pipefail
-          work="$(mktemp -d)"
-          cp deploy/substrate/package.json deploy/substrate/package-lock.json "$work/"
-          (cd packages/proxy && npm pack --ignore-scripts --silent --pack-destination "$work")
-          (cd "$work" && npm install --package-lock-only --ignore-scripts --no-audit --no-fund ./aquaman-proxy-*.tgz)
-          node scripts/check-image-lock.mjs deploy/substrate/package-lock.json "$work/package-lock.json" package-lock.json --local
       # Surface dev-dependency advisories for awareness, without blocking.
       - name: npm audit — dev deps (informational)
         run: npm audit --audit-level=high || true
@@ -352,41 +335,3 @@ jobs:
             uv pip install --python "$RUNNER_TEMP/hermes-pypi/bin/python" "hermes-agent==${{ env.HERMES_PYPI_VERSION }}"
             scripts/e2e-hermes-setup.sh "$RUNNER_TEMP/hermes-pypi/bin/hermes" manual
           fi
-
-  # The credential provider image, built from this checkout on every pull
-  # request: that the recipe and its lockfile still produce an image, and that
-  # the image runs the daemon of this checkout as an unprivileged user with the
-  # provider's packages in it. The provider against a real gateway is
-  # substrate-compat.yml.
-  image:
-    name: Credential provider image
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-      - name: Install npm dependencies
-        run: npm ci --legacy-peer-deps --ignore-scripts
-      - name: Build
-        run: npm run build
-      - name: Build the image from this checkout
-        run: |
-          set -euo pipefail
-          work="$(mktemp -d)"
-          cp deploy/substrate/package.json deploy/substrate/package-lock.json "$work/"
-          (cd packages/proxy && npm pack --ignore-scripts --silent --pack-destination "$work")
-          tarball="$(basename "$work"/aquaman-proxy-*.tgz)"
-          docker build -f deploy/substrate/Dockerfile --build-arg "AQUAMAN_TARBALL=$tarball" -t aquaman-credential-provider:ci "$work"
-      - name: The image runs this checkout's daemon, unprivileged, with the provider in it
-        run: |
-          set -euo pipefail
-          image=aquaman-credential-provider:ci
-          version="$(jq -r .version packages/proxy/package.json)"
-          test "$(docker run --rm --entrypoint aquaman "$image" --version)" = "$version"
-          test "$(docker run --rm --entrypoint id "$image" -u)" = "65532"
-          # Nothing is configured, so doctor fails; what it prints says the pieces are there.
-          out="$(docker run --rm --entrypoint aquaman "$image" substrate doctor 2>&1 || true)"
-          echo "$out"
-          echo "$out" | grep -F "gRPC packages installed"
-          echo "$out" | grep -F "Provider not enabled"

@@ -43,11 +43,11 @@ The full list, what you will see, and how to undo it: [Your agent asked to use a
 - **Limits what a key can do, for traffic through the proxy.** Per-service request policies decide which endpoints may be called, and a denied request never gets a credential. A coding agent's commands receive the key in their environment by default; [route the app through the proxy](/docs/app-through-proxy/) and it holds only a local token, with policies applied.
 - **Keeps evidence.** Every credential use goes into a log on your machine, chained by SHA-256, so an altered or inserted entry is detectable with `aquaman audit verify`. The log can be switched off.
 
-aquaman is for your own machine; the Agent Substrate provider, which runs in a cluster, is the one exception. In CI and production the same variable names are filled from that platform's secrets, and for some setups another tool fits better: [how it compares](/docs/compare/).
+aquaman is for your own machine. In CI and production the same variable names are filled from that platform's secrets, and for some setups another tool fits better: [how it compares](/docs/compare/).
 
 ## Security
 
-- **Runs on your own machine,** or for Agent Substrate in your own cluster. No account, no telemetry, no hosted service. Config and logs are plain files under `~/.aquaman`.
+- **Runs entirely on your machine.** No account, no telemetry, no hosted service. Config and logs are plain files under `~/.aquaman`.
 - **Open source, verifiable releases.** Apache-2.0 licensed. npm packages are published from GitHub Actions with provenance, and have no install scripts.
 - **Every credential use is recorded** in a hash-chained log that `aquaman audit verify` checks.
 - **Tested against attack, not just for function.** The request path has a conformance suite that sends raw bytes at a real proxy, and the controls are mapped to [MITRE ATLAS](/docs/compliance/atlas-mapping/) and [NIST SP 800-53](/docs/compliance/nist-800-53/).

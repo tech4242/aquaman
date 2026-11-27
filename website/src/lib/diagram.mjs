@@ -41,7 +41,7 @@ const HANDOFFS = [
   {
     name: 'Hand to the host',
     what: 'The host asks aquaman for the key and injects it at its own egress.',
-    users: [['NVIDIA OpenShell', 'aquaman openshell setup'], ['Docker Sandboxes', 'aquaman get'], ['Agent Substrate', 'credential provider']],
+    users: [['NVIDIA OpenShell', 'aquaman openshell setup'], ['Docker Sandboxes', 'aquaman get']],
     holds: 'The sandbox never holds the key.',
   },
 ];

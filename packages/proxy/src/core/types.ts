@@ -176,36 +176,6 @@ export interface OpenShellConfig {
   };
 }
 
-/** Agent Substrate integration: aquaman as a credential provider for its egress gateway. */
-export interface SubstrateConfig {
-  provider: {
-    /** Serve Substrate's credential provider API from `aquaman daemon`. Default false. */
-    enabled: boolean;
-    /** `host:port` the gateway dials. Default `0.0.0.0:50051`. */
-    listen?: string;
-    /** The provider's name in `ate-secret://<name>/<service>/<key>`. Default `aquaman`. */
-    name?: string;
-    tls?: {
-      /** PEM file with the serving certificate chain. Required. */
-      certFile?: string;
-      /** PEM file with the private key. Default: `certFile`, as Substrate writes both into one file. */
-      keyFile?: string;
-      /** PEM bundle of the authority the caller's certificate must chain to. Required. */
-      clientCaFile?: string;
-    };
-    /** The one identity that may call. Default: the egress gateway of a stock install. */
-    callerSpiffeId?: string;
-    /** Trust domain of actor identities. Default `substrate-actor.local`. */
-    actorTrustDomain?: string;
-    /** Fetches one actor is served per second; above it the actor gets 503. Default 20. */
-    fetchesPerSecond?: number;
-    /** The same for all actors of one atespace together. Default: four times `fetchesPerSecond`. */
-    atespaceFetchesPerSecond?: number;
-    /** `<atespace>` or `<atespace>/<actor>` to the `aquaman://service/key` references it may be given. */
-    grants?: Record<string, string[]>;
-  };
-}
-
 export interface WrapperConfig {
   credentials: CredentialsConfig;
   audit: AuditConfig;
@@ -215,7 +185,6 @@ export interface WrapperConfig {
   hermes?: HermesConfig;
   broker?: BrokerConfig;
   openshell?: OpenShellConfig;
-  substrate?: SubstrateConfig;
   policy?: Record<string, { defaultAction: 'allow' | 'deny'; rules: Array<{ method: string; path: string; action: 'allow' | 'deny' }> }>;
 }
 

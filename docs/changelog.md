@@ -12,22 +12,12 @@ pip install -U aquaman-hermes                     # Hermes users
 
 ## 0.22.0
 
-aquaman now describes itself as a credential broker: one daemon that reads the vault you already have and hands a key off in one of three ways, depending on what your agent host allows. This release adds a third host that injects keys itself, Agent Substrate, and corrects what the docs said about helper commands. Nothing changes for an existing install.
+aquaman now describes itself as a credential broker: one daemon that reads the vault you already have and hands a key off in one of three ways, depending on what your agent host allows. This release is that description, a page on helper commands that corrects what the docs said about them, a pass over every document, and fixes. Nothing changes for an existing install.
 
 ### How it fits together
 
 - A new page, [How aquaman fits together](https://aquaman.sh/docs/how-it-fits/), with one diagram: your vault, the daemon, and the three hand-offs. **Forward and inject** keeps the key in aquaman and is the only one where method and path rules apply. **Resolve** gives the key to one process. **Hand to the host** gives it to a sandbox host that injects it itself.
 - The README, the site and the package descriptions say "credential broker". aquaman runs no vault service and needs no account; that has not changed, and the first paragraph now says it.
-
-### Agent Substrate
-
-- `aquaman daemon` can serve as a credential provider for [Agent Substrate](https://github.com/agent-substrate/substrate)'s egress gateway on Kubernetes. Substrate isolates the agent and injects the key; aquaman supplies it from your vault. Guide: [Agent Substrate](https://aquaman.sh/docs/agent-substrate/).
-- **Who gets which key is written down, not asked.** `substrate.provider.grants` in `config.yaml` maps an atespace, or one actor in it, to the references it may be given. Anything else is refused before the vault is read. An edit takes effect without a restart.
-- **Only the gateway gets an answer.** The listener is TLS 1.3 with a required client certificate from Substrate's own signer, and aquaman answers exactly the egress gateway's identity, checked when a call's headers arrive. Substrate issues and renews the certificates; aquaman picks up a renewed one without a restart, and closes connections opened under an authority that was replaced.
-- **Every served fetch is in the audit log** with the actor and the reference, and `aquaman audit tail` shows both. Refusals are summarised (per actor the same one once a minute and at most twenty different ones, 240 a minute over all actors, the rest counted), and fetches are rate-limited per actor (20 a second, 40 at once) and per atespace (four times that), so one actor cannot use up its atespace's share and one atespace cannot use up another's. The log keeps a set number of 10 MB files (`audit.maxArchives` in `config.yaml`, new in this release: 10 by default, `0` keeps all; the manifest sets 100).
-- **A container image,** `ghcr.io/tech4242/aquaman-credential-provider`, is published with each release for amd64 and arm64 with a build attestation. A manifest is in `deploy/substrate/`. Every package in the image is pinned by a lockfile and the base image by digest; a release moves the `aquaman-proxy` entry of that lockfile, and stops if anything else would change to a package that was not reviewed.
-- `aquaman substrate doctor` checks the settings, the certificate files, the grants and the listener.
-- What was run: Agent Substrate v1.0.1 on a kind cluster with gVisor sandboxes. An actor's request arrived with the stored key; a key that was not granted was refused; grants added and removed, a key stored again, a stopped provider, a pod restart and a certificate renewal behaved as the guide says; and the HashiCorp Vault backend was run once against a dev server. CI repeats the cluster check when the provider changes and once a week.
 
 ### Helper commands
 
@@ -42,7 +32,14 @@ aquaman now describes itself as a credential broker: one daemon that reads the v
 - **`aquaman-coder doctor` and Codex hook trust.** With `CODEX_HOME` reached through a symlink, doctor kept saying the hooks were not trusted after you had trusted them, because Codex records trust under the real path.
 - The hook contract was run again on Claude Code 2.1.332 and Codex 0.172.0, with a stand-in API returning the tool call: the rewrite, the permission rules still applying to the original command, and redaction of the result all behave as documented.
 - When a sandbox blocks the proxy socket, the message no longer names Claude Code first under Codex: it says the agent host's sandbox and gives the fix for each host.
+- `aquaman init` told you to run `aquaman start`, which does not exist. It says `aquaman daemon`.
+- `audit.maxArchives` in `config.yaml` sets how many 10 MB audit log files are kept before the oldest is deleted: 10 by default, `0` keeps all.
 - The OpenShell check follows the project to its new repository.
+
+### Documentation
+
+- Every page was read against the code and against the others. Among the corrections: a policy example for a service that is not built in, the Telegram token described as stored in `openclaw.json`, commands that do not exist, and the old diagram in the proxy package's README.
+- The home page's host picker is grouped: coding assistants, personal agents, sandboxes, your own app.
 
 ## 0.21.2
 

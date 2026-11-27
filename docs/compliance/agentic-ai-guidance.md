@@ -14,7 +14,7 @@ How aquaman relates to 2026 guidance on agentic AI security. These are documenta
 | **Strong governance** | A hash-chained audit log records every credential use, policy denial and broker read; a value is not handed out unless its entry was written. What the chain and its anchor detect and what they do not is stated under AU-9 in the [NIST mapping](nist-800-53.md). |
 | **Continuous monitoring** | Per-credential-access audit events with timestamp, service, operation and outcome. `aquaman audit tail` for live monitoring. |
 | **Supply-chain controls** | aquaman pins its own dependencies exactly (no semver ranges on `aquaman-proxy` from `aquaman-plugin` or `aquaman-coder`). Versions cross-pin between packages. ClawScan + VirusTotal third-party audit posture: Passed. |
-| **Expanded attack surface mitigation** | Process isolation: credentials live in a separate proxy process, not in the agent's address space. A Unix socket (chmod 0o600) by default; an opt-in token-gated listener on loopback; and, only when deployed as an Agent Substrate provider, a TLS 1.3 listener that answers one client identity. |
+| **Expanded attack surface mitigation** | Process isolation: credentials live in a separate proxy process, not in the agent's address space. A Unix socket (chmod 0o600) by default, and an opt-in token-gated listener on loopback; nothing that another machine can reach. |
 | **Privilege creep prevention** | Broker endpoint materializes credentials per tool call (default 60s TTL, max 3600s). Agent's shell holds the credential only for the duration of one command. Project-scoped credential maps (v0.12.0+) limit which services each project sees. |
 | **Obscure event records (anti-tampering)** | `aquaman audit verify` detects an entry altered, inserted or deleted inside the log through the hash chain, and a log cut short, emptied, deleted or rebuilt through the anchor the serving process keeps in the credential store. Not detected: the removal of entries written since the last anchor (at most `audit.anchorIntervalSeconds`: 60 by default, 900 with 1Password, Bitwarden or Keeper), and a change made by software that can also write to the credential store. Details under AU-9 in the [NIST mapping](nist-800-53.md#the-audit-logs-anchor). |
 
@@ -30,10 +30,10 @@ CSA's own MAESTRO commentary explicitly endorses the **ephemeral credential brok
 |---|---|
 | **L2 Data Operations** | Vault backends + secret-pattern redactor (incoming + outgoing data sanitization). |
 | **L3 Agent Framework** | HTTP interceptor strips `Authorization` and `X-API-Key` headers before routing — credentials don't leak from agent SDKs that preset them. |
-| **L4 Deployment Infrastructure** | A Unix socket with file-mode access control by default; an opt-in token-gated loopback listener; for Agent Substrate a mutual-TLS listener that answers one client identity. |
+| **L4 Deployment Infrastructure** | A Unix socket with file-mode access control by default, and an opt-in token-gated loopback listener; nothing that another machine can reach. |
 | **L5 Evaluation & Observability** | Hash-chained audit log; runnable conformance tests at `test/compliance/`. |
 | **L6 Security & Compliance** | This document set: MITRE ATLAS, NIST SP 800-53 and BSI TR-02102-1 mappings, and this page. |
-| **L7 Agent Ecosystem** | Per-host adapters (OpenClaw, Claude Code via `aquaman-coder` since v0.12.0, Hermes since v0.13.0, Codex since v0.16.0, Docker Sandboxes, NVIDIA OpenShell since v0.17.0, Agent Substrate since v0.22.0): the same vault and audit log across every supported host, and the policy engine wherever requests pass through the proxy. |
+| **L7 Agent Ecosystem** | Per-host adapters (OpenClaw, Claude Code via `aquaman-coder` since v0.12.0, Hermes since v0.13.0, Codex since v0.16.0, Docker Sandboxes, NVIDIA OpenShell since v0.17.0): the same vault and audit log across every supported host, and the policy engine wherever requests pass through the proxy. |
 
 ## OWASP Top 10 for Agentic Applications 2026 and Top 10 for LLM Applications 2025
 

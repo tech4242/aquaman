@@ -45,7 +45,6 @@ jobs:
           assert "openclaw.plugin.json"       "$(jq -r .version packages/plugin/openclaw.plugin.json)"
           assert "plugin->aquaman-proxy dep"  "$(jq -r '.dependencies["aquaman-proxy"]' packages/plugin/package.json)"
           assert "coder->aquaman-proxy dep"   "$(jq -r '.dependencies["aquaman-proxy"]' packages/coder/package.json)"
-          assert "provider manifest image"    "$(sed -nE 's#^[[:space:]]*image:[[:space:]]*ghcr\.io/tech4242/aquaman-credential-provider:(.*)$#\1#p' deploy/substrate/aquaman-credential-provider.yaml)"
           assert "pyproject.toml"             "$(python3 -c "import tomllib;print(tomllib.load(open('packages/hermes/pyproject.toml','rb'))['project']['version'])")"
           assert "hermes plugin.yaml"         "$(grep -E '^version:' packages/hermes/aquaman_hermes/plugin.yaml | sed -E 's/^version:[[:space:]]*"?([^"]*)"?/\1/')"
           assert "hermes __init__.py"         "$(sed -nE 's/^__version__[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' packages/hermes/aquaman_hermes/__init__.py)"
@@ -239,29 +238,13 @@ jobs:
         with:
           node-version: 24
       - name: Stamp versions from the release tag
-        env:
-          VERSION: ${{ needs.validate-version.outputs.version }}
-        run: node scripts/set-version.mjs "$VERSION"
-      - name: Lock the credential provider image to the released package
-        # The image's lockfile can name the new aquaman-proxy only once it is
-        # on the registry. This becomes the committed lockfile the next
-        # release starts from, so it passes the same check as the image build.
-        env:
-          VERSION: ${{ needs.validate-version.outputs.version }}
-        run: |
-          set -euo pipefail
-          # A new version answers 404 for some minutes after it is published.
-          curl --fail --silent --show-error --location --retry 40 --retry-delay 15 --retry-all-errors \
-            -o /dev/null "https://registry.npmjs.org/aquaman-proxy/-/aquaman-proxy-$VERSION.tgz"
-          cp deploy/substrate/package-lock.json "$RUNNER_TEMP/image-lock.before.json"
-          (cd deploy/substrate && npm install --package-lock-only --save-exact --ignore-scripts --no-audit --no-fund "aquaman-proxy@$VERSION")
-          node scripts/check-image-lock.mjs "$RUNNER_TEMP/image-lock.before.json" deploy/substrate/package-lock.json package-lock.json
+        run: node scripts/set-version.mjs "${{ needs.validate-version.outputs.version }}"
       - name: Open sync PR (skips if repo is already in sync)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ needs.validate-version.outputs.version }}
         run: |
           set -euo pipefail
+          VERSION="${{ needs.validate-version.outputs.version }}"
           if git diff --quiet; then
             echo "main is already at $VERSION — nothing to sync."
             exit 0
@@ -270,7 +253,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git commit -am "release: sync versions to $VERSION"   # tracked files only; the lockfile above is one
+          git commit -am "release: sync versions to $VERSION"
           git push -u origin "$BRANCH" --force-with-lease
           gh pr create --base main --head "$BRANCH" \
             --title "release: sync versions to $VERSION" \
@@ -334,110 +317,3 @@ jobs:
         run: |
           cp "$BUNDLE" "assets/aquaman-$VERSION.intoto.jsonl"
           gh release upload "v$VERSION" assets/* --repo "$GITHUB_REPOSITORY" --clobber
-
-  # The Agent Substrate credential provider as a container image, installed
-  # from the lockfile in deploy/substrate. That lockfile is moved to the
-  # aquaman-proxy this run published, and scripts/check-image-lock.mjs stops
-  # the job if anything else in it moved to a package that is not in a reviewed
-  # lockfile. One image per architecture on a runner of that architecture, then
-  # one tag that names both by digest. The attestation is made over the digest
-  # of that tag.
-  # Check one:  gh attestation verify oci://ghcr.io/tech4242/aquaman-credential-provider:<version> --repo tech4242/aquaman
-  image-build:
-    name: Build the credential provider image (${{ matrix.arch }})
-    needs: [validate-version, npm-publish]
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      matrix:
-        include:
-          - { arch: amd64, runner: ubuntu-latest }
-          - { arch: arm64, runner: ubuntu-24.04-arm }
-    permissions:
-      contents: read
-      packages: write            # push to ghcr.io
-    outputs:
-      digest_amd64: ${{ steps.push.outputs.digest_amd64 }}
-      digest_arm64: ${{ steps.push.outputs.digest_arm64 }}
-    env:
-      VERSION: ${{ needs.validate-version.outputs.version }}
-      IMAGE: ghcr.io/${{ github.repository_owner }}/aquaman-credential-provider
-      ARCH: ${{ matrix.arch }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-      - name: Wait for the package on the registry
-        run: |
-          # A new version answers 404 for some minutes after it is published.
-          curl --fail --silent --show-error --location --retry 40 --retry-delay 15 --retry-all-errors \
-            -o /dev/null "https://registry.npmjs.org/aquaman-proxy/-/aquaman-proxy-$VERSION.tgz"
-      - name: Lock the image to the released package
-        # The committed lockfile pins every package in the image, with
-        # aquaman-proxy at the version before this one. Only that entry may
-        # move, or an entry may move to what the repository lockfile has.
-        run: |
-          set -euo pipefail
-          cp deploy/substrate/package-lock.json "$RUNNER_TEMP/image-lock.before.json"
-          (cd deploy/substrate && npm install --package-lock-only --save-exact --ignore-scripts --no-audit --no-fund "aquaman-proxy@$VERSION")
-          test "$(jq -r '.packages["node_modules/aquaman-proxy"].version' deploy/substrate/package-lock.json)" = "$VERSION"
-          node scripts/check-image-lock.mjs "$RUNNER_TEMP/image-lock.before.json" deploy/substrate/package-lock.json package-lock.json
-      - name: Build
-        run: |
-          set -euo pipefail
-          docker build \
-            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
-            --label "org.opencontainers.image.version=$VERSION" \
-            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            --label "org.opencontainers.image.licenses=Apache-2.0" \
-            -t "$IMAGE:$VERSION-$ARCH" deploy/substrate
-          # The image runs what it says: the daemon of this version.
-          docker run --rm --entrypoint aquaman "$IMAGE:$VERSION-$ARCH" --version | grep -F "$VERSION"
-      - name: Push
-        id: push
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          docker push "$IMAGE:$VERSION-$ARCH"
-          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$VERSION-$ARCH" | sed 's/.*@//')"
-          case "$digest" in sha256:*) ;; *) echo "::error::no digest for $IMAGE:$VERSION-$ARCH"; exit 1 ;; esac
-          echo "digest_$ARCH=$digest" >> "$GITHUB_OUTPUT"
-
-  image-publish:
-    name: Publish the credential provider image
-    needs: [validate-version, image-build]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write            # push the tag to ghcr.io
-      id-token: write            # sign the attestation (Sigstore, OIDC)
-      attestations: write        # store it with the repository
-    env:
-      VERSION: ${{ needs.validate-version.outputs.version }}
-      IMAGE: ghcr.io/${{ github.repository_owner }}/aquaman-credential-provider
-      AMD64: ${{ needs.image-build.outputs.digest_amd64 }}
-      ARM64: ${{ needs.image-build.outputs.digest_arm64 }}
-    steps:
-      - name: One tag for both architectures
-        id: tag
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          # By the digests the build jobs pushed, not by tags that could have moved since.
-          tags=(-t "$IMAGE:$VERSION")
-          # `latest` follows npm: it moves only when this version is the newest there.
-          if [ "$(npm view aquaman-proxy dist-tags.latest)" = "$VERSION" ]; then tags+=(-t "$IMAGE:latest"); fi
-          docker buildx imagetools create "${tags[@]}" "$IMAGE@$AMD64" "$IMAGE@$ARM64"
-          digest="$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}' | jq -r .digest)"
-          case "$digest" in sha256:*) ;; *) echo "::error::no digest for $IMAGE:$VERSION"; exit 1 ;; esac
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-      - name: Attest
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.tag.outputs.digest }}
-          push-to-registry: true

@@ -469,7 +469,7 @@ const program = new Command();
 
 program
   .name('aquaman')
-  .description('Credential broker for AI agents: vault, daemon, audit and policy, with the OpenClaw, coding-agent, Hermes, OpenShell and Agent Substrate integrations')
+  .description('Credential broker for AI agents: vault, daemon, audit and policy, with the OpenClaw, coding-agent, Hermes and OpenShell integrations')
   .version(VERSION)
   .configureHelp({
     subcommandTerm(cmd) {
@@ -588,15 +588,6 @@ program
         lines.push(aqua('NVIDIA OpenShell integration'));
         for (const sub of helper.visibleCommands(os_).filter((s: any) => s.name() !== 'help')) {
           lines.push(renderRow(`openshell ${sub.name()}`, sub.description() || ''));
-        }
-        lines.push('');
-      }
-
-      const substrate_ = byName.get('substrate');
-      if (substrate_) {
-        lines.push(aqua('Agent Substrate integration'));
-        for (const sub of helper.visibleCommands(substrate_).filter((s: any) => s.name() !== 'help')) {
-          lines.push(renderRow(`substrate ${sub.name()}`, sub.description() || ''));
         }
         lines.push('');
       }
@@ -1237,19 +1228,6 @@ program
       }
     }
 
-    // Agent Substrate credential provider. Opt-in; a failure here is reported
-    // but never takes the proxy down.
-    let substrateProvider: { address: string; stop(): Promise<void> } | undefined;
-    let substrateProviderError: string | undefined;
-    if (config.substrate?.provider?.enabled) {
-      try {
-        const { startSubstrateProvider } = await import('../substrate/integration.js');
-        substrateProvider = await startSubstrateProvider({ config, store: credentialStore, audit: auditLogger });
-      } catch (err) {
-        substrateProviderError = err instanceof Error ? err.message : String(err);
-      }
-    }
-
     // Write PID file
     writePidFile();
 
@@ -1257,8 +1235,6 @@ program
     console.log(`Credential broker: ${describeBroker(brokerScope)}`);
     if (openshellDriver) console.log(`OpenShell credential driver: ${openshellDriver.socketPath}`);
     if (openshellDriverError) console.error(`  ⚠ OpenShell credential driver not started: ${openshellDriverError}`);
-    if (substrateProvider) console.log(`Agent Substrate credential provider: ${substrateProvider.address}`);
-    if (substrateProviderError) console.error(`  ⚠ Agent Substrate credential provider not started: ${substrateProviderError}`);
     if (brokerScope?.declarationError()) {
       console.error(`  ⚠ ${brokerScope.declarationError()} — refs declared there are refused until it parses`);
     }
@@ -1273,7 +1249,6 @@ program
     const shutdown = async () => {
       console.log('\nShutting down daemon...');
       await openshellDriver?.stop();
-      await substrateProvider?.stop();
       await credentialProxy.stop();
       await auditAnchor.stop();
       removePidFile();
@@ -3910,80 +3885,6 @@ async function startProxyOrExit(proxy: { start(): Promise<void> }): Promise<void
   }
 }
 
-// ── aquaman substrate …: Agent Substrate credential provider ──
-const substrate = program
-  .command('substrate')
-  .description('Agent Substrate integration: aquaman as a credential provider for its egress gateway');
-
-substrate
-  .command('doctor')
-  .description('Check the Agent Substrate credential provider: packages, settings, TLS files, grants, listener')
-  .action(async () => {
-    const net = await import('node:net');
-    const { X509Certificate } = await import('node:crypto');
-    const { grpcAvailable } = await import('../openshell/integration.js');
-    const { GRPC_INSTALL_HINT } = await import('../openshell/grpc-server.js');
-    const { substrateProviderSettings } = await import('../substrate/integration.js');
-    const { readTlsContext } = await import('../substrate/grpc-server.js');
-    const { loadSubstrateGrants } = await import('../substrate/grants.js');
-    const config = loadConfig();
-    let failed = 0;
-    const pass = (m: string) => console.log(`  ✓ ${m}`);
-    const fail = (m: string, fix?: string) => { failed++; console.log(`  ✗ ${m}`); if (fix) console.log(`    → ${fix}`); };
-    const note = (m: string) => console.log(`  • ${m}`);
-
-    console.log(`\n  ${aqua('Agent Substrate credential provider')}\n`);
-    if (await grpcAvailable()) pass('gRPC packages installed (@grpc/grpc-js, @grpc/proto-loader)');
-    else fail('gRPC packages missing', GRPC_INSTALL_HINT);
-
-    if (config.substrate?.provider?.enabled) pass('Provider enabled in config.yaml');
-    else fail('Provider not enabled', `set substrate.provider.enabled: true in ${getConfigPath()}`);
-
-    const settings = substrateProviderSettings(config);
-    if ('error' in settings) {
-      fail(settings.error, `edit ${getConfigPath()}`);
-    } else {
-      pass(`Secret URIs: ate-secret://${settings.name}/<service>/<key>`);
-      pass(`Only caller accepted: ${settings.callerSpiffeId}`);
-      try {
-        const context = readTlsContext(settings.tls);
-        // The file may hold the key first; the first certificate in it is the serving one.
-        const firstCert = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/.exec((context.cert as Buffer).toString('latin1'))?.[0] ?? '';
-        const leaf = new X509Certificate(firstCert);
-        const until = new Date(leaf.validTo);
-        if (until.getTime() <= Date.now()) fail(`Serving certificate expired on ${until.toISOString()}`, `renew ${settings.tls.certFile}`);
-        else pass(`TLS files load; serving certificate valid until ${until.toISOString()}`);
-      } catch (err) {
-        fail(err instanceof Error ? err.message : String(err), 'check substrate.provider.tls in config.yaml and the mounted certificate volumes');
-      }
-
-      const port = Number(settings.listen.slice(settings.listen.lastIndexOf(':') + 1));
-      const reachable = await new Promise<boolean>((resolve) => {
-        const c = net.connect(port, '127.0.0.1', () => { c.end(); resolve(true); });
-        c.on('error', () => resolve(false));
-        setTimeout(() => { c.destroy(); resolve(false); }, 2000);
-      });
-      if (reachable) pass(`Listener accepts connections on port ${port}`);
-      else fail(`Nothing is listening on port ${port} (daemon not running, or started before the provider was enabled)`, 'aquaman stop; aquaman daemon');
-    }
-
-    const grants = loadSubstrateGrants(getConfigPath());
-    if (grants.error) fail(grants.error, `edit ${getConfigPath()}`);
-    let refs = 0;
-    for (const set of grants.grants.values()) refs += set.size;
-    if (refs > 0) pass(`${refs} grant${refs === 1 ? '' : 's'} across ${grants.grants.size} atespace or actor entr${grants.grants.size === 1 ? 'y' : 'ies'}`);
-    else note('No grants yet: every fetch is refused until substrate.provider.grants lists a reference');
-
-    const backend = config.credentials.backend;
-    if (backend === 'bitwarden' || backend === 'keychain' || backend === 'keepassxc' || backend === 'keeper') {
-      note(`Backend ${backend} needs a person or a desktop session; in a cluster use vault or encrypted-file`);
-    }
-
-    console.log('');
-    if (failed > 0) { console.log(`  ${failed} check${failed === 1 ? '' : 's'} failed.\n`); process.exit(1); }
-    console.log('  All checks passed.\n');
-  });
-
 // Credential broker scope (v0.15.0+)
 const broker = program
   .command('broker')
@@ -4783,8 +4684,7 @@ function formatEntry(entry: any): string {
     case 'tool_result':
       return `Result for ${entry.data.toolCallId}`;
     case 'credential_access':
-      // An Agent Substrate fetch is recorded with the actor it was for as its session.
-      return `${entry.data.service} ${entry.data.operation} ${entry.data.success ? 'OK' : `FAIL: ${entry.data.error || 'unknown'}`}${entry.data.note ? ` (${entry.data.note})` : ''}${typeof entry.sessionId === 'string' && entry.sessionId.startsWith('actor/') ? ` for ${entry.sessionId}` : ''}`;
+      return `${entry.data.service} ${entry.data.operation} ${entry.data.success ? 'OK' : `FAIL: ${entry.data.error || 'unknown'}`}${entry.data.note ? ` (${entry.data.note})` : ''}`;
     default:
       return JSON.stringify(entry.data).slice(0, 80);
   }

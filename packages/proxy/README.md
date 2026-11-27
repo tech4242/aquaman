@@ -11,7 +11,7 @@ This package is the core every other aquaman package talks to: the daemon, vault
 | [`aquaman-plugin`](https://github.com/tech4242/aquaman/tree/main/packages/plugin) | OpenClaw | `openclaw plugins install aquaman-plugin` |
 | [`aquaman-hermes`](https://github.com/tech4242/aquaman/tree/main/packages/hermes) | Hermes | `pip install aquaman-hermes` |
 
-**Guides:** [Claude Code](https://aquaman.sh/docs/claude-code/) · [Codex](https://aquaman.sh/docs/codex/) · [OpenClaw](https://aquaman.sh/docs/openclaw/) · [Hermes](https://aquaman.sh/docs/hermes/) · [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/) · [NVIDIA OpenShell](https://aquaman.sh/docs/openshell/) · [Agent Substrate](https://aquaman.sh/docs/agent-substrate/) · [how it fits together](https://aquaman.sh/docs/how-it-fits/) · [for agents](https://aquaman.sh/docs/agent-setup/) · [compared with alternatives](https://aquaman.sh/docs/compare/)
+**Guides:** [Claude Code](https://aquaman.sh/docs/claude-code/) · [Codex](https://aquaman.sh/docs/codex/) · [OpenClaw](https://aquaman.sh/docs/openclaw/) · [Hermes](https://aquaman.sh/docs/hermes/) · [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/) · [NVIDIA OpenShell](https://aquaman.sh/docs/openshell/) · [how it fits together](https://aquaman.sh/docs/how-it-fits/) · [for agents](https://aquaman.sh/docs/agent-setup/) · [compared with alternatives](https://aquaman.sh/docs/compare/)
 
 **Security:** [policy and how to report](https://aquaman.sh/docs/security/) · [published advisories](https://github.com/tech4242/aquaman/security/advisories) (latest: [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v), fixed in 0.17.2) · [what to know before trusting it](https://aquaman.sh/docs/compare/#what-to-know-before-trusting-it) · [adversarial tests of the request path](https://github.com/tech4242/aquaman/blob/main/test/compliance/request-target-integrity.test.ts) · [what aquaman does not protect against](https://aquaman.sh/docs/compare/#what-aquaman-does-not-do)
 
@@ -34,7 +34,7 @@ With `--no-hooks` nothing is written to the agent host's settings and aquaman an
 
 Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://aquaman.sh/docs/agent-setup/).
 
-<img src="https://raw.githubusercontent.com/tech4242/aquaman/main/docs/assets/how-it-fits.svg" width="880" alt="Your vault at the top. Below it the aquaman-proxy daemon with four parts: vault backends and links, approval dialog, declared scope, audit log. It hands a key off in three ways. Forward and inject, used by OpenClaw for model keys and Telegram, Hermes for model keys, and your own app. Resolve, used by Claude Code, Codex and Hermes project secrets. Hand to the host, used by NVIDIA OpenShell, Docker Sandboxes and Agent Substrate.">
+<img src="https://raw.githubusercontent.com/tech4242/aquaman/main/docs/assets/how-it-fits.svg" width="880" alt="Your vault at the top. Below it the aquaman-proxy daemon with four parts: vault backends and links, approval dialog, declared scope, audit log. It hands a key off in three ways. Forward and inject, used by OpenClaw for model keys and Telegram, Hermes for model keys, and your own app. Resolve, used by Claude Code, Codex and Hermes project secrets. Hand to the host, used by NVIDIA OpenShell and Docker Sandboxes.">
 
 What each of the three hand-offs gives you: [how aquaman fits together](https://aquaman.sh/docs/how-it-fits/).
 
@@ -66,7 +66,7 @@ aquaman daemon &        # start the proxy on ~/.aquaman/proxy.sock
 
 Five layers of protection:
 
-- **Process isolation**: credentials live in a separate address space, reached over a Unix socket (`chmod 0o600`), a token-gated loopback listener or, for Agent Substrate, a mutual-TLS listener (see below)
+- **Process isolation**: credentials live in a separate address space, reached over a Unix socket (`chmod 0o600`) or a token-gated loopback listener (see below)
 - **Service allowlisting**: `proxiedServices` controls which APIs the agent can reach
 - **Request policies**: method + path rules per service, checked *before* credential injection ([details in the root README](https://github.com/tech4242/aquaman#request-policies))
 - **Broker scope** (v0.15.0+): the one endpoint that returns a credential *value* serves only refs you declared, and never runs on an OpenClaw-hosted proxy
@@ -79,9 +79,8 @@ Five layers of protection:
 | Coding agents, any client that can dial a socket | Unix socket `~/.aquaman/proxy.sock` | File permissions (`0600`): only processes running as you |
 | Hermes (v0.13.0+), OpenClaw model and Telegram traffic (v0.15.0+) | Loopback TCP `127.0.0.1:<port>` | Per-install token, constant-time check, loopback bind |
 | NVIDIA OpenShell gateway (v0.17.0+) | Unix socket `~/.aquaman/openshell.sock` | File permissions (`0600`) |
-| Agent Substrate egress gateway (v0.22.0+) | TCP, gRPC over TLS 1.3 (in a pod) | Client certificate from Substrate's signer, and exactly the gateway's identity |
 
-Hermes and OpenClaw each build their own HTTP client and can't dial a socket, so they use the loopback listener. Coding agents and `aquaman get` use the socket. The Agent Substrate listener is the only one meant to be reached from another machine, and it is off unless you deploy it.
+Hermes and OpenClaw each build their own HTTP client and can't dial a socket, so they use the loopback listener. Coding agents and `aquaman get` use the socket.
 
 The token is a capability to reach the local proxy, not a credential. Generated per install, stored in `~/.aquaman/config.yaml` (`0600`), sent by the host as its provider api key. The proxy checks it, strips it, injects your real key.
 
@@ -139,18 +138,6 @@ It is a way to supply a secret without the agent handling it, and a consent step
 - **Copy mode:** a plain value is written to the vault under the `openshell` service.
 - Every resolve is audited as a `read` (agent `openshell`), without the value. Handles are interpreted by namespace, never by gateway-supplied metadata, so a reference can't bypass the allow-list.
 - `@grpc/grpc-js` and `@grpc/proto-loader` are optional peer dependencies, loaded only when the driver is on. The vendored protocol files live in `proto/openshell/`.
-
-## Agent Substrate credential provider (v0.22.0+)
-
-`aquaman daemon` can serve Agent Substrate's credential provider API (`substrate.credprovider.v1.CredentialProvider`) when `substrate.provider.enabled` is set in `config.yaml`. It runs as a pod; the image and a manifest are in [`deploy/substrate/`](https://github.com/tech4242/aquaman/tree/main/deploy/substrate).
-
-- **Who may call:** TLS 1.3 with a required client certificate, and only the egress gateway's SPIFFE identity gets an answer.
-- **Who gets what:** `substrate.provider.grants` maps an atespace, or one actor in it, to the references it may be given. Anything else is refused before the vault is read.
-- **Audit:** one entry per served fetch, with the actor and the reference. Refusals are summarised.
-- `aquaman substrate doctor` checks the settings, the certificate files, the grants and the listener.
-- The gRPC packages are the same optional peer dependencies as for OpenShell. The vendored protocol file is in `proto/substrate/`.
-
-Guide: [Agent Substrate](https://aquaman.sh/docs/agent-substrate/).
 
 ## Documentation
 

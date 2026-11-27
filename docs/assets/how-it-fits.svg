@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" role="img" aria-labelledby="hf-t hf-d" shape-rendering="crispEdges">
 <title id="hf-t">How aquaman fits together</title>
-<desc id="hf-d">Your vault is at the top. The aquaman-proxy daemon reads your keys from it, and has four parts: vault backends and links, the approval dialog, the declared scope and the audit log. It hands a key off in three ways. Forward and inject: aquaman adds the key to the request and checks your method and path rules; used by OpenClaw for model keys and Telegram through aquaman-plugin, by Hermes for model keys, and by your own app through aquaman-coder bind --via-proxy. Resolve: one command, or a host at startup, gets the key in its environment; used by Claude Code and Codex through aquaman-coder and by Hermes project secrets through aquaman-hermes. Hand to the host: the host asks aquaman for the key and injects it itself; used by NVIDIA OpenShell, Docker Sandboxes and Agent Substrate.</desc>
+<desc id="hf-d">Your vault is at the top. The aquaman-proxy daemon reads your keys from it, and has four parts: vault backends and links, the approval dialog, the declared scope and the audit log. It hands a key off in three ways. Forward and inject: aquaman adds the key to the request and checks your method and path rules; used by OpenClaw for model keys and Telegram through aquaman-plugin, by Hermes for model keys, and by your own app through aquaman-coder bind --via-proxy. Resolve: one command, or a host at startup, gets the key in its environment; used by Claude Code and Codex through aquaman-coder and by Hermes project secrets through aquaman-hermes. Hand to the host: the host asks aquaman for the key and injects it itself; used by NVIDIA OpenShell and Docker Sandboxes.</desc>
 <style>
 .s{font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;fill:#0b2a3a}
 .m{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;fill:#0b2a3a}
@@ -91,8 +91,6 @@ text{shape-rendering:auto}
 <text class="m" x="676" y="535" font-size="12">aquaman openshell setup</text>
 <text class="s b" x="676" y="562" font-size="13.5">Docker Sandboxes</text>
 <text class="m" x="676" y="579" font-size="12">aquaman get</text>
-<text class="s b" x="676" y="606" font-size="13.5">Agent Substrate</text>
-<text class="m" x="676" y="623" font-size="12">credential provider</text>
 <rect x="660" y="636" width="280" height="4" fill="#0b2a3a"/>
 <text class="s b" x="676" y="658" font-size="12.5">The sandbox never holds the key.</text>
 </svg>

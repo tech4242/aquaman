@@ -27,7 +27,7 @@ Three things aquaman does:
 2. **Limits what a key can do, for traffic through the proxy.** Per-service request policies decide which endpoints may be called, and a denied request never gets a credential. This covers OpenClaw, Hermes and any client pointed at the proxy. A coding agent's commands receive the key in their environment by default, so policies do not apply to them unless the app is [routed through the proxy](https://aquaman.sh/docs/app-through-proxy/).
 3. **Keeps evidence.** Every credential use goes into a log chained by SHA-256, so an altered or inserted entry is detectable (unless you switch the log off with `audit.enabled: false`).
 
-**Guides:** [Claude Code](https://aquaman.sh/docs/claude-code/) · [Codex](https://aquaman.sh/docs/codex/) · [OpenClaw](https://aquaman.sh/docs/openclaw/) · [Hermes](https://aquaman.sh/docs/hermes/) · [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/) · [NVIDIA OpenShell](https://aquaman.sh/docs/openshell/) · [Agent Substrate](https://aquaman.sh/docs/agent-substrate/) · [how it fits together](https://aquaman.sh/docs/how-it-fits/) · [for agents](https://aquaman.sh/docs/agent-setup/) · [compared with alternatives](https://aquaman.sh/docs/compare/)
+**Guides:** [Claude Code](https://aquaman.sh/docs/claude-code/) · [Codex](https://aquaman.sh/docs/codex/) · [OpenClaw](https://aquaman.sh/docs/openclaw/) · [Hermes](https://aquaman.sh/docs/hermes/) · [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/) · [NVIDIA OpenShell](https://aquaman.sh/docs/openshell/) · [how it fits together](https://aquaman.sh/docs/how-it-fits/) · [for agents](https://aquaman.sh/docs/agent-setup/) · [compared with alternatives](https://aquaman.sh/docs/compare/)
 
 **Security:** [policy and how to report](https://aquaman.sh/docs/security/) · [published advisories](https://github.com/tech4242/aquaman/security/advisories) (latest: [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v), fixed in 0.17.2) · [what to know before trusting it](https://aquaman.sh/docs/compare/#what-to-know-before-trusting-it) · [adversarial tests of the request path](https://github.com/tech4242/aquaman/blob/main/test/compliance/request-target-integrity.test.ts) · [what aquaman does not protect against](https://aquaman.sh/docs/compare/#what-aquaman-does-not-do)
 
@@ -52,7 +52,7 @@ Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://a
 
 ## Pick your path
 
-Aquaman ships as four packages sharing one vault and one daemon, plus three host integrations that need no package of their own. Install only what you need:
+Aquaman ships as four packages sharing one vault and one daemon, plus two host integrations that need no package of their own. Install only what you need:
 
 | Package | What it does | When to install |
 |---|---|---|
@@ -62,9 +62,8 @@ Aquaman ships as four packages sharing one vault and one daemon, plus three host
 | **[`aquaman-hermes`](packages/hermes/)** | Hermes agent-host plugin (Python, on PyPI). Points Hermes at an opt-in, token-gated loopback listener via its native `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`; adds an in-session `/aquaman-status` command, tool, and health probe. Isolation is proxy-side; the plugin holds no credentials. | If you run the Hermes agent host. `pip install aquaman-hermes` |
 | **Docker Sandboxes** | Not a package: a separate path that needs only `aquaman-proxy`. Docker's own proxy injects the secrets; `aquaman get` supplies them from your vault, with the allow-list and audit log. | If you run agents in Docker Sandboxes. See [Quick Start 5](#5-docker-sandboxes-secrets-from-your-own-vault). |
 | **NVIDIA OpenShell** | Not a package: `aquaman daemon` becomes the OpenShell gateway's credential driver. OpenShell isolates the key from the sandbox; aquaman supplies it from your vault by reference, with the allow-list and audit log. | If you run agents in OpenShell sandboxes. See [Quick Start 6](#6-your-vault-as-the-nvidia-openshell-credential-driver). |
-| **Agent Substrate** | Not a package: `aquaman daemon` runs as a pod and becomes a credential provider for Substrate's egress gateway. Substrate isolates the key from the actor; aquaman supplies it from your vault to the actors you granted it to, with an audit entry per fetch. | If you run agents on Agent Substrate. See [Quick Start 7](#7-your-vault-as-an-agent-substrate-credential-provider). |
 
-A single `aquaman` CLI surfaces all of them: top-level commands for vault and audit, `aquaman openclaw ...` for the OpenClaw integration, `aquaman coder ...` for the coding-agent integration (delegates to `aquaman-coder` under the hood), `aquaman hermes ...` for Hermes, and `aquaman openshell ...` and `aquaman substrate ...` for the two sandbox hosts.
+A single `aquaman` CLI surfaces all of them: top-level commands for vault and audit, `aquaman openclaw ...` for the OpenClaw integration, `aquaman coder ...` for the coding-agent integration (delegates to `aquaman-coder` under the hood), `aquaman hermes ...` for Hermes, and `aquaman openshell ...` for the OpenShell driver.
 
 ## Quick Start
 
@@ -228,34 +227,19 @@ Good to know:
 
 `aquaman openshell doctor [--gateway-config <file>]` checks the packages, the driver socket, your declared refs and, optionally, that the gateway config points at aquaman.
 
-### 7. Your vault as an Agent Substrate credential provider
-
-[Agent Substrate](https://github.com/agent-substrate/substrate) runs sandboxed agents on Kubernetes; its egress gateway replaces a placeholder header with a credential it fetches from a provider plugin. aquaman can be that provider: it runs as a pod, takes the key from HashiCorp Vault or from its own encrypted file on a volume (the manifest's default), hands it only to the actors you granted it to, and records every fetch.
-
-```bash
-kubectl -n ate-system create secret generic aquaman-credential-provider \
-  --from-literal=AQUAMAN_ENCRYPTION_PASSWORD="$(openssl rand -base64 32)"
-curl -fsSLO https://raw.githubusercontent.com/tech4242/aquaman/main/deploy/substrate/aquaman-credential-provider.yaml
-kubectl apply -f aquaman-credential-provider.yaml      # after editing the grants in its ConfigMap
-ate-setup deploy atenet \
-  --credential-provider='{"name":"aquaman","address":"aquaman-credential-provider.ate-system.svc:50051"}'
-```
-
-Grants live in the ConfigMap (`substrate.provider.grants`: an atespace or one actor to the references it may be given; anything else is refused). An actor's `EgressPolicy` then names a key as `ate-secret://aquaman/<service>/<key>`. The connection is mutual TLS with certificates Substrate issues, and aquaman accepts only the gateway's identity. Full guide: [Agent Substrate](https://aquaman.sh/docs/agent-substrate/).
-
 ## How It Works
 
-<img src="docs/assets/how-it-fits.svg" width="880" alt="Your vault at the top. Below it the aquaman-proxy daemon with four parts: vault backends and links, approval dialog, declared scope, audit log. It hands a key off in three ways. Forward and inject, used by OpenClaw for model keys and Telegram, Hermes for model keys, and your own app. Resolve, used by Claude Code, Codex and Hermes project secrets. Hand to the host, used by NVIDIA OpenShell, Docker Sandboxes and Agent Substrate.">
+<img src="docs/assets/how-it-fits.svg" width="880" alt="Your vault at the top. Below it the aquaman-proxy daemon with four parts: vault backends and links, approval dialog, declared scope, audit log. It hands a key off in three ways. Forward and inject, used by OpenClaw for model keys and Telegram, Hermes for model keys, and your own app. Resolve, used by Claude Code, Codex and Hermes project secrets. Hand to the host, used by NVIDIA OpenShell and Docker Sandboxes.">
 
 One daemon, `aquaman-proxy`, reads your vault and hands a key off in one of three ways. Which one applies depends on what the host lets aquaman do.
 
 | | Forward and inject | Resolve | Hand to the host |
 |---|---|---|---|
 | What happens | aquaman adds the key to the outgoing request | one command, or a host at startup, gets the key in its environment | the host asks for the key and injects it at its own egress |
-| Used by | OpenClaw model keys and Telegram (`aquaman-plugin`), Hermes model keys (Anthropic and OpenAI providers), [your own app](https://aquaman.sh/docs/app-through-proxy/) | Claude Code and Codex (`aquaman-coder`), Hermes project secrets (`aquaman-hermes`) | NVIDIA OpenShell, Docker Sandboxes, Agent Substrate |
+| Used by | OpenClaw model keys and Telegram (`aquaman-plugin`), Hermes model keys (Anthropic and OpenAI providers), [your own app](https://aquaman.sh/docs/app-through-proxy/) | Claude Code and Codex (`aquaman-coder`), Hermes project secrets (`aquaman-hermes`) | NVIDIA OpenShell, Docker Sandboxes |
 | Who holds the key | aquaman only | that one process | the host, outside its sandbox |
 | Your vault as the source | yes | yes | yes |
-| Only what you set up for it | proxied services, or a service you routed an app to | declared references | declared references, or grants for Agent Substrate |
+| Only what you set up for it | proxied services, or a service you routed an app to | declared references | declared references |
 | Audit entry (unless you switch the log off) | every request | every hand-out | every hand-out |
 | Method and path rules | yes | no | no |
 
@@ -271,7 +255,7 @@ On the proxy paths the agent sees a local endpoint plus a marker: the `aquaman-p
 
 | Layer | What it does | What it stops |
 |---|---|---|
-| **Process isolation** | Credentials in a separate process, reached over a Unix socket (`chmod 0o600`), a token-gated loopback listener or, for Agent Substrate, a mutual-TLS listener that answers one identity | Compromised agent can't read proxied keys: different address space |
+| **Process isolation** | Credentials in a separate process, reached over a Unix socket (`chmod 0o600`) or a token-gated loopback listener | Compromised agent can't read proxied keys: different address space |
 | **Broker scope** | Only `aquaman daemon` hands out values, and only for refs you declared; OpenClaw-hosted proxies never do (v0.15.0+) | An agent can't pull arbitrary vault entries through the socket |
 | **Service allowlisting** | `proxiedServices` controls which APIs the agent can reach | Agent can't talk to services you didn't authorize |
 | **Request policies** | Method + path rules per service, enforced before credential injection | Agent can reach Anthropic but not its admin API; can draft emails but not send them |
@@ -286,9 +270,8 @@ On the proxy paths the agent sees a local endpoint plus a marker: the `aquaman-p
 | Coding agents, any client that can dial a socket | Unix socket `~/.aquaman/proxy.sock` | File permissions (`0600`): only processes running as you |
 | Hermes (v0.13.0+), OpenClaw model and Telegram traffic (v0.15.0+) | Loopback TCP `127.0.0.1:<port>` | Per-install token, constant-time check, loopback bind |
 | NVIDIA OpenShell gateway (v0.17.0+) | Unix socket `~/.aquaman/openshell.sock` | File permissions (`0600`) |
-| Agent Substrate egress gateway (v0.22.0+) | TCP, gRPC over TLS 1.3 (in a pod) | Client certificate from Substrate's signer, and exactly the gateway's identity |
 
-Hermes and OpenClaw each build their own HTTP client and can't dial a socket, so they use the loopback listener. Coding agents and `aquaman get` use the socket. The Agent Substrate listener is the only one meant to be reached from another machine, and it is off unless you deploy it.
+Hermes and OpenClaw each build their own HTTP client and can't dial a socket, so they use the loopback listener. Coding agents and `aquaman get` use the socket.
 
 The token is a capability to reach the local proxy, not a credential. Generated per install, stored in `~/.aquaman/config.yaml` (`0600`), sent by the host as its provider api key. The proxy checks it, strips it, injects your real key. Telegram has no auth header, so there the token rides in the `/bot<TOKEN>` path segment instead.
 
@@ -372,7 +355,7 @@ Bring your own vault: aquaman runs no vault service. Pick the backend you alread
 | Backend | Best For | Setup |
 |---|---|---|
 | `keychain` | Local dev on macOS (default) | Works out of the box |
-| `encrypted-file` | Linux and WSL2 without a keyring; a pod (Agent Substrate) | AES-256-GCM, password-protected |
+| `encrypted-file` | Linux and WSL2 without a keyring | AES-256-GCM, password-protected |
 | `keepassxc` | Existing KeePass users | `npm i -g kdbxweb argon2` (optional peers since v0.14.1), then set `AQUAMAN_KEEPASS_PASSWORD` or a key file |
 | `1password` | Team credential sharing | `brew install 1password-cli && op signin`. For unattended agents use a [service account](https://developer.1password.com/docs/service-accounts/) (`OP_SERVICE_ACCOUNT_TOKEN`) |
 | `vault` | Enterprise secrets management | Set `VAULT_ADDR` + `VAULT_TOKEN` |
@@ -384,7 +367,7 @@ Bring your own vault: aquaman runs no vault service. Pick the backend you alread
 
 With `bitwarden` the daemon starts and stays up while the vault is locked, for example after `aquaman service install` started it at login. Requests that need a credential answer `vault_locked` with the fix `Run: aquaman unlock` until a person has run it in a terminal; `aquaman lock` makes the daemon drop the session again. The session is never written to disk, the keychain or the login item. Details: [Bitwarden: unlock after you log in](https://aquaman.sh/docs/autostart/#bitwarden-unlock-after-you-log-in).
 
-`encrypted-file` is the last resort for a headless Linux machine without a native keyring, and the default in the Agent Substrate manifest. For better security on Linux, install `libsecret-1-dev` (GNOME Keyring), use `systemd-creds` (TPM2 binding), or use 1Password/Vault.
+`encrypted-file` is the last resort for a headless Linux machine without a native keyring. For better security on Linux, install `libsecret-1-dev` (GNOME Keyring), use `systemd-creds` (TPM2 binding), or use 1Password/Vault.
 
 ### Credential caching (v0.13.1+)
 
