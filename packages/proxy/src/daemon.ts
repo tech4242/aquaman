@@ -315,6 +315,9 @@ export class CredentialProxy {
       });
     };
 
+    const tooLong = socketPathTooLong(this.options.socketPath);
+    if (tooLong) throw new SocketPathError(tooLong);
+
     this.server = http.createServer(handlerFor(false));
 
     // Clean up stale socket (atomic — no TOCTOU race)
@@ -2052,6 +2055,29 @@ export class CredentialProxy {
 
   getServiceConfigs(): Record<string, ServiceConfig> {
     return this.serviceRegistry.toConfigMap();
+  }
+}
+
+/**
+ * The longest path a Unix socket can be bound at: the kernel's address
+ * structure holds 104 bytes on macOS and 108 on Linux, and a path that fills
+ * it binds and accepts connections (run with Node 24 on both).
+ */
+export const MAX_UNIX_SOCKET_PATH = process.platform === 'darwin' ? 104 : 108;
+
+/** Why the proxy cannot listen at this path, when the path is too long to bind; otherwise `null`. */
+export function socketPathTooLong(socketPath: string): string | null {
+  const bytes = Buffer.byteLength(socketPath);
+  if (bytes <= MAX_UNIX_SOCKET_PATH) return null;
+  return `The proxy socket path is ${bytes} bytes, and a Unix socket path can be at most ${MAX_UNIX_SOCKET_PATH} here: ${socketPath}`;
+}
+
+/** The proxy cannot listen where it was told to. Carries the fix. */
+export class SocketPathError extends Error {
+  readonly fix = 'Use a shorter config directory: set AQUAMAN_CONFIG_DIR to a short directory that only you can write to';
+  constructor(message: string) {
+    super(message);
+    this.name = 'SocketPathError';
   }
 }
 
