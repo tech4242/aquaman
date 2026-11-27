@@ -1,8 +1,8 @@
 {
   "name": "aquaman",
-  "version": "0.21.2",
+  "version": "0.22.0",
   "private": true,
-  "description": "aquaman: credential proxy for AI agents. No account, bring your own vault, runs locally.",
+  "description": "aquaman: credential broker for AI agents. No account, bring your own vault, runs locally.",
   "type": "module",
   "workspaces": [
     "packages/*"
@@ -40,6 +40,7 @@
     "claude-code",
     "codex",
     "coding-agent",
+    "credential-broker",
     "credential-proxy",
     "ai-agents",
     "secrets-management",

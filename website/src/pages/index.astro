@@ -40,7 +40,7 @@ const software = {
 const jsonLd = [software, { '@context': 'https://schema.org', '@type': 'WebSite', name: 'aquaman', url: Astro.site!.href }];
 const description =
   'Give Claude Code, Codex and other AI agents an API key without handing it over. Open source, runs on your machine, keeps keys in the vault you already use.';
-import { routeDiagramHtml } from '../lib/diagram.mjs';
+import { routeDiagramHtml, overviewDiagramHtml } from '../lib/diagram.mjs';
 import { scorecardScore, SCORECARD_URL } from '../lib/scorecard';
 
 const scorecard = await scorecardScore();
@@ -54,7 +54,7 @@ const scorecard = await scorecardScore();
           <p class="depth" aria-hidden="true">Depth 000 m: the surface</p>
         </header>
         <p class="subline">Your agent stays up here with a reference. The key stays down there, in your vault.</p>
-        <p class="what">aquaman is an open-source credential proxy that runs on your machine. No account, no cloud.</p>
+        <p class="what">aquaman is an open-source credential broker that runs on your machine. No account, no cloud, no vault service to sign up for.</p>
         <div class="cta">
           <a class="btn a" href="#start">Start</a>
           <a class="btn b" href="/docs/approve/">My agent asked to install it</a>
@@ -186,6 +186,11 @@ const scorecard = await scorecardScore();
 <span class="prompt">[CREDENTIAL_ACCESS] </span>github read OK
 <span class="prompt">&gt; </span>aquaman audit verify</code></pre>
           </article>
+        </div>
+        <div class="fits" id="how-it-fits">
+          <h3>One daemon, three ways to hand a key off</h3>
+          <p class="big">Which way applies depends on what your agent host lets aquaman do. Where a request passes through aquaman, your policy rules apply to it. Where the host injects the key itself, aquaman decides who gets it and records it.</p>
+          <div set:html={overviewDiagramHtml()} />
         </div>
       </div>
       <div class="dither" aria-hidden="true"></div>

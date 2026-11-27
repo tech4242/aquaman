@@ -94,6 +94,9 @@
 .proof .box p { margin: 0 0 1rem; min-height: 3.8em; font-size: 1.03rem; }
 .proof pre { font-size: 0.72rem; min-height: 9.5rem; overflow-x: auto; }
 .proof .deco { position: absolute; right: 1.2rem; top: -1.1rem; }
+.fits { max-width: 80%; margin-top: 4.5rem; }
+.fits h3 { font-size: 1.35rem; margin: 0 0 0.8rem; }
+.fits .big { max-width: 62ch; }
 
 /* 200 m */
 .deep { background: var(--ink); color: var(--foam); padding-top: 9rem; }
@@ -242,7 +245,7 @@
   /* Room for the things standing on the sea floor, which rise into this zone. */
   .zone.d5 { padding-bottom: 12rem; }
   .surface { padding-bottom: 13rem; }
-  .exchange, .flow, .proof { max-width: none; }
+  .exchange, .flow, .proof, .fits { max-width: none; }
   .exchange { grid-template-columns: minmax(0, 1fr); }
   .flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .proof { grid-template-columns: minmax(0, 1fr); }

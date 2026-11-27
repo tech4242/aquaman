@@ -86,6 +86,19 @@ aquaman daemon &                                     # start or restart the daem
     guide: 'openshell',
   },
   {
+    id: 'agent-substrate',
+    name: 'Agent Substrate',
+    how: "Substrate's egress gateway injects the key outside the actor's sandbox. aquaman runs as a pod and is its credential provider: the key comes from HashiCorp Vault or an encrypted file on a volume, only for the actors you granted it to, with a log entry per fetch.",
+    commands: `kubectl -n ate-system create secret generic aquaman-credential-provider \\
+  --from-literal=AQUAMAN_ENCRYPTION_PASSWORD="$(openssl rand -base64 32)"
+curl -fsSLO https://raw.githubusercontent.com/tech4242/aquaman/main/deploy/substrate/aquaman-credential-provider.yaml
+kubectl apply -f aquaman-credential-provider.yaml      # after editing the grants in its ConfigMap
+ate-setup deploy atenet \\
+  --credential-provider='{"name":"aquaman","address":"aquaman-credential-provider.ate-system.svc:50051"}'`,
+    guide: 'agent-substrate',
+    note: 'For a Kubernetes cluster, not a laptop. Keys are in HashiCorp Vault or in an encrypted file on the pod\'s volume.',
+  },
+  {
     id: 'your-app',
     name: 'Your app/agent',
     how: 'Any app or agent you run yourself, in any language, as long as it reads its API base URL from the environment. It is started with a local token and aquaman\'s address; aquaman adds the real key on the way out and applies your request policies.',

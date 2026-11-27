@@ -82,7 +82,7 @@ What it does not add: the command still receives the real value, here as with `o
 ## Good to know
 
 - Output of wrapped commands is scrubbed of injected values. Codex gives hooks no way to rewrite other output, so for unwrapped commands aquaman can only warn.
-- For Codex's own model key, use `aquaman get` as the provider auth command: `[model_providers.openai.auth] command = "aquaman"`, `args = ["get", "aquaman://openai/api_key"]`.
+- For the model key of a provider you define in Codex's config, `aquaman get` can be the provider's auth command: see [helper commands](helper-commands.md). Codex refuses an auth command on its built-in `openai` provider.
 - If the daemon is not running, the hook refuses shell commands in the project instead of running them without their credentials. `aquaman` commands are never refused. Unless the person has installed the login item (`aquaman service install`, see [autostart](autostart.md)), the daemon is gone after a reboot: run `aquaman init --agent codex --no-hooks` again (it leaves installed hooks in place).
 - Codex's own credential masking is under development and off by default (`credential_masking` in its feature list, read 2026-11-16). When it ships it will cover values that are already in environment variables or files; aquaman's part is getting them out of those and into a vault.
 - `aquaman coder doctor` checks the hooks, their trust state and the sandbox profile.

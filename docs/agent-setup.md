@@ -1,6 +1,6 @@
 # Using aquaman from an AI agent
 
-aquaman is a credential proxy for AI agents: secrets stay in the user's own vault and are injected when a command or request needs them. This page is the contract for an agent (Claude Code, Codex or similar) that wants to use it. Every command here runs without prompting and can print JSON.
+aquaman is a credential broker for AI agents (a local credential proxy): secrets stay in the user's own vault and are injected when a command or request needs them. This page is the contract for an agent (Claude Code, Codex or similar) that wants to use it. Every command here runs without prompting and can print JSON.
 
 Requires Node.js 18 or later on macOS, Linux or WSL2, and aquaman 0.18.1 or later: `aquaman init --agent` and `aquaman request` do not exist before that. Check with `aquaman --version`.
 

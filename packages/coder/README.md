@@ -1,4 +1,4 @@
-# aquaman-coder: credential proxy for AI agents (Claude Code, Codex)
+# aquaman-coder: credential broker for AI agents (Claude Code, Codex)
 
 **No account. Bring your own vault. Runs locally.** aquaman keeps API keys and tokens in the vault you already use (Keychain, 1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, systemd-creds or an encrypted file) and injects them when a request or command needs them. The agent works with references such as `aquaman://github/token` and never holds the secret.
 

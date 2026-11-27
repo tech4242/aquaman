@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" role="img" aria-labelledby="hf-t hf-d" shape-rendering="crispEdges">
+<title id="hf-t">How aquaman fits together</title>
+<desc id="hf-d">Your vault is at the top. The aquaman-proxy daemon reads your keys from it, and has four parts: vault backends and links, the approval dialog, the declared scope and the audit log. It hands a key off in three ways. Forward and inject: aquaman adds the key to the request and checks your method and path rules; used by OpenClaw model providers and Telegram through aquaman-plugin, by Hermes for Anthropic and OpenAI keys, and by your own app through aquaman-coder bind --via-proxy. Resolve: one command, or a host at startup, gets the key in its environment; used by Claude Code and Codex through aquaman-coder and by Hermes project secrets through aquaman-hermes. Hand to the host: the host asks aquaman for the key and injects it itself; used by NVIDIA OpenShell, Docker Sandboxes and Agent Substrate.</desc>
+<style>
+.s{font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;fill:#0b2a3a}
+.m{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;fill:#0b2a3a}
+.f{fill:#d9f5ec}
+.b{font-weight:700}
+text{shape-rendering:auto}
+</style>
+<rect width="1000" height="700" fill="#136f7a"/>
+
+<!-- your vault -->
+<rect x="258" y="36" width="500" height="96" fill="#0b2a3a"/>
+<rect x="250" y="28" width="500" height="96" fill="#d9f5ec" stroke="#0b2a3a" stroke-width="4"/>
+<text class="s b" x="500" y="60" font-size="18" text-anchor="middle">Your vault</text>
+<text class="s" x="500" y="84" font-size="13" text-anchor="middle">1Password, Bitwarden, HashiCorp Vault, Keeper, Keychain,</text>
+<text class="s" x="500" y="103" font-size="13" text-anchor="middle">KeePassXC, systemd-creds, or an encrypted file if you have none</text>
+
+<!-- vault to daemon -->
+<rect x="498" y="126" width="4" height="52" fill="#d9f5ec"/>
+<path d="M488 176h24l-12 16z" fill="#d9f5ec"/>
+<text class="s b f" x="520" y="158" font-size="13">reads your keys from it</text>
+<text class="s f" x="480" y="158" font-size="13" text-anchor="end">aquaman runs no vault service</text>
+
+<!-- the daemon -->
+<rect x="68" y="204" width="880" height="150" fill="#0b2a3a"/>
+<rect x="60" y="196" width="880" height="150" fill="#ffd23f" stroke="#0b2a3a" stroke-width="4"/>
+<text class="m b" x="84" y="233" font-size="22">aquaman-proxy</text>
+<text class="s" x="274" y="232" font-size="15">the daemon on your machine</text>
+<g>
+<rect x="84" y="254" width="196" height="68" fill="#0b2a3a"/>
+<text class="s b f" x="182" y="282" font-size="14" text-anchor="middle">Vault backends, links</text>
+<text class="s f" x="182" y="304" font-size="12.5" text-anchor="middle">eight stores, existing items</text>
+<rect x="296" y="254" width="196" height="68" fill="#0b2a3a"/>
+<text class="s b f" x="394" y="282" font-size="14" text-anchor="middle">Approval dialog</text>
+<text class="s f" x="394" y="304" font-size="12.5" text-anchor="middle">a person decides</text>
+<rect x="508" y="254" width="196" height="68" fill="#0b2a3a"/>
+<text class="s b f" x="606" y="282" font-size="14" text-anchor="middle">Declared scope</text>
+<text class="s f" x="606" y="304" font-size="12.5" text-anchor="middle">only named references</text>
+<rect x="720" y="254" width="196" height="68" fill="#0b2a3a"/>
+<text class="s b f" x="818" y="282" font-size="14" text-anchor="middle">Audit log</text>
+<text class="s f" x="818" y="304" font-size="12.5" text-anchor="middle">hash-chained, every use</text>
+</g>
+
+<!-- daemon to the three hand-offs -->
+<g fill="#d9f5ec">
+<rect x="198" y="348" width="4" height="40"/><path d="M188 386h24l-12 16z"/>
+<rect x="498" y="348" width="4" height="40"/><path d="M488 386h24l-12 16z"/>
+<rect x="798" y="348" width="4" height="40"/><path d="M788 386h24l-12 16z"/>
+</g>
+
+<!-- A: forward and inject -->
+<rect x="68" y="414" width="280" height="262" fill="#0b2a3a"/>
+<rect x="60" y="406" width="280" height="262" fill="#d9f5ec" stroke="#0b2a3a" stroke-width="4"/>
+<rect x="60" y="406" width="280" height="42" fill="#0b2a3a"/>
+<text class="s b f" x="76" y="433" font-size="15">Forward and inject</text>
+<text class="s" x="76" y="470" font-size="13">aquaman adds the key to the request</text>
+<text class="s" x="76" y="488" font-size="13">and checks your method and path rules.</text>
+<text class="s b" x="76" y="518" font-size="13.5">OpenClaw models and Telegram</text>
+<text class="m" x="76" y="535" font-size="12">aquaman-plugin</text>
+<text class="s b" x="76" y="562" font-size="13.5">Hermes: Anthropic, OpenAI</text>
+<text class="m" x="76" y="579" font-size="12">aquaman hermes setup</text>
+<text class="s b" x="76" y="606" font-size="13.5">Your own app or SDK</text>
+<text class="m" x="76" y="623" font-size="12">aquaman-coder bind --via-proxy</text>
+<rect x="60" y="636" width="280" height="4" fill="#0b2a3a"/>
+<text class="s b" x="76" y="658" font-size="12.5">The agent or app never holds the key.</text>
+
+<!-- B: resolve -->
+<rect x="368" y="414" width="280" height="262" fill="#0b2a3a"/>
+<rect x="360" y="406" width="280" height="262" fill="#d9f5ec" stroke="#0b2a3a" stroke-width="4"/>
+<rect x="360" y="406" width="280" height="42" fill="#0b2a3a"/>
+<text class="s b f" x="376" y="433" font-size="15">Resolve</text>
+<text class="s" x="376" y="470" font-size="13">One command, or a host at startup,</text>
+<text class="s" x="376" y="488" font-size="13">gets the key in its environment.</text>
+<text class="s b" x="376" y="518" font-size="13.5">Claude Code and Codex</text>
+<text class="m" x="376" y="535" font-size="12">aquaman-coder</text>
+<text class="s b" x="376" y="562" font-size="13.5">Hermes project secrets</text>
+<text class="m" x="376" y="579" font-size="12">aquaman-hermes</text>
+<rect x="360" y="636" width="280" height="4" fill="#0b2a3a"/>
+<text class="s b" x="376" y="658" font-size="12.5">That one process holds the key.</text>
+
+<!-- C: hand to the host -->
+<rect x="668" y="414" width="280" height="262" fill="#0b2a3a"/>
+<rect x="660" y="406" width="280" height="262" fill="#d9f5ec" stroke="#0b2a3a" stroke-width="4"/>
+<rect x="660" y="406" width="280" height="42" fill="#0b2a3a"/>
+<text class="s b f" x="676" y="433" font-size="15">Hand to the host</text>
+<text class="s" x="676" y="470" font-size="13">The host asks aquaman for the key</text>
+<text class="s" x="676" y="488" font-size="13">and injects it at its own egress.</text>
+<text class="s b" x="676" y="518" font-size="13.5">NVIDIA OpenShell</text>
+<text class="m" x="676" y="535" font-size="12">aquaman openshell setup</text>
+<text class="s b" x="676" y="562" font-size="13.5">Docker Sandboxes</text>
+<text class="m" x="676" y="579" font-size="12">aquaman get</text>
+<text class="s b" x="676" y="606" font-size="13.5">Agent Substrate</text>
+<text class="m" x="676" y="623" font-size="12">credential provider</text>
+<rect x="660" y="636" width="280" height="4" fill="#0b2a3a"/>
+<text class="s b" x="676" y="658" font-size="12.5">The sandbox never holds the key.</text>
+</svg>

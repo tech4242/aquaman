@@ -34,7 +34,7 @@ const here = page?.url ?? `/docs/${version ? `${version}/` : ''}`;
 const title = page ? page.metaTitle : `Documentation${version ? ` for ${version}` : ''}`;
 const description = page
   ? page.description
-  : 'Guides for each agent host, the contract for agents, and reference pages for aquaman, a credential proxy for AI agents.';
+  : 'Guides for each agent host, the contract for agents, and reference pages for aquaman, a credential broker for AI agents.';
 const other = [null, ...versions.archived].filter((v) => v !== version);
 const article = page && {
   '@context': 'https://schema.org',
