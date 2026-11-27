@@ -10,6 +10,9 @@ updates:
       - "/packages/*"
       # The site has its own lockfile, outside the workspaces.
       - "/website"
+      # What the credential provider image installs (deploy/substrate/Dockerfile
+      # runs `npm ci` on this lockfile), outside the workspaces too.
+      - "/deploy/substrate"
     schedule:
       interval: weekly
       day: monday
@@ -65,3 +68,16 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+
+  # The base image of the credential provider image. It is pinned by digest in
+  # deploy/substrate/Dockerfile, so a rebuilt node:24-slim (security fixes in
+  # the base system) arrives as a PR here and nowhere else. A new Node major is
+  # a deliberate change, as on the npm side.
+  - package-ecosystem: docker
+    directory: "/deploy/substrate"
+    schedule:
+      interval: weekly
+      day: monday
+    ignore:
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]

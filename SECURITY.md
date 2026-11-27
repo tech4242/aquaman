@@ -1,6 +1,6 @@
 # Security Policy
 
-This is the security policy for aquaman, a credential proxy for AI agents: how to report a vulnerability, what is in scope, and which versions get fixes. Security reports get priority over everything else.
+This is the security policy for aquaman, a credential broker for AI agents: how to report a vulnerability, what is in scope, and which versions get fixes. Security reports get priority over everything else.
 
 ## Reporting a vulnerability
 
@@ -28,7 +28,8 @@ The four packages (`aquaman-proxy`, `aquaman-plugin`, `aquaman-coder` on npm; `a
 - Audit-log tampering that `aquaman audit verify` fails to detect, within what it is documented to detect: an entry altered, inserted or deleted inside the chain, and a log cut short, emptied, deleted or rebuilt behind its anchor. Entries written since the last anchor, a change by software that can write to your vault, and a deleted old archive are [documented limits](docs/compliance/nist-800-53.md)
 - A way to read, move or redirect the audit anchor through aquaman, or to link a vault item or install the login item without the person's approval
 - A credential value handed out without an audit entry
-- Vulnerabilities in the packages' own code or their published artifacts (including the release pipeline)
+- For the Agent Substrate credential provider: a caller other than the configured gateway identity getting an answer, or an actor being given a reference that was not granted to its atespace or to itself
+- Vulnerabilities in the packages' own code or their published artifacts, the container image included (and the release pipeline)
 
 **Out of scope:**
 

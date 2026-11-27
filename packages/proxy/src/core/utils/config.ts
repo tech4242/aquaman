@@ -293,7 +293,10 @@ function mergeConfig(
     policy: override.policy !== undefined ? { ...base.policy, ...override.policy } : base.policy,
     openshell: override.openshell !== undefined
       ? { driver: { ...(base.openshell?.driver ?? { enabled: false }), ...override.openshell?.driver } }
-      : base.openshell
+      : base.openshell,
+    substrate: override.substrate !== undefined
+      ? { provider: { ...(base.substrate?.provider ?? { enabled: false }), ...override.substrate?.provider } }
+      : base.substrate
   };
 }
 

@@ -48,6 +48,23 @@ jobs:
       # never shows up in these audits.
       - name: npm audit — block on high+ in shipped deps
         run: npm audit --omit=dev --audit-level=high
+
+      - name: npm audit, block on high+ in the credential provider image
+        # deploy/substrate has its own lockfile: it is what the image installs.
+        run: npm audit --omit=dev --omit=optional --audit-level=high
+        working-directory: deploy/substrate
+
+      - name: The image lockfile covers this checkout's aquaman-proxy
+        # At release the image is locked to the aquaman-proxy just published.
+        # If that would pull in a package or a version nobody reviewed, the
+        # release's image job stops. This finds out before the tag exists.
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          cp deploy/substrate/package.json deploy/substrate/package-lock.json "$work/"
+          (cd packages/proxy && npm pack --ignore-scripts --silent --pack-destination "$work")
+          (cd "$work" && npm install --package-lock-only --ignore-scripts --no-audit --no-fund ./aquaman-proxy-*.tgz)
+          node scripts/check-image-lock.mjs deploy/substrate/package-lock.json "$work/package-lock.json" package-lock.json --local
       # Surface dev-dependency advisories for awareness, without blocking.
       - name: npm audit — dev deps (informational)
         run: npm audit --audit-level=high || true
