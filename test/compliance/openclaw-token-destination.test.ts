@@ -159,22 +159,36 @@ describe('the resolver hands out the loopback token only for a reference whose e
     expect(await resolve(['anthropic/api_key'])).toEqual({ 'anthropic/api_key': PLACEHOLDER });
   });
 
-  it('still answers with the token when there is no OpenClaw config to read', async () => {
-    fs.rmSync(path.join(dir, 'oc'), { recursive: true });
-    expect(await resolve(['anthropic/api_key'])).toEqual({ 'anthropic/api_key': TOKEN });
-  });
-
-  // Limits. Where the script cannot see the whole config it returns the
-  // token, so that a correctly wired install it cannot parse keeps working.
-  it.fails('limit: a config with $include is not followed, so an endpoint set in an included file is not seen', async () => {
-    fs.writeFileSync(path.join(dir, 'oc', 'models.json'), JSON.stringify({ providers: { anthropic: { baseUrl: 'https://gateway.example.com' } } }));
-    writeOpenClaw({ models: { $include: './models.json' } });
-    expect(await resolve(['anthropic/api_key'])).toEqual({ 'anthropic/api_key': PLACEHOLDER });
-  });
-
-  it.fails('limit: a config with comments (JSON5) is not read, so its endpoints are not seen', async () => {
-    writeOpenClaw('{\n  // mine\n  "models": { "providers": { "anthropic": { "baseUrl": "https://gateway.example.com" } } }\n}\n');
-    expect(await resolve(['anthropic/api_key'])).toEqual({ 'anthropic/api_key': PLACEHOLDER });
+  // A config the script cannot read whole says nothing about where a
+  // credential goes, so every reference gets the placeholder. One row per way
+  // of not being readable; the proxy's own address in the text changes nothing.
+  const PROXY_ENTRY = '"models": { "providers": { "anthropic": { "baseUrl": "http://127.0.0.1:8585/anthropic" } } }';
+  const UNREADABLE: Array<[string, (d: string) => void]> = [
+    ['there is no config file', (d) => fs.rmSync(path.join(d, 'oc'), { recursive: true })],
+    ['the config is a directory', (d) => { fs.mkdirSync(path.join(d, 'oc', 'openclaw.json')); }],
+    ['the config is empty', () => writeOpenClaw('')],
+    ['the config is cut off', () => writeOpenClaw(`{ ${PROXY_ENTRY}`)],
+    ['the config has a line comment (JSON5)', () => writeOpenClaw(`{\n  // mine\n  ${PROXY_ENTRY}\n}\n`)],
+    ['the config has a block comment (JSON5)', () => writeOpenClaw(`{ /* mine */ ${PROXY_ENTRY} }`)],
+    ['the config has a trailing comma (JSON5)', () => writeOpenClaw(`{ ${PROXY_ENTRY}, }`)],
+    ['the config has unquoted keys (JSON5)', () => writeOpenClaw('{ models: { providers: { anthropic: { baseUrl: "http://127.0.0.1:8585/anthropic" } } } }')],
+    ['the config is a list', () => writeOpenClaw(`[{ ${PROXY_ENTRY} }]`)],
+    ['the config is null', () => writeOpenClaw('null')],
+    ['an $include at the root', () => writeOpenClaw(`{ "$include": "./base.json", ${PROXY_ENTRY} }`)],
+    ['an $include for the models section', (d) => {
+      fs.writeFileSync(path.join(d, 'oc', 'models.json'), JSON.stringify({ providers: { anthropic: { baseUrl: 'https://gateway.example.com' } } }));
+      writeOpenClaw({ models: { $include: './models.json' } });
+    }],
+    ['an $include beside the proxy address', () => writeOpenClaw({ models: { providers: { anthropic: { $include: './a.json', baseUrl: 'http://127.0.0.1:8585/anthropic' } } } })],
+    ['an $include in an unrelated section', () => writeOpenClaw(`{ "plugins": { "$include": "./plugins.json" }, ${PROXY_ENTRY} }`)],
+    ['an $include inside a list', () => writeOpenClaw(`{ "agents": { "list": [{ "$include": "./agent.json" }] }, ${PROXY_ENTRY} }`)],
+  ];
+  it.each(UNREADABLE)('a config that cannot be read whole (%s): the placeholder for every reference', async (_name, arrange) => {
+    arrange(dir);
+    expect(await resolve(['anthropic/api_key', 'telegram/bot_token'])).toEqual({
+      'anthropic/api_key': PLACEHOLDER,
+      'telegram/bot_token': PLACEHOLDER,
+    });
   });
 });
 

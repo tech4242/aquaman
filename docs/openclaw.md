@@ -50,9 +50,11 @@ The rest of the file is OpenClaw's to keep. The port is 8585 unless `loopback.po
 
 - the `openclaw` program is not on the PATH;
 - `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1` is set (put the patch into the source your deployment builds the config from);
-- the config uses `$include`: setup reads only the root file, so check the patch against the included files first.
+- the config uses `$include`: setup reads only the root file, so check the patch against the included files first. Routing also needs the config in one file: see below.
 
 If OpenClaw refuses the patch, setup exits 1 with what OpenClaw said. To decide what to change, setup reads `openclaw.json` as strict JSON. A file with comments or trailing commas stops it, and the file is left as it is.
+
+**The plugin reads the same file.** OpenClaw sends a key to whatever endpoint the config names, so aquaman's plugin answers a key reference with the local proxy token only when it reads `openclaw.json` and sees the proxy as that reference's endpoint. A config it cannot read whole (comments, trailing commas, `$include`, or no file where it looks) gets a placeholder for every reference, and calls routed through the proxy then fail with 401. `aquaman openclaw doctor` reports both cases. Keep the config in one file of standard JSON, which is the form OpenClaw writes itself.
 
 **Profiles.** `aquaman openclaw setup --profile <name>` sets up the OpenClaw profile under `~/.openclaw-<name>` and runs `openclaw --profile <name>`; `aquaman openclaw doctor --profile <name>` checks it. Without the flag, `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` are honoured.
 

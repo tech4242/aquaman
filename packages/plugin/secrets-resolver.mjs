@@ -13,6 +13,8 @@
  * for a reference whose endpoint in openclaw.json is the proxy's listener,
  * else the static placeholder: OpenClaw sends a resolved credential to
  * whatever endpoint the config names, and the token is for the proxy only.
+ * A config this script cannot read whole (missing, not strict JSON, or with
+ * `$include`) gets the placeholder for every reference.
  * Both are markers the proxy strips before injecting the real key from the
  * vault:
  *   - loopback token: OpenClaw's model transport calls the proxy's loopback
@@ -87,7 +89,8 @@ function hasIncludes(value) {
 /**
  * OpenClaw's config as this process can see all of it, or null. Null when
  * the file is missing, is not strict JSON (OpenClaw also reads JSON5), or
- * uses `$include`: then where a credential is sent cannot be told from here.
+ * uses `$include`: then where a credential is sent cannot be told from here,
+ * and no reference is answered with the token.
  */
 function readOpenClawConfig() {
   try {
@@ -123,14 +126,13 @@ function isProxyUrl(url, port) {
  * What a reference resolves to. The loopback token is a capability for the
  * local proxy, and OpenClaw sends a resolved credential to whatever endpoint
  * the config names, so the token is handed out only for a reference whose
- * endpoint is the proxy. When the config shows another endpoint, or none
- * (the provider's own host), the answer is the inert placeholder. When the
- * config cannot be read in full the token is still returned: refusing there
- * would stop a correctly wired install whose file this script cannot parse.
+ * endpoint is seen to be the proxy. When the config shows another endpoint,
+ * or none (the provider's own host), or cannot be read in full, the answer
+ * is the inert placeholder: the proxy refuses it, and `aquaman openclaw
+ * doctor` says why.
  */
 function valueFor(id, loopback, config) {
-  if (!loopback) return PLACEHOLDER;
-  if (config === null) return loopback.token;
+  if (!loopback || config === null) return PLACEHOLDER;
   return isProxyUrl(destinationOf(config, id), loopback.port) ? loopback.token : PLACEHOLDER;
 }
 

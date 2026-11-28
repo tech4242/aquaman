@@ -1,6 +1,6 @@
 {
   "name": "aquaman",
-  "version": "0.22.0",
+  "version": "0.22.1",
   "private": true,
   "description": "aquaman: credential broker for AI agents. No account, bring your own vault, runs locally.",
   "type": "module",

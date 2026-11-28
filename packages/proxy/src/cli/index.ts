@@ -46,7 +46,7 @@ import { createCredentialProxy, SocketPathError } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
 import { createOpenClawIntegration, authProfilesAreSqliteOnly, legacyAuthProfilesBlockProviders, pluginInstallNeedsCapabilityConsent, pluginProvenanceIsReported } from '../openclaw/integration.js';
 import { supportsSecretRefIntegrations, wireSecretRefProviders, secretRefWiringStatus } from '../openclaw/secretref.js';
-import { openclawPaths, openclawProfileArgs, isOpenClawProfileName, configMergePatch, applyOpenClawPatch, type OpenClawWriteResult } from '../openclaw/config-file.js';
+import { openclawPaths, openclawProfileArgs, isOpenClawProfileName, configMergePatch, applyOpenClawPatch, configHasIncludes, type OpenClawWriteResult } from '../openclaw/config-file.js';
 import {
   CHANNEL_ROUTING_SUPPORTED,
   wireChannelRouting,
@@ -2156,7 +2156,7 @@ function reportOpenClawWrite(write: OpenClawWriteResult, configFile: string, pla
         for (const line of planned) console.log(`      \u2022 ${line}`);
       }
       console.log(write.reason === 'includes'
-        ? `    Check it against the included files, then apply it: ${aqua(write.command)}`
+        ? `    Check it against the included files, then apply it: ${aqua(write.command)}\n    Calls go through the proxy only once the config is one file without $include: until then aquaman's plugin answers key references with a placeholder.`
         : write.reason === 'read_only'
           ? '    Put its contents into the source your deployment builds the config from.'
           : `    Apply it once OpenClaw is installed: ${aqua(write.command)}`);
@@ -3056,8 +3056,8 @@ openclaw
             issues++;
           }
         } catch {
-          console.log(`  \u2717 ${aqua('openclaw.json')} is invalid`);
-          console.log('    \u2192 Run: aquaman setup');
+          console.log(`  \u2717 ${aqua('openclaw.json')} is not standard JSON, so aquaman cannot read it and its plugin answers every key reference with a placeholder`);
+          console.log('    \u2192 Remove comments and trailing commas from the file');
           issues++;
         }
       } else {
@@ -3089,6 +3089,23 @@ openclaw
             console.log('    \u2192 Run: aquaman setup (or add "aquaman-plugin" to plugins.allow in openclaw.json)');
             console.log('    Note: "openclaw security audit" will show a dangerous-exec finding for proxy-manager.ts.');
             console.log('    This is expected \u2014 the plugin spawns the proxy as a separate process for credential isolation.');
+            issues++;
+          }
+        } catch {
+          // openclaw.json invalid — already reported above
+        }
+      }
+
+      // 8.4. The plugin's resolver answers a key reference with the local
+      //      proxy token only when it can read this file whole and sees the
+      //      proxy as the endpoint. With `$include` it answers with a
+      //      placeholder the proxy refuses. (A file that is not strict JSON
+      //      gets the same answer and is reported above.)
+      if (supportsSecretRefIntegrations(openclawVersion) && fs.existsSync(openclawJsonPath)) {
+        try {
+          if (configHasIncludes(JSON.parse(fs.readFileSync(openclawJsonPath, 'utf-8')))) {
+            console.log(`  ✗ ${aqua('Key references')} ${openclawJsonPath} uses $include, so where OpenClaw sends a key may be set in another file. aquaman's plugin then answers every key reference with a placeholder, and calls routed through the proxy fail with 401.`);
+            console.log('    → Keep the OpenClaw config in one file without $include');
             issues++;
           }
         } catch {
