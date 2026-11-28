@@ -1,6 +1,6 @@
 # aquaman: credential broker for AI agents
 
-<img src="docs/assets/banner.svg" width="880" alt="Pixel art: an AI agent, drawn as a small robot on a raft, floats at the surface and lowers a line. Far below, an octopus guards a treasure chest and a key. The agent gets a tag on its line, never the key.">
+<img src="docs/assets/banner.svg" width="880" alt="aquaman in three steps. 1, the agent asks: aquaman request aquaman://github/token. 2, you approve: a dialog says an agent is asking for a credential that is not in your vault, and you type it and store it. 3, the agent uses it: printenv GITHUB_TOKEN prints [REDACTED:injected-value].">
 
 [![CI](https://github.com/tech4242/aquaman/actions/workflows/ci.yml/badge.svg)](https://github.com/tech4242/aquaman/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/tech4242/aquaman/badge)](https://scorecard.dev/viewer/?uri=github.com/tech4242/aquaman)

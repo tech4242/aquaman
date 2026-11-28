@@ -425,8 +425,9 @@ print('wrote', len(SPRITES), 'sprites, the favicon and the bitmap icons')
 
 # ---- The README banner: the home page's scene as one standalone SVG ----------------
 
-#: Which variant docs/assets/banner.svg is: 'a' day, 'b' dusk, 'c' underwater only, 'd' wide and sparse.
-BANNER = 'd'
+#: Which variant docs/assets/banner.svg is: 'a' day, 'b' dusk, 'c' underwater only, 'd' wide and sparse,
+#: 'steps' the three panels (asks, approves, uses).
+BANNER = 'steps'
 
 # Nine rows: two above the x-height, five for it, two below for the q's tail.
 GLYPHS = {
@@ -585,9 +586,92 @@ def banner(variant='a'):
     parts.append(group(weed(18, 1.9), W - 22, floor - 18))
     return wrap(W, H, defs, parts)
 
+# ---- The README banner in use: three panels that light up in turn -------------------
+
+#: Press Start 2P's letters as bitmaps, ten rows of eight bits each, for the panel labels:
+#: an image in a README cannot load a font.
+LABEL_GLYPHS = dict(g.split(':') for g in (
+    '1:1838181818187e000000 2:7cc60e3c78e0fe000000 3:7e0c183c06c67c000000 A:386cc6c6fec6c6000000 '
+    'g:00007ec6c67e067c0000 e:00007cc6fec07c000000 n:0000fcc6c6c6c6000000 t:18187e18181818000000 '
+    'a:00007c067ec67e000000 s:00007cc07c06fc000000 k:c0c0c6ccf8ccc6000000 Y:6666663c181818000000 '
+    'o:00007cc6c6c67c000000 u:0000c6c6c6c67e000000 p:0000fcc6c6fcc0c00000 r:00006e70606060000000 '
+    'v:00006666663c18000000 i:1800381818187e000000 S:7cc6c07c06c67c000000 l:3818181818187e000000').split())
+
+def label(text, x, y, px, colour):
+    d = ''
+    for i, ch in enumerate(text):
+        bits = LABEL_GLYPHS.get(ch)
+        if not bits: continue
+        for r in range(10):
+            row = int(bits[2 * r:2 * r + 2], 16)
+            for q in range(8):
+                if row & (0x80 >> q):
+                    d += f'M{i * 8 + q} {r}h1v1h-1z'
+    return f'<path transform="translate({x} {y}) scale({px})" fill="{colour}" d="{d}"/>'
+
+def steps_banner():
+    """Agent asks, you approve, agent uses it. Without motion it is the finished picture."""
+    W, H, T = 880, 300, 13
+    ink, sea, foam, sun_, coral_ = HEX['#'], HEX['m'], HEX['l'], HEX['y'], HEX['c']
+    mono = "font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace;font-size:12px"
+    sans = "font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:13.5px"
+    style = ('<style>@media (prefers-reduced-motion: no-preference){'
+             f'.s1{{animation:s1 {T}s steps(1,end) infinite}}.s2{{animation:s2 {T}s steps(1,end) infinite}}.s3{{animation:s3 {T}s steps(1,end) infinite}}'
+             f'.t1{{animation:t1 {T}s steps(22,end) infinite}}.dots{{animation:dots {T}s steps(12,end) infinite}}.t2{{animation:t2 {T}s steps(21,end) infinite}}'
+             f'.pick{{animation:pick {T}s steps(1,end) infinite}}.red{{animation:red {T}s steps(1,end) infinite}}'
+             '.bob{animation:bob 1.6s steps(2,jump-none) infinite}}'
+             '.cover{transform-box:fill-box;transform-origin:right;transform:scaleX(0)}'
+             '@keyframes s1{0%,3%{opacity:.35}4%,100%{opacity:1}}@keyframes s2{0%,19%{opacity:.35}20%,100%{opacity:1}}@keyframes s3{0%,61%{opacity:.35}62%,100%{opacity:1}}'
+             '@keyframes t1{0%,4%{transform:scaleX(1)}16%,100%{transform:scaleX(0)}}'
+             '@keyframes dots{0%,26%{transform:scaleX(1)}40%,100%{transform:scaleX(0)}}'
+             '@keyframes t2{0%,62%{transform:scaleX(1)}72%,100%{transform:scaleX(0)}}'
+             '@keyframes pick{0%,43%{opacity:0}44%,47%{opacity:1}48%,50%{opacity:0}51%,100%{opacity:1}}'
+             '@keyframes red{0%,76%{opacity:0}77%,100%{opacity:1}}'
+             '@keyframes bob{50%{transform:translateY(1px)}}</style>')
+    title = ('aquaman in three steps: an agent asks for a credential, you type it into a dialog that stores it in your vault, '
+             'and the agent uses it but sees only a redaction marker')
+
+    def mono_text(text, x, y, colour):
+        xs = ' '.join(f'{x + i * 7.2:.1f}' for i in range(len(text)))
+        return f'<text x="{xs}" y="{y}" fill="{colour}" style="{mono}">{text}</text>'
+
+    def panel(x, cls, name, inner):
+        y, w, h = 40, 262, 214
+        return (f'<g class="{cls}"><rect x="{x + 8}" y="{y + 8}" width="{w}" height="{h}" fill="{ink}"/>'
+                f'<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{ink}"/><rect x="{x + 4}" y="{y + 4}" width="{w - 8}" height="{h - 8}" fill="{foam}"/>'
+                f'<rect x="{x + 8}" y="{y + 8}" width="{w - 16}" height="{h - 16}" fill="{ink}"/><rect x="{x + 12}" y="{y + 12}" width="{w - 24}" height="{h - 24}" fill="{foam}"/>'
+                f'{label(name, x + 24, y + 26, 1.5, ink)}{inner(x + 24, y + 54)}</g>')
+
+    def asks(x, y):
+        return (f'<rect x="{x}" y="{y}" width="214" height="122" fill="{ink}"/>'
+                + mono_text('&gt;', x + 12, y + 26, sea) + mono_text('aquaman request', x + 26.4, y + 26, foam)
+                + mono_text('aquaman://github/token', x + 12, y + 48, sea)
+                + f'<rect class="cover t1" x="{x + 12}" y="{y + 34}" width="{22 * 7.2:.1f}" height="20" fill="{ink}"/>')
+
+    def approves(x, y):
+        dots = ''.join(f'M{x + 12 + i * 12} {y + 51}h6v6h-6z' for i in range(12))
+        return (f'<text x="{x}" y="{y + 12}" fill="{ink}" style="{sans}">An agent is asking for a credential</text>'
+                f'<text x="{x}" y="{y + 30}" fill="{ink}" style="{sans}">that is not in your vault.</text>'
+                f'<rect x="{x}" y="{y + 40}" width="214" height="28" fill="{ink}"/><rect x="{x + 4}" y="{y + 44}" width="206" height="20" fill="#fff"/>'
+                f'<path fill="{ink}" d="{dots}"/><rect class="cover dots" x="{x + 10}" y="{y + 48}" width="146" height="12" fill="#fff"/>'
+                f'<path class="pick" fill="{coral_}" d="M{x} {y + 84}v10l8 -5z"/>{label("Store in vault", x + 16, y + 83, 1.25, ink)}')
+
+    def uses(x, y):
+        return (f'<rect x="{x}" y="{y}" width="214" height="122" fill="{ink}"/>'
+                + mono_text('&gt;', x + 12, y + 26, sea) + mono_text('printenv GITHUB_TOKEN', x + 26.4, y + 26, foam)
+                + f'<rect class="cover t2" x="{x + 26.4:.1f}" y="{y + 12}" width="{21 * 7.2:.1f}" height="20" fill="{ink}"/>'
+                + f'<g class="red">{mono_text("[REDACTED:injected-value]", x + 12, y + 48, sun_)}</g>')
+
+    octo = octopus()
+    parts = [f'<rect width="{W}" height="{H}" fill="{sea}"/>',
+             panel(28, 's1', '1 Agent asks', asks), panel(309, 's2', '2 You approve', approves), panel(590, 's3', '3 Agent uses it', uses),
+             group(octo, (W - len(octo[0])) // 2, H - len(octo) - 1, 'bob')]
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" role="img" aria-labelledby="t">'
+            f'<title id="t">{title}</title>{style}<g shape-rendering="crispEdges">{"".join(parts)}</g></svg>\n')
+
 assets = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'docs', 'assets')
 os.makedirs(assets, exist_ok=True)
-open(os.path.join(assets, 'banner.svg'), 'w').write(banner(BANNER))
+open(os.path.join(assets, 'banner.svg'), 'w').write(steps_banner() if BANNER == 'steps' else banner(BANNER))
 print('wrote docs/assets/banner.svg')
 
 # `--options DIR` writes every variant there, to compare before choosing one.
