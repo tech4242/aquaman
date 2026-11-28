@@ -341,11 +341,15 @@ describe('secrets-resolver.mjs (exec protocol v1)', () => {
   });
 
   // OpenClaw's model transport calls the proxy's token-gated loopback
-  // listener, so the api key it presents must BE that token. With no
-  // OpenClaw config to read, where the key goes cannot be told and the token
-  // is returned; what happens when the config can be read is in
-  // test/compliance/openclaw-token-destination.test.ts.
-  it('returns the loopback token when the listener is configured', async () => {
+  // listener, so the api key it presents must BE that token. It is returned
+  // for a reference whose endpoint in OpenClaw's config is that listener;
+  // every other case is in test/compliance/openclaw-token-destination.test.ts.
+  it('returns the loopback token when the listener is configured and is the endpoint', async () => {
+    fs.mkdirSync(path.join(cfgDir, 'openclaw-state'));
+    fs.writeFileSync(path.join(cfgDir, 'openclaw-state', 'openclaw.json'), JSON.stringify({ models: { providers: {
+      anthropic: { baseUrl: 'http://127.0.0.1:8585/anthropic' },
+      openai: { baseUrl: 'http://127.0.0.1:8585/openai/v1' },
+    } } }));
     writeConfig([
       'credentials:',
       '  backend: keychain',

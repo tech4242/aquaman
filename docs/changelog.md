@@ -10,6 +10,14 @@ openclaw plugins install clawhub:aquaman-plugin   # OpenClaw users
 pip install -U aquaman-hermes                     # Hermes users
 ```
 
+## 0.22.1
+
+One change, in the OpenClaw plugin. Update it with `openclaw plugins install clawhub:aquaman-plugin`.
+
+- **The plugin no longer hands out the local proxy token when it cannot read OpenClaw's config.** OpenClaw sends a key to whatever endpoint its config names, so the plugin answers a key reference with the token only where it sees the proxy as the endpoint. When it could not read the config whole (comments or trailing commas, `$include`, or no file) it used to answer with the token anyway, so that such an install kept working. An endpoint set where the plugin could not see it would then have been sent the token. The token lets a local process use the proxy on your machine; it is not a provider key and opens nothing from outside. Now every reference gets an inert placeholder in those cases.
+- **If your `openclaw.json` has comments, trailing commas or `$include`,** calls routed through the proxy fail with 401 after this update until the config is one file of standard JSON, which is the form OpenClaw writes itself. `aquaman openclaw doctor` reports both cases with the fix.
+- `aquaman openclaw doctor` gives a usable fix for a config that is not standard JSON (it used to say to run setup, which stops on such a file).
+
 ## 0.22.0
 
 aquaman now describes itself as a credential broker: one daemon that reads the vault you already have and hands a key off in one of three ways, depending on what your agent host allows. This release is that description, a page on helper commands that corrects what the docs said about them, a pass over every document, and fixes. Nothing changes for an existing install.

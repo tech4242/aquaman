@@ -304,8 +304,20 @@ describe('aquaman openclaw doctor (cli-hosts coverage)', () => {
       sb.writeOpenClawJson('{ not json');
       const r = await doctor({ AQUAMAN_OPENCLAW_VERSION: '2026.9.37' });
       expect(r.code).toBe(1);
-      expect(r.stdout).toContain('✗ openclaw.json is invalid');
+      expect(r.stdout).toContain('✗ openclaw.json is not standard JSON');
+      expect(r.stdout).toContain('→ Remove comments and trailing commas from the file');
       expect(r.stdout.match(/openclaw\.json/g)).toHaveLength(1);
+    }, T);
+
+    it('fails on a config with $include, because the plugin then answers no reference with the proxy token', async () => {
+      sb.writeConfig(baseConfig(sb));
+      installPlugin(sb);
+      sb.writeOpenClawJson(wired({ agents: { $include: './agents.json' } }));
+      const r = await doctor({ AQUAMAN_OPENCLAW_VERSION: '2026.9.37' });
+      expect(r.code).toBe(1);
+      expect(r.stdout).toContain('✗ Key references');
+      expect(r.stdout).toContain('uses $include');
+      expect(r.stdout).toContain('→ Keep the OpenClaw config in one file without $include');
     }, T);
 
     it('fails when a plugins.allow list leaves the plugin out', async () => {
