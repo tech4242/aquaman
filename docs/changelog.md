@@ -10,6 +10,37 @@ openclaw plugins install clawhub:aquaman-plugin   # OpenClaw users
 pip install -U aquaman-hermes                     # Hermes users
 ```
 
+## 0.22.0
+
+aquaman now describes itself as a credential broker: one daemon that reads the vault you already have and hands a key off in one of three ways, depending on what your agent host allows. This release is that description, a page on helper commands that corrects what the docs said about them, a pass over every document, and fixes. Nothing changes for an existing install.
+
+### How it fits together
+
+- A new page, [How aquaman fits together](https://aquaman.sh/docs/how-it-fits/), with one diagram: your vault, the daemon, and the three hand-offs. **Forward and inject** keeps the key in aquaman and is the only one where method and path rules apply. **Resolve** gives the key to one process. **Hand to the host** gives it to a sandbox host that injects it itself.
+- The README, the site and the package descriptions say "credential broker". aquaman runs no vault service and needs no account; that has not changed, and the first paragraph now says it.
+
+### Helper commands
+
+- A new page, [Helper commands](https://aquaman.sh/docs/helper-commands/), gives the working form of `aquaman get` behind Claude Code's `apiKeyHelper`, the auth command of a Codex provider, Hermes's `key_cmd` and an OpenClaw exec secrets provider, and how each host behaves when the command fails. Each was run against a stand-in API.
+- **The Codex example was wrong.** The docs and `aquaman get --help` showed the auth command on Codex's built-in `openai` provider, which Codex refuses. It works on a provider you define.
+- **The README named the wrong Hermes setting.** The one that takes `aquaman get` as it is, is `key_cmd`. Hermes's command secret source expects `KEY=VALUE` lines.
+
+### Fixes
+
+- A config directory so deep that the proxy's socket path is over the system limit (104 bytes on macOS, 108 on Linux) stopped the daemon with a `listen EINVAL` stack trace. It now says what is wrong and how to fix it.
+- **Claude Code's sandbox and a symlinked config directory.** `aquaman-coder setup claude-code` wrote the proxy socket into the sandbox's allow-list by the path it was given. Claude Code 2.1.332 opens the socket only for its real path, so with `~/.aquaman` (or `AQUAMAN_CONFIG_DIR`) reached through a symlink, sandboxed commands could not reach the daemon. Setup now writes the real path, and `aquaman-coder doctor` no longer counts an entry spelled through a symlink. Run setup again if this applies to you.
+- **`aquaman-coder doctor` and Codex hook trust.** With `CODEX_HOME` reached through a symlink, doctor kept saying the hooks were not trusted after you had trusted them, because Codex records trust under the real path.
+- The hook contract was run again on Claude Code 2.1.332 and Codex 0.172.0, with a stand-in API returning the tool call: the rewrite, the permission rules still applying to the original command, and redaction of the result all behave as documented.
+- When a sandbox blocks the proxy socket, the message no longer names Claude Code first under Codex: it says the agent host's sandbox and gives the fix for each host.
+- `aquaman init` told you to run `aquaman start`, which does not exist. It says `aquaman daemon`.
+- `audit.maxArchives` in `config.yaml` sets how many 10 MB audit log files are kept before the oldest is deleted: 10 by default, `0` keeps all.
+- The OpenShell check follows the project to its new repository.
+
+### Documentation
+
+- Every page was read against the code and against the others. Among the corrections: a policy example for a service that is not built in, the Telegram token described as stored in `openclaw.json`, commands that do not exist, and the old diagram in the proxy package's README.
+- The home page's host picker is grouped: coding assistants, personal agents, sandboxes, your own app.
+
 ## 0.21.2
 
 The two things the Hermes review found in 0.21.1 had counterparts on the OpenClaw side. This release fixes them there.

@@ -9,11 +9,11 @@ Every tool on this page does one of two things, and the difference matters more 
 - **Injected at egress.** The agent and the programs it runs hold a placeholder. A proxy outside them swaps in the real value on the way to the API. The secret is never in the process that could leak it.
 - **Injected into the environment.** The program is started with the real value in an environment variable. The agent's conversation does not see it, and output can be masked, but the program holds the secret and can do anything with it.
 
-aquaman does both, depending on the path:
+aquaman does either, or supplies the value to a host that injects it, depending on the path ([the three hand-offs](how-it-fits.md)):
 
 | aquaman path | Mechanism |
 |---|---|
-| OpenClaw, Hermes model calls, any client you point at the proxy (`/<service>/...`) | At egress. Request policies apply here |
+| OpenClaw model calls and Telegram, Hermes model calls, any client you point at the proxy (`/<service>/...`) | At egress. Request policies apply here |
 | NVIDIA OpenShell driver, Docker Sandboxes credential helper | aquaman supplies the value to the host; the host injects at egress |
 | Claude Code and Codex (`aquaman-coder`), default | Into the environment of each command, with output redaction. Request policies do not apply |
 | Claude Code and Codex, a binding made with `--via-proxy` | At egress: the app holds a local token and the proxy's URL. Request policies apply. Needs an app that takes a base URL ([guide](app-through-proxy.md)) |
@@ -44,7 +44,7 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 - Your secrets already live in a password manager or vault and you do not want a second copy or a new account. A reference can point at the item you already have, and you approve that in a dialog.
 - You want the agent to set things up and ask for credentials itself, without ever handling one: `aquaman init --agent` and `aquaman request` are built for that, with no prompts, JSON output, and a native dialog where a person supplies each value. (fnox has a comparable request flow through its MCP server, off by default, where the person enters the value on a local web page.)
 - You use more than one agent host (say Claude Code, OpenClaw and an OpenShell sandbox) and want one place that holds the keys and one record of their use.
-- You want evidence: every use is written to a log whose entries are numbered and chained by SHA-256, and the log's last position is kept in your vault, so an altered or inserted entry and a truncated or replaced log are detectable (`aquaman audit verify`). The limits are under "What aquaman does not do".
+- You want evidence: every use is written to a log (unless you switch the log off) whose entries are numbered and chained by SHA-256, and the log's last position is kept in your vault, so an altered or inserted entry and a truncated or replaced log are detectable (`aquaman audit verify`). The limits are under "What aquaman does not do".
 - You route OpenClaw, Hermes or your own client through the proxy and want to limit what a key can do there, per endpoint (`aquaman policy`).
 
 ## Choose something else when
@@ -63,9 +63,9 @@ So for a coding agent building an ordinary app that reads `GITHUB_TOKEN` from it
 
 What you can check yourself:
 
-- **It was one of the first tools to inject credentials at egress for AI agents.** The first release, on 6 February 2026, was the proxy and the OpenClaw plugin. By the public history of the other projects on this page, nono's proxy gained credential injection on 23 February 2026, the OpenShell repository was created on 24 February, OneCLI's on 8 March and Infisical Agent Vault's on 27 March. Claude Code followed in 0.12.0, Hermes in 0.13.0, Codex in 0.16.0 and NVIDIA OpenShell in 0.17.0. There were 40 releases up to 0.21.0, each on npm with its date (`npm view aquaman-proxy time`) and described in the [changelog](changelog.md).
+- **It was one of the first tools to inject credentials at egress for AI agents.** The first release, on 6 February 2026, was the proxy and the OpenClaw plugin. By the public history of the other projects on this page, nono's proxy gained credential injection on 23 February 2026, the OpenShell repository was created on 24 February, OneCLI's on 8 March and Infisical Agent Vault's on 27 March. Claude Code followed in 0.12.0, Hermes in 0.13.0, Codex in 0.16.0 and NVIDIA OpenShell in 0.17.0. There were 42 releases up to 0.21.2, each on npm with its date (`npm view aquaman-proxy time`) and described in the [changelog](changelog.md).
 - **Releases are verifiable.** npm packages are published from GitHub Actions with provenance, shown on each version's npm page; `npm audit signatures` checks it in a project that installs them. No install scripts.
-- **It is local and inspectable.** No account, no telemetry, no network service of its own. Config and logs are plain files under `~/.aquaman`.
+- **It is local and inspectable.** No account, no telemetry, no hosted service, and no listener that another machine can reach. Config and logs are plain files under `~/.aquaman`.
 - **The tests are in the repository, and CI holds a coverage floor.** More than 3,200 tests (`npx vitest list` counts them). Line coverage is measured over everything that ships, including both command-line tools and the processes the tests start, and CI fails below 95% overall and for each package. Five files have higher floors: the request-target parser 100%, the broker scope, the request policy and the credential dialog 98%, the daemon 97% (`scripts/coverage-floors.json`).
 - **The security tests attack each control, and the limits are pinned.** The tests under `test/compliance/` are written one table row per attack: respelling a request to get past a deny rule, sending raw bytes at the request parser, tampering with the audit log, comparing each dialog's wording with what a caller can then obtain. An attack the code does not stop stays in the table as a row that is expected to fail and says so in its name (`grep -rn "it.fails" test/compliance` lists them), and the [mapping pages](compliance/nist-800-53.md) state the same limits. The day one is fixed, its row fails and has to be updated.
 - **What a review found is in the changelog.** Before 0.18.2 the code was assessed against OWASP ASVS 5.0, the OWASP Top 10 lists for agentic and LLM applications, the OWASP API Security Top 10, NIST SP 800-53, NIST SSDF and BSI TR-02102-1. The findings were fixed in that release, each with a test that fails without the fix, and are listed with what to check on your own machine: [0.18.2](changelog.md#0182). That was the project's own work, not an outside audit.

@@ -110,6 +110,11 @@ export interface AuditConfig {
    * anchoring off.
    */
   anchorIntervalSeconds?: number;
+  /**
+   * How many rotated log files (10 MB each) are kept before the oldest is
+   * deleted. Default 10. `0` keeps all.
+   */
+  maxArchives?: number;
 }
 
 export interface ServicesConfig {

@@ -330,7 +330,7 @@ A service with no entry under `policy` has no restriction. A request is refused 
 
 - The app, its dependencies and anything it logs hold a token that is useless off your machine and that the API rejects. The key is never in the app's memory or environment.
 - The route token is not a secret from other software on your machine. A local process that reads it can send requests to the routed services, within your policy; it cannot use it to obtain a key. A process running as you can also change the binding itself, so this keeps the key from leaking through the app. It is not a boundary between programs running as you.
-- The listener is plain HTTP on a loopback address. aquaman refuses to start it on any other address, and refuses requests addressed to it by any name other than `127.0.0.1` or `localhost`.
+- The listener is plain HTTP on a loopback address. aquaman refuses to start it on any other address, and refuses requests addressed to it by any name other than `127.0.0.1`, `localhost` or `[::1]`.
 - One route token covers every service your projects have routed, and nothing else. Policy rules narrow what it can do on each. A long-running app has to be started again after the daemon restarts, because the token changes.
 - The proxy does not forward a header that carries one of its own tokens, as plain text or inside a `Basic` value. It does not look for the token under other encodings, so an app that copies its "key" into another header in some other form sends that local token to the API. The token is of no use there.
 - Only HTTP APIs with header or basic authentication, and AWS. For everything else the variable is set to the value, as before.

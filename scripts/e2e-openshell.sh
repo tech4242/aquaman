@@ -37,11 +37,11 @@ esac
 
 # --- OpenShell binaries (checksum-verified) ---
 if [ -z "$VERSION" ]; then
-  VERSION="$(gh release list -R NVIDIA/OpenShell --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName')"
+  VERSION="$(gh release list -R ai-openshell/openshell --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName')"
 fi
 echo "OpenShell $VERSION on $(uname -s)-$(uname -m)"
 mkdir -p "$WORK/dl" "$WORK/bin"
-gh release download "$VERSION" -R NVIDIA/OpenShell -D "$WORK/dl" \
+gh release download "$VERSION" -R ai-openshell/openshell -D "$WORK/dl" \
   -p "$CLI_ASSET" -p "$GW_ASSET" -p 'openshell-checksums-sha256.txt' -p 'openshell-gateway-checksums-sha256.txt'
 ( cd "$WORK/dl" && grep -h -E " (\*)?($CLI_ASSET|$GW_ASSET)\$" openshell-checksums-sha256.txt openshell-gateway-checksums-sha256.txt | shasum -a 256 -c - ) \
   || fail "checksum mismatch"

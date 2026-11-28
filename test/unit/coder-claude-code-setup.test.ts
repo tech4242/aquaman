@@ -16,7 +16,9 @@ describe('aquaman-coder / claude-code setup', () => {
   let settingsPath: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-claude-test-'));
+    // The real path: on macOS the temp directory is reached through a symlink, and the
+    // sandbox entry is written and matched as the socket's real path.
+    tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aquaman-claude-test-')));
     settingsPath = path.join(tmpDir, 'settings.json');
   });
 
@@ -185,7 +187,40 @@ describe('aquaman-coder / claude-code setup — sandbox socket allowance', () =>
       fs.writeFileSync(settingsPath, JSON.stringify({ sandbox: { network } }));
       expect(installClaudeCodeHooks({ settingsPath, socketPath, platform: 'darwin' }).sandboxSocket).toBe('present');
     }
-    expect(socketAllowedByEntry('~/.aquaman/proxy.sock', path.join(os.homedir(), '.aquaman', 'proxy.sock'))).toBe(true);
+    // `~` is expanded, not resolved, so the comparison is with the home directory's real path.
+    const home = os.homedir();
+    expect(socketAllowedByEntry('~/.aquaman/proxy.sock', path.join(home, '.aquaman', 'proxy.sock'))).toBe(fs.realpathSync(home) === home);
+  });
+
+  it('writes the real path of a socket whose config directory is reached through a symlink', () => {
+    const real = path.join(tmpDir, 'real-config');
+    const link = path.join(tmpDir, 'link-config');
+    fs.mkdirSync(real);
+    fs.symlinkSync(real, link);
+    const viaLink = path.join(link, 'proxy.sock');
+
+    expect(installClaudeCodeHooks({ settingsPath, socketPath: viaLink, platform: 'darwin' }).sandboxSocket).toBe('added');
+    expect(read().sandbox.network.allowUnixSockets).toEqual([path.join(real, 'proxy.sock')]);
+    expect(installClaudeCodeHooks({ settingsPath, socketPath: viaLink, platform: 'darwin' }).sandboxSocket).toBe('present');
+    expect(sandboxSocketStatus([settingsPath], viaLink, 'darwin').socketAllowed).toBe(true);
+
+    expect(uninstallClaudeCodeHooks({ settingsPath, socketPath: viaLink }).sandboxSocket).toBe('removed');
+    expect(read().sandbox).toBeUndefined();
+  });
+
+  it('does not count an entry that reaches the socket through a symlink, and adds the real path beside it', () => {
+    const real = path.join(tmpDir, 'real-config');
+    const link = path.join(tmpDir, 'link-config');
+    fs.mkdirSync(real);
+    fs.symlinkSync(real, link);
+    const viaLink = path.join(link, 'proxy.sock');
+    expect(socketAllowedByEntry(viaLink, viaLink)).toBe(false);
+    expect(socketAllowedByEntry(link, viaLink)).toBe(false);
+    expect(socketAllowedByEntry(real, viaLink)).toBe(true);
+
+    fs.writeFileSync(settingsPath, JSON.stringify({ sandbox: { network: { allowUnixSockets: [viaLink] } } }));
+    expect(installClaudeCodeHooks({ settingsPath, socketPath: viaLink, platform: 'darwin' }).sandboxSocket).toBe('added');
+    expect(read().sandbox.network.allowUnixSockets).toEqual([viaLink, path.join(real, 'proxy.sock')]);
   });
 
   it('does not count glob entries (the sandbox does not expand them)', () => {

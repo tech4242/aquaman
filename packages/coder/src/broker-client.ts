@@ -60,19 +60,20 @@ export class BrokerError extends Error {
 }
 
 /**
- * Claude Code's sandbox denies Unix-socket connects it hasn't allowlisted, and
- * the kernel reports that as EPERM (macOS Seatbelt) or EACCES/EPERM (Linux
- * seccomp). Say so instead of surfacing a bare errno.
+ * An agent host's sandbox denies Unix-socket connects it has not been told to
+ * allow, and the kernel reports that as EPERM (macOS Seatbelt) or
+ * EACCES/EPERM (Linux seccomp). Say so, for both hosts, instead of surfacing a
+ * bare errno: the command cannot tell which host it runs under.
  */
 export function sandboxSocketHint(socketPath: string): string {
   return (
-    `Connecting to the aquaman proxy socket at ${socketPath} was blocked — most likely by ` +
-    `Claude Code's sandbox, which denies Unix sockets by default. On macOS run ` +
-    `\`aquaman coder setup claude-code\` (it allowlists this socket in sandbox.network.allowUnixSockets). ` +
-    `On Linux/WSL2 the sandbox can only allow it with sandbox.network.allowAllUnixSockets: true, ` +
-    `which opens every Unix socket to sandboxed commands. Under Codex, its sandbox blocks the ` +
-    `socket unless a permissions profile allows it (network.enabled = true plus ` +
-    `unix_sockets); run \`aquaman coder setup codex\` for the snippet.`
+    `Connecting to the aquaman proxy socket at ${socketPath} was blocked, most likely by the ` +
+    `agent host's sandbox, which denies Unix sockets by default. ` +
+    `Under Claude Code on macOS, run \`aquaman coder setup claude-code\` (it allowlists this socket ` +
+    `in sandbox.network.allowUnixSockets); on Linux/WSL2 its sandbox can only allow it with ` +
+    `sandbox.network.allowAllUnixSockets: true, which opens every Unix socket to sandboxed commands. ` +
+    `Under Codex, the sandbox blocks the socket unless a permissions profile allows it ` +
+    `(network.enabled = true plus unix_sockets); run \`aquaman coder setup codex\` for the snippet.`
   );
 }
 

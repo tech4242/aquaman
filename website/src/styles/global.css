@@ -162,6 +162,32 @@ h1, h2, h3 { line-height: 1.15; letter-spacing: -0.015em; text-wrap: balance; }
 .dia-up span { position: absolute; right: 18px; top: 12px; width: 11.5rem; text-align: right; font-size: 0.84rem; font-weight: 600; line-height: 1.3; }
 .dia-vault { grid-column: 3; }
 .dia-note { margin: 1.6rem 0 0; }
+/* The overview diagram (overviewDiagramHtml): vault, daemon, three hand-offs, top to bottom. */
+.dia-over { --d-ink: #0b2a3a; --d-foam: #d9f5ec; --d-aqua: #3fc1c0; --d-y: #ffd23f; --d-px: 4px; margin: 2rem 0 0; font-family: var(--sans); display: grid; justify-items: center; }
+.dia-over .dia-box { width: 100%; }
+.dia-over .dia-box h3 { font-family: var(--sans); font-size: 1rem; line-height: 1.3; font-weight: 700; margin: 0 0 0.5rem; color: var(--d-ink); }
+.dia-over .dia-box p { margin: 0; font-size: 0.94rem; line-height: 1.4; max-width: none; color: var(--d-ink); }
+.dia-over .dia-box code { background: none; padding: 0; color: var(--d-ink); font: 600 0.8rem/1.4 var(--mono); border-radius: 0; }
+.dia-over .dia-over-vault { max-width: 34rem; text-align: center; }
+.dia-over .dia-me h3 code { font-size: 1.05rem; margin-right: 0.5rem; }
+.dia-over .dia-me h3 { font-weight: 500; }
+.dia-down { position: relative; width: var(--d-px); height: 3.4rem; margin: 0.9rem 0 1rem; background: currentColor; }
+.dia-down::after { content: ''; position: absolute; left: -8px; bottom: -2px; border: 10px solid transparent; border-bottom: 0; border-top-color: currentColor; }
+.dia-down span { position: absolute; left: 1.4rem; top: 0.9rem; width: 16rem; font-size: 0.84rem; font-weight: 600; line-height: 1.3; }
+.dia-parts { list-style: none; margin: 0.9rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.8rem; }
+.dia-parts li { margin: 0; padding: 0.7rem 0.6rem; background: var(--d-ink); color: var(--d-foam); text-align: center; font-size: 0.8rem; line-height: 1.35; }
+.dia-parts li b { display: block; font-size: 0.88rem; }
+.dia-ways { width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.6rem; align-items: stretch; }
+.dia-over .dia-way { display: flex; flex-direction: column; }
+.dia-over .dia-way dl { margin: 0.9rem 0 1rem; }
+.dia-over .dia-way dt { font-size: 0.9rem; font-weight: 700; color: var(--d-ink); margin-top: 0.55rem; }
+.dia-over .dia-way dd { margin: 0; }
+.dia-over .dia-way .dia-holds { margin-top: auto; padding-top: 0.7rem; border-top: var(--d-px) solid var(--d-ink); font-weight: 700; font-size: 0.88rem; }
+@media (max-width: 62rem) {
+  .dia-ways { grid-template-columns: minmax(0, 1fr); }
+  .dia-parts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dia-down span { width: 9rem; }
+}
 @media (max-width: 62rem) {
   .dia { grid-template-columns: minmax(0, 1fr); }
   .dia-arrow { width: var(--d-px); height: 3.2rem; margin: 0.9rem 0 1.1rem 2rem; }

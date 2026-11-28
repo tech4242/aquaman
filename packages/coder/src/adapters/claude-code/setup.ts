@@ -107,19 +107,22 @@ function realpathLoose(p: string): string {
 }
 
 /**
- * Does one `allowUnixSockets` entry cover `socketPath`? Mirrors the sandbox's
- * Seatbelt rule `(remote unix-socket (subpath <entry>))`: the entry matches
- * the path itself or anything beneath it, after `~` expansion and symlink
- * resolution (macOS /tmp -> /private/tmp). Globs are not patterns there, so
- * they don't count here either.
+ * Does one `allowUnixSockets` entry cover `socketPath`? The sandbox's rule is
+ * `(remote unix-socket (subpath <entry>))`, matched against the socket's real
+ * path: the entry covers the path itself or anything beneath it, after `~`
+ * expansion. The entry has to be spelled as the real path. One that reaches
+ * the socket through a symlink does not open it (run on Claude Code 2.1.332:
+ * the entry worked only once every symlink in it was resolved), so it does
+ * not count here either. Globs are not patterns there and do not count.
  */
-export function socketAllowedByEntry(entry: string, socketPath: string): boolean {
+export function socketAllowedByEntry(entry: string, socketPath: string, resolveEntry = false): boolean {
   if (typeof entry !== 'string' || entry.length === 0 || /[*?[]/.test(entry)) return false;
   const want = realpathLoose(socketPath);
   // Trim trailing slashes without a regex: /\/+$/ backtracks polynomially on
   // an entry ending in many slashes, and entries come from a settings file
   // (CodeQL js/polynomial-redos).
-  let have = realpathLoose(expandHome(entry));
+  // `resolveEntry` is for a list whose reader is not known to need the real path (Codex's).
+  let have = resolveEntry ? realpathLoose(expandHome(entry)) : path.resolve(expandHome(entry));
   while (have.length > 1 && have.endsWith('/')) have = have.slice(0, -1);
   return want === have || want.startsWith(have + '/');
 }
@@ -259,7 +262,8 @@ export function installClaudeCodeHooks(opts: SetupOptions = {}): SetupResult {
     } else {
       const sandbox = (settings.sandbox && typeof settings.sandbox === 'object' ? settings.sandbox : {}) as Record<string, unknown>;
       const network = (sandbox.network && typeof sandbox.network === 'object' ? sandbox.network : {}) as Record<string, unknown>;
-      network.allowUnixSockets = [...list, socketPath];
+      // The real path: an entry that reaches the socket through a symlink does not open it.
+      network.allowUnixSockets = [...list, realpathLoose(socketPath)];
       sandbox.network = network;
       settings.sandbox = sandbox;
       sandboxSocket = 'added';
@@ -321,8 +325,10 @@ export function uninstallClaudeCodeHooks(opts: SetupOptions = {}): SetupResult {
   const socketPath = opts.socketPath ?? defaultSocketPath();
   let sandboxSocket: SetupResult['sandboxSocket'] = 'absent';
   const net = sandboxNetwork(settings);
-  if (Array.isArray(net?.allowUnixSockets) && (net!.allowUnixSockets as string[]).includes(socketPath)) {
-    const remaining = (net!.allowUnixSockets as string[]).filter((e) => e !== socketPath);
+  // The entry setup wrote is the socket's real path; one written before that was the path as given.
+  const ours = new Set([socketPath, realpathLoose(socketPath)]);
+  if (Array.isArray(net?.allowUnixSockets) && (net!.allowUnixSockets as string[]).some((e) => ours.has(e))) {
+    const remaining = (net!.allowUnixSockets as string[]).filter((e) => !ours.has(e));
     const sandbox = settings.sandbox as Record<string, unknown>;
     if (remaining.length > 0) {
       net!.allowUnixSockets = remaining;

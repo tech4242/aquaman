@@ -69,7 +69,7 @@ aquaman-coder exec -- npm publish --dry-run
 **Compared with `op run`.** For these two commands `op run --env-file` gives the same protection: the command holds the real value while it runs and its output is masked. If that is all you need and you use 1Password, it is the smaller tool. What aquaman adds:
 
 - Claude can ask for a credential it does not have and you approve it in a dialog, without editing a reference file.
-- One audit log of each read (`aquaman audit tail`), shared with the other hosts aquaman serves: Claude Code, Codex, OpenClaw, Hermes, Docker Sandboxes and OpenShell.
+- One audit log of each read (`aquaman audit tail`), shared with the other hosts aquaman serves: Claude Code, Codex, OpenClaw, Hermes, Docker Sandboxes and NVIDIA OpenShell.
 - The same commands with a different vault, if 1Password is not where every secret lives.
 
 What it does not add: the command still receives the real value, here as with `op run`. Only a binding made with `--via-proxy` keeps the value out of the program, and that needs an HTTP API whose client accepts a base URL ([guide](app-through-proxy.md)). Reading linked items is tested against a stand-in for the `op` CLI, not against a live 1Password account, and 1Password in desktop-app mode can ask you to unlock when the daemon reads.
@@ -89,7 +89,7 @@ That is the protection: the commands Claude runs, and the app they start, hold t
 
 ## Good to know
 
-- **Sandbox:** Claude Code's sandbox blocks Unix sockets. On macOS the hook setup allowlists the aquaman socket; with `--no-hooks` add it yourself (`aquaman coder doctor` shows the entry). On Linux and WSL2 only `sandbox.network.allowAllUnixSockets: true` works, which opens every socket.
+- **Sandbox:** Claude Code's sandbox blocks Unix sockets. On macOS the hook setup allowlists the aquaman socket; with `--no-hooks` add it yourself, by the socket's real path and not through a symlink (`aquaman coder doctor` shows the entry). On Linux and WSL2 only `sandbox.network.allowAllUnixSockets: true` works, which opens every socket.
 - **If the daemon is not running**, `aquaman-coder exec` stops and says how to start it; in hook mode the hook refuses shell commands in the project instead of running them without their credentials. `aquaman` commands are never refused. The daemon is not a system service: after a reboot, run `aquaman init --agent claude-code --no-hooks` again (it changes nothing else, and leaves an installed hook in place) or `aquaman daemon` in a terminal of your own.
 - **If the hook itself cannot start** (for example aquaman was uninstalled), Claude Code runs the command without credentials. `aquaman coder setup claude-code --fail-closed` blocks it instead (Claude Code 2.1.295+).
 - **Monitor commands** are not wrapped.

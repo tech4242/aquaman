@@ -42,7 +42,7 @@ import { registerLinkCommands, refuseIfLinked, listedCredential, reportLinks, ch
 
 import { fileURLToPath } from 'node:url';
 
-import { createCredentialProxy } from '../daemon.js';
+import { createCredentialProxy, SocketPathError } from '../daemon.js';
 import { createServiceRegistry, ServiceRegistry } from '../service-registry.js';
 import { createOpenClawIntegration, authProfilesAreSqliteOnly, legacyAuthProfilesBlockProviders, pluginInstallNeedsCapabilityConsent, pluginProvenanceIsReported } from '../openclaw/integration.js';
 import { supportsSecretRefIntegrations, wireSecretRefProviders, secretRefWiringStatus } from '../openclaw/secretref.js';
@@ -469,7 +469,7 @@ const program = new Command();
 
 program
   .name('aquaman')
-  .description('Credential proxy for AI agents: vault, daemon, audit and policy, with the OpenClaw, coding-agent, Hermes and OpenShell integrations')
+  .description('Credential broker for AI agents: vault, daemon, audit and policy, with the OpenClaw, coding-agent, Hermes and OpenShell integrations')
   .version(VERSION)
   .configureHelp({
     subcommandTerm(cmd) {
@@ -493,7 +493,7 @@ program
 
       const lines: string[] = [];
       lines.push('');
-      lines.push(`  \u{1F419} ${aqua('aquaman')} ${VERSION} \u2014 credential proxy for AI agents`);
+      lines.push(`  \u{1F419} ${aqua('aquaman')} ${VERSION}: credential broker for AI agents`);
       lines.push('');
       lines.push(`Usage: ${helper.commandUsage(cmd)}`);
       lines.push('');
@@ -977,7 +977,8 @@ openclaw
     // Initialize audit logger
     const auditLogger = createAuditLogger({
       logDir: config.audit.logDir,
-      enabled: config.audit.enabled
+      enabled: config.audit.enabled,
+      maxArchives: auditMaxArchives(config),
     });
     await auditLogger.initialize();
 
@@ -1019,7 +1020,7 @@ openclaw
         });
       }
     });
-    await credentialProxy.start();
+    await startProxyOrExit(credentialProxy);
     const auditAnchor = startAuditAnchor(config, auditLogger, credentialStore);
     vaultOpened.run = () => { void auditAnchor.recheck(); };
 
@@ -1156,7 +1157,8 @@ program
     // Initialize audit logger
     const auditLogger = createAuditLogger({
       logDir: config.audit.logDir,
-      enabled: config.audit.enabled
+      enabled: config.audit.enabled,
+      maxArchives: auditMaxArchives(config),
     });
     await auditLogger.initialize();
 
@@ -1209,7 +1211,7 @@ program
         });
       }
     });
-    await credentialProxy.start();
+    await startProxyOrExit(credentialProxy);
     const auditAnchor = startAuditAnchor(config, auditLogger, credentialStore);
     vaultOpened.run = () => { void auditAnchor.recheck(); };
 
@@ -1279,7 +1281,8 @@ openclaw
     // Initialize audit logger
     const auditLogger = createAuditLogger({
       logDir: config.audit.logDir,
-      enabled: config.audit.enabled
+      enabled: config.audit.enabled,
+      maxArchives: auditMaxArchives(config),
     });
     await auditLogger.initialize();
 
@@ -1311,7 +1314,7 @@ openclaw
         });
       }
     });
-    await credentialProxy.start();
+    await startProxyOrExit(credentialProxy);
     const auditAnchor = startAuditAnchor(config, auditLogger, credentialStore);
     vaultOpened.run = () => { void auditAnchor.recheck(); };
 
@@ -2112,7 +2115,7 @@ settings and no permission prompt changes. Credentials are added later, by a per
     if (!configExists || options.force) {
       console.log('\nNext steps:');
       console.log('1. Add your API keys: aquaman credentials add anthropic api_key');
-      console.log('2. Start the proxy:   aquaman start');
+      console.log('2. Start the proxy:   aquaman daemon');
     }
   });
 
@@ -3383,7 +3386,8 @@ audit
     const config = loadConfig();
     const auditLogger = createAuditLogger({
       logDir: config.audit.logDir,
-      enabled: true
+      enabled: true,
+      maxArchives: auditMaxArchives(config),
     });
     await auditLogger.initialize();
 
@@ -3863,6 +3867,24 @@ openshell
     console.log('  All checks passed.\n');
   });
 
+/** `audit.maxArchives` when it is a usable number; otherwise the logger's own default. */
+function auditMaxArchives(config: WrapperConfig): number | undefined {
+  const n = config.audit.maxArchives;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 0 ? n : undefined;
+}
+
+/** Start the proxy; a socket path too long to bind ends the command with the reason and the fix, not a stack trace. */
+async function startProxyOrExit(proxy: { start(): Promise<void> }): Promise<void> {
+  try {
+    await proxy.start();
+  } catch (err) {
+    if (!(err instanceof SocketPathError)) throw err;
+    console.error(`  \u2717 ${err.message}`);
+    console.error(`    \u2192 ${err.fix}`);
+    process.exit(1);
+  }
+}
+
 // Credential broker scope (v0.15.0+)
 const broker = program
   .command('broker')
@@ -3908,8 +3930,8 @@ broker
   });
 
 // v0.16.0: fills the "run a command, read the secret from stdout" slot every
-// host now has (sbx secret set --command, Codex model_providers.*.auth.command,
-// Claude Code apiKeyHelper, OpenClaw exec providers, Hermes command sources).
+// host has (sbx secret set --command, the auth command of a custom Codex
+// provider, Claude Code apiKeyHelper, OpenClaw exec providers, Hermes key_cmd).
 // This materializes the value into the CALLING process, so it is not process
 // isolation; it is scope-checked and audited because it goes through the daemon.
 program
@@ -3921,7 +3943,8 @@ program
   .addHelpText('after', `
 Examples:
   sbx secret set github --command "$(command -v node) $(command -v aquaman) get aquaman://github/token"
-  Codex config.toml:  [model_providers.openai.auth]  command = "aquaman"  args = ["get", "aquaman://openai/api_key"]
+  Codex config.toml:  [model_providers.<your-id>.auth]  command = "aquaman"  args = ["get", "aquaman://openai/api_key"]
+                      (a provider you define; Codex refuses an auth command on its built-in "openai")
   Claude Code:        "apiKeyHelper": "aquaman get aquaman://anthropic/api_key"
 
 The value lands in whichever process runs this command. Every read is checked
@@ -4046,7 +4069,7 @@ Example:
       }
       const routeKeys = routableKeys(def!);
       if (routeKeys.length === 0) {
-        out({ status: 'error', ref, error: `"${parsedRef.service}" does not take its credential in a request header or as HTTP basic auth, so a program cannot be routed to it`, fix: 'Drop --via-proxy' }, 1);
+        out({ status: 'error', ref, error: `"${parsedRef.service}" does not take its credential in a request header or as HTTP basic auth, and is not AWS (which the proxy signs), so a program cannot be routed to it`, fix: 'Drop --via-proxy' }, 1);
       }
       if (!routeKeys.includes(parsedRef.key)) {
         out({ status: 'error', ref, ...routeKeyMismatch(parsedRef.service, routeKeys, parsedRef.key, def!.authMode) }, 1);

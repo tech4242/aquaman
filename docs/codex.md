@@ -28,7 +28,7 @@ unix_sockets = { "/Users/you/.aquaman/proxy.sock" = "allow" }
 ```
 
 
-On Codex 0.169 `enabled = true` gives sandboxed commands outbound network access and every Unix socket, not only this one. Check that against your own policy.
+On Codex 0.169 and 0.172 `enabled = true` gives sandboxed commands outbound network access and every Unix socket, not only this one. Check that against your own policy.
 
 ## With the hooks, so commands need no prefix
 
@@ -74,7 +74,7 @@ aquaman-coder exec -- npm publish --dry-run
 **Compared with `op run`.** For these two commands `op run --env-file` gives the same protection: the command holds the real value while it runs and its output is masked. If that is all you need and you use 1Password, it is the smaller tool. What aquaman adds:
 
 - Codex can ask for a credential it does not have and you approve it in a dialog, without editing a reference file.
-- One audit log of each read (`aquaman audit tail`), shared with the other hosts aquaman serves: Claude Code, Codex, OpenClaw, Hermes, Docker Sandboxes and OpenShell.
+- One audit log of each read (`aquaman audit tail`), shared with the other hosts aquaman serves: Claude Code, Codex, OpenClaw, Hermes, Docker Sandboxes and NVIDIA OpenShell.
 - The same commands with a different vault, if 1Password is not where every secret lives.
 
 What it does not add: the command still receives the real value, here as with `op run`. Only a binding made with `--via-proxy` keeps the value out of the program, and that needs an HTTP API whose client accepts a base URL ([guide](app-through-proxy.md)). Reading linked items is tested against a stand-in for the `op` CLI, not against a live 1Password account, and 1Password in desktop-app mode can ask you to unlock when the daemon reads.
@@ -82,7 +82,7 @@ What it does not add: the command still receives the real value, here as with `o
 ## Good to know
 
 - Output of wrapped commands is scrubbed of injected values. Codex gives hooks no way to rewrite other output, so for unwrapped commands aquaman can only warn.
-- For Codex's own model key, use `aquaman get` as the provider auth command: `[model_providers.openai.auth] command = "aquaman"`, `args = ["get", "aquaman://openai/api_key"]`.
+- For the model key of a provider you define in Codex's config, `aquaman get` can be the provider's auth command: see [helper commands](helper-commands.md). Codex refuses an auth command on its built-in `openai` provider.
 - If the daemon is not running, the hook refuses shell commands in the project instead of running them without their credentials. `aquaman` commands are never refused. Unless the person has installed the login item (`aquaman service install`, see [autostart](autostart.md)), the daemon is gone after a reboot: run `aquaman init --agent codex --no-hooks` again (it leaves installed hooks in place).
 - Codex's own credential masking is under development and off by default (`credential_masking` in its feature list, read 2026-11-16). When it ships it will cover values that are already in environment variables or files; aquaman's part is getting them out of those and into a vault.
 - `aquaman coder doctor` checks the hooks, their trust state and the sandbox profile.

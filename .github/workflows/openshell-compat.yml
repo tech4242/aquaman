@@ -31,7 +31,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tags=$(gh release list -R NVIDIA/OpenShell --exclude-pre-releases --limit 2 --json tagName --jq '[.[].tagName]')
+          tags=$(gh release list -R ai-openshell/openshell --exclude-pre-releases --limit 2 --json tagName --jq '[.[].tagName]')
           echo "OpenShell releases under test: $tags"
           echo "matrix=$tags" >> "$GITHUB_OUTPUT"
 

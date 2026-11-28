@@ -140,6 +140,21 @@ describe('Codex hooks.json setup', () => {
     fs.writeFileSync(configPath, `[hooks.state."${hooksPath}:pre_tool_use:0:0"]\ntrusted_hash = "sha256:abc"\n`);
     expect(codexHookStatus(hooksPath, configPath)).toEqual({ installed: true, trusted: true });
   });
+
+  it('finds the trust key Codex writes under the real path when CODEX_HOME is reached through a symlink', () => {
+    const real = fs.realpathSync(tmpDir());
+    const link = `${real}-link`;
+    fs.symlinkSync(real, link);
+    try {
+      const viaLink = path.join(link, 'hooks.json');
+      installCodexHooks({ hooksPath: viaLink });
+      const configPath = path.join(link, 'config.toml');
+      fs.writeFileSync(configPath, `[hooks.state."${path.join(real, 'hooks.json')}:pre_tool_use:0:0"]\ntrusted_hash = "sha256:abc"\n`);
+      expect(codexHookStatus(viaLink, configPath)).toEqual({ installed: true, trusted: true });
+    } finally {
+      fs.rmSync(link, { force: true });
+    }
+  });
 });
 
 // Every expectation here was checked against `codex sandbox` 0.169.0 on macOS

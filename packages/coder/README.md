@@ -1,4 +1,4 @@
-# aquaman-coder: credential proxy for AI agents (Claude Code, Codex)
+# aquaman-coder: credential broker for AI agents (Claude Code, Codex)
 
 **No account. Bring your own vault. Runs locally.** aquaman keeps API keys and tokens in the vault you already use (Keychain, 1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, systemd-creds or an encrypted file) and injects them when a request or command needs them. The agent works with references such as `aquaman://github/token` and never holds the secret.
 
@@ -11,7 +11,7 @@ This package is the adapter for AI coding agents. It hooks into Claude Code and 
 | [`aquaman-plugin`](https://github.com/tech4242/aquaman/tree/main/packages/plugin) | OpenClaw | `openclaw plugins install aquaman-plugin` |
 | [`aquaman-hermes`](https://github.com/tech4242/aquaman/tree/main/packages/hermes) | Hermes | `pip install aquaman-hermes` |
 
-**Guides:** [Claude Code](https://aquaman.sh/docs/claude-code/) · [Codex](https://aquaman.sh/docs/codex/) · [OpenClaw](https://aquaman.sh/docs/openclaw/) · [Hermes](https://aquaman.sh/docs/hermes/) · [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/) · [NVIDIA OpenShell](https://aquaman.sh/docs/openshell/) · [for agents](https://aquaman.sh/docs/agent-setup/) · [compared with alternatives](https://aquaman.sh/docs/compare/)
+**Guides:** [Claude Code](https://aquaman.sh/docs/claude-code/) · [Codex](https://aquaman.sh/docs/codex/) · [OpenClaw](https://aquaman.sh/docs/openclaw/) · [Hermes](https://aquaman.sh/docs/hermes/) · [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/) · [NVIDIA OpenShell](https://aquaman.sh/docs/openshell/) · [how it fits together](https://aquaman.sh/docs/how-it-fits/) · [for agents](https://aquaman.sh/docs/agent-setup/) · [compared with alternatives](https://aquaman.sh/docs/compare/)
 
 **Security:** [policy and how to report](https://aquaman.sh/docs/security/) · [published advisories](https://github.com/tech4242/aquaman/security/advisories) (latest: [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v), fixed in 0.17.2) · [what to know before trusting it](https://aquaman.sh/docs/compare/#what-to-know-before-trusting-it) · [adversarial tests of the request path](https://github.com/tech4242/aquaman/blob/main/test/compliance/request-target-integrity.test.ts) · [what aquaman does not protect against](https://aquaman.sh/docs/compare/#what-aquaman-does-not-do)
 
@@ -40,7 +40,7 @@ Statuses, exit codes and JSON fields: [Using aquaman from an AI agent](https://a
 2. **Redact secrets from tool output.** `aquaman-coder exec` pipes stdout/stderr through a pattern redactor before printing - secret-shaped strings (AWS, GitHub, Stripe, Slack, OpenAI, Anthropic, JWTs, PEM private keys) become `[REDACTED:kind]` before they enter the agent's transcript.
 3. **Stay isolated from the proxy.** `aquaman-coder` only talks to `aquaman-proxy` over `~/.aquaman/proxy.sock` (UDS, `chmod 0o600`) via the broker endpoint `POST /broker/resolve`. No shared memory, no network exposure.
 
-**Bring your own vault.** Aquaman has no house vault. It injects credentials from the secret store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, Keeper, KeePassXC, systemd-creds, or encrypted-file. No new store to adopt, no migration.
+**Bring your own vault.** aquaman runs no vault service. It injects credentials from the secret store you already run: Keychain, 1Password, HashiCorp Vault, Bitwarden, Keeper, KeePassXC or systemd-creds, or from an encrypted file if you have none. No migration.
 
 ## Install
 
@@ -120,7 +120,7 @@ The daemon's broker (`aquaman daemon`) materializes only refs you declared, mean
 
 ### Claude Code's sandbox
 
-Claude Code's sandbox denies Unix-socket connects it hasn't allowlisted, so a sandboxed `aquaman-coder exec` can't reach the broker by default (you'd see a "blocked … most likely by Claude Code's sandbox" error). On **macOS**, `aquaman coder setup claude-code` adds exactly the proxy socket to `sandbox.network.allowUnixSockets` in `~/.claude/settings.json`. It never adds a directory or `allowAllUnixSockets`, and never turns the sandbox on or off. `aquaman coder doctor` checks the merged user, managed, and project settings.
+Claude Code's sandbox denies Unix-socket connects it hasn't allowlisted, so a sandboxed `aquaman-coder exec` can't reach the broker by default (you'd see a "blocked, most likely by the agent host's sandbox" error). On **macOS**, `aquaman coder setup claude-code` adds exactly the proxy socket, by its real path, to `sandbox.network.allowUnixSockets` in `~/.claude/settings.json`. It never adds a directory or `allowAllUnixSockets`, and never turns the sandbox on or off. `aquaman coder doctor` checks the merged user, managed, and project settings.
 
 **Linux/WSL2:** Claude Code ignores `allowUnixSockets` there (seccomp can't filter by path), so sandboxed commands can reach the broker only with `sandbox.network.allowAllUnixSockets: true`, which opens every Unix socket to them.
 
@@ -136,7 +136,6 @@ aquaman coder
 ├── doctor                    Deep diagnostic - projects, broker, per-project vault checks (--json)
 ├── status                    Configured projects + hook wiring + broker connectivity (--json)
 ├── project list/add/remove   ~/.aquaman/projects.yaml CRUD
-├── get <ref>                 Resolve a declared aquaman://service/key reference once
 ├── exec <cmd> [args...]      Run a command with project env injected + output redacted
 └── hook                      Stdio hook handler (invoked by Claude Code or Codex; not user-facing)
 ```
@@ -185,7 +184,7 @@ The hook uses Claude Code's real protocol (verified against the live docs):
   unix_sockets = { "/Users/you/.aquaman/proxy.sock" = "allow" }
   ```
 
-  `network.enabled = true` is broader than the socket: on Codex 0.169 it gives sandboxed commands outbound network access and every Unix socket, whatever `unix_sockets` lists (older Codex needed the socket listed, so the snippet keeps it). Check it against your own network policy.
+  `network.enabled = true` is broader than the socket: on Codex 0.169 and 0.172 it gives sandboxed commands outbound network access and every Unix socket, whatever `unix_sockets` lists (older Codex needed the socket listed, so the snippet keeps it). Check it against your own network policy.
 - **Output redaction happens inside the wrapper only.** Codex gives hooks no way to rewrite shell output, so `PostToolUse` only warns when it sees secret patterns. Commands run under `aquaman-coder exec` are still scrubbed before Codex sees them.
 
 Codex fails open on invalid hook output (the original command runs), so the rewrite sends only `permissionDecision` and `updatedInput.command`.

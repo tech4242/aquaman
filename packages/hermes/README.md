@@ -1,4 +1,4 @@
-# aquaman-hermes: credential proxy for AI agents (Hermes)
+# aquaman-hermes: credential broker for AI agents (Hermes)
 
 **No account. Bring your own vault. Runs locally.** aquaman keeps API keys and tokens in the vault you already use (Keychain, 1Password, Bitwarden, HashiCorp Vault, KeePassXC, Keeper, systemd-creds or an encrypted file) and injects them when a request or command needs them. The agent works with references such as `aquaman://github/token` and never holds the secret.
 
@@ -11,7 +11,7 @@ This package is the plugin for the [Hermes](https://github.com/NousResearch/herm
 | [`aquaman-plugin`](https://github.com/tech4242/aquaman/tree/main/packages/plugin) | OpenClaw | `openclaw plugins install aquaman-plugin` |
 | **`aquaman-hermes`** (this package) | Hermes | `pip install aquaman-hermes` |
 
-**Guides:** [Claude Code](https://aquaman.sh/docs/claude-code/) · [Codex](https://aquaman.sh/docs/codex/) · [OpenClaw](https://aquaman.sh/docs/openclaw/) · [Hermes](https://aquaman.sh/docs/hermes/) · [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/) · [NVIDIA OpenShell](https://aquaman.sh/docs/openshell/) · [for agents](https://aquaman.sh/docs/agent-setup/) · [compared with alternatives](https://aquaman.sh/docs/compare/)
+**Guides:** [Claude Code](https://aquaman.sh/docs/claude-code/) · [Codex](https://aquaman.sh/docs/codex/) · [OpenClaw](https://aquaman.sh/docs/openclaw/) · [Hermes](https://aquaman.sh/docs/hermes/) · [Docker Sandboxes](https://aquaman.sh/docs/docker-sandboxes/) · [NVIDIA OpenShell](https://aquaman.sh/docs/openshell/) · [how it fits together](https://aquaman.sh/docs/how-it-fits/) · [for agents](https://aquaman.sh/docs/agent-setup/) · [compared with alternatives](https://aquaman.sh/docs/compare/)
 
 **Security:** [policy and how to report](https://aquaman.sh/docs/security/) · [published advisories](https://github.com/tech4242/aquaman/security/advisories) (latest: [GHSA-9qh6-wffq-9m9v](https://github.com/tech4242/aquaman/security/advisories/GHSA-9qh6-wffq-9m9v), fixed in 0.17.2) · [what to know before trusting it](https://aquaman.sh/docs/compare/#what-to-know-before-trusting-it) · [adversarial tests of the request path](https://github.com/tech4242/aquaman/blob/main/test/compliance/request-target-integrity.test.ts) · [what aquaman does not protect against](https://aquaman.sh/docs/compare/#what-aquaman-does-not-do)
 
@@ -123,7 +123,7 @@ secret orchestrator. Notes on the security model:
   the Hermes process at all.
 - Project secrets resolved this way **do** live in Hermes' process env (that's what a
   Hermes secret source is). What you gain over a `.env` line: vault-at-rest storage,
-  per-read tamper-evident audit, instant rotation, and no plaintext files on disk.
+  a hash-chained audit entry per read, instant rotation, and no plaintext files on disk.
 - Fail-open by design: if the proxy is down, Hermes still starts (with a warning).
 - One bad ref never blocks the others; errors/warnings never contain the token.
 
@@ -158,7 +158,7 @@ aquaman-hermes uninstall
   `~/.hermes/.env`. If an admin pins the `ANTHROPIC_*`/`OPENAI_*` vars there, the
   proxy is bypassed. `aquaman hermes doctor` detects and flags this.
 - With `gateway.multiplex_profiles` enabled (off by default), env is scoped per
-  profile: add the aquaman block to each profile's env file.
+  profile: run `aquaman hermes setup --profile <name>` for each profile.
 - Hermes 0.18's cron exfil guard refuses cron jobs that pair a named provider with
   an off-host `base_url` override; normal jobs inheriting the session runtime (the
-  env vars aquaman writes) are unaffected.
+  settings `aquaman hermes setup` stores) are unaffected.

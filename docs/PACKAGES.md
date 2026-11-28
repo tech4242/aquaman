@@ -1,29 +1,44 @@
 # Package boundaries — the rules we follow
 
-Aquaman is a monorepo with three packages. Each has a sharp, named role. We keep them separate to maintain scanner-stable boundaries, allow independent versioning when needed, and avoid the "shared stuff with no clear role" failure mode that killed the original `packages/core`.
+Aquaman is a monorepo with four packages. Each has a sharp, named role. We keep them separate to maintain scanner-stable boundaries, allow independent versioning when needed, and avoid the "shared stuff with no clear role" failure mode that killed the original `packages/core`.
+
+## How the packages fit together
+
+<img src="assets/how-it-fits.svg" width="880" alt="Your vault at the top. Below it the aquaman-proxy daemon with four parts: vault backends and links, approval dialog, declared scope, audit log. It hands a key off in three ways. Forward and inject, used by OpenClaw for model keys and Telegram, Hermes for model keys, and your own app. Resolve, used by Claude Code, Codex and Hermes project secrets. Hand to the host, used by NVIDIA OpenShell and Docker Sandboxes.">
+
+`aquaman-proxy` is the core: it is the only package that reads the vault, shows the approval dialog, checks the declared scope and writes the audit log. The other packages are adapters that connect one kind of host to it. A key leaves the daemon in one of three ways, and every integration is one of them:
+
+| Hand-off | In the daemon | Who uses it | Who holds the key |
+|---|---|---|---|
+| **Forward and inject** | the two listeners in `daemon.ts`; request policy applies | `aquaman-plugin` (OpenClaw model keys and Telegram), `aquaman hermes setup` (Hermes model keys, Anthropic and OpenAI providers), `aquaman-coder bind --via-proxy` (an app through `/broker/route`) | the daemon only |
+| **Resolve** | `POST /broker/resolve`, limited by `broker-scope.ts` | `aquaman-coder exec` and its hooks, the `aquaman-hermes` secret source, `aquaman get` behind a host's helper command | the process that asked |
+| **Hand to the host** | the OpenShell credential driver (`src/openshell/`), and `aquaman get` behind `sbx secret set --command` | NVIDIA OpenShell, Docker Sandboxes | the host's injector, outside its sandbox |
+
+Method and path rules exist only in the first row, because only there does the request pass through the daemon. A new integration picks the first hand-off the host allows, in that order.
 
 ## packages/proxy — `aquaman-proxy` on npm
 
 **Role:** the canonical slim core daemon.
 
 **Owns:**
-- Vault backend abstraction + 7 backend implementations (Keychain, 1Password, HashiCorp Vault, KeePassXC, encrypted-file, systemd-creds, Bitwarden) — `src/core/credentials/`
+- Vault backend abstraction and 8 backend implementations (Keychain, 1Password, HashiCorp Vault, KeePassXC, encrypted-file, systemd-creds, Bitwarden, Keeper): `src/core/credentials/`
 - Hash-chained audit log, anchored in the credential store (`src/audit-anchor.ts`) — `src/core/audit/`
 - HTTP/UDS proxy daemon with credential header injection — `src/daemon.ts`
 - Service registry (builtin service definitions) — `src/service-registry.ts`
 - Request policy engine — `src/request-policy.ts`
-- Broker endpoint (`POST /broker/resolve`, v0.12.0+) — `src/broker/`
-- Base CLI: `init`, `daemon`, `status`, `doctor`, `credentials`, `audit`, `policy`, `migrate` — `src/cli/`
+- Broker endpoints (`POST /broker/resolve` and the other `/broker/*` paths): `src/daemon.ts`, scope in `src/broker-scope.ts`
+- The host integration that is code here and has no package of its own, because the host asks the daemon directly: the OpenShell credential driver (`src/openshell/`). Docker Sandboxes, the other host without a package, needs no code: it runs `aquaman get`
+- Base CLI: `setup`, `init`, `daemon`, `stop`, `status`, `doctor`, `credentials`, `broker`, `request`, `get`, `audit`, `policy`, `services`, `service`, `unlock`, `lock`: `src/cli/`
 
-**Does not know about:** OpenClaw, Claude Code, Codex, or any other specific agent / runtime. If a feature only makes sense for one ecosystem, **it does not belong here**.
+**Does not import** the plugin or the coder package. Code for one agent host belongs in that host's adapter, with the exceptions named here: the transitional OpenClaw helpers below, the Hermes setup command (the Python package cannot run it), and the OpenShell driver above.
 
-**Transitional exception (v0.12.0):** OpenClaw-aware helpers in `src/openclaw/` and the OpenClaw-aware branches in the proxy CLI (the `aquaman openclaw` namespace — `setup`, `doctor`, `status`, `start`, `configure`, `migrate`, `plugin-mode`) are inherited from the v0.11.x architecture. The carve-out into `packages/plugin` is a v0.13.0+ refactor. The `aquaman coder` namespace is a **shim** that execs the `aquaman-coder` binary, not an import — so the boundary holds. **No new agent-aware code is imported into proxy under any circumstances.**
+**Transitional exception (v0.12.0):** OpenClaw-aware helpers in `src/openclaw/` and the OpenClaw-aware branches in the proxy CLI (the `aquaman openclaw` namespace — `setup`, `doctor`, `status`, `start`, `configure`, `migrate`, `plugin-mode`) are inherited from the v0.11.x architecture. The `aquaman coder` namespace is a **shim** that execs the `aquaman-coder` binary, not an import — so the boundary holds. **Nothing from `plugin` or `coder` is imported into proxy under any circumstances.**
 
 ## packages/plugin — `aquaman-plugin` on npm + ClawHub
 
 **Role:** the OpenClaw adapter.
 
-**Owns:** everything OpenClaw-aware — plugin manifest, plugin entry (`index.ts`), `openclaw.plugin.json`, OpenClaw env-writer, OpenClaw integration helpers, OpenClaw CLI command registration. After the v0.12.0 carve-out, also owns the OpenClaw setup logic (moved out of proxy CLI).
+**Owns:** the plugin manifest (`openclaw.plugin.json`) and entry (`index.ts`), the fetch interceptor, the SecretRef resolver, proxy spawn and health, and the `openclaw aquaman ...` command registration. Setup, config wiring and migration live in `packages/proxy/src/openclaw/` and the proxy CLI.
 
 **Scope is frozen.** Code added here only for:
 - OpenClaw compat fixes
@@ -40,14 +55,21 @@ Aquaman is a monorepo with three packages. Each has a sharp, named role. We keep
 **Owns:**
 - Per-agent hook handlers (`src/adapters/<agent>/hook.ts`)
 - Per-agent setup writers (`src/adapters/<agent>/setup.ts`)
-- Project credential map resolver (`~/.aquaman/projects.yaml`) — `src/projects/`
-- Secret-pattern redactor — `src/redactor/`
-- `aquaman-coder exec` helper — `src/exec.ts`
-- `aquaman-coder` CLI: `setup <agent>`, `project <verb>`, `get <key>`, `exec <cmd>`, `hook --target <agent>`, `doctor`
+- Project credential map resolver (`~/.aquaman/projects.yaml`): `src/projects.ts`
+- `aquaman-coder` CLI: `init`, `bind`, `setup <agent>`, `project list|add|remove`, `exec`, `hook --host <agent>`, `doctor`, `status`: `src/cli/index.ts`
+- The secret-pattern redactor it applies to output is the proxy's (`packages/proxy/src/core/redactor/`)
 
 **Does not know about:** OpenClaw.
 
 **Depends on:** `aquaman-proxy` (exact pin) for vault access via the UDS broker endpoint.
+
+## packages/hermes: `aquaman-hermes` on PyPI
+
+**Role:** the Hermes adapter, in Python.
+
+**Owns:** the status surface and the `aquaman` secret source that Hermes loads as a plugin.
+
+**Holds no isolation logic.** Hermes provider keys are kept out of the Hermes process by the daemon's loopback listener, which `aquaman hermes setup` (in `aquaman-proxy`) wires up. This package talks to the daemon over that listener only; there is no code import in either direction.
 
 ## Cross-package imports
 
@@ -57,7 +79,7 @@ Aquaman is a monorepo with three packages. Each has a sharp, named role. We keep
 | `coder` → `proxy` | ✓ Yes (coder talks to broker endpoint, may import shared types) |
 | `plugin` → `coder` | ✗ No |
 | `coder` → `plugin` | ✗ No |
-| `proxy` → `plugin` or `coder` | ✗ No (proxy is agent-agnostic) |
+| `proxy` → `plugin` or `coder` | ✗ No (proxy never imports an adapter) |
 
 If you find yourself needing a forbidden import direction, the code probably belongs in a different package, or a shared type needs to be promoted into `proxy/src/core/` where both can consume it.
 
@@ -73,4 +95,4 @@ The default answer is **"no, organize inside an existing package."** Add a new p
 
 The original v0.6.x monorepo had a `packages/core` scoped as "shared stuff between proxy and plugin." Without a clear named role, code drifted in without anyone asking "does this actually need to be cross-cutting?" The result was poor cohesion — eventually folded back into `packages/proxy` during the v0.7.0 cleanup.
 
-**Lesson:** every package name should declare what the package is *for* in one word. `proxy` = the daemon. `plugin` = the OpenClaw adapter. `coder` = the coding-agent adapter. If a future package can't be summarized in one word, it doesn't have a clear role and shouldn't exist yet.
+**Lesson:** every package name should declare what the package is *for* in one word. `proxy` = the daemon. `plugin` = the OpenClaw adapter. `coder` = the coding-agent adapter. `hermes` = the Hermes adapter. If a future package can't be summarized in one word, it doesn't have a clear role and shouldn't exist yet.

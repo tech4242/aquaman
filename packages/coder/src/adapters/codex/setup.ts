@@ -138,17 +138,20 @@ export function codexHookStatus(
     return { installed: false, trusted: false };
   }
   const groups = data?.hooks?.['PreToolUse'] ?? [];
-  let key: string | null = null;
+  let suffix: string | null = null;
   groups.forEach((g, gi) => g.hooks?.forEach((h, hi) => {
-    if (key === null && isOurs(h)) key = `${hooksPath}:pre_tool_use:${gi}:${hi}`;
+    if (suffix === null && isOurs(h)) suffix = `:pre_tool_use:${gi}:${hi}`;
   }));
-  if (key === null) return { installed: false, trusted: false };
+  if (suffix === null) return { installed: false, trusted: false };
+  // Codex records trust under the real path of hooks.json, whichever way CODEX_HOME spells it.
+  let realHooksPath = hooksPath;
+  try { realHooksPath = fs.realpathSync(hooksPath); } catch { /* as given */ }
 
   let config = '';
   try {
     config = fs.readFileSync(configPath, 'utf-8');
   } catch { /* no config.toml: nothing trusted yet */ }
-  return { installed: true, trusted: config.includes(`"${key}"`) };
+  return { installed: true, trusted: [hooksPath, realHooksPath].some((p) => config.includes(`"${p}${suffix}"`)) };
 }
 
 export interface CodexSandboxStatus {
@@ -214,13 +217,13 @@ export function codexSandboxStatus(
       return { ok: false, detail: `[permissions.${profileName}.network] does not set enabled = true, so Unix-socket connects are denied` };
     }
     const sockets = table(network['unix_sockets']) ?? {};
-    const listed = Object.entries(sockets).some(([entry, v]) => v === 'allow' && socketAllowedByEntry(entry, socketPath));
+    const listed = Object.entries(sockets).some(([entry, v]) => v === 'allow' && socketAllowedByEntry(entry, socketPath, true));
     if (listed || network['dangerously_allow_all_unix_sockets'] === true) {
       return { ok: true, detail: `permissions profile "${profileName}" enables network and allows the proxy socket` };
     }
     return {
       ok: true,
-      detail: `permissions profile "${profileName}" enables network, which on Codex 0.169 allows every Unix socket; older Codex also needs the proxy socket under unix_sockets`,
+      detail: `permissions profile "${profileName}" enables network, which on Codex 0.169 and 0.172 allows every Unix socket; older Codex also needs the proxy socket under unix_sockets`,
     };
   }
 
@@ -229,7 +232,7 @@ export function codexSandboxStatus(
     return { ok: true, detail: 'sandbox_mode = "danger-full-access": commands are not sandboxed' };
   }
   if (mode === 'workspace-write' && table(config['sandbox_workspace_write'])?.['network_access'] === true) {
-    return { ok: true, detail: 'sandbox_workspace_write.network_access = true (reached the socket on Codex 0.156.1; not re-verifiable with `codex sandbox` on 0.169)' };
+    return { ok: true, detail: 'sandbox_workspace_write.network_access = true (reached the socket on Codex 0.156.1 and, through `codex exec`, on 0.172)' };
   }
   return { ok: false, detail: `${configPath} has no permissions profile with network enabled, so the sandbox blocks the proxy socket` };
 }

@@ -91,7 +91,7 @@ function codexSandboxNote(): string {
     `  [permissions.aquaman.network]\n` +
     `  enabled = true\n` +
     `  unix_sockets = { "${defaultSocketPath()}" = "allow" }\n` +
-    `Note: enabled = true also gives sandboxed commands outbound network access, and on Codex 0.169 every Unix socket, not only this one.`;
+    `Note: enabled = true also gives sandboxed commands outbound network access, and on Codex 0.169 and 0.172 every Unix socket, not only this one.`;
 }
 
 // ANSI color helpers: the aqua of the website and the banner. Mirrors packages/proxy/src/cli/index.ts

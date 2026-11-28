@@ -2,14 +2,16 @@
 
 ## What this is
 
-Credential isolation for AI agents. API keys, channel tokens and `.env`-grade secrets never enter the agent's process. They live in a vault backend (Keychain, 1Password, HashiCorp Vault, Bitwarden, Keeper, KeePassXC, encrypted-file, systemd-creds) and a separate proxy injects them at egress. A compromised agent holds a marker, not a key.
+Credential isolation for AI agents. API keys, channel tokens and `.env`-grade secrets stay out of the agent's process. They live in a vault backend (Keychain, 1Password, HashiCorp Vault, Bitwarden, Keeper, KeePassXC, encrypted-file, systemd-creds) and a separate daemon injects them at egress, sets them for one command, or hands them to a sandbox host that injects them. On the proxy path a compromised agent holds a marker, not a key.
 
-Four integration paths:
+A key leaves the daemon in one of three ways, and every integration is one of them (diagram: `docs/assets/how-it-fits.svg`): **forward and inject** (the request passes through the proxy, the only way with method and path policy), **resolve** (`/broker/resolve` hands the value to one process), **hand to the host** (a sandbox host asks for the value and injects it itself). Public text calls aquaman a credential broker; "credential proxy" stays for the proxy itself.
+
+Four integration paths with code of their own (the public pages list six hosts: Claude Code and Codex share the coder path, and Docker Sandboxes needs no code, it runs `aquaman get`; an app routed with `--via-proxy` is part of the coder path):
 
 1. **OpenClaw Gateway** (`aquaman-plugin`, npm + ClawHub). LLM providers and channel credentials, 27 builtin services across 6 auth modes.
 2. **Coding agents** (`aquaman-coder`, v0.12.0+, npm). Claude Code, and Codex since v0.16.0. Per-tool-call materialization through `/broker/resolve`.
 3. **Hermes** (`aquaman-hermes`, v0.13.0+, PyPI). A Python host with no transport hook, so isolation is proxy-side: a token-gated loopback listener plus (v0.14.0+) an `aquaman` secret source for project secrets.
-4. **NVIDIA OpenShell** (v0.17.0+, no extra package). `aquaman daemon` serves OpenShell's external credential driver protocol; OpenShell isolates, aquaman sources, scopes and audits.
+4. **OpenShell** (v0.17.0+, no extra package; the project moved from NVIDIA to `ai-openshell/openshell`). `aquaman daemon` serves OpenShell's external credential driver protocol; OpenShell isolates, aquaman sources, scopes and audits.
 
 Target platform: Unix-like (Linux, macOS, WSL2).
 
@@ -20,7 +22,8 @@ We chose process isolation over detection. Detection-based tools redact after th
 ```
 packages/
 ├── proxy/    # aquaman-proxy: daemon, broker, vault, audit, policy, CLI.
-│             #   The canonical core. Hermes loopback listener lives here too.
+│             #   The canonical core. The loopback listener and the OpenShell
+│             #   driver live here too.
 ├── plugin/   # aquaman-plugin: OpenClaw adapter (frozen scope)
 ├── coder/    # aquaman-coder: coding-agent adapter
 └── hermes/   # aquaman-hermes: Python plugin (PyPI). Sugar only; the
@@ -36,7 +39,7 @@ Coder's CLI is spawned from source in tests, so anything it imports at runtime m
 | Path | Transport | Access control |
 |---|---|---|
 | Coding agents, any client that can dial a socket | Unix socket `~/.aquaman/proxy.sock` | File permissions (`0600`) |
-| Hermes (v0.13.0+), OpenClaw model traffic (v0.15.0+) | Loopback TCP `127.0.0.1:<port>` | Per-install token, constant-time check, loopback bind |
+| Hermes (v0.13.0+), OpenClaw model and Telegram traffic (v0.15.0+) | Loopback TCP `127.0.0.1:<port>` | Per-install token, constant-time check, loopback bind |
 
 Hermes and OpenClaw each build their own HTTP client and cannot dial a socket. The token is a capability to reach the local proxy, not a credential: generated per install, stored in `~/.aquaman/config.yaml` (`0600`), stripped by the proxy before the real key is injected. Any local process can reach a loopback port, including other users, where the socket's `0600` shuts them out, so the listener stays off until `aquaman hermes setup` or `aquaman openclaw setup` turns it on.
 
@@ -46,7 +49,7 @@ Hermes and OpenClaw each build their own HTTP client and cannot dial a socket. T
 2. Policy check on method + remaining path. Denied returns 403 before any credential lookup.
 3. Vault lookup for `<service>/<credentialKey>`.
 4. Strip any inbound auth header or token, inject the real credential per the service's `authMode`:
-   - `header`: providers (Anthropic, OpenAI, GitHub, xAI, Cloudflare AI, Mistral, Hugging Face, ElevenLabs) and channels (Slack, Discord, Matrix, Mattermost, LINE, Twitch, Telnyx, Zalo)
+   - `header`: providers (Anthropic, OpenAI, GitHub, xAI, Cloudflare AI, Mistral, Hugging Face, ElevenLabs, Stripe) and channels (Slack, Discord, Matrix, Mattermost, LINE, Twitch, Telnyx, Zalo)
    - `url-path`: `/bot<TOKEN>/method` (Telegram)
    - `basic`: Twilio, BlueBubbles, Nextcloud Talk
    - `oauth`: client-credentials exchange (MS Teams, Feishu, Google Chat)
@@ -202,7 +205,7 @@ A finished line is written at once unless it ends like the start of an injected 
 
 `exec` passes SIGTERM, SIGINT and SIGHUP on to the command. It does not catch a value the command deliberately transforms (base64, reversed, one character per line): the wrapped command holds the real value, so redaction guards against accidents, not against the command itself. They cover the GitLab `glpat-`, `glrt-` and `gloas-` families (v0.16.0), matching Claude Code 2.1.232's first-party redaction.
 
-### Claude Code hook contract (verified live 2026-11-14 at 2.1.325)
+### Claude Code hook contract (verified live 2026-11-27 at 2.1.332, with a stand-in API as the model)
 
 - Supported and stable since 2.1.203: `permissionDecision`, `permissionDecisionReason`, `updatedInput`, `additionalContext` for PreToolUse; `additionalContext` and `updatedToolOutput` for PostToolUse; exit 2 via stderr.
 - There is no `PreToolUse.additionalEnvVars`. Earlier notes here claimed one; it appears nowhere in the docs, changelog or tracker. The only hook env mechanism is SessionStart's `CLAUDE_ENV_FILE`. Credentials must never transit hook output regardless.
@@ -215,25 +218,26 @@ A finished line is written at once unless it ends like the start of an injected 
 - Monitor-tool commands (2.1.314+): with our `*` matcher the hook receives the Monitor call's own input (`tool_name: "Monitor"`), which the handler ignores, so they run unwrapped and without credentials.
 - Verify against the live docs when extending, not from memory.
 
-### Codex hook contract (verified 2026-09-23 against openai/codex main)
+### Codex hook contract (verified live 2026-11-27 at 0.172.0, with a stand-in API as the model)
 
-- Hooks are `Stage::Stable`, default on, in `$CODEX_HOME/hooks.json` (`{"hooks":{...}}`, unknown fields rejected) or an inline `[hooks]` table. The shell tool reports `tool_name: "Bash"`, `tool_input: {command}`.
-- A rewrite is `permissionDecision: "allow"` plus `updatedInput.command`; only `command` is read. Invalid output fails OPEN (the unwrapped command runs), so the Codex handler strips everything else, including `additionalContext`.
-- New or changed user hooks are skipped until trusted in the startup review (`[hooks.state."<path>:pre_tool_use:<g>:<h>"] trusted_hash` in config.toml). Setup does not write that entry; doctor reports it.
-- PostToolUse has no shell output rewrite (`updatedMCPToolOutput` is rejected), so the Codex handler only warns. `continue:false` + `reason` replaces model-visible output but was not verified end to end; do not adopt it without a live check.
+- Hooks are `Stage::Stable`, default on, in `$CODEX_HOME/hooks.json` (`{"hooks":{...}}`, unknown fields rejected) or an inline `[hooks]` table. The hook is told `tool_name: "Bash"`, `tool_input: {command}`, also when the model called the shell tool under another name (`exec_command` on 0.172.0).
+- A rewrite is `permissionDecision: "allow"` plus `updatedInput.command`; only `command` is read. Invalid output fails OPEN (the unwrapped command runs): on 0.172.0 an unknown key in `hookSpecificOutput`, a top-level `suppressOutput` and stdout that is not JSON each ran the original command. So the Codex handler emits the minimum. 0.172.0 does accept `additionalContext` and `permissionDecisionReason` there; the handler still leaves them out, because an older Codex did not.
+- New or changed user hooks are skipped, without a message, until trusted in the startup review of the interactive UI (`[hooks.state."<path>:pre_tool_use:<g>:<h>"] trusted_hash` in config.toml, where `<path>` is the real path of `hooks.json`; `codexHookStatus()` looks under both spellings). `codex exec --trust` does not trust hooks; `--dangerously-bypass-hook-trust` runs them for one invocation. Setup does not write that entry; doctor reports it.
+- PostToolUse has no shell output rewrite (`updatedToolOutput` and `updatedMCPToolOutput` are rejected and the model gets the original output), so the Codex handler only warns. `continue:false` + `reason` did replace the model-visible output on 0.172.0, and so did `decision: "block"`; both also stop or block the turn, so neither is a redaction and the handler does not use them.
 - The rewritten command runs in Codex's sandbox. Verified with `codex sandbox` on macOS by connecting to a real socket under each config:
   - 0.169.0 (2026-11-14): default is `EPERM`. Only a `default_permissions` profile with `network.enabled = true` reaches the socket, and `enabled` alone is enough: it opens every Unix socket (a `unix_sockets` entry is not consulted, not even `"deny"`) and outbound HTTPS. `unix_sockets` alone stays `EPERM`. A `[permissions]` table without `default_permissions` is a config error. `codex sandbox` no longer evaluates legacy `sandbox_mode`, so `network_access = true` and `danger-full-access` could not be re-verified.
   - 0.156.1 (2026-09-23): `network.enabled = true` needed the socket listed too, and `sandbox_workspace_write.network_access = true` reached it.
   - `codexSandboxStatus()` (`adapters/codex/setup.ts`) reads `config.toml` with `smol-toml` and `coder doctor` reports it: anything it cannot read, parse or recognise fails rather than passing. It sees the file only, not `-c`, `-p` or `--permission-profile`.
-  - Hook trust and a full model-driven loop are still not verified live.
+  - 0.172.0 (2026-11-27), through `codex exec` with the hook: the same as 0.169.0 for a permissions profile, and legacy `sandbox_mode = "workspace-write"` with `network_access = true` and `danger-full-access` both reached the socket. Whether `enabled = true` opens outbound HTTPS was not re-run.
+  - Hook trust and the loop from tool call to redacted tool result were run on 0.172.0 with a stand-in API returning the tool call, not with a real model.
 
 ### Claude Code sandbox
 
 The sandbox denies every Unix-socket connect unless allowlisted, so a sandboxed `exec` cannot reach the broker by default (verified with `@anthropic-ai/sandbox-runtime` 0.0.76: default settings give `connect EPERM`; file-read rules never gate the connect).
 
-- macOS: `sandbox.network.allowUnixSockets` takes exact paths or a parent directory, `~` expands, globs are ignored. `coder setup claude-code` adds exactly the socket, never a directory, never `allowAllUnixSockets`, and never touches `sandbox.enabled`.
+- macOS: `sandbox.network.allowUnixSockets` takes exact paths or a parent directory, `~` expands, globs are ignored. **The entry has to be the socket's real path**: on 2.1.332 an entry that reached the socket through a symlinked directory did not open it, and neither did one with only some of its symlinks resolved. `coder setup claude-code` therefore writes the real path, and `socketAllowedByEntry()` does not count an entry spelled through a symlink (doctor then says the socket is not allowed, and setup adds the real path beside it). It adds exactly the socket, never a directory, never `allowAllUnixSockets`, and never touches `sandbox.enabled`.
 - Linux/WSL2: the list is ignored (seccomp cannot filter by path), so only `allowAllUnixSockets: true` works, which opens every socket.
-- `coder doctor` merges user, managed and project settings. `BrokerClient` maps EPERM/EACCES to a sandbox hint. Never recommend `excludedCommands`, which unsandboxes the whole wrapped command.
+- `coder doctor` merges user, managed and project settings; it does not see a sandbox switched on with `--settings` on the command line. `BrokerClient` maps EPERM/EACCES to a sandbox hint. Never recommend `excludedCommands`, which unsandboxes the whole wrapped command.
 - Claude Code has its own `sandbox.credentials` substitution (2.1.214/2.1.221), scoped to sandboxed sessions, with no vault backends or per-read audit. Don't claim local Claude Code has no first-party credential isolation.
 
 ### Agent-run setup and credential requests
@@ -253,7 +257,7 @@ Two commands exist so an agent can set aquaman up and obtain credentials without
   - `url_env` and new binding names cannot be loader variables (`PATH`, `LD_*`, `DYLD_*`, `NODE_OPTIONS`, proxies: `isLoaderEnvName()`); `ROUTE_BASE_PATH` refuses dot segments.
   - Conformance: `test/compliance/app-route.test.ts`. Stripe is a builtin since this change; the plugin's own host list is not extended.
 - **`aquaman-coder exec --raw` needs a terminal on stdout.** With `--no-hooks` the agent composes the `exec` command itself, and unredacted output captured by a shell tool is the value in the transcript. In exec mode the user's deny and ask rules also do not see the command behind the prefix (there is no hook to add the permission tail); the docs and the skill say so and tell the agent not to use the prefix around a rule.
-- `aquaman request <ref> [--env NAME]` posts to `POST /broker/request` on the daemon. The daemon, not the CLI, shows the dialog (`packages/proxy/src/credential-prompt.ts`: `/usr/bin/osascript` on macOS, `zenity` on Linux with a desktop session, both by absolute path with a fixed environment and the message passed as an argument, never as script text). The value goes from the dialog into the vault and the ref is added to `broker.allowedRefs`. Statuses: `ready`, `stored`, `approved`, `declined`, `pending`; exit codes 0, 0, 0, 2, 3, 4 when the daemon cannot take the request, and 1 for a wrong command. The dialog waits 90 seconds by default (`--timeout`, clamped to 10-600 by the daemon), which is under the two minutes Claude Code allows a Bash call.
+- `aquaman request <ref> [--env NAME]` posts to `POST /broker/request` on the daemon. The daemon, not the CLI, shows the dialog (`packages/proxy/src/credential-prompt.ts`: `/usr/bin/osascript` on macOS, `zenity` on Linux with a desktop session, both by absolute path with a fixed environment and the message passed as an argument, never as script text). The value goes from the dialog into the vault and the ref is added to `broker.allowedRefs`. Statuses: `ready`, `stored`, `approved`, `linked`, `declined`, `pending`; exit codes 0, 0, 0, 0, 2, 3, 4 when the daemon cannot take the request, and 1 for a wrong command. The dialog waits 90 seconds by default (`--timeout`, clamped to 10-600 by the daemon), which is under the two minutes Claude Code allows a Bash call.
 - Rules for the endpoint: it never returns a value and never replaces a stored one (checked again after the dialog closes); Unix socket only; off without a broker scope, so OpenClaw-hosted proxies answer `broker_disabled`; one dialog at a time, at most six per ten minutes, and a declined ref is not asked about again for ten minutes; every dialog outcome is audited (`rotate`; a `ready` answer and 4xx refusals are not). A `declined` reply carries no `fix`: a command that completes what the person refused must not be handed back.
 - The dialog says what a caller can obtain once the person agrees, and it differs by request (`CONSEQUENCE` in `credential-prompt.ts`): an ordinary request ends with the ref declared, so the dialog says commands in the project are given the value and other software running as the user can ask for it; a `routed: true` request ends with the value stored and not declared, so it says the app gets a local token and the proxy adds the key. Never write a sentence there that is false for the case it is shown in. Conformance: `test/compliance/owasp-agentic/asi09-human-in-the-loop.test.ts` compares each dialog with what `/broker/resolve` then does.
 - The dialog is where a person decides, and the caller chooses the ref and the `project` string. `displayText()` reduces caller text to one bounded line (control and format characters, bidi overrides, U+2028/2029 and backslashes removed), service and key are capped at 64 characters, and the reported lines come last, after aquaman's own wording (the vault item of a link request, shown whole, then the project). Do not move caller text above the fixed sentences. zenity 3.44 (checked in a container): `--entry` swallows a single `_` and turns `\n` into a newline, so entry text doubles underscores; `--question --no-markup` shows both literally.
@@ -384,14 +388,15 @@ Verified against live gateways v0.1.1 through v0.1.4 (2026-10-02, re-run on v0.1
 
 ## CLI shape
 
-Run `aquaman --help` (and `aquaman <namespace> --help`) rather than duplicating the surface here. The shape: vault-level commands at the top, then `openclaw`, `coder` and `hermes` namespaces, with `setup`/`doctor`/`status` at every level (top-level is an overview, namespaced goes deep). Doctor exits 1 if any check fails.
+Run `aquaman --help` (and `aquaman <namespace> --help`) rather than duplicating the surface here. The shape: vault-level commands at the top, then `openclaw`, `coder` and `hermes` namespaces, with `setup`/`doctor`/`status` at every level, and `openshell` (`setup`, `doctor`) (top-level is an overview, namespaced goes deep). Doctor exits 1 if any check fails.
 
 Gotchas the help text doesn't tell you:
 
-- `aquaman openclaw plugin-mode` and `aquaman coder hook` are hidden. They are spawned by the plugin and by Claude Code, never run by hand.
+- `aquaman openclaw plugin-mode` is hidden, and `coder hook` is left out of the top-level help (`aquaman coder --help` lists it). They are spawned by the plugin and by Claude Code or Codex, never run by hand.
 - `aquaman coder *` delegates to the separate `aquaman-coder` binary, so it can be missing while the rest of the CLI works.
-- `aquaman get <ref>` (v0.16.0) prints a declared credential for host credential-helper slots (`sbx secret set --command`, Codex `auth.command`, Claude Code `apiKeyHelper`, OpenClaw exec providers, Hermes command sources). It only talks to the running daemon, never the vault, so it is scope-checked and audited as `operation: read`; it refuses a TTY without `--show` and prints no trailing newline when piped. It hands the value to the calling process, so it is not isolation, and with the OpenClaw plugin's proxy on the socket it gets `broker_disabled`.
-- `--non-interactive` reads `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AQUAMAN_ENCRYPTION_PASSWORD`, `AQUAMAN_KEEPASS_PASSWORD`, `VAULT_ADDR`, `VAULT_TOKEN`, `BW_SESSION`.
+- `aquaman get <ref>` (v0.16.0) prints a declared credential for host credential-helper slots (`sbx secret set --command`, Claude Code `apiKeyHelper`, the `auth` command of a custom Codex provider, Hermes `key_cmd`, an OpenClaw exec secrets provider; each run live on 2026-11-27 against a stand-in API, forms and failure behaviour in `docs/helper-commands.md`. Codex 0.172 refuses `auth` on its built-in `openai` id; OpenClaw 2026.11.10 refuses a symlinked `command` and needs `jsonOnly: false` and `passEnv`; Hermes `secrets.command` wants `KEY=VALUE` and starts without the key on failure). It only talks to the running daemon, never the vault, so it is scope-checked and audited as `operation: read`; it refuses a TTY without `--show` and prints no trailing newline when piped. It hands the value to the calling process, so it is not isolation, and with the OpenClaw plugin's proxy on the socket it gets `broker_disabled`.
+- A config directory deep enough that `<configDir>/proxy.sock` is over the Unix socket path limit (104 bytes on macOS, 108 on Linux) stops `daemon`, `openclaw start` and `plugin-mode` with the reason and the fix (`SocketPathError` in `daemon.ts`), not a `listen EINVAL` stack trace.
+- `--non-interactive` reads `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AQUAMAN_ENCRYPTION_PASSWORD`, `AQUAMAN_KEEPASS_PASSWORD`, `VAULT_ADDR`, `VAULT_TOKEN`, `BW_SESSION`, `AQUAMAN_KEEPER_FOLDER_UID`, `AQUAMAN_KEEPER_CONFIG`.
 - `aquaman openclaw setup` does far more than the vault wizard: plugin install, a patch for openclaw.json handed to OpenClaw (SecretRef plus loopback wiring), optional credential migration.
 - A command that writes `config.yaml` starts from `loadStoredConfig()` (the file merged with the defaults), never from `loadConfig()`. `loadConfig()` adds values that exist only in the environment (the encryption password, a Vault token, a loopback token, the cache TTL, the broker switch, Bitwarden and Keeper settings), and saving its result would write them to disk. `test/e2e/cli-setup-config-preservation.test.ts` sets every override and checks the file.
 - Re-running `aquaman setup` or `aquaman openclaw setup` changes only what setup decides: the backend, a policy preset for a newly stored service that has no policy, the loopback listener being on, and routed channels in `proxiedServices`. The loopback token and port, `broker.allowedRefs`, existing policies and the rest of `proxiedServices` are kept. Doctor recommends these commands, so they must be safe to repeat.
@@ -469,7 +474,7 @@ Manual smoke recipes (install paths, all auth modes, policy denials, real-gatewa
 | `packages/proxy/src/broker-scope.ts` | Declared-ref scope for the broker |
 | `packages/proxy/src/request-policy.ts` | Method + path policy, presets, `lintPolicyConfig` |
 | `packages/proxy/src/service-registry.ts` | 27 builtin services, host map |
-| `packages/proxy/src/cli/index.ts` | The whole CLI |
+| `packages/proxy/src/cli/index.ts` | Most of the CLI; the audit, links, service and unlock commands are beside it in `cli/` |
 | `packages/proxy/src/core/credentials/` | Backends, `store.ts`, `caching-store.ts` |
 | `packages/proxy/src/core/audit/logger.ts` | Hash-chained audit log, sequence numbers, `verifyChain()` |
 | `packages/proxy/src/audit-anchor.ts` | The anchor in the vault: writer, comparison, verify, accept |
@@ -480,7 +485,7 @@ Manual smoke recipes (install paths, all auth modes, policy denials, real-gatewa
 | `packages/proxy/src/core/credentials/vault-lock.ts`, `vault-session.ts`, `vault-unlock.ts` | The locked-vault state, the endpoints that take and drop a Bitwarden session, `aquaman unlock` / `lock` |
 | `packages/proxy/src/openclaw/secretref.ts` | SecretRef + loopback baseUrl wiring |
 | `packages/proxy/src/openclaw/integration.ts` | Version gates, detection, launch |
-| `packages/proxy/src/hermes/config-writer.ts` | `~/.hermes/.env` block, managed-scope detection |
+| `packages/proxy/src/hermes/config-writer.ts` | The Hermes settings, the `hermes config set` argument lists, reading the profile's `.env` back, managed-scope detection |
 | `packages/proxy/src/openshell/credential-driver.ts` | OpenShell credential driver core (reference/copy modes) |
 | `scripts/e2e-openshell.sh` | Live OpenShell gateway end-to-end (CI: `openshell-compat.yml`) |
 | `packages/plugin/index.ts` | Plugin entry the Gateway loads |
@@ -495,7 +500,7 @@ Tests mirror these names under `test/unit`, `test/e2e` and `test/compliance`.
 
 ## Design principles
 
-Credentials never in agent memory. A hash-chained audit entry for every use. Bring your own vault. Follow each host's native patterns rather than fighting them.
+Credentials out of agent memory wherever the host lets a request be routed, and said plainly where it does not. A hash-chained audit entry for every use. Bring your own vault. Follow each host's native patterns rather than fighting them.
 
 ## Maintainer resources
 
