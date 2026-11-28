@@ -50,7 +50,7 @@ aquaman is for your own machine. In CI and production the same variable names ar
 - **Runs entirely on your machine.** No account, no telemetry, no hosted service. Config and logs are plain files under `~/.aquaman`.
 - **Open source, verifiable releases.** Apache-2.0 licensed. npm packages are published from GitHub Actions with provenance, and have no install scripts.
 - **Every credential use is recorded** in a hash-chained log that `aquaman audit verify` checks.
-- **Tested against attack, not just for function.** The request path has a conformance suite that sends raw bytes at a real proxy, and the controls are mapped to [MITRE ATLAS](/docs/compliance/atlas-mapping/) and [NIST SP 800-53](/docs/compliance/nist-800-53/).
+- **Tested against attack, not just for function.** The request path has a conformance suite that sends raw bytes at a real proxy, and the controls are mapped to [MITRE ATLAS](/docs/compliance/atlas-mapping/), [NIST SP 800-53](/docs/compliance/nist-800-53/), [BSI TR-02102-1](/docs/compliance/bsi-tr-02102/) and the [OWASP Top 10 for agentic and LLM applications](/docs/compliance/agentic-ai-guidance/).
 - **Vulnerabilities are fixed and disclosed.** Reports are handled privately and published as [advisories](https://github.com/tech4242/aquaman/security/advisories) with the fix. Stay on the latest release.
 - **Scope.** aquaman keeps credentials out of the agent. It is not a sandbox and does not separate programs running as you: [what it does not do](/docs/compare/#what-aquaman-does-not-do).
 
